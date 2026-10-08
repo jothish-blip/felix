@@ -331,10 +331,20 @@ func main() {
 		fmt.Println("────────────────────────────────────────")
 		for _, p := range rep.TopPriorities {
 			fmt.Printf("[%s] %s\n", p.Severity, p.Title)
-			fmt.Printf("Confidence: %s\n", p.Confidence)
-			fmt.Printf("Endpoint:   %s (%s)\n", p.Endpoint, p.Method)
+			fmt.Printf("Confidence:   %s\n", p.Confidence)
+			if p.Verification.Status != "" {
+				fmt.Printf("Verification: %s\n", p.Verification.Status)
+			}
+			loc := p.Endpoint
+			if p.EvidenceDetails.Location != "" {
+				loc = p.EvidenceDetails.Location
+			}
+			fmt.Printf("Location:     %s (%s)\n", loc, p.Method)
+			if p.EvidenceDetails.NegativeEvidence != "" {
+				fmt.Printf("Safety Note:  %s\n", p.EvidenceDetails.NegativeEvidence)
+			}
 			if p.Remediation != "" {
-				fmt.Printf("Action:     %s\n", p.Remediation)
+				fmt.Printf("Action:       %s\n", p.Remediation)
 			}
 			fmt.Println()
 		}

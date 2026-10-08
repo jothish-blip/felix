@@ -100,6 +100,32 @@ const htmlReportTemplate = `<!DOCTYPE html>
   .badge-LOW { background: #172554; color: #93c5fd; border: 1px solid #1e40af; }
   .badge-INFO { background: #1e293b; color: #cbd5e1; border: 1px solid #475569; }
 
+  /* Verification Badges */
+  .badge-VERIFIED { background: #064e3b; color: #6ee7b7; border: 1px solid #047857; }
+  .badge-OBSERVED { background: #1e293b; color: #cbd5e1; border: 1px solid #475569; }
+  .badge-DETECTED { background: #451a03; color: #fde047; border: 1px solid #a16207; }
+  .badge-NOT_VERIFIED { background: #27272a; color: #d4d4d8; border: 1px solid #52525b; }
+  .badge-NOT_EXPOSED { background: #134e4a; color: #5eead4; border: 1px solid #0f766e; }
+
+  .negative-evidence-box {
+    background-color: #0c192c;
+    border-left: 3px solid #38bdf8;
+    padding: 0.5rem 0.75rem;
+    border-radius: 0 0.25rem 0.25rem 0;
+    font-size: 0.85rem;
+    color: #bae6fd;
+    margin-bottom: 0.75rem;
+  }
+  .verification-box {
+    background-color: #111e2e;
+    border: 1px solid #1e293b;
+    padding: 0.5rem 0.75rem;
+    border-radius: 0.25rem;
+    font-size: 0.85rem;
+    color: #93c5fd;
+    margin-bottom: 0.75rem;
+  }
+
   /* Tables & Lists */
   .finding-card {
     background-color: var(--bg-card);
@@ -234,17 +260,30 @@ const htmlReportTemplate = `<!DOCTYPE html>
     <div class="finding-card">
       <div class="finding-header">
         <div class="finding-title">{{.Title}}</div>
-        <div>
+        <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
           <span class="badge badge-{{.Severity}}">{{.Severity}}</span>
           <span class="badge badge-INFO">Conf: {{.Confidence}}</span>
+          {{if .Verification.Status}}
+          <span class="badge badge-{{.Verification.Status}}">{{.Verification.Status}}</span>
+          {{end}}
         </div>
       </div>
       <div class="finding-meta">
-        <strong>Endpoint:</strong> {{.Endpoint}} ({{.Method}}) &bull; <strong>Category:</strong> {{.Category}} &bull; <strong>Source:</strong> {{.Source}}
+        <strong>Location:</strong> {{if .EvidenceDetails.Location}}{{.EvidenceDetails.Location}}{{else}}{{.Endpoint}}{{end}} ({{.Method}}) &bull; <strong>Detection:</strong> {{if .EvidenceDetails.DetectionMethod}}{{.EvidenceDetails.DetectionMethod}}{{else}}{{.Source}}{{end}} &bull; <strong>Category:</strong> {{.Category}}
       </div>
       <div class="finding-desc">{{.Description}}</div>
+      {{if .Verification.Result}}
+      <div class="verification-box">
+        <strong>Verification Status ({{.Verification.Status}}):</strong> {{.Verification.Result}}
+      </div>
+      {{end}}
       {{if .Evidence}}
       <div class="code-block">{{.Evidence}}</div>
+      {{end}}
+      {{if .EvidenceDetails.NegativeEvidence}}
+      <div class="negative-evidence-box">
+        <strong>Negative Evidence / Safety Verification:</strong> {{.EvidenceDetails.NegativeEvidence}}
+      </div>
       {{end}}
       <div class="remediation-box">
         <strong>Remediation:</strong> {{.Remediation}}
@@ -265,17 +304,30 @@ const htmlReportTemplate = `<!DOCTYPE html>
     <div class="finding-card">
       <div class="finding-header">
         <div class="finding-title">[{{.ID}}] {{.Title}}</div>
-        <div>
+        <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
           <span class="badge badge-{{.Severity}}">{{.Severity}}</span>
-          <span class="badge badge-INFO">{{.Confidence}}</span>
+          <span class="badge badge-INFO">Conf: {{.Confidence}}</span>
+          {{if .Verification.Status}}
+          <span class="badge badge-{{.Verification.Status}}">{{.Verification.Status}}</span>
+          {{end}}
         </div>
       </div>
       <div class="finding-meta">
-        <strong>Endpoint:</strong> {{.Endpoint}} ({{.Method}}) &bull; <strong>Category:</strong> {{.Category}} &bull; <strong>Source:</strong> {{.Source}}
+        <strong>Location:</strong> {{if .EvidenceDetails.Location}}{{.EvidenceDetails.Location}}{{else}}{{.Endpoint}}{{end}} ({{.Method}}) &bull; <strong>Detection:</strong> {{if .EvidenceDetails.DetectionMethod}}{{.EvidenceDetails.DetectionMethod}}{{else}}{{.Source}}{{end}} &bull; <strong>Category:</strong> {{.Category}}
       </div>
       <div class="finding-desc">{{.Description}}</div>
+      {{if .Verification.Result}}
+      <div class="verification-box">
+        <strong>Verification Status ({{.Verification.Status}}):</strong> {{.Verification.Result}}
+      </div>
+      {{end}}
       {{if .Evidence}}
       <div class="code-block">{{.Evidence}}</div>
+      {{end}}
+      {{if .EvidenceDetails.NegativeEvidence}}
+      <div class="negative-evidence-box">
+        <strong>Negative Evidence / Safety Verification:</strong> {{.EvidenceDetails.NegativeEvidence}}
+      </div>
       {{end}}
       <div class="remediation-box">
         <strong>Action:</strong> {{.Remediation}}

@@ -36,13 +36,42 @@ func DeduplicateFindings(findings []Finding) []Finding {
 		fp := norm.Fingerprint
 
 		if existing, exists := seen[fp]; exists {
-			// Merge evidence if different
+			// Merge string evidence if different
 			if norm.Evidence != "" && !strings.Contains(existing.Evidence, norm.Evidence) {
 				if existing.Evidence == "" {
 					existing.Evidence = norm.Evidence
 				} else {
 					existing.Evidence = existing.Evidence + "; Also: " + norm.Evidence
 				}
+			}
+
+			// Merge structured evidence observation
+			if existing.EvidenceDetails.Observation == "" {
+				existing.EvidenceDetails.Observation = norm.EvidenceDetails.Observation
+			} else if norm.EvidenceDetails.Observation != "" && !strings.Contains(existing.EvidenceDetails.Observation, norm.EvidenceDetails.Observation) {
+				existing.EvidenceDetails.Observation = existing.EvidenceDetails.Observation + "; Also: " + norm.EvidenceDetails.Observation
+			}
+
+			// Merge negative evidence if missing
+			if existing.EvidenceDetails.NegativeEvidence == "" && norm.EvidenceDetails.NegativeEvidence != "" {
+				existing.EvidenceDetails.NegativeEvidence = norm.EvidenceDetails.NegativeEvidence
+			}
+
+			// Merge details map
+			if len(norm.EvidenceDetails.Details) > 0 {
+				if existing.EvidenceDetails.Details == nil {
+					existing.EvidenceDetails.Details = make(map[string]string)
+				}
+				for k, v := range norm.EvidenceDetails.Details {
+					if _, has := existing.EvidenceDetails.Details[k]; !has {
+						existing.EvidenceDetails.Details[k] = v
+					}
+				}
+			}
+
+			// Keep highest verification status
+			if VerificationRank(norm.Verification.Status) > VerificationRank(existing.Verification.Status) {
+				existing.Verification = norm.Verification
 			}
 
 			// Keep highest severity

@@ -102,6 +102,62 @@ func NormalizeSource(src string) string {
 	}
 }
 
+// NormalizeVerificationStatus canonicalizes verification status to one of the canonical states.
+func NormalizeVerificationStatus(v VerificationStatus) VerificationStatus {
+	s := strings.ToUpper(strings.TrimSpace(string(v)))
+	switch VerificationStatus(s) {
+	case VerificationVerified:
+		return VerificationVerified
+	case VerificationDetected:
+		return VerificationDetected
+	case VerificationObserved:
+		return VerificationObserved
+	case VerificationNotVerified:
+		return VerificationNotVerified
+	case VerificationNotExposed:
+		return VerificationNotExposed
+	default:
+		return VerificationObserved
+	}
+}
+
+// VerificationRank returns an ordering rank for verification statuses (higher is more verified).
+func VerificationRank(v VerificationStatus) int {
+	switch NormalizeVerificationStatus(v) {
+	case VerificationVerified:
+		return 4
+	case VerificationDetected:
+		return 3
+	case VerificationObserved:
+		return 2
+	case VerificationNotVerified:
+		return 1
+	case VerificationNotExposed:
+		return 0
+	default:
+		return 0
+	}
+}
+
+// DefaultDetectionMethod infers a suitable detection method string from source and category.
+func DefaultDetectionMethod(source, category string) string {
+	src := NormalizeSource(source)
+	cat := NormalizeCategory(category)
+	switch {
+	case src == SourceSecrets:
+		if strings.Contains(cat, "entropy") {
+			return "shannon_entropy_heuristic"
+		}
+		return "static_pattern_signature"
+	case src == SourceCrawler:
+		return "asset_ingestion"
+	case strings.HasPrefix(cat, "missing-") || cat == "cors-wildcard":
+		return "header_inspection"
+	default:
+		return "active_probe"
+	}
+}
+
 // NormalizeFinding applies all normalization rules to a single finding.
 func NormalizeFinding(f Finding) Finding {
 	f.Target = NormalizeURL(f.Target)
@@ -114,6 +170,32 @@ func NormalizeFinding(f Finding) Finding {
 	f.Title = strings.TrimSpace(f.Title)
 	f.Description = strings.TrimSpace(f.Description)
 	f.Evidence = strings.TrimSpace(f.Evidence)
+
+	// Normalize EvidenceDetails
+	f.EvidenceDetails.Observation = strings.TrimSpace(f.EvidenceDetails.Observation)
+	f.EvidenceDetails.Location = strings.TrimSpace(f.EvidenceDetails.Location)
+	f.EvidenceDetails.DetectionMethod = strings.TrimSpace(f.EvidenceDetails.DetectionMethod)
+	f.EvidenceDetails.NegativeEvidence = strings.TrimSpace(f.EvidenceDetails.NegativeEvidence)
+
+	if f.EvidenceDetails.Observation == "" && f.Evidence != "" {
+		f.EvidenceDetails.Observation = f.Evidence
+	}
+	if f.EvidenceDetails.Location == "" {
+		f.EvidenceDetails.Location = f.Endpoint
+	}
+	if f.EvidenceDetails.DetectionMethod == "" {
+		f.EvidenceDetails.DetectionMethod = DefaultDetectionMethod(f.Source, f.Category)
+	}
+	if f.Evidence == "" && f.EvidenceDetails.Observation != "" {
+		f.Evidence = f.EvidenceDetails.Observation
+	}
+
+	// Normalize VerificationRecord
+	f.Verification.Status = NormalizeVerificationStatus(f.Verification.Status)
+	f.Verification.Result = strings.TrimSpace(f.Verification.Result)
+	if f.Verification.Result == "" {
+		f.Verification.Result = f.Description
+	}
 
 	if f.Remediation == "" {
 		f.Remediation = RemediationFor(f.Category, f.Title)

@@ -37,20 +37,35 @@ func SanitizeEvidence(input string) string {
 	return output
 }
 
+// sanitizeFinding sanitizes all string fields within a Finding to prevent leaking sensitive credentials.
+func sanitizeFinding(f Finding) Finding {
+	cleanF := f
+	cleanF.Evidence = SanitizeEvidence(f.Evidence)
+	cleanF.EvidenceDetails.Observation = SanitizeEvidence(f.EvidenceDetails.Observation)
+	cleanF.EvidenceDetails.Location = SanitizeEvidence(f.EvidenceDetails.Location)
+	cleanF.EvidenceDetails.NegativeEvidence = SanitizeEvidence(f.EvidenceDetails.NegativeEvidence)
+	if len(f.EvidenceDetails.Details) > 0 {
+		cleanDetails := make(map[string]string, len(f.EvidenceDetails.Details))
+		for k, v := range f.EvidenceDetails.Details {
+			cleanDetails[k] = SanitizeEvidence(v)
+		}
+		cleanF.EvidenceDetails.Details = cleanDetails
+	}
+	cleanF.Verification.Result = SanitizeEvidence(f.Verification.Result)
+	cleanF.Verification.Rationale = SanitizeEvidence(f.Verification.Rationale)
+	return cleanF
+}
+
 // SanitizeReport ensures all findings and security stories in a report are fully redacted.
 func SanitizeReport(rep Report) Report {
 	cleanFindings := make([]Finding, len(rep.Findings))
 	for i, f := range rep.Findings {
-		cleanF := f
-		cleanF.Evidence = SanitizeEvidence(f.Evidence)
-		cleanFindings[i] = cleanF
+		cleanFindings[i] = sanitizeFinding(f)
 	}
 
 	cleanPriorities := make([]Finding, len(rep.TopPriorities))
 	for i, f := range rep.TopPriorities {
-		cleanF := f
-		cleanF.Evidence = SanitizeEvidence(f.Evidence)
-		cleanPriorities[i] = cleanF
+		cleanPriorities[i] = sanitizeFinding(f)
 	}
 
 	cleanStories := make([]SecurityStory, len(rep.SecurityStories))

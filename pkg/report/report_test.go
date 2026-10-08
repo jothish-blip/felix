@@ -633,3 +633,399 @@ func TestUnifiedEngineIngestion(t *testing.T) {
 		t.Errorf("expected 1 api source finding, got %d", rep.Summary.BySource[SourceAPI])
 	}
 }
+
+// 19. Secret finding evidence survives normalization
+func TestSecretEvidenceSurvivesNormalization(t *testing.T) {
+	sec := secrets.SecretFinding{
+		Type:        secrets.SecretHighEntropy,
+		Title:       "High-Entropy Suspicious Secret String",
+		Value:       "sb_p1234567890abcdef1234567890abcdef",
+		Redacted:    "sb_p****************cdef",
+		FileOrigin:  "https://example.com/chunk.js",
+		LineNumber:  37,
+		Severity:    secrets.SeverityLow,
+		Confidence:  secrets.ConfidenceLow,
+		Evidence:    "const token = 'sb_p****************cdef'",
+		Fingerprint: "fp-entropy-1",
+	}
+
+	f := FromSecretFinding("https://example.com", sec)
+	if f.EvidenceDetails.Observation == "" {
+		t.Errorf("expected structured observation, got empty")
+	}
+	if f.EvidenceDetails.Location != "https://example.com/chunk.js:37" {
+		t.Errorf("expected location 'https://example.com/chunk.js:37', got %q", f.EvidenceDetails.Location)
+	}
+	if f.EvidenceDetails.DetectionMethod != "shannon_entropy_heuristic" {
+		t.Errorf("expected shannon_entropy_heuristic detection method, got %q", f.EvidenceDetails.DetectionMethod)
+	}
+	if f.Verification.Status != VerificationNotVerified {
+		t.Errorf("expected NOT_VERIFIED status, got %q", f.Verification.Status)
+	}
+}
+
+// 20. Secret redaction remains intact in structured evidence
+func TestSecretRedactionIntact(t *testing.T) {
+	sec := secrets.SecretFinding{
+		Type:        secrets.SecretStripeLiveKey,
+		Title:       "Stripe Live Secret Key Discovered",
+		Value:       "sk_live_51Abcdef1234567890abcdef1234567890",
+		Redacted:    "sk_live_********************7890",
+		FileOrigin:  "https://example.com/api.js",
+		LineNumber:  15,
+		Severity:    secrets.SeverityCritical,
+		Confidence:  secrets.ConfidenceHigh,
+		Evidence:    "const key = 'sk_live_********************7890'",
+		Fingerprint: "fp-stripe-1",
+	}
+
+	f := FromSecretFinding("https://example.com", sec)
+	rep := BuildReport("https://example.com", []Finding{f})
+
+	jsonBytes, err := GenerateJSON(rep)
+	if err != nil {
+		t.Fatalf("GenerateJSON error: %v", err)
+	}
+
+	rawJSON := string(jsonBytes)
+	if strings.Contains(rawJSON, "sk_live_51Abcdef1234567890abcdef1234567890") {
+		t.Fatalf("CRITICAL LEAK: Raw unredacted secret found in JSON report!")
+	}
+	if !strings.Contains(rawJSON, "sk_live_********************7890") {
+		t.Errorf("expected redacted token in JSON report")
+	}
+}
+
+// 21. Line number and source asset information survives
+func TestSecretLineNumberAndAssetSurvive(t *testing.T) {
+	sec := secrets.SecretFinding{
+		Type:        secrets.SecretGitHubToken,
+		Title:       "GitHub Token Discovered",
+		Value:       "ghp_123456789012345678901234567890123456",
+		Redacted:    "ghp_********************3456",
+		FileOrigin:  "https://example.com/bundle.js",
+		LineNumber:  42,
+		Severity:    secrets.SeverityHigh,
+		Confidence:  secrets.ConfidenceHigh,
+		Fingerprint: "fp-gh-42",
+	}
+
+	f := FromSecretFinding("https://example.com", sec)
+	if f.EvidenceDetails.Details["line_number"] != "42" {
+		t.Errorf("expected line_number 42 in details, got %q", f.EvidenceDetails.Details["line_number"])
+	}
+	if f.EvidenceDetails.Details["source_asset"] != "https://example.com/bundle.js" {
+		t.Errorf("expected source_asset in details, got %q", f.EvidenceDetails.Details["source_asset"])
+	}
+}
+
+// 22. Cloud provider evidence survives normalization
+func TestCloudEvidenceSurvivesNormalization(t *testing.T) {
+	cld := cloud.CloudFinding{
+		Provider:    cloud.ProviderSupabase,
+		Category:    "Unauthorized Data Exposure",
+		Endpoint:    "https://project.supabase.co/rest/v1/users",
+		Description: "Public read access allowed on Supabase resource /users",
+		Evidence:    "HTTP 200 OK. Returned 5 record(s). Observed fields: [email, id, name]",
+		Severity:    cloud.SeverityHigh,
+		Confidence:  cloud.ConfidenceHigh,
+		Fingerprint: "fp-cld-data",
+	}
+
+	f := FromCloudFinding("https://example.com", cld)
+	if f.EvidenceDetails.Observation != cld.Evidence {
+		t.Errorf("cloud observation did not survive, got %q", f.EvidenceDetails.Observation)
+	}
+	if f.EvidenceDetails.Details["provider"] != "supabase" {
+		t.Errorf("cloud provider details missing, got %v", f.EvidenceDetails.Details)
+	}
+	if f.Verification.Status != VerificationVerified {
+		t.Errorf("expected VERIFIED status for data exposure, got %s", f.Verification.Status)
+	}
+}
+
+// 23. Cloud HTTP status survives
+func TestCloudHTTPStatusSurvives(t *testing.T) {
+	cld := cloud.CloudFinding{
+		Provider:    cloud.ProviderAWS,
+		Category:    "Anonymous Bucket Listing",
+		Endpoint:    "https://s3.amazonaws.com/test-bucket",
+		Description: "AWS S3 storage bucket permits anonymous object listing",
+		Evidence:    "HTTP 200 OK. Public ListBucketResult observed (2450 bytes).",
+		Severity:    cloud.SeverityMedium,
+		Confidence:  cloud.ConfidenceHigh,
+		Fingerprint: "fp-s3-1",
+	}
+
+	f := FromCloudFinding("https://example.com", cld)
+	if f.EvidenceDetails.HTTPStatus != 200 {
+		t.Errorf("expected HTTP status 200, got %d", f.EvidenceDetails.HTTPStatus)
+	}
+	if f.EvidenceDetails.HTTPMethod != "GET" {
+		t.Errorf("expected HTTPMethod GET, got %q", f.EvidenceDetails.HTTPMethod)
+	}
+}
+
+// 24. API endpoint, method, and status survive
+func TestAPIFindingEvidenceSurvives(t *testing.T) {
+	apiF := api.APIFinding{
+		Category:    api.CategoryGraphQLIntrospection,
+		Endpoint:    "https://example.com/graphql",
+		Method:      "GET",
+		Description: "GraphQL endpoint has public introspection enabled",
+		Evidence:    "HTTP 200 OK. Introspection query succeeded (24 types observed).",
+		Severity:    api.SeverityLow,
+		Confidence:  api.ConfidenceHigh,
+		Fingerprint: "fp-gql-1",
+	}
+
+	f := FromAPIFinding("https://example.com", apiF)
+	if f.EvidenceDetails.HTTPMethod != "GET" {
+		t.Errorf("expected method GET, got %q", f.EvidenceDetails.HTTPMethod)
+	}
+	if f.EvidenceDetails.HTTPStatus != 200 {
+		t.Errorf("expected status 200, got %d", f.EvidenceDetails.HTTPStatus)
+	}
+	if f.EvidenceDetails.DetectionMethod != "active_probe" {
+		t.Errorf("expected detection method active_probe, got %q", f.EvidenceDetails.DetectionMethod)
+	}
+	if f.Verification.Status != VerificationVerified {
+		t.Errorf("expected VERIFIED status, got %q", f.Verification.Status)
+	}
+}
+
+// 25. Verification status survives JSON serialization
+func TestVerificationStatusSurvivesJSONSerialization(t *testing.T) {
+	f := Finding{
+		ID:          "TEST-VER",
+		Title:       "Test Verification Finding",
+		Category:    "cors-wildcard",
+		Severity:    SeverityInfo,
+		Confidence:  ConfidenceHigh,
+		Target:      "https://example.com",
+		Endpoint:    "https://example.com",
+		Method:      "GET",
+		Description: "CORS policy permits wildcard origin",
+		Verification: VerificationRecord{
+			Status: VerificationObserved,
+			Result: "Wildcard CORS origin observed on public endpoint.",
+		},
+	}
+
+	rep := BuildReport("https://example.com", []Finding{f})
+	data, err := GenerateJSON(rep)
+	if err != nil {
+		t.Fatalf("GenerateJSON failed: %v", err)
+	}
+
+	var parsed Report
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("json.Unmarshal failed: %v", err)
+	}
+
+	if len(parsed.Findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(parsed.Findings))
+	}
+	if parsed.Findings[0].Verification.Status != VerificationObserved {
+		t.Errorf("expected verification status OBSERVED, got %s", parsed.Findings[0].Verification.Status)
+	}
+	if parsed.Findings[0].Verification.Result != "Wildcard CORS origin observed on public endpoint." {
+		t.Errorf("verification result mismatch: %q", parsed.Findings[0].Verification.Result)
+	}
+}
+
+// 26. Negative evidence survives serialization
+func TestNegativeEvidenceSurvivesSerialization(t *testing.T) {
+	apiF := api.APIFinding{
+		Category:    api.CategoryCORSWildcard,
+		Endpoint:    "https://example.com/api",
+		Method:      "GET",
+		Description: "CORS policy permits wildcard (*) origin",
+		Evidence:    "Response returned Access-Control-Allow-Origin: *",
+		Severity:    api.SeverityInfo,
+		Confidence:  api.ConfidenceHigh,
+		Fingerprint: "fp-cors-wildcard-1",
+	}
+
+	f := FromAPIFinding("https://example.com", apiF)
+	if f.EvidenceDetails.NegativeEvidence == "" {
+		t.Fatalf("expected negative evidence for cors-wildcard, got empty")
+	}
+
+	rep := BuildReport("https://example.com", []Finding{f})
+	data, err := GenerateJSON(rep)
+	if err != nil {
+		t.Fatalf("GenerateJSON failed: %v", err)
+	}
+
+	var parsed Report
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("json.Unmarshal failed: %v", err)
+	}
+
+	neg := parsed.Findings[0].EvidenceDetails.NegativeEvidence
+	if !strings.Contains(neg, "Access-Control-Allow-Credentials header was absent") {
+		t.Errorf("expected negative evidence to survive serialization, got %q", neg)
+	}
+}
+
+// 27. HTML report contains evidence and verification badges
+func TestHTMLExportContainsEvidenceAndVerification(t *testing.T) {
+	f := Finding{
+		ID:          "TEST-HTML-EVID",
+		Title:       "Test HTML Evidence",
+		Category:    "missing-csp",
+		Severity:    SeverityLow,
+		Confidence:  ConfidenceHigh,
+		Target:      "https://example.com",
+		Endpoint:    "https://example.com",
+		Method:      "GET",
+		Description: "Missing Content-Security-Policy",
+		Evidence:    "Response headers do not include Content-Security-Policy.",
+		EvidenceDetails: EvidenceDetails{
+			Observation:      "Response headers do not include Content-Security-Policy.",
+			Location:         "https://example.com",
+			DetectionMethod:  "header_inspection",
+			NegativeEvidence: "No CSP header returned by web server.",
+		},
+		Verification: VerificationRecord{
+			Status: VerificationVerified,
+			Result: "Evaluated server response headers; missing-csp was confirmed.",
+		},
+	}
+
+	rep := BuildReport("https://example.com", []Finding{f})
+	htmlStr, err := GenerateHTML(rep)
+	if err != nil {
+		t.Fatalf("GenerateHTML failed: %v", err)
+	}
+
+	if !strings.Contains(htmlStr, "badge-VERIFIED") {
+		t.Errorf("expected badge-VERIFIED in HTML report")
+	}
+	if !strings.Contains(htmlStr, "negative-evidence-box") {
+		t.Errorf("expected negative-evidence-box in HTML report")
+	}
+	if !strings.Contains(htmlStr, "No CSP header returned by web server.") {
+		t.Errorf("expected negative evidence text in HTML report")
+	}
+}
+
+// 28. Existing minimal reports remain valid
+func TestExistingReportsRemainValid(t *testing.T) {
+	legacy := Finding{
+		ID:          "LEGACY-1",
+		Title:       "Legacy Finding",
+		Category:    "missing-hsts",
+		Severity:    SeverityLow,
+		Confidence:  ConfidenceHigh,
+		Target:      "https://example.com",
+		Endpoint:    "https://example.com",
+		Method:      "GET",
+		Evidence:    "No HSTS header observed.",
+	}
+
+	norm := NormalizeFinding(legacy)
+	if norm.EvidenceDetails.Observation != "No HSTS header observed." {
+		t.Errorf("expected legacy evidence to populate EvidenceDetails.Observation, got %q", norm.EvidenceDetails.Observation)
+	}
+	if norm.Verification.Status == "" {
+		t.Errorf("expected default verification status for legacy finding")
+	}
+
+	rep := BuildReport("https://example.com", []Finding{legacy})
+	if rep.RiskScore == 0 {
+		t.Errorf("expected non-zero risk score for legacy finding")
+	}
+}
+
+// 29. Deterministic output remains deterministic
+func TestDeterministicOutputRemainsDeterministic(t *testing.T) {
+	f1 := Finding{
+		ID:          "DET-1",
+		Title:       "Finding 1",
+		Category:    "cors-wildcard",
+		Severity:    SeverityInfo,
+		Confidence:  ConfidenceHigh,
+		Target:      "https://example.com",
+		Endpoint:    "https://example.com/api",
+		Method:      "GET",
+		Evidence:    "Evidence 1",
+	}
+	f2 := Finding{
+		ID:          "DET-2",
+		Title:       "Finding 2",
+		Category:    "missing-csp",
+		Severity:    SeverityLow,
+		Confidence:  ConfidenceHigh,
+		Target:      "https://example.com",
+		Endpoint:    "https://example.com",
+		Method:      "GET",
+		Evidence:    "Evidence 2",
+	}
+
+	rep1 := BuildReport("https://example.com", []Finding{f1, f2})
+	rep2 := BuildReport("https://example.com", []Finding{f2, f1})
+
+	// Override timestamp for strict comparison
+	rep1.Timestamp = "2026-10-08T12:00:00Z"
+	rep2.Timestamp = "2026-10-08T12:00:00Z"
+
+	json1, err1 := GenerateJSON(rep1)
+	json2, err2 := GenerateJSON(rep2)
+	if err1 != nil || err2 != nil {
+		t.Fatalf("GenerateJSON failed: %v, %v", err1, err2)
+	}
+
+	if string(json1) != string(json2) {
+		t.Errorf("expected deterministic JSON output regardless of input slice order.\nRun1:\n%s\nRun2:\n%s", string(json1), string(json2))
+	}
+}
+
+// 30. Deduplication still works with differing evidence
+func TestDeduplicationPreservesIdentityWithDifferingEvidence(t *testing.T) {
+	f1 := Finding{
+		Target:      "https://example.com",
+		Category:    "cors-wildcard",
+		Endpoint:    "https://example.com/api",
+		Method:      "GET",
+		Title:       "CORS Wildcard",
+		Evidence:    "Observation from worker 1",
+		EvidenceDetails: EvidenceDetails{
+			Observation: "Observation from worker 1",
+			Location:    "https://example.com/api",
+		},
+		Verification: VerificationRecord{
+			Status: VerificationObserved,
+		},
+	}
+	f2 := Finding{
+		Target:      "https://example.com",
+		Category:    "cors-wildcard",
+		Endpoint:    "https://example.com/api",
+		Method:      "GET",
+		Title:       "CORS Wildcard",
+		Evidence:    "Observation from worker 2",
+		EvidenceDetails: EvidenceDetails{
+			Observation: "Observation from worker 2",
+			Location:    "https://example.com/api",
+		},
+		Verification: VerificationRecord{
+			Status: VerificationVerified, // higher verification status
+		},
+	}
+
+	deduped := DeduplicateFindings([]Finding{f1, f2})
+	if len(deduped) != 1 {
+		t.Fatalf("expected exactly 1 deduplicated finding despite differing evidence details, got %d", len(deduped))
+	}
+
+	merged := deduped[0]
+	if !strings.Contains(merged.Evidence, "worker 1") || !strings.Contains(merged.Evidence, "worker 2") {
+		t.Errorf("expected merged evidence to contain both observations, got: %s", merged.Evidence)
+	}
+	if merged.Verification.Status != VerificationVerified {
+		t.Errorf("expected higher verification status VERIFIED to be retained, got %s", merged.Verification.Status)
+	}
+}
+
