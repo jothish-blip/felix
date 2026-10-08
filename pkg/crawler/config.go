@@ -17,6 +17,7 @@ type Config struct {
 	Concurrency  int           `json:"concurrency"`
 	Timeout      time.Duration `json:"timeout"`
 	MaxAssetSize int64         `json:"max_asset_size"`
+	MaxAssets    int           `json:"max_assets,omitempty"`
 	UserAgent    string        `json:"user_agent"`
 	ScopeMode          ScopeMode     `json:"scope_mode"`
 	AllowedHosts       []string      `json:"allowed_hosts"`

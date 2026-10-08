@@ -345,3 +345,351 @@ func TestCLI_ScanAndReportDecoupled(t *testing.T) {
 	}
 	_ = repOut
 }
+
+func TestCLI_TimeoutControl(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<!DOCTYPE html><html><body>OK</body></html>`)
+	}))
+	defer ts.Close()
+
+	// 1. Valid timeout syntax (10s, 1m)
+	_, code := runFelix(t, "scan", ts.URL, "--timeout", "5s")
+	if code == 2 {
+		t.Errorf("expected timeout 5s to be accepted, got code: %d", code)
+	}
+	_, code = runFelix(t, "scan", ts.URL, "--timeout", "1m")
+	if code == 2 {
+		t.Errorf("expected timeout 1m to be accepted, got code: %d", code)
+	}
+
+	// 2. Invalid timeout values (0, negative, invalid string) -> must exit 2
+	invalidTimeouts := []string{"0", "0s", "-5s", "abc"}
+	for _, inv := range invalidTimeouts {
+		out, errCode := runFelix(t, "scan", ts.URL, "--timeout", inv)
+		if errCode != 2 {
+			t.Errorf("expected invalid timeout %q to exit with code 2, got %d (out: %s)", inv, errCode, out)
+		}
+	}
+}
+
+func TestCLI_ConcurrencyControl(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<!DOCTYPE html><html><body>OK</body></html>`)
+	}))
+	defer ts.Close()
+
+	// 1. Valid concurrency
+	_, code := runFelix(t, "scan", ts.URL, "--concurrency", "4")
+	if code == 2 {
+		t.Errorf("expected concurrency 4 to be accepted, got code: %d", code)
+	}
+
+	// 2. Zero and negative concurrency -> must exit 2
+	invalidConcurrencies := []string{"0", "-1", "-10", "abc"}
+	for _, inv := range invalidConcurrencies {
+		out, errCode := runFelix(t, "scan", ts.URL, "--concurrency", inv)
+		if errCode != 2 {
+			t.Errorf("expected invalid concurrency %q to exit with code 2, got %d (out: %s)", inv, errCode, out)
+		}
+	}
+}
+
+func TestCLI_ScopeControl(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<!DOCTYPE html><html><body>OK</body></html>`)
+	}))
+	defer ts.Close()
+
+	// 1. Valid scope modes
+	validScopes := []string{"same-origin", "subdomains", "explicit"}
+	for _, sc := range validScopes {
+		_, code := runFelix(t, "scan", ts.URL, "--scope", sc)
+		if code == 2 {
+			t.Errorf("expected valid scope %q to be accepted, got code: %d", sc, code)
+		}
+	}
+
+	// 2. Invalid scope values -> must exit 2
+	invalidScopes := []string{"global", "any", "unrestricted", "invalid"}
+	for _, inv := range invalidScopes {
+		out, errCode := runFelix(t, "scan", ts.URL, "--scope", inv)
+		if errCode != 2 {
+			t.Errorf("expected invalid scope %q to exit with code 2, got %d (out: %s)", inv, errCode, out)
+		}
+	}
+}
+
+func TestCLI_MaxAssetsControl(t *testing.T) {
+	// Mock server serving HTML that links to 5 distinct scripts
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, `<!DOCTYPE html><html><head>
+				<script src="/s1.js"></script>
+				<script src="/s2.js"></script>
+				<script src="/s3.js"></script>
+				<script src="/s4.js"></script>
+				<script src="/s5.js"></script>
+			</head><body>Test</body></html>`)
+		default:
+			w.Header().Set("Content-Type", "application/javascript")
+			fmt.Fprint(w, `console.log("script");`)
+		}
+	}))
+	defer ts.Close()
+
+	// 1. Invalid values -> must exit 2
+	invalidValues := []string{"0", "-1", "-5", "abc"}
+	for _, inv := range invalidValues {
+		out, errCode := runFelix(t, "scan", ts.URL, "--max-assets", inv)
+		if errCode != 2 {
+			t.Errorf("expected invalid max-assets %q to exit 2, got %d (out: %s)", inv, errCode, out)
+		}
+	}
+
+	// 2. Enforcement verification: limit to 2 assets
+	tmpDir := t.TempDir()
+	outJSON := filepath.Join(tmpDir, "max_assets.json")
+	_, code := runFelix(t, "scan", ts.URL, "--max-assets", "2", "--json", outJSON)
+	if code == 2 {
+		t.Fatalf("scan failed with code 2")
+	}
+
+	// Verify loaded result contains at most 2 assets
+	data, err := os.ReadFile(outJSON)
+	if err != nil {
+		t.Fatalf("failed to read json result: %v", err)
+	}
+	var rep report.Report
+	if err := json.Unmarshal(data, &rep); err != nil {
+		t.Fatalf("failed to unmarshal report: %v", err)
+	}
+	// Asset discovery count in report metadata or findings
+	assetCount := 0
+	for _, f := range rep.Findings {
+		if f.Category == "asset" || f.Source == "crawler" {
+			assetCount++
+		}
+	}
+	if assetCount > 2 {
+		t.Errorf("expected max-assets enforcement <= 2, got %d crawler assets", assetCount)
+	}
+}
+
+func TestCLI_MaxResponseSizeControl(t *testing.T) {
+	// Mock server serving 500KB script
+	largePayload := strings.Repeat("x", 500*1024)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, `<!DOCTYPE html><html><head><script src="/large.js"></script></head><body>Test</body></html>`)
+		case "/large.js":
+			w.Header().Set("Content-Type", "application/javascript")
+			fmt.Fprint(w, largePayload)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	// 1. Invalid size syntax -> must exit 2
+	invalidSizes := []string{"0", "0MB", "-5MB", "abc"}
+	for _, inv := range invalidSizes {
+		out, errCode := runFelix(t, "scan", ts.URL, "--max-response-size", inv)
+		if errCode != 2 {
+			t.Errorf("expected invalid max-response-size %q to exit 2, got %d (out: %s)", inv, errCode, out)
+		}
+	}
+
+	// 2. Enforcement: allow up to 100KB -> 500KB asset exceeds limit and is rejected / skipped
+	tmpDir := t.TempDir()
+	outJSON := filepath.Join(tmpDir, "size_test.json")
+	_, code := runFelix(t, "scan", ts.URL, "--max-response-size", "100KB", "--json", outJSON)
+	if code == 2 {
+		t.Fatalf("scan failed with code 2")
+	}
+
+	data, err := os.ReadFile(outJSON)
+	if err != nil {
+		t.Fatalf("failed to read json result: %v", err)
+	}
+	var rep report.Report
+	if err := json.Unmarshal(data, &rep); err != nil {
+		t.Fatalf("failed to unmarshal report: %v", err)
+	}
+	// The 500KB asset must NOT have been downloaded successfully into full inventory content
+	for _, f := range rep.Findings {
+		if strings.Contains(f.Endpoint, "/large.js") && strings.Contains(f.Evidence, largePayload) {
+			t.Errorf("large asset content should not be present when max-response-size is 100KB")
+		}
+	}
+}
+
+func TestCLI_ExportControl(t *testing.T) {
+	var requestCount int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<!DOCTYPE html><html><body>Export Test</body></html>`)
+	}))
+	defer ts.Close()
+
+	tmpDir := t.TempDir()
+	exportPath := filepath.Join(tmpDir, "canonical_export.html")
+
+	// Canonical syntax: felix scan <target> --export report.html
+	out, code := runFelix(t, "scan", ts.URL, "--export", exportPath)
+	if code == 2 {
+		t.Fatalf("scan failed with code 2, out: %s", out)
+	}
+
+	// Must generate the requested HTML report
+	if _, err := os.Stat(exportPath); os.IsNotExist(err) {
+		t.Fatalf("expected --export to generate %s", exportPath)
+	}
+
+	htmlData, err := os.ReadFile(exportPath)
+	if err != nil {
+		t.Fatalf("failed to read exported HTML: %v", err)
+	}
+	if !strings.Contains(string(htmlData), "#000000") {
+		t.Errorf("expected HTML report to have #000000 background")
+	}
+}
+
+func TestCLI_JSONControl(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<!DOCTYPE html><html><body>JSON Test</body></html>`)
+	}))
+	defer ts.Close()
+
+	tmpDir := t.TempDir()
+
+	// 1. felix scan target --json <file.json>
+	customJSON := filepath.Join(tmpDir, "custom.json")
+	_, code := runFelix(t, "scan", ts.URL, "--json", customJSON)
+	if code == 2 {
+		t.Fatalf("scan failed with code 2")
+	}
+	if _, err := os.Stat(customJSON); os.IsNotExist(err) {
+		t.Fatalf("expected custom JSON file %s to be created", customJSON)
+	}
+
+	// 2. felix scan target --json (bare flag)
+	defer os.Remove("scan-result.json")
+	out, code := runFelix(t, "scan", ts.URL, "--json")
+	if code == 2 {
+		t.Fatalf("scan failed with code 2 for bare --json, out: %s", out)
+	}
+	var rep report.Report
+	if err := json.Unmarshal([]byte(out), &rep); err != nil {
+		t.Fatalf("bare --json stdout must be valid machine-readable JSON: %v, out: %s", err, out)
+	}
+	if rep.Target != ts.URL {
+		t.Errorf("expected target %s, got %s", ts.URL, rep.Target)
+	}
+}
+
+func TestCLI_QuietControl(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<!DOCTYPE html><html><body>Quiet Test</body></html>`)
+	}))
+	defer ts.Close()
+
+	tmpDir := t.TempDir()
+	outJSON := filepath.Join(tmpDir, "quiet_result.json")
+
+	// --quiet should suppress human progress and banners
+	out, code := runFelix(t, "scan", ts.URL, "--quiet", "--json", outJSON)
+	if code == 2 {
+		t.Fatalf("scan failed with code 2 in quiet mode")
+	}
+
+	// Terminal output should be minimal/empty
+	if strings.Contains(out, "ASSET DISCOVERY") || strings.Contains(out, "FELIX ::") {
+		t.Errorf("quiet mode must suppress banners and stage milestones, got: %s", out)
+	}
+
+	// File must still be generated cleanly
+	if _, err := os.Stat(outJSON); os.IsNotExist(err) {
+		t.Fatalf("quiet mode must still generate requested export file")
+	}
+}
+
+func TestCLI_VerboseControl(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<!DOCTYPE html><html><body>Verbose Test</body></html>`)
+	}))
+	defer ts.Close()
+
+	out, code := runFelix(t, "scan", ts.URL, "--verbose")
+	if code == 2 {
+		t.Fatalf("scan failed with code 2 in verbose mode")
+	}
+
+	if !strings.Contains(out, "Active Scan Configuration") {
+		t.Errorf("verbose mode must display operational configuration, out: %s", out)
+	}
+	if !strings.Contains(out, "Concurrency:") || !strings.Contains(out, "Timeout:") {
+		t.Errorf("verbose mode must display timeout and concurrency settings")
+	}
+}
+
+func TestCLI_Conflicts(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `OK`)
+	}))
+	defer ts.Close()
+
+	// --quiet and --verbose cannot be used together -> exit 2
+	out, code := runFelix(t, "scan", ts.URL, "--quiet", "--verbose")
+	if code != 2 {
+		t.Errorf("expected exit code 2 for conflicting flags --quiet and --verbose, got %d", code)
+	}
+	if !strings.Contains(out, "--quiet and --verbose cannot be used together") {
+		t.Errorf("expected conflict error message, got: %s", out)
+	}
+}
+
+func TestCLI_ScanReportZeroRescanSeparation(t *testing.T) {
+	var requestCount int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<!DOCTYPE html><html><body>Single Scan Test</body></html>`)
+	}))
+	defer ts.Close()
+
+	tmpDir := t.TempDir()
+	jsonPath := filepath.Join(tmpDir, "scan_single.json")
+	htmlPath := filepath.Join(tmpDir, "scan_single.html")
+
+	// 1. Run felix scan: must perform ONE scan pass
+	_, scanCode := runFelix(t, "scan", ts.URL, "--json", jsonPath, "--export", htmlPath)
+	if scanCode == 2 {
+		t.Fatalf("scan failed with code 2")
+	}
+
+	initialRequests := atomic.LoadInt32(&requestCount)
+	if initialRequests == 0 {
+		t.Fatalf("expected initial requests during scan")
+	}
+
+	// 2. Run felix report consuming scan_single.json: must perform ZERO network requests!
+	reloadedHTML := filepath.Join(tmpDir, "offline.html")
+	_, repCode := runFelix(t, "report", jsonPath, "--html", reloadedHTML)
+	if repCode != scanCode {
+		t.Errorf("expected report code %d to match scan code %d", scanCode, repCode)
+	}
+
+	finalRequests := atomic.LoadInt32(&requestCount)
+	if finalRequests != initialRequests {
+		t.Fatalf("ZERO network requests expected during felix report, but %d additional requests were made!", finalRequests-initialRequests)
+	}
+}
+

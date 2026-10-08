@@ -203,6 +203,9 @@ func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
 	// Filter and mark seen
 	var toDownload []DiscoveredAsset
 	for _, da := range discovered {
+		if c.config.MaxAssets > 0 && len(toDownload) >= c.config.MaxAssets {
+			break
+		}
 		if _, exists := seen[da.URL]; exists {
 			continue
 		}
@@ -242,17 +245,22 @@ func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
 
 	// Phase 2: Source map discovery from downloaded JavaScript assets
 	var sourceMapJobs []string
-	for _, a := range assets {
-		if (a.Type == AssetJavaScript || strings.HasSuffix(a.URL, ".js")) && len(a.Content) > 0 {
-			smRef := ExtractSourceMapURL(a.Content)
-			if smRef != "" {
-				parsedAssetURL, err := url.Parse(a.URL)
-				if err == nil {
-					smURL, err := resolveURL(parsedAssetURL, smRef)
+	if c.config.MaxAssets <= 0 || len(assets) < c.config.MaxAssets {
+		for _, a := range assets {
+			if (a.Type == AssetJavaScript || strings.HasSuffix(a.URL, ".js")) && len(a.Content) > 0 {
+				smRef := ExtractSourceMapURL(a.Content)
+				if smRef != "" {
+					parsedAssetURL, err := url.Parse(a.URL)
 					if err == nil {
-						if _, exists := seen[smURL]; !exists {
-							seen[smURL] = struct{}{}
-							sourceMapJobs = append(sourceMapJobs, smURL)
+						smURL, err := resolveURL(parsedAssetURL, smRef)
+						if err == nil {
+							if _, exists := seen[smURL]; !exists {
+								seen[smURL] = struct{}{}
+								sourceMapJobs = append(sourceMapJobs, smURL)
+								if c.config.MaxAssets > 0 && len(assets)+len(sourceMapJobs) >= c.config.MaxAssets {
+									break
+								}
+							}
 						}
 					}
 				}
@@ -292,6 +300,15 @@ func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
 	}
 
 	wg.Wait()
+
+	if c.config.MaxAssets > 0 {
+		if len(assets) > c.config.MaxAssets {
+			assets = assets[:c.config.MaxAssets]
+		}
+		if len(res.Scripts) > c.config.MaxAssets {
+			res.Scripts = res.Scripts[:c.config.MaxAssets]
+		}
+	}
 
 	res.Assets = assets
 	return res
