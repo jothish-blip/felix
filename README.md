@@ -30,15 +30,25 @@ felix/
 │   │   ├── filters.go         # False positive & placeholder filtering
 │   │   └── detector_test.go   # Engine 2 test suite
 │   │
-│   └── cloud/                 # Engine 3: Cloud & BaaS Intelligence
-│       ├── provider.go        # Provider enums & service models
-│       ├── detector.go        # Provider discovery & verification coordinator
-│       ├── finding.go         # Cloud finding model & deduplication
-│       ├── supabase.go        # Supabase RLS auditor & key separation
-│       ├── firebase.go        # Firebase Realtime Database auditor
-│       ├── storage.go         # AWS S3 & GCP Cloud Storage auditor
-│       ├── client.go          # Bounded HTTP probe client
-│       └── cloud_test.go      # Engine 3 test suite
+│   ├── cloud/                 # Engine 3: Cloud & BaaS Intelligence
+│   │   ├── provider.go        # Provider enums & service models
+│   │   ├── detector.go        # Provider discovery & verification coordinator
+│   │   ├── finding.go         # Cloud finding model & deduplication
+│   │   ├── supabase.go        # Supabase RLS auditor & key separation
+│   │   ├── firebase.go        # Firebase Realtime Database auditor
+│   │   ├── storage.go         # AWS S3 & GCP Cloud Storage auditor
+│   │   ├── client.go          # Bounded HTTP probe client
+│   │   └── cloud_test.go      # Engine 3 test suite
+│   │
+│   └── api/                   # Engine 4: Modern API & Endpoint Auditor
+│       ├── finding.go         # API finding model & redaction
+│       ├── client.go          # Bounded probe client with scope protection
+│       ├── graphql.go         # Safe GraphQL introspection auditor
+│       ├── cors.go            # Conservative CORS origin reflection auditor
+│       ├── endpoints.go       # Sensitive endpoint auditor (.env, .git, metrics)
+│       ├── headers.go         # Defensive security headers auditor
+│       ├── detector.go        # Engine 4 coordinator & endpoint discovery
+│       └── api_test.go        # Engine 4 test suite
 │
 ├── .gitignore
 ├── go.mod
@@ -200,6 +210,63 @@ A client-visible Supabase `anon` key or public S3 asset bucket URL is standard m
 
 ---
 
+## Engine 4 — Modern API & Endpoint Auditor (`felix-api`)
+
+Engine 4 focuses on modern web API exposure and endpoint security posture, identifying exposed attack surfaces and verifying security conditions without exploiting or modifying the target.
+
+```text
+Engine 1 Assets
+        │
+        ▼
+API Endpoint Discovery
+        │
+ ┌──────┼────────┬────────┐
+ ▼      ▼        ▼        ▼
+GraphQL CORS  Sensitive Headers
+ │      │        │        │
+ └──────┼────────┴────────┘
+        ▼
+Evidence Redaction & Filtering
+        │
+        ▼
+API Finding Inventory
+```
+
+### Core Principle
+
+> **Felix identifies exposed attack surfaces and verifies meaningful security conditions without exploiting or modifying the target.**
+
+### Key Capabilities
+
+- **Endpoint Discovery**:
+  - Extracts relative API routes (`/api/...`, `/graphql`, `/v1/...`) referenced inside client-side JavaScript assets.
+  - Normalizes and bounds discovery to target scope (maximum 25 candidate routes).
+  - Reuses Engine 1 data without launching secondary web crawlers.
+- **GraphQL Auditing (`pkg/api/graphql.go`)**:
+  - Identifies endpoints (`/graphql`, `/api/graphql`, `/v1/graphql`) and executes a non-destructive query for schema metadata (`{ __schema { types { name } } }`).
+  - If introspection is enabled, reports type count while omitting schema dumps.
+  - Protected endpoints (HTTP 401/403) or 404s generate no exposure findings.
+  - Never executes mutations, depth attacks, or denial-of-service queries.
+- **CORS Auditing (`pkg/api/cors.go`)**:
+  - Sends controlled non-existent probe origin (`https://felix.invalid`) via GET and OPTIONS.
+  - Arbitrary origin reflection with credentials (`ACAC: true`) is flagged as `HIGH` severity.
+  - Arbitrary origin reflection without credentials is categorized as `LOW` severity.
+  - Wildcard policies (`*`) are noted as `INFO`.
+  - Does not attempt to read or exfiltrate private user sessions.
+- **Sensitive Endpoint Auditing (`pkg/api/endpoints.go`)**:
+  - Probes curated sensitive files: `/.env`, `/.env.local`, `/.env.example`, `/.git/HEAD`, `/swagger.json`, `/openapi.json`, `/actuator/health`, `/metrics`.
+  - Verifies authentic file structure (e.g. valid key-value assignments for `.env`, valid Git refs for `.git/HEAD`, PromQL metrics syntax).
+  - Redacts all sensitive variables, tokens, and metric values.
+- **Defensive Security Headers (`pkg/api/headers.go`)**:
+  - Inspects `Content-Security-Policy`, `Strict-Transport-Security` (only on HTTPS), `X-Frame-Options`, `X-Content-Type-Options`, and `Permissions-Policy`.
+  - Classifies missing headers as hardening findings (`LOW` / `INFO`).
+- **Safety & Scope Protection (`pkg/api/client.go`)**:
+  - Enforces a 1 MB response limit via `io.LimitReader`.
+  - Prohibits cross-origin redirect following to enforce target boundaries.
+  - HTTP 429 halts probing immediately without retry loops.
+
+---
+
 ## Installation & Building
 
 Compile the binary:
@@ -282,7 +349,7 @@ ENGINE 3 — CLOUD & BaaS INTELLIGENCE
 Providers discovered:
   Supabase: 1
   Firebase: 0
-  AWS:      1
+  AWS:      0
   GCP:      0
 
 Findings:
@@ -290,18 +357,34 @@ Findings:
          Endpoint: https://xyz.supabase.co/rest/v1/products
          Confidence: High
 
-  INFO   Supabase publishable anon key detected
-         Endpoint: https://xyz.supabase.co
-         Confidence: High
+ENGINE 4 — MODERN API & ENDPOINT INTELLIGENCE
+────────────────────────────────────────
+Endpoints audited: 14
+[+] GraphQL endpoints:     1
+[+] Sensitive endpoints:   1
+[+] CORS observations:     1
+[+] Security header checks: 5
 
-[*] Scan complete. 8 total asset(s) ingested, 1 secret finding(s), 2 cloud finding(s) discovered across 1 target(s).
+Findings:
+  HIGH    [cors-origin-reflection] CORS configuration reflects arbitrary Origin with credentials allowed
+          Endpoint: https://example.com/api (GET)
+          Evidence: Supplied Origin: https://felix.invalid. Response returned Access-Control-Allow-Origin: https://felix.invalid, Access-Control-Allow-Credentials: true
+          Confidence: High
+
+  CRITICAL [env-exposure] Public exposure of sensitive /.env configuration file
+          Endpoint: https://example.com/.env (GET)
+          Evidence: HTTP 200 OK. Observed variable declarations: [APP_ENV, DB_HOST, ...] (secret values redacted).
+          Confidence: High
+
+[*] Scan complete. 8 asset(s) ingested, 1 secret, 1 cloud, 2 API finding(s) discovered across 1 target(s).
 ```
 
 ---
 
-## Safety & Limitations
+## Safety & Defensive Boundaries
 
-- **Passive & Non-Destructive**: Felix performs static analysis and bounded, non-destructive read requests only.
-- **No Exploitation or Data Exfiltration**: Never dumps databases, downloads storage objects, or executes state-modifying requests (no POST, PUT, DELETE).
-- **No Live Credential Testing**: Never tests discovered secret tokens or `service_role` keys against third-party provider APIs.
-- **Defensive Auditing Only**: Designed strictly for authorized security assessments.
+Felix is strictly designed for authorized defensive security assessments:
+- **No Exploitation or Data Exfiltration**: Never dumps databases, downloads storage objects, or executes state-modifying requests (no POST/PUT/DELETE payload exploitation).
+- **No Brute-Forcing or Wordlists**: Probes only bounded, application-referenced routes and standard security metadata paths.
+- **No Credential Guessing**: Never attempts to guess passwords, test stolen API keys, or brute-force authentication.
+- **Strict Evidence Redaction**: Passwords, API tokens, JWTs, and database records are always masked in memory and terminal outputs.

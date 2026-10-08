@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"felix/pkg/api"
 	"felix/pkg/cloud"
 	"felix/pkg/crawler"
 	"felix/pkg/secrets"
@@ -94,6 +95,7 @@ func main() {
 	c := crawler.New(cfg)
 	detector := secrets.NewDetector()
 	cloudAuditor := cloud.NewDetector(nil)
+	apiAuditor := api.NewDetector(nil)
 
 	// Graceful cancellation on SIGINT/SIGTERM
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -104,6 +106,7 @@ func main() {
 	totalDiscovered := 0
 	totalSecretFindings := 0
 	totalCloudFindings := 0
+	totalAPIFindings := 0
 
 	for res := range results {
 		if res.Err != nil {
@@ -207,6 +210,30 @@ func main() {
 			}
 		}
 
+		// Run Engine 4 Modern API & Endpoint Intelligence
+		apiResult := apiAuditor.Audit(ctx, res.Target, res.Assets)
+
+		fmt.Println("ENGINE 4 — MODERN API & ENDPOINT INTELLIGENCE")
+		fmt.Println("────────────────────────────────────────")
+		fmt.Printf("Endpoints audited: %d\n", apiResult.EndpointsScanned)
+		fmt.Printf("[+] GraphQL endpoints:     %d\n", apiResult.GraphQLCount)
+		fmt.Printf("[+] Sensitive endpoints:   %d\n", apiResult.SensitiveCount)
+		fmt.Printf("[+] CORS observations:     %d\n", apiResult.CORSCount)
+		fmt.Printf("[+] Security header checks: %d\n\n", apiResult.HeaderCount)
+
+		if len(apiResult.Findings) > 0 {
+			fmt.Println("Findings:")
+			for _, f := range apiResult.Findings {
+				fmt.Printf("  %-7s [%s] %s\n", f.Severity, f.Category, f.Description)
+				fmt.Printf("          Endpoint: %s (%s)\n", f.Endpoint, f.Method)
+				if f.Evidence != "" {
+					fmt.Printf("          Evidence: %s\n", api.RedactEvidence(f.Evidence))
+				}
+				fmt.Printf("          Confidence: %s\n\n", f.Confidence)
+				totalAPIFindings++
+			}
+		}
+
 		if verbose && len(res.Assets) > 0 {
 			fmt.Println("Assets")
 			fmt.Println("────────────────────────────────────")
@@ -226,8 +253,8 @@ func main() {
 		totalDiscovered += len(res.Assets)
 	}
 
-	fmt.Printf("[*] Scan complete. %d total asset(s) ingested, %d secret finding(s), %d cloud finding(s) discovered across %d target(s).\n",
-		totalDiscovered, totalSecretFindings, totalCloudFindings, len(targets))
+	fmt.Printf("[*] Scan complete. %d asset(s) ingested, %d secret, %d cloud, %d API finding(s) discovered across %d target(s).\n",
+		totalDiscovered, totalSecretFindings, totalCloudFindings, totalAPIFindings, len(targets))
 }
 
 func assetLabel(t crawler.AssetType) string {
