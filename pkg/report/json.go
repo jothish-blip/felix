@@ -102,3 +102,21 @@ func WriteJSON(rep Report, filePath string) error {
 	}
 	return os.WriteFile(filePath, data, 0644)
 }
+
+// ParseReport deserializes a JSON scan result into a Report struct.
+func ParseReport(data []byte) (Report, error) {
+	var rep Report
+	if err := json.Unmarshal(data, &rep); err != nil {
+		return rep, err
+	}
+	return rep, nil
+}
+
+// LoadReport reads and deserializes a saved scan result JSON file from disk without network access.
+func LoadReport(filePath string) (Report, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return Report{}, err
+	}
+	return ParseReport(data)
+}

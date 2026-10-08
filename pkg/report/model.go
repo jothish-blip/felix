@@ -127,6 +127,9 @@ type Report struct {
 	Target          string          `json:"target"`
 	Targets         []string        `json:"targets,omitempty"`
 	Timestamp       string          `json:"timestamp"`
+	Duration        string          `json:"duration,omitempty"`
+	DurationMs      int64           `json:"duration_ms,omitempty"`
+	RequestCount    int             `json:"request_count,omitempty"`
 	RiskScore       int             `json:"risk_score"`
 	RiskLevel       string          `json:"risk_level"`
 	Summary         Summary         `json:"summary"`
