@@ -111,22 +111,48 @@ shasum -a 256 felix_darwin_arm64
 
 ## Quick Start
 
-### Windows (Zero Dependencies)
-1. Download `felix_1.0.0_windows_amd64.zip` from [Official Releases](https://github.com/jothish-blip/felix/releases/latest).
-2. Extract the archive.
-3. Run the automated installer:
+## Windows Installation
+
+Felix provides two distinct Windows installation paths:
+
+### Path A: Developer / Local Testing — FREE (No Azure / No Paid Certificates)
+For developers, security analysts, and contributors running Felix on their own Windows machines without paying for cloud signing services:
+
+1. **Acquire Felix:** Download the release ZIP or clone the repository.
+2. **Run Developer Setup:**
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\scripts\setup-dev.ps1
+   ```
+   This automated script:
+   - Generates a dedicated **Felix Development Code Signing Certificate** (`CN=Felix Development Code Signing, O=Felix Development, OU=Development Testing Only`).
+   - Prompts for explicit confirmation before installing trust into your local `CurrentUser` store.
+   - Signs `felix.exe` with standard Windows Authenticode.
+   - Installs Felix to `%LOCALAPPDATA%\Felix\bin` and registers it in User `PATH`.
+   - Runs `felix version` and `felix doctor --security` diagnostics.
+
+> [!NOTE]
+> **Local Trust Scope**: The development certificate is trusted **only on your local machine** where you explicitly confirm installation. It is explicitly labeled for DEVELOPMENT / TESTING ONLY and is not a commercial root.
+
+To remove development trust at any time:
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\uninstall-dev-trust.ps1
+```
+
+### Path B: Public Production Distribution (Official Releases)
+For users downloading pre-built public releases:
+1. Download `felix_windows_amd64.exe` or `felix_1.0.0_windows_amd64.zip` from [Official GitHub Releases](https://github.com/jothish-blip/felix/releases/latest).
+2. Verify SHA-256 integrity against the published manifest:
+   ```powershell
+   Get-FileHash .\felix_windows_amd64.exe -Algorithm SHA256
+   ```
+3. Run the standard installer:
    ```powershell
    powershell -ExecutionPolicy Bypass -File .\scripts\install\install.ps1
    ```
-4. Open a new PowerShell terminal and verify:
-   ```powershell
-   felix version
-   felix doctor
-   ```
-5. Execute an audit:
-   ```powershell
-   felix scan https://example.com --export report.html --json result.json
-   ```
+
+> [!IMPORTANT]
+> **Public SmartScreen Reputation vs. Local Trust**:
+> Public releases are distributed with cryptographic SHA-256 checksums and optional cloud signing hooks. Microsoft Defender SmartScreen reputation develops naturally over download volume and publisher identity. Felix does not bypass SmartScreen; instead, Felix provides the free, safe local development trust path (Path A above) so you can develop and test locally with verified Authenticode signatures.
 
 ### Linux & macOS (POSIX)
 1. Download and extract the archive for your architecture:

@@ -79,6 +79,16 @@ func TestCLI_Doctor(t *testing.T) {
 	}
 }
 
+func TestCLI_DoctorSecurity(t *testing.T) {
+	out, code := runFelix(t, "doctor", "--security")
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d, output: %s", code, out)
+	}
+	if !strings.Contains(out, "Security Diagnostic") {
+		t.Errorf("expected doctor --security output to include 'Security Diagnostic', got: %s", out)
+	}
+}
+
 func TestCLI_Config(t *testing.T) {
 	// 1. Show config
 	out, code := runFelix(t, "config", "show")

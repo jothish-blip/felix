@@ -20,8 +20,30 @@ Download the pre-compiled archive for your platform from the [GitHub Releases](h
 | **macOS** | Apple Silicon (`arm64`) | `felix_1.0.0_darwin_arm64.tar.gz` | `felix_darwin_arm64` (`felix`) |
 | **macOS** | Intel x86_64 (`amd64`) | `felix_1.0.0_darwin_amd64.tar.gz` | `felix_darwin_amd64` (`felix`) |
 
-#### Windows Installation (No Go Required)
-1. Download `felix_1.0.0_windows_amd64.zip`.
+#### Windows Installation
+
+Felix provides two installation options on Windows:
+
+##### Path A: Local Development & Testing — FREE (No Azure / No Paid Certificates)
+For developers and security analysts running Felix locally without requiring external cloud signing:
+1. Run the all-in-one developer setup:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\scripts\setup-dev.ps1
+   ```
+2. The workflow:
+   - Generates a dedicated **Felix Development Code Signing Certificate** (`CN=Felix Development Code Signing, O=Felix Development, OU=Development Testing Only`).
+   - Prompts for explicit user confirmation to trust this certificate in your local `CurrentUser` store.
+   - Signs `felix.exe` with standard Windows Authenticode.
+   - Installs Felix to `%LOCALAPPDATA%\Felix\bin` and configures User `PATH`.
+   - Verifies execution via `felix version` and `felix doctor --security`.
+
+To remove the development trust at any time:
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\uninstall-dev-trust.ps1
+```
+
+##### Path B: Public Production Distribution (Official Releases)
+1. Download `felix_1.0.0_windows_amd64.zip` from [GitHub Releases](https://github.com/jothish-blip/felix/releases).
 2. Extract the archive.
 3. Run the automated installer:
    ```powershell

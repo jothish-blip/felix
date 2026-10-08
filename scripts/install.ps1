@@ -1,5 +1,9 @@
 # Felix CLI Windows Installation Script
-# Usage: powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
+# Usage: powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 [-DevSign]
+
+param(
+    [switch]$DevSign
+)
 
 $ErrorActionPreference = "Stop"
 
@@ -40,6 +44,13 @@ if (-not (Test-Path $sourceExe)) {
 $targetExe = Join-Path $installDir "felix.exe"
 Copy-Item -Path $sourceExe -Destination $targetExe -Force
 Write-Host "[+] Installed felix.exe to: $targetExe" -ForegroundColor Green
+
+# 3b. Optional dev signing
+if ($DevSign) {
+    Write-Host "[*] Signing installed binary with Felix Development Certificate..." -ForegroundColor Cyan
+    $signScript = Join-Path $repoRoot "scripts\sign-dev-binary.ps1"
+    & powershell -ExecutionPolicy Bypass -File $signScript -BinaryPath $targetExe
+}
 
 # 4. Add to User PATH if not already present
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")

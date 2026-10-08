@@ -15,7 +15,8 @@
 
 param(
     [string]$BinaryPath = "",
-    [string]$Version = "1.0.0"
+    [string]$Version = "1.0.0",
+    [switch]$DevSign
 )
 
 $ErrorActionPreference = "Stop"
@@ -64,6 +65,16 @@ if (-not (Test-Path $TargetExe)) {
 }
 
 Write-Host "[OK] Installed binary: $TargetExe"
+if ($DevSign) {
+    Write-Host "[*] Applying Felix Development Authenticode signature..." -ForegroundColor Cyan
+    $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    $signScript = Join-Path $repoRoot "scripts\sign-dev-binary.ps1"
+    if (Test-Path $signScript) {
+        & powershell -ExecutionPolicy Bypass -File $signScript -BinaryPath $TargetExe
+    } else {
+        Write-Warning "sign-dev-binary.ps1 not found at $signScript"
+    }
+}
 
 # 3. Idempotent PATH management (User scope, zero admin required)
 $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")

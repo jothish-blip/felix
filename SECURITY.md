@@ -100,6 +100,25 @@ Felix's update subsystem (`pkg/update`) protects against software supply-chain t
 
 ---
 
+## 8. Windows Code Signing & Trust Architecture
+
+Felix maintains a clear separation between local development testing and public production distribution:
+
+### Local Development / Testing Path (Free & Machine-Scoped)
+For local development, building, and testing without requiring cloud subscription expenses:
+- **Dedicated Development Certificate:** A self-signed Authenticode certificate (`CN=Felix Development Code Signing, O=Felix Development, OU=Development Testing Only`) with Code Signing Enhanced Key Usage (`1.3.6.1.5.5.7.3.3`) is generated locally via `scripts\create-dev-cert.ps1`.
+- **Explicit User Confirmation:** Trust is installed into the local machine or user trust store **only** after explicit operator confirmation via `scripts\install-dev-trust.ps1`.
+- **Safe Scope:** The certificate is trusted **only on the specific machine** where installed. It does not possess authority outside the local test environment and cannot sign arbitrary software across other machines.
+- **Idempotent Removal:** The development certificate can be cleanly and completely uninstalled at any time using `scripts\uninstall-dev-trust.ps1` with zero impact on other Windows certificates.
+- **No Security Bypasses:** Felix strictly rejects disabling Windows Defender, modifying execution policies, or hacking SmartScreen. Trust is established purely through standard Windows Authenticode mechanisms.
+
+### Public Production Distribution Path
+- Public releases are authenticated cryptographically through SHA-256 manifests (`SHA256SUMS`) and machine-readable release metadata (`update.json`).
+- Future production signing is configured via Microsoft Azure Trusted Signing / Apple Developer ID.
+- Development certificates are never represented as commercial production authorities.
+
+---
+
 ## Navigation & Cross-References
 
 - **[README](README.md)** — Project overview and quick start.
