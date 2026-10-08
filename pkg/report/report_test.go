@@ -11,6 +11,7 @@ import (
 
 	"felix/pkg/api"
 	"felix/pkg/cloud"
+	"felix/pkg/crawler"
 	"felix/pkg/secrets"
 )
 
@@ -1028,4 +1029,468 @@ func TestDeduplicationPreservesIdentityWithDifferingEvidence(t *testing.T) {
 		t.Errorf("expected higher verification status VERIFIED to be retained, got %s", merged.Verification.Status)
 	}
 }
+
+// 31. JS asset discovered -> OBSERVED
+func TestMatrix1_JSAssetDiscovered_Observed(t *testing.T) {
+	asset := crawler.Asset{
+		URL:   "https://example.com/static/bundle.js",
+		Type:  crawler.AssetJavaScript,
+		Size:  10240,
+	}
+
+	f := FromCrawlerDiscovery("https://example.com", asset)
+	if f.Verification.Status != VerificationObserved {
+		t.Errorf("expected VerificationObserved, got %s", f.Verification.Status)
+	}
+	if f.Severity != SeverityInfo {
+		t.Errorf("expected INFO severity, got %s", f.Severity)
+	}
+	if f.EvidenceDetails.DetectionStatus != "OBSERVED" {
+		t.Errorf("expected detection status OBSERVED, got %s", f.EvidenceDetails.DetectionStatus)
+	}
+}
+
+// 32. Source map discovered -> OBSERVED
+func TestMatrix2_SourceMapDiscovered_Observed(t *testing.T) {
+	asset := crawler.Asset{
+		URL:         "https://example.com/static/bundle.js.map",
+		Type:        crawler.AssetSourceMap,
+		IsSourceMap: true,
+		Size:        52400,
+	}
+
+	f, ok := FromCrawlerAsset("https://example.com", asset)
+	if !ok {
+		t.Fatalf("expected source map asset to produce finding")
+	}
+	if f.Verification.Status != VerificationObserved {
+		t.Errorf("expected VerificationObserved, got %s", f.Verification.Status)
+	}
+	if f.Severity != SeverityInfo {
+		t.Errorf("expected INFO severity for source map discovery, got %s", f.Severity)
+	}
+	if !strings.Contains(f.Title, "Discovered") {
+		t.Errorf("expected title to reflect discovery rather than vulnerability, got %q", f.Title)
+	}
+}
+
+// 33. Entropy candidate -> DETECTED / NOT_VERIFIED
+func TestMatrix3_EntropyCandidate_DetectedNotVerified(t *testing.T) {
+	sec := secrets.SecretFinding{
+		Type:        secrets.SecretHighEntropy,
+		Title:       "High-Entropy Suspicious Secret String",
+		Value:       "4fA8bC9dE0fG1hI2jK3lM4nO5pQ6rS7tU8vW9xY0z=",
+		Redacted:    "4fA8****************xY0z=",
+		FileOrigin:  "https://example.com/app.js",
+		LineNumber:  24,
+		Severity:    secrets.SeverityLow,
+		Confidence:  secrets.ConfidenceLow,
+		Evidence:    "const token = '4fA8****************xY0z='",
+		Fingerprint: "fp-entropy-33",
+	}
+
+	f := FromSecretFinding("https://example.com", sec)
+	if f.Verification.Status != VerificationNotVerified {
+		t.Errorf("expected VerificationNotVerified, got %s", f.Verification.Status)
+	}
+	if f.Verification.DetectionStatus != "DETECTED" {
+		t.Errorf("expected DetectionStatus DETECTED, got %s", f.Verification.DetectionStatus)
+	}
+	if f.EvidenceDetails.NegativeEvidence == "" {
+		t.Errorf("expected negative evidence explaining live validity not tested")
+	}
+}
+
+// 34. Known secret pattern -> DETECTED / NOT_VERIFIED
+func TestMatrix4_KnownSecretPattern_DetectedNotVerified(t *testing.T) {
+	sec := secrets.SecretFinding{
+		Type:        secrets.SecretAWSAccessKey,
+		Title:       "AWS Access Key ID Discovered",
+		Value:       "AKIAIOSFODNN7EXAMPLE",
+		Redacted:    "AKIA****************MPLE",
+		FileOrigin:  "https://example.com/config.js",
+		LineNumber:  12,
+		Severity:    secrets.SeverityCritical,
+		Confidence:  secrets.ConfidenceHigh,
+		Evidence:    "const aws_key = 'AKIA****************MPLE'",
+		Fingerprint: "fp-aws-34",
+	}
+
+	f := FromSecretFinding("https://example.com", sec)
+	if f.Verification.Status != VerificationNotVerified {
+		t.Errorf("expected VerificationNotVerified, got %s", f.Verification.Status)
+	}
+	if f.Verification.DetectionStatus != "DETECTED" {
+		t.Errorf("expected DetectionStatus DETECTED, got %s", f.Verification.DetectionStatus)
+	}
+	// High confidence pattern must NOT be converted to VERIFIED without live probe
+	if f.Confidence != ConfidenceHigh {
+		t.Errorf("expected HIGH confidence, got %s", f.Confidence)
+	}
+}
+
+// 35. Supabase provider detected -> OBSERVED
+func TestMatrix5_SupabaseProviderDetected_Observed(t *testing.T) {
+	cld := cloud.CloudFinding{
+		Provider:    cloud.ProviderSupabase,
+		Category:    "provider-discovered",
+		Endpoint:    "https://xyz.supabase.co",
+		Description: "Discovered Supabase cloud provider infrastructure",
+		Severity:    cloud.SeverityInfo,
+		Confidence:  cloud.ConfidenceHigh,
+		Fingerprint: "fp-sb-provider",
+	}
+
+	f := FromCloudFinding("https://example.com", cld)
+	if f.Verification.Status != VerificationObserved {
+		t.Errorf("expected VerificationObserved, got %s", f.Verification.Status)
+	}
+	if f.Severity != SeverityInfo {
+		t.Errorf("expected INFO severity, got %s", f.Severity)
+	}
+}
+
+// 36. Supabase endpoint discovered -> OBSERVED
+func TestMatrix6_SupabaseEndpointDiscovered_Observed(t *testing.T) {
+	cld := cloud.CloudFinding{
+		Provider:    cloud.ProviderSupabase,
+		Category:    "supabase-endpoint-discovered",
+		Endpoint:    "https://xyz.supabase.co/rest/v1/users",
+		Description: "Discovered Supabase REST endpoint in client assets",
+		Severity:    cloud.SeverityInfo,
+		Confidence:  cloud.ConfidenceHigh,
+		Fingerprint: "fp-sb-endpoint",
+	}
+
+	f := FromCloudFinding("https://example.com", cld)
+	if f.Verification.Status != VerificationObserved {
+		t.Errorf("expected VerificationObserved, got %s", f.Verification.Status)
+	}
+	if f.Severity != SeverityInfo {
+		t.Errorf("expected INFO severity, got %s", f.Severity)
+	}
+}
+
+// 37. Supabase endpoint returns 401 -> NOT_EXPOSED
+func TestMatrix7_SupabaseEndpointReturns401_NotExposed(t *testing.T) {
+	cld := cloud.CloudFinding{
+		Provider:    cloud.ProviderSupabase,
+		Category:    "supabase-access-denied",
+		Endpoint:    "https://xyz.supabase.co/rest/v1/private_table",
+		Description: "Safe bounded GET returned HTTP 401 Unauthorized (RLS enforced)",
+		Evidence:    "HTTP 401 Unauthorized. Access denied by Row Level Security.",
+		Severity:    cloud.SeverityInfo,
+		Confidence:  cloud.ConfidenceHigh,
+		Fingerprint: "fp-sb-401",
+	}
+
+	f := FromCloudFinding("https://example.com", cld)
+	if f.Verification.Status != VerificationNotExposed {
+		t.Errorf("expected VerificationNotExposed, got %s", f.Verification.Status)
+	}
+	if f.Severity != SeverityInfo {
+		t.Errorf("expected INFO severity for denied access, got %s", f.Severity)
+	}
+	if !strings.Contains(f.EvidenceDetails.NegativeEvidence, "401") {
+		t.Errorf("expected negative evidence citing HTTP 401, got %q", f.EvidenceDetails.NegativeEvidence)
+	}
+}
+
+// 38. Supabase endpoint returns 403 -> NOT_EXPOSED
+func TestMatrix8_SupabaseEndpointReturns403_NotExposed(t *testing.T) {
+	cld := cloud.CloudFinding{
+		Provider:    cloud.ProviderSupabase,
+		Category:    "supabase-access-denied",
+		Endpoint:    "https://xyz.supabase.co/rest/v1/admin_table",
+		Description: "Safe bounded GET returned HTTP 403 Forbidden (RLS enforced)",
+		Evidence:    "HTTP 403 Forbidden. Access denied by Row Level Security.",
+		Severity:    cloud.SeverityInfo,
+		Confidence:  cloud.ConfidenceHigh,
+		Fingerprint: "fp-sb-403",
+	}
+
+	f := FromCloudFinding("https://example.com", cld)
+	if f.Verification.Status != VerificationNotExposed {
+		t.Errorf("expected VerificationNotExposed, got %s", f.Verification.Status)
+	}
+	if f.Severity != SeverityInfo {
+		t.Errorf("expected INFO severity, got %s", f.Severity)
+	}
+}
+
+// 39. GraphQL endpoint discovered -> OBSERVED
+func TestMatrix9_GraphQLEndpointDiscovered_Observed(t *testing.T) {
+	apiF := api.APIFinding{
+		Category:    "graphql-endpoint-discovered",
+		Endpoint:    "https://example.com/api/graphql",
+		Method:      "GET",
+		Description: "Discovered candidate GraphQL endpoint in assets",
+		Severity:    api.SeverityInfo,
+		Confidence:  api.ConfidenceHigh,
+		Fingerprint: "fp-gql-discovered",
+	}
+
+	f := FromAPIFinding("https://example.com", apiF)
+	if f.Verification.Status != VerificationObserved {
+		t.Errorf("expected VerificationObserved, got %s", f.Verification.Status)
+	}
+	if f.Severity != SeverityInfo {
+		t.Errorf("expected INFO severity for endpoint discovery, got %s", f.Severity)
+	}
+}
+
+// 40. GraphQL introspection succeeds -> VERIFIED
+func TestMatrix10_GraphQLIntrospectionSucceeds_Verified(t *testing.T) {
+	apiF := api.APIFinding{
+		Category:    api.CategoryGraphQLIntrospection,
+		Endpoint:    "https://example.com/graphql",
+		Method:      "GET",
+		Description: "GraphQL endpoint has public introspection enabled",
+		Evidence:    "HTTP 200 OK. Introspection query succeeded (32 types observed).",
+		Severity:    api.SeverityLow,
+		Confidence:  api.ConfidenceHigh,
+		Fingerprint: "fp-gql-success",
+	}
+
+	f := FromAPIFinding("https://example.com", apiF)
+	if f.Verification.Status != VerificationVerified {
+		t.Errorf("expected VerificationVerified, got %s", f.Verification.Status)
+	}
+	if f.Severity != SeverityLow {
+		t.Errorf("expected LOW severity (not critical), got %s", f.Severity)
+	}
+}
+
+// 41. Wildcard CORS without credentials -> OBSERVED
+func TestMatrix11_WildcardCORSWithoutCredentials_Observed(t *testing.T) {
+	apiF := api.APIFinding{
+		Category:    api.CategoryCORSWildcard,
+		Endpoint:    "https://example.com/api/public",
+		Method:      "GET",
+		Description: "CORS policy permits wildcard (*) origin",
+		Evidence:    "Response returned Access-Control-Allow-Origin: *",
+		Severity:    api.SeverityInfo,
+		Confidence:  api.ConfidenceHigh,
+		Fingerprint: "fp-cors-wildcard-35",
+	}
+
+	f := FromAPIFinding("https://example.com", apiF)
+	if f.Verification.Status != VerificationObserved {
+		t.Errorf("expected VerificationObserved, got %s", f.Verification.Status)
+	}
+	if f.Severity != SeverityInfo {
+		t.Errorf("expected INFO severity, got %s", f.Severity)
+	}
+	if !strings.Contains(f.EvidenceDetails.NegativeEvidence, "Access-Control-Allow-Credentials header was absent") {
+		t.Errorf("expected negative evidence confirming absence of credentials, got %q", f.EvidenceDetails.NegativeEvidence)
+	}
+}
+
+// 42. Arbitrary-origin credentialed behavior -> VERIFIED
+func TestMatrix12_ArbitraryOriginCredentialed_Verified(t *testing.T) {
+	apiF := api.APIFinding{
+		Category:    api.CategoryCORSOriginReflection,
+		Endpoint:    "https://example.com/api/user",
+		Method:      "GET",
+		Description: "CORS configuration reflects arbitrary Origin with credentials allowed",
+		Evidence:    "Supplied Origin: https://felix.invalid. Response returned Access-Control-Allow-Origin: https://felix.invalid, Access-Control-Allow-Credentials: true",
+		Severity:    api.SeverityHigh,
+		Confidence:  api.ConfidenceHigh,
+		Fingerprint: "fp-cors-creds-36",
+	}
+
+	f := FromAPIFinding("https://example.com", apiF)
+	if f.Verification.Status != VerificationVerified {
+		t.Errorf("expected VerificationVerified, got %s", f.Verification.Status)
+	}
+	if f.Severity != SeverityHigh {
+		t.Errorf("expected HIGH severity for credentialed reflection, got %s", f.Severity)
+	}
+}
+
+// 43. Sensitive endpoint 404 -> NOT_EXPOSED
+func TestMatrix13_SensitiveEndpoint404_NotExposed(t *testing.T) {
+	apiF := api.APIFinding{
+		Category:    "sensitive-endpoint-protected",
+		Endpoint:    "https://example.com/.env",
+		Method:      "GET",
+		Description: "Probe returned HTTP 404 Not Found",
+		Evidence:    "HTTP 404 Not Found. Resource absent.",
+		Severity:    api.SeverityInfo,
+		Confidence:  api.ConfidenceHigh,
+		Fingerprint: "fp-env-404",
+	}
+
+	f := FromAPIFinding("https://example.com", apiF)
+	if f.Verification.Status != VerificationNotExposed {
+		t.Errorf("expected VerificationNotExposed, got %s", f.Verification.Status)
+	}
+	if f.Severity != SeverityInfo {
+		t.Errorf("expected INFO severity, got %s", f.Severity)
+	}
+}
+
+// 44. Sensitive endpoint 401 -> NOT_EXPOSED
+func TestMatrix14_SensitiveEndpoint401_NotExposed(t *testing.T) {
+	apiF := api.APIFinding{
+		Category:    "sensitive-endpoint-protected",
+		Endpoint:    "https://example.com/api/debug",
+		Method:      "GET",
+		Description: "Probe returned HTTP 401 Unauthorized",
+		Evidence:    "HTTP 401 Unauthorized. Access denied.",
+		Severity:    api.SeverityInfo,
+		Confidence:  api.ConfidenceHigh,
+		Fingerprint: "fp-debug-401",
+	}
+
+	f := FromAPIFinding("https://example.com", apiF)
+	if f.Verification.Status != VerificationNotExposed {
+		t.Errorf("expected VerificationNotExposed, got %s", f.Verification.Status)
+	}
+	if f.Severity != SeverityInfo {
+		t.Errorf("expected INFO severity, got %s", f.Severity)
+	}
+}
+
+// 45. Sensitive endpoint 403 -> NOT_EXPOSED
+func TestMatrix15_SensitiveEndpoint403_NotExposed(t *testing.T) {
+	apiF := api.APIFinding{
+		Category:    "sensitive-endpoint-protected",
+		Endpoint:    "https://example.com/.git/HEAD",
+		Method:      "GET",
+		Description: "Probe returned HTTP 403 Forbidden",
+		Evidence:    "HTTP 403 Forbidden. Access denied.",
+		Severity:    api.SeverityInfo,
+		Confidence:  api.ConfidenceHigh,
+		Fingerprint: "fp-git-403",
+	}
+
+	f := FromAPIFinding("https://example.com", apiF)
+	if f.Verification.Status != VerificationNotExposed {
+		t.Errorf("expected VerificationNotExposed, got %s", f.Verification.Status)
+	}
+	if f.Severity != SeverityInfo {
+		t.Errorf("expected INFO severity, got %s", f.Severity)
+	}
+}
+
+// 46. Sensitive endpoint 200 normal content -> VERIFIED response, no exposure
+func TestMatrix16_SensitiveEndpoint200Normal_VerifiedNoExposure(t *testing.T) {
+	apiF := api.APIFinding{
+		Category:    "sensitive-endpoint-normal",
+		Endpoint:    "https://example.com/.env",
+		Method:      "GET",
+		Description: "HTTP 200 OK returned generic HTML shell (no .env contents)",
+		Evidence:    "HTTP 200 OK. Standard HTML document returned; no configuration variables.",
+		Severity:    api.SeverityInfo,
+		Confidence:  api.ConfidenceHigh,
+		Fingerprint: "fp-env-spa-200",
+	}
+
+	f := FromAPIFinding("https://example.com", apiF)
+	if f.Verification.Status != VerificationVerified {
+		t.Errorf("expected VerificationVerified response, got %s", f.Verification.Status)
+	}
+	if f.Severity != SeverityInfo {
+		t.Errorf("expected INFO severity for normal content, got %s", f.Severity)
+	}
+	if !strings.Contains(f.EvidenceDetails.NegativeEvidence, "normal content") {
+		t.Errorf("expected negative evidence indicating normal response, got %q", f.EvidenceDetails.NegativeEvidence)
+	}
+}
+
+// 47. Sensitive endpoint 200 sensitive content -> VERIFIED exposure
+func TestMatrix17_SensitiveEndpoint200Sensitive_VerifiedExposure(t *testing.T) {
+	apiF := api.APIFinding{
+		Category:    api.CategoryEnvExposure,
+		Endpoint:    "https://example.com/.env",
+		Method:      "GET",
+		Description: "Public exposure of sensitive /.env configuration file",
+		Evidence:    "HTTP 200 OK. Observed variable declarations: [DATABASE_URL, SECRET_KEY] (values redacted).",
+		Severity:    api.SeverityCritical,
+		Confidence:  api.ConfidenceHigh,
+		Fingerprint: "fp-env-leak-200",
+	}
+
+	f := FromAPIFinding("https://example.com", apiF)
+	if f.Verification.Status != VerificationVerified {
+		t.Errorf("expected VerificationVerified, got %s", f.Verification.Status)
+	}
+	if f.Severity != SeverityCritical {
+		t.Errorf("expected CRITICAL severity, got %s", f.Severity)
+	}
+}
+
+// 48. Weak observations -> NO false high-impact security story
+func TestMatrix18_WeakObservations_NoFalseSecurityStory(t *testing.T) {
+	target := "https://example.com"
+
+	// Construct weak observations:
+	// 1. Supabase publishable anon key (client config)
+	cldAnon := cloud.CloudFinding{
+		Provider:    cloud.ProviderSupabase,
+		Category:    "supabase-anon-key",
+		Endpoint:    "https://test.supabase.co",
+		Description: "Supabase publishable anon key detected",
+		Severity:    cloud.SeverityInfo,
+		Confidence:  cloud.ConfidenceHigh,
+		Fingerprint: "fp-anon-weak",
+	}
+	// 2. Discovered REST endpoint
+	cldEP := cloud.CloudFinding{
+		Provider:    cloud.ProviderSupabase,
+		Category:    "supabase-endpoint-discovered",
+		Endpoint:    "https://test.supabase.co/rest/v1/items",
+		Description: "Discovered Supabase REST endpoint in client assets",
+		Severity:    cloud.SeverityInfo,
+		Confidence:  cloud.ConfidenceHigh,
+		Fingerprint: "fp-ep-weak",
+	}
+	// 3. Discovered GraphQL endpoint
+	apiGQL := api.APIFinding{
+		Category:    "graphql-endpoint-discovered",
+		Endpoint:    "https://example.com/graphql",
+		Method:      "GET",
+		Description: "Discovered GraphQL route in client assets",
+		Severity:    api.SeverityInfo,
+		Confidence:  api.ConfidenceHigh,
+		Fingerprint: "fp-gql-weak",
+	}
+	// 4. Wildcard CORS
+	apiCORS := api.APIFinding{
+		Category:    api.CategoryCORSWildcard,
+		Endpoint:    "https://example.com/api",
+		Method:      "GET",
+		Description: "CORS policy permits wildcard (*) origin",
+		Evidence:    "Access-Control-Allow-Origin: *",
+		Severity:    api.SeverityInfo,
+		Confidence:  api.ConfidenceHigh,
+		Fingerprint: "fp-cors-weak",
+	}
+
+	f1 := FromCloudFinding(target, cldAnon)
+	f2 := FromCloudFinding(target, cldEP)
+	f3 := FromAPIFinding(target, apiGQL)
+	f4 := FromAPIFinding(target, apiCORS)
+
+	rep := BuildReport(target, []Finding{f1, f2, f3, f4})
+
+	// PROVE: Zero high-impact or critical security stories are formed from weak observations alone!
+	for _, story := range rep.SecurityStories {
+		if story.Severity == SeverityCritical || story.Severity == SeverityHigh {
+			t.Errorf("UNSUPPORTED ESCALATION: Weak observations created high-impact story: %s (Severity: %s)",
+				story.Title, story.Severity)
+		}
+	}
+
+	// Overall risk score must remain strictly LOW or INFORMATIONAL (not inflated)
+	if rep.RiskScore > 20 {
+		t.Errorf("Risk score unfairly escalated for weak observations: %d/100", rep.RiskScore)
+	}
+	if rep.Summary.CriticalCount > 0 || rep.Summary.HighCount > 0 {
+		t.Errorf("Weak observations must not produce CRITICAL or HIGH findings: Crit=%d, High=%d",
+			rep.Summary.CriticalCount, rep.Summary.HighCount)
+	}
+}
+
 

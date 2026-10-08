@@ -1,0 +1,122 @@
+[
+  {
+    "id": "cloud_fp_supabase_anon_config",
+    "type": "false_positive",
+    "provider": "supabase",
+    "description": "Public Supabase anon client configuration discovered in client code",
+    "mock_status": 200,
+    "mock_body": "",
+    "expected_detection_status": "OBSERVED",
+    "expected_verification_status": "OBSERVED",
+    "expected_severity": "INFO",
+    "expect_exposure": false
+  },
+  {
+    "id": "cloud_fp_supabase_rls_401",
+    "type": "false_positive",
+    "provider": "supabase",
+    "description": "Supabase REST endpoint probe returns 401 with active RLS",
+    "mock_status": 401,
+    "mock_body": "{\"message\":\"Unauthorized\"}",
+    "expected_detection_status": "DETECTED",
+    "expected_verification_status": "NOT_EXPOSED",
+    "expected_severity": "INFO",
+    "expect_exposure": false
+  },
+  {
+    "id": "cloud_fp_supabase_rls_403",
+    "type": "false_positive",
+    "provider": "supabase",
+    "description": "Supabase REST endpoint probe returns 403 with active RLS",
+    "mock_status": 403,
+    "mock_body": "{\"message\":\"Permission denied\"}",
+    "expected_detection_status": "DETECTED",
+    "expected_verification_status": "NOT_EXPOSED",
+    "expected_severity": "INFO",
+    "expect_exposure": false
+  },
+  {
+    "id": "cloud_fp_supabase_empty_200",
+    "type": "false_positive",
+    "provider": "supabase",
+    "description": "Supabase REST endpoint probe returns 200 OK with empty records array []",
+    "mock_status": 200,
+    "mock_body": "[]",
+    "expected_detection_status": "DETECTED",
+    "expected_verification_status": "VERIFIED",
+    "expected_severity": "INFO",
+    "expect_exposure": false
+  },
+  {
+    "id": "cloud_fn_supabase_unauthenticated_records",
+    "type": "true_positive",
+    "provider": "supabase",
+    "description": "Supabase REST endpoint probe returns unauthenticated database rows",
+    "mock_status": 200,
+    "mock_body": "[{\"id\":1,\"email\":\"admin@acme.corp\",\"role\":\"superadmin\"}]",
+    "expected_detection_status": "VERIFIED",
+    "expected_verification_status": "VERIFIED",
+    "expected_severity": "HIGH",
+    "expect_exposure": true
+  },
+  {
+    "id": "cloud_fn_supabase_service_role_key",
+    "type": "true_positive",
+    "provider": "supabase",
+    "description": "Privileged Supabase service_role JWT key identified in client assets",
+    "mock_status": 0,
+    "mock_body": "",
+    "expected_detection_status": "DETECTED",
+    "expected_verification_status": "NOT_VERIFIED",
+    "expected_severity": "CRITICAL",
+    "expect_exposure": true
+  },
+  {
+    "id": "cloud_fp_firebase_protected_401",
+    "type": "false_positive",
+    "provider": "firebase",
+    "description": "Firebase Realtime Database returns 401 Permission Denied",
+    "mock_status": 401,
+    "mock_body": "{\"error\":\"Permission denied\"}",
+    "expected_detection_status": "DETECTED",
+    "expected_verification_status": "NOT_EXPOSED",
+    "expected_severity": "INFO",
+    "expect_exposure": false
+  },
+  {
+    "id": "cloud_fn_firebase_open_rtdb",
+    "type": "true_positive",
+    "provider": "firebase",
+    "description": "Firebase Realtime Database allows unauthorized read access returning sensitive data",
+    "mock_status": 200,
+    "mock_body": "{\"users\":{\"u1\":{\"email\":\"ceo@acme.corp\",\"role\":\"admin\"}}}",
+    "expected_detection_status": "VERIFIED",
+    "expected_verification_status": "VERIFIED",
+    "expected_severity": "HIGH",
+    "expect_exposure": true
+  },
+  {
+    "id": "cloud_fp_aws_s3_protected_403",
+    "type": "false_positive",
+    "provider": "aws",
+    "description": "AWS S3 bucket returns 403 AccessDenied",
+    "mock_status": 403,
+    "mock_body": "<Error><Code>AccessDenied</Code></Error>",
+    "expected_detection_status": "DETECTED",
+    "expected_verification_status": "NOT_EXPOSED",
+    "expected_severity": "INFO",
+    "expect_exposure": false
+  },
+  {
+    "id": "cloud_fn_aws_s3_public_bucket",
+    "type": "true_positive",
+    "provider": "aws",
+    "description": "AWS S3 bucket returns 200 OK with public ListBucketResult XML listing",
+    "mock_status": 200,
+    "mock_body": "<ListBucketResult><Name>acme-backups</Name><Contents><Key>database.dump</Key></Contents></ListBucketResult>",
+    "expected_detection_status": "DETECTED",
+    "expected_verification_status": "VERIFIED",
+    "expected_severity": "MEDIUM",
+    "expect_exposure": true
+  }
+]

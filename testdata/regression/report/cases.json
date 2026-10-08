@@ -1,0 +1,147 @@
+[
+  {
+    "id": "report_fp_weak_signals_no_story",
+    "description": "Weak signals (anon config, wildcard CORS, health endpoint) must NOT generate critical security stories",
+    "findings": [
+      {
+        "id": "CLOUD-anon",
+        "category": "supabase-provider",
+        "severity": "INFO",
+        "confidence": "HIGH",
+        "target": "https://example.com",
+        "endpoint": "https://project.supabase.co",
+        "source": "cloud"
+      },
+      {
+        "id": "API-cors",
+        "category": "cors-wildcard",
+        "severity": "INFO",
+        "confidence": "HIGH",
+        "target": "https://example.com",
+        "endpoint": "https://example.com",
+        "source": "api"
+      },
+      {
+        "id": "API-health",
+        "category": "health-exposure",
+        "severity": "INFO",
+        "confidence": "HIGH",
+        "target": "https://example.com",
+        "endpoint": "https://example.com/health",
+        "source": "api"
+      }
+    ],
+    "expected_stories_count": 0,
+    "expected_max_story_severity": "",
+    "expected_max_risk_level": "INFORMATIONAL"
+  },
+  {
+    "id": "report_fn_supabase_service_role_story",
+    "description": "Privileged Supabase service_role key with matching project endpoint MUST generate critical security story",
+    "findings": [
+      {
+        "id": "SEC-sb-service",
+        "category": "supabase-service-key",
+        "title": "Supabase Service Role Key",
+        "severity": "CRITICAL",
+        "confidence": "HIGH",
+        "target": "https://example.com",
+        "endpoint": "https://example.com/bundle.js",
+        "source": "secrets"
+      },
+      {
+        "id": "CLOUD-sb-proj",
+        "category": "supabase-provider",
+        "severity": "INFO",
+        "confidence": "HIGH",
+        "target": "https://example.com",
+        "endpoint": "https://project.supabase.co",
+        "source": "cloud"
+      }
+    ],
+    "expected_stories_count": 1,
+    "expected_story_id_prefix": "STORY-SB-",
+    "expected_max_story_severity": "CRITICAL",
+    "expected_max_risk_level": "CRITICAL"
+  },
+  {
+    "id": "report_fn_firebase_open_story",
+    "description": "Open Firebase Realtime Database MUST generate high-severity security story",
+    "findings": [
+      {
+        "id": "CLOUD-fb-open",
+        "category": "firebase-open-database",
+        "title": "Open Firebase Realtime Database",
+        "severity": "HIGH",
+        "confidence": "HIGH",
+        "target": "https://example.com",
+        "endpoint": "https://project.firebaseio.com",
+        "source": "cloud"
+      }
+    ],
+    "expected_stories_count": 1,
+    "expected_story_id_prefix": "STORY-FB-",
+    "expected_max_story_severity": "HIGH",
+    "expected_max_risk_level": "HIGH"
+  },
+  {
+    "id": "report_fn_env_exposed_with_secrets_story",
+    "description": "Exposed .env configuration file with confirmed secrets MUST generate critical security story",
+    "findings": [
+      {
+        "id": "API-env",
+        "category": "env-exposure",
+        "title": "Exposed Environment Configuration (.env)",
+        "severity": "CRITICAL",
+        "confidence": "HIGH",
+        "target": "https://example.com",
+        "endpoint": "https://example.com/.env",
+        "source": "api"
+      },
+      {
+        "id": "SEC-aws",
+        "category": "aws-access-key",
+        "title": "AWS Access Key ID",
+        "severity": "HIGH",
+        "confidence": "HIGH",
+        "target": "https://example.com",
+        "endpoint": "https://example.com/bundle.js",
+        "source": "secrets"
+      }
+    ],
+    "expected_stories_count": 1,
+    "expected_story_id_prefix": "STORY-ENV-",
+    "expected_max_story_severity": "CRITICAL",
+    "expected_max_risk_level": "CRITICAL"
+  },
+  {
+    "id": "report_fn_cors_credentialed_with_routes_story",
+    "description": "Credentialed CORS reflection with active API routes MUST generate high-severity security story",
+    "findings": [
+      {
+        "id": "API-cors-cred",
+        "category": "cors-origin-reflection",
+        "title": "CORS Origin Reflection with Credentials",
+        "severity": "HIGH",
+        "confidence": "HIGH",
+        "target": "https://example.com",
+        "endpoint": "https://example.com/api/login",
+        "source": "api"
+      },
+      {
+        "id": "API-route-user",
+        "category": "endpoint-discovered",
+        "title": "Discovered API Route",
+        "severity": "INFO",
+        "confidence": "HIGH",
+        "target": "https://example.com",
+        "endpoint": "https://example.com/api/v1/user",
+        "source": "api"
+      }
+    ],
+    "expected_stories_count": 1,
+    "expected_story_id_prefix": "STORY-CORS-",
+    "expected_max_story_severity": "HIGH",
+    "expected_max_risk_level": "HIGH"
+  }
+]

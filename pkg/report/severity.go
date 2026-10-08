@@ -55,8 +55,15 @@ func MapSeverity(category string, rawSeverity string) string {
 	case cat == "missing-csp", cat == "missing-hsts", cat == "missing-x-frame-options":
 		return SeverityLow
 
-	// Source map exposure -> INFO (source disclosure, not direct vuln)
-	case cat == "source-map-exposure":
+	// Source map exposure or discovery -> INFO (source disclosure, not direct vuln)
+	case cat == "source-map-exposure", cat == "source-map-discovered":
+		return SeverityInfo
+
+	// Discovered components, protected endpoints (401/403/404), and asset inventory -> INFO
+	case strings.Contains(cat, "endpoint-discovered"), strings.Contains(cat, "provider-discovered"),
+		strings.Contains(cat, "access-denied"), strings.Contains(cat, "endpoint-protected"),
+		strings.Contains(cat, "public-endpoint"), strings.Contains(cat, "endpoint-normal"),
+		strings.Contains(cat, "introspection-denied"), strings.HasPrefix(cat, "asset-"):
 		return SeverityInfo
 
 	// Version control repository exposure -> HIGH

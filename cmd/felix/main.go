@@ -183,7 +183,7 @@ func main() {
 
 		fmt.Println("ENGINE 2 — SECRET INTELLIGENCE")
 		fmt.Printf("[+] Files analyzed: %d\n", filesAnalyzed)
-		fmt.Printf("[+] Confirmed findings: %d\n", len(secretFindings))
+		fmt.Printf("[+] Findings detected: %d\n", len(secretFindings))
 
 		if len(secretFindings) > 0 {
 			fmt.Println()
