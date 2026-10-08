@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"felix/pkg/crawler"
+	"felix/pkg/secrets"
 )
 
 const banner = `
@@ -90,6 +91,7 @@ func main() {
 		UserAgent:    userAgent,
 	}
 	c := crawler.New(cfg)
+	detector := secrets.NewDetector()
 
 	// Graceful cancellation on SIGINT/SIGTERM
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -98,6 +100,8 @@ func main() {
 	results := c.CrawlConcurrently(ctx, targets)
 
 	totalDiscovered := 0
+	totalFindings := 0
+
 	for res := range results {
 		if res.Err != nil {
 			fmt.Printf("[-] [%s] Error: %v\n\n", res.Target, res.Err)
@@ -108,6 +112,7 @@ func main() {
 		cssCount := 0
 		mapCount := 0
 		manifestCount := 0
+		filesAnalyzed := 0
 
 		for _, a := range res.Assets {
 			switch a.Type {
@@ -120,11 +125,13 @@ func main() {
 			case crawler.AssetManifest:
 				manifestCount++
 			}
+			if len(a.Content) > 0 {
+				filesAnalyzed++
+			}
 		}
 
 		fmt.Printf("Target: %s\n\n", res.Target)
-		fmt.Printf("[+] Target reachable\n")
-		fmt.Printf("[+] HTML retrieved\n")
+		fmt.Println("ENGINE 1 — ASSET INGESTION")
 		fmt.Printf("[+] Assets discovered: %d\n", len(res.Assets))
 		if jsCount > 0 {
 			fmt.Printf("[+] JavaScript: %d\n", jsCount)
@@ -140,9 +147,28 @@ func main() {
 		}
 		fmt.Println()
 
-		if len(res.Assets) > 0 {
+		// Run Engine 2 Secret Detection
+		findings := detector.ScanAssets(res.Assets)
+
+		fmt.Println("ENGINE 2 — SECRET INTELLIGENCE")
+		fmt.Printf("[+] Files analyzed: %d\n", filesAnalyzed)
+		fmt.Printf("[+] Confirmed findings: %d\n\n", len(findings))
+
+		if len(findings) > 0 {
+			fmt.Println("Findings")
+			fmt.Println("────────────────────────────────────")
+			for _, f := range findings {
+				fmt.Printf("%-7s %s\n", f.Severity, f.Title)
+				fmt.Printf("        %s:%d\n", f.FileOrigin, f.LineNumber)
+				fmt.Printf("        Value: %s\n", f.Redacted)
+				fmt.Printf("        Confidence: %s\n\n", f.Confidence)
+				totalFindings++
+			}
+		}
+
+		if verbose && len(res.Assets) > 0 {
 			fmt.Println("Assets")
-			fmt.Println("────────────────────────────────────────")
+			fmt.Println("────────────────────────────────────")
 			for _, a := range res.Assets {
 				label := assetLabel(a.Type)
 				statusSuffix := ""
@@ -152,13 +178,15 @@ func main() {
 					statusSuffix = " [external / skipped]"
 				}
 				fmt.Printf("%-8s %s%s\n", label, a.URL, statusSuffix)
-				totalDiscovered++
 			}
 			fmt.Println()
 		}
+
+		totalDiscovered += len(res.Assets)
 	}
 
-	fmt.Printf("[*] Scan complete. %d total asset(s) ingested across %d target(s).\n", totalDiscovered, len(targets))
+	fmt.Printf("[*] Scan complete. %d total asset(s) ingested, %d secret finding(s) discovered across %d target(s).\n",
+		totalDiscovered, totalFindings, len(targets))
 }
 
 func assetLabel(t crawler.AssetType) string {
