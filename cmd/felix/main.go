@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"felix/pkg/cloud"
 	"felix/pkg/crawler"
 	"felix/pkg/secrets"
 )
@@ -92,6 +93,7 @@ func main() {
 	}
 	c := crawler.New(cfg)
 	detector := secrets.NewDetector()
+	cloudAuditor := cloud.NewDetector(nil)
 
 	// Graceful cancellation on SIGINT/SIGTERM
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -100,7 +102,8 @@ func main() {
 	results := c.CrawlConcurrently(ctx, targets)
 
 	totalDiscovered := 0
-	totalFindings := 0
+	totalSecretFindings := 0
+	totalCloudFindings := 0
 
 	for res := range results {
 		if res.Err != nil {
@@ -148,21 +151,59 @@ func main() {
 		fmt.Println()
 
 		// Run Engine 2 Secret Detection
-		findings := detector.ScanAssets(res.Assets)
+		secretFindings := detector.ScanAssets(res.Assets)
 
 		fmt.Println("ENGINE 2 — SECRET INTELLIGENCE")
 		fmt.Printf("[+] Files analyzed: %d\n", filesAnalyzed)
-		fmt.Printf("[+] Confirmed findings: %d\n\n", len(findings))
+		fmt.Printf("[+] Confirmed findings: %d\n", len(secretFindings))
 
-		if len(findings) > 0 {
+		if len(secretFindings) > 0 {
+			fmt.Println()
 			fmt.Println("Findings")
 			fmt.Println("────────────────────────────────────")
-			for _, f := range findings {
+			for _, f := range secretFindings {
 				fmt.Printf("%-7s %s\n", f.Severity, f.Title)
 				fmt.Printf("        %s:%d\n", f.FileOrigin, f.LineNumber)
 				fmt.Printf("        Value: %s\n", f.Redacted)
 				fmt.Printf("        Confidence: %s\n\n", f.Confidence)
-				totalFindings++
+				totalSecretFindings++
+			}
+		}
+		fmt.Println()
+
+		// Run Engine 3 Cloud Intelligence
+		cloudResult := cloudAuditor.Audit(ctx, res.Assets, secretFindings)
+
+		sbCount, fbCount, awsCount, gcpCount := 0, 0, 0, 0
+		for _, s := range cloudResult.Services {
+			switch s.Provider {
+			case cloud.ProviderSupabase:
+				sbCount++
+			case cloud.ProviderFirebase:
+				fbCount++
+			case cloud.ProviderAWS:
+				awsCount++
+			case cloud.ProviderGCP:
+				gcpCount++
+			}
+		}
+
+		fmt.Println("ENGINE 3 — CLOUD & BaaS INTELLIGENCE")
+		fmt.Println("────────────────────────────────────────")
+		fmt.Println("Providers discovered:")
+		fmt.Printf("  Supabase: %d\n", sbCount)
+		fmt.Printf("  Firebase: %d\n", fbCount)
+		fmt.Printf("  AWS:      %d\n", awsCount)
+		fmt.Printf("  GCP:      %d\n", gcpCount)
+		fmt.Println()
+
+		if len(cloudResult.Findings) > 0 {
+			fmt.Println("Findings:")
+			for _, f := range cloudResult.Findings {
+				fmt.Printf("  %-6s %s\n", f.Severity, f.Description)
+				fmt.Printf("         Endpoint: %s\n", f.Endpoint)
+				fmt.Printf("         Confidence: %s\n\n", f.Confidence)
+				totalCloudFindings++
 			}
 		}
 
@@ -185,8 +226,8 @@ func main() {
 		totalDiscovered += len(res.Assets)
 	}
 
-	fmt.Printf("[*] Scan complete. %d total asset(s) ingested, %d secret finding(s) discovered across %d target(s).\n",
-		totalDiscovered, totalFindings, len(targets))
+	fmt.Printf("[*] Scan complete. %d total asset(s) ingested, %d secret finding(s), %d cloud finding(s) discovered across %d target(s).\n",
+		totalDiscovered, totalSecretFindings, totalCloudFindings, len(targets))
 }
 
 func assetLabel(t crawler.AssetType) string {

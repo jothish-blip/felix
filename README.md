@@ -22,13 +22,23 @@ felix/
 │   │   ├── crawler_test.go    # Test suite (unit & mock HTTP integration tests)
 │   │   └── scope.go           # Origin & host scope boundary enforcement
 │   │
-│   └── secrets/               # Engine 2: Secret Intelligence
-│       ├── detector.go        # Scanner orchestration & context evaluation
-│       ├── patterns.go        # Signature registry & JWT inspector
-│       ├── entropy.go         # Shannon entropy calculation
-│       ├── finding.go         # Secret finding model & redaction
-│       ├── filters.go         # False positive & placeholder filtering
-│       └── detector_test.go   # Engine 2 test suite
+│   ├── secrets/               # Engine 2: Secret Intelligence
+│   │   ├── detector.go        # Scanner orchestration & context evaluation
+│   │   ├── patterns.go        # Signature registry & JWT inspector
+│   │   ├── entropy.go         # Shannon entropy calculation
+│   │   ├── finding.go         # Secret finding model & redaction
+│   │   ├── filters.go         # False positive & placeholder filtering
+│   │   └── detector_test.go   # Engine 2 test suite
+│   │
+│   └── cloud/                 # Engine 3: Cloud & BaaS Intelligence
+│       ├── provider.go        # Provider enums & service models
+│       ├── detector.go        # Provider discovery & verification coordinator
+│       ├── finding.go         # Cloud finding model & deduplication
+│       ├── supabase.go        # Supabase RLS auditor & key separation
+│       ├── firebase.go        # Firebase Realtime Database auditor
+│       ├── storage.go         # AWS S3 & GCP Cloud Storage auditor
+│       ├── client.go          # Bounded HTTP probe client
+│       └── cloud_test.go      # Engine 3 test suite
 │
 ├── .gitignore
 ├── go.mod
@@ -124,30 +134,69 @@ Engine 1 Assets
   - Distinguishes client-side publishable Supabase `anon` keys (intentionally public; suppressed from secret reports) from privileged `service_role` credentials (flagged as `CRITICAL`).
   - Flags tokens with administrative roles.
 
-### Shannon Entropy Analysis
+### Shannon Entropy & Redaction
 
-Implements character-level Shannon entropy:
-$$H(X) = -\sum_{i=1}^{n} p(x_i) \log_2 p(x_i)$$
-Entropy is treated as a candidate signal, not an automatic critical finding. High-entropy strings ($H \ge 4.5$) undergo context evaluation, looking for nearby variable names such as `key`, `secret`, `token`, or `auth`.
+- Implements Shannon entropy ($H(X) = -\sum p(x) \log_2 p(x)$) as a candidate heuristic requiring surrounding secret keywords before generating a finding.
+- Modular filtering suppresses dummy placeholders (`YOUR_API_KEY`, `REPLACE_ME`, `example-key`), UUIDs, CSS values, and webpack hashes.
+- Credential redaction masks sensitive bodies (e.g. `sk_live_********************7890`, `AKIA************MPLE`).
+- Inspects source-map `sourcesContent` payloads to discover secrets in original unminified source code.
 
-### False-Positive Filtering
+---
 
-Modular filtering suppresses non-actionable noise:
-- Known documentation and tutorial placeholders (`YOUR_API_KEY`, `REPLACE_ME`, `example-key`, `dummy`).
-- Webpack chunk hashes and build artifacts.
-- UUIDs, CSS color values, and base64 data URIs.
-- Unstructured hex strings without sensitive context.
+## Engine 3 — Cloud & BaaS Intelligence (`felix-cloud`)
 
-### Secret Redaction
+Engine 3 analyzes cloud and Backend-as-a-Service infrastructure discovered by Engine 1 and Engine 2, safely determining whether publicly observable configuration creates an unauthorized exposure.
 
-Felix strictly enforces credential redaction:
-- Full raw secrets are never printed to the terminal, stdout, or reports.
-- High-risk credentials are masked (e.g. `sk_live_********************7890`, `AKIA************MPLE`).
-- Private keys have payload bodies completely replaced with `[REDACTED PRIVATE KEY]`.
+```text
+Engine 1 + Engine 2
+        │
+        ▼
+Discovered URLs / configuration
+        │
+        ▼
+Cloud Provider Detection
+        │
+ ┌──────┼────────┐
+ ▼      ▼        ▼
+Supabase Firebase Storage (S3 / GCS)
+ │      │        │
+ └──────┼────────┘
+        ▼
+Safe Verification
+        │
+        ▼
+Evidence
+        │
+        ▼
+Cloud Finding
+```
 
-### Source Map Analysis
+### Important Security Principle: Public URL ≠ Vulnerability
 
-When Engine 1 captures source maps (`.map`), Engine 2 inspects embedded `sourcesContent` payloads to discover secrets in original unminified source code, reporting the original source path and line number.
+> **Felix does NOT consider a public cloud URL or client-visible publishable key a vulnerability by itself.**
+
+A client-visible Supabase `anon` key or public S3 asset bucket URL is standard modern web architecture. Felix distinguishes expected public resources from unauthorized exposures by verifying authorization behavior.
+
+### Provider Capabilities
+
+- **Supabase**:
+  - Distinguishes `anon` keys (`INFO: Client Configuration`) from `service_role` keys (`CRITICAL: Privileged Credential Exposure`).
+  - **Zero Credential Abuse**: Never transmits requests using discovered `service_role` keys.
+  - Safe Authorization Probing: Verifies candidate REST endpoints (e.g. `/rest/v1/products`) actually referenced in application code using `?limit=1`.
+  - Proper RLS protection (HTTP 401/403) produces no unauthorized-access finding.
+  - If open data is returned (HTTP 200), captures only observed schema field names (`id`, `created_at`, `title`) with record values redacted.
+  - Never enumerates arbitrary dictionary table names or dumps databases.
+- **Firebase Realtime Database**:
+  - Probes discovered `*.firebaseio.com` and `*.firebasedatabase.app` endpoints with shallow non-destructive queries (`/.json?shallow=true&limitToFirst=1`).
+  - Protected rules (HTTP 401/403) are verified as secure.
+  - Unauthenticated access (HTTP 200) reports top-level key names only, redacting all database contents.
+- **Cloud Storage (AWS S3 & Google Cloud Storage)**:
+  - Checks if buckets allow anonymous object listing via `?max-keys=1`.
+  - 403 Forbidden indicates listing is disabled.
+  - If listing is permitted, reports `Anonymous Bucket Listing` without downloading bucket files.
+- **Bounded Probing & Rate Limiting**:
+  - Dedicated client enforces a 1 MB response limit via `io.LimitReader`.
+  - HTTP 429 immediately halts probing for that resource without retry loops.
 
 ---
 
@@ -219,7 +268,7 @@ ENGINE 1 — ASSET INGESTION
 
 ENGINE 2 — SECRET INTELLIGENCE
 [+] Files analyzed: 8
-[+] Confirmed findings: 2
+[+] Confirmed findings: 1
 
 Findings
 ────────────────────────────────────
@@ -228,18 +277,31 @@ HIGH    Stripe Live Secret Key
         Value: sk_live_********************7890
         Confidence: High
 
-CRITICAL Private Cryptographic Key
-        webpack:///src/config/server.ts:12
-        Value: -----BEGIN RSA PRIVATE KEY-----... [REDACTED PRIVATE KEY] ...
-        Confidence: High
+ENGINE 3 — CLOUD & BaaS INTELLIGENCE
+────────────────────────────────────────
+Providers discovered:
+  Supabase: 1
+  Firebase: 0
+  AWS:      1
+  GCP:      0
 
-[*] Scan complete. 8 total asset(s) ingested, 2 secret finding(s) discovered across 1 target(s).
+Findings:
+  HIGH   Public read access allowed on Supabase resource /rest/v1/products
+         Endpoint: https://xyz.supabase.co/rest/v1/products
+         Confidence: High
+
+  INFO   Supabase publishable anon key detected
+         Endpoint: https://xyz.supabase.co
+         Confidence: High
+
+[*] Scan complete. 8 total asset(s) ingested, 1 secret finding(s), 2 cloud finding(s) discovered across 1 target(s).
 ```
 
 ---
 
 ## Safety & Limitations
 
-- **Passive Analysis**: Engine 2 is purely passive. It performs static analysis on downloaded assets without making outbound requests to validate credentials.
-- **No Live Validation**: Felix does not attempt to authenticate against third-party APIs (AWS, Stripe, OpenAI, etc.), spend credits, or determine whether discovered keys are currently active in production.
-- **Defensive Auditing Only**: No brute forcing, credential stuffing, or destructive payloads.
+- **Passive & Non-Destructive**: Felix performs static analysis and bounded, non-destructive read requests only.
+- **No Exploitation or Data Exfiltration**: Never dumps databases, downloads storage objects, or executes state-modifying requests (no POST, PUT, DELETE).
+- **No Live Credential Testing**: Never tests discovered secret tokens or `service_role` keys against third-party provider APIs.
+- **Defensive Auditing Only**: Designed strictly for authorized security assessments.
