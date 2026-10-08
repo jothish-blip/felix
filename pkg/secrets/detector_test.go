@@ -443,3 +443,172 @@ func TestConcurrentDetectorSafety(t *testing.T) {
 	wg.Wait()
 }
 
+// Test 19: Isolated unit test for structured alphabet filtering
+func TestStructuredAlphabetFilter(t *testing.T) {
+	knownCases := []struct {
+		name     string
+		input    string
+		context  string
+		expected bool
+	}{
+		{
+			name:     "NexSpace Base64URL/nanoid alphabet table",
+			input:    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_",
+			context:  "const urlAlphabet = ...",
+			expected: true,
+		},
+		{
+			name:     "Standard RFC 4648 Base64 alphabet table",
+			input:    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+			context:  "var b64 = ...",
+			expected: true,
+		},
+		{
+			name:     "Base62 alphanumeric charset table",
+			input:    "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+			context:  "const base62Chars = ...",
+			expected: true,
+		},
+		{
+			name:     "Hexadecimal lookup alphabet",
+			input:    "0123456789abcdef",
+			context:  "const hexDigits = ...",
+			expected: true,
+		},
+		{
+			name:     "Bitcoin Base58 character lookup table",
+			input:    "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz",
+			context:  "const b58 = ...",
+			expected: true,
+		},
+		{
+			name:     "Custom nanoid alphabet with context keyword",
+			input:    "use-random-values-0123456789abcdefghijklmnopqrstuvwxyz",
+			context:  "customAlphabet(alphabet, 21)",
+			expected: true,
+		},
+		{
+			name:     "Cryptographic base64 token",
+			input:    "4fA8bC9dE0fG1hI2jK3lM4nO5pQ6rS7tU8vW9xY0z=",
+			context:  "const api_key = ...",
+			expected: false,
+		},
+		{
+			name:     "Random high-entropy API secret string",
+			input:    "dGhpc0lzQVZlcnlIaWdoRW50cm9weVN0cmluZzEyMzQ1Njc4OTA=",
+			context:  "const app_secret = ...",
+			expected: false,
+		},
+		{
+			name:     "High-entropy pseudo-random hex token",
+			input:    "8f7b2c1e4a9d0f3b5e8c1a7d2e4f0a9b",
+			context:  "const auth_token = ...",
+			expected: false,
+		},
+		{
+			name:     "Stripe live secret key",
+			input:    "sk_live_51Abcdef1234567890abcdef1234567890",
+			context:  "const stripe_key = ...",
+			expected: false,
+		},
+	}
+
+	for _, tc := range knownCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := IsStructuredAlphabet(tc.input, tc.context)
+			if got != tc.expected {
+				t.Errorf("IsStructuredAlphabet(%q, %q) = %v; want %v", tc.input, tc.context, got, tc.expected)
+			}
+		})
+	}
+}
+
+// Test 20: Regression test — Alphabet lookup table does NOT produce an entropy finding (NexSpace bug fix)
+func TestAlphabetLookupTableFalsePositiveSuppression(t *testing.T) {
+	d := NewDetector()
+
+	js := `
+		// Third-party nanoid / websocket dependency
+		const defaultAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+		function generateKey(size) {
+			return customAlphabet(defaultAlphabet, size);
+		}
+	`
+
+	findings := d.ScanContent("0lcc2ylewy3e9.js", []byte(js))
+	for _, f := range findings {
+		if f.Type == SecretHighEntropy && strings.Contains(f.Value, "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
+			t.Errorf("alphabet lookup table was incorrectly flagged as high-entropy secret finding: %+v", f)
+		}
+	}
+}
+
+// Test 21: Regression test — Genuinely random high-entropy token is STILL detected
+func TestRandomHighEntropySecretDetection(t *testing.T) {
+	d := NewDetector()
+
+	js := `
+		// Sensitive server API configuration
+		const api_key = "4fA8bC9dE0fG1hI2jK3lM4nO5pQ6rS7tU8vW9xY0z=";
+	`
+
+	findings := d.ScanContent("config.js", []byte(js))
+	if len(findings) == 0 {
+		t.Fatalf("expected genuine high-entropy token to be detected as SecretHighEntropy, got 0 findings")
+	}
+
+	found := false
+	for _, f := range findings {
+		if f.Type == SecretHighEntropy && f.Value == "4fA8bC9dE0fG1hI2jK3lM4nO5pQ6rS7tU8vW9xY0z=" {
+			found = true
+			if f.Severity != SeverityLow {
+				t.Errorf("expected LOW severity for generic entropy candidate, got %s", f.Severity)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected finding for random token, got: %+v", findings)
+	}
+}
+
+// Test 22: Regression test — High-entropy value with secret context receives appropriate detection
+func TestHighEntropyWithSecretContext(t *testing.T) {
+	d := NewDetector()
+
+	testContexts := []struct {
+		name string
+		js   string
+	}{
+		{
+			name: "API_KEY assignment",
+			js:   `const API_KEY = "dGhpc0lzQVZlcnlIaWdoRW50cm9weVN0cmluZzEyMzQ1Njc4OTA=";`,
+		},
+		{
+			name: "SECRET assignment",
+			js:   `const APP_SECRET = "dGhpc0lzQVZlcnlIaWdoRW50cm9weVN0cmluZzEyMzQ1Njc4OTA=";`,
+		},
+		{
+			name: "TOKEN assignment",
+			js:   `const AUTH_TOKEN = "dGhpc0lzQVZlcnlIaWdoRW50cm9weVN0cmluZzEyMzQ1Njc4OTA=";`,
+		},
+		{
+			name: "PASSWORD assignment",
+			js:   `const DB_PASSWORD = "dGhpc0lzQVZlcnlIaWdoRW50cm9weVN0cmluZzEyMzQ1Njc4OTA=";`,
+		},
+	}
+
+	for _, tc := range testContexts {
+		t.Run(tc.name, func(t *testing.T) {
+			findings := d.ScanContent("test.js", []byte(tc.js))
+			if len(findings) == 0 {
+				t.Fatalf("expected finding for %s, got 0", tc.name)
+			}
+			f := findings[0]
+			if f.Type != SecretHighEntropy {
+				t.Errorf("expected SecretHighEntropy, got %s", f.Type)
+			}
+		})
+	}
+}
+
