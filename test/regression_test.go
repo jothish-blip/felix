@@ -564,6 +564,10 @@ func TestRegression_API_Scenarios(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.ID, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tc.Path != "" && tc.Category != "cors" && r.URL.Path != tc.Path {
+					http.NotFound(w, r)
+					return
+				}
 				for k, v := range tc.MockHeaders {
 					w.Header().Set(k, v)
 				}
@@ -633,6 +637,33 @@ func TestRegression_API_Scenarios(t *testing.T) {
 					if string(rf.Severity) != tc.ExpectedSeverity {
 						t.Errorf("%s: expected %s, got %s", tc.ID, tc.ExpectedSeverity, rf.Severity)
 					}
+				}
+
+			case "endpoint-discovered":
+				h := make(http.Header)
+				for k, v := range tc.MockHeaders {
+					h.Set(k, v)
+				}
+				authRes := api.ReasonAuthState(tc.MockStatus, h, []byte(tc.MockBody))
+				if string(authRes.State) != tc.ExpectedDetectionStatus {
+					t.Errorf("%s: expected auth state %s, got %s", tc.ID, tc.ExpectedDetectionStatus, authRes.State)
+				}
+				finding := api.APIFinding{
+					Category:       api.CategoryEndpointDiscovered,
+					Endpoint:       tc.Path,
+					Severity:       api.SeverityInfo,
+					Confidence:     api.ConfidenceMedium,
+					Classification: api.ClassifyEndpoint(tc.Path),
+					AuthState:      authRes.State,
+					SourceAsset:    "bundle.js",
+					Mechanism:      "fetch",
+				}
+				rf := report.FromAPIFinding("https://example.com", finding)
+				if string(rf.Verification.Status) != tc.ExpectedVerificationStatus {
+					t.Errorf("%s: expected %s, got %s", tc.ID, tc.ExpectedVerificationStatus, rf.Verification.Status)
+				}
+				if string(rf.Severity) != tc.ExpectedSeverity {
+					t.Errorf("%s: expected %s, got %s", tc.ID, tc.ExpectedSeverity, rf.Severity)
 				}
 			}
 		})
@@ -762,4 +793,248 @@ func TestRegression_Pipeline_EndToEnd(t *testing.T) {
 	if finalReport.RiskLevel != "LOW" && finalReport.RiskLevel != "INFORMATIONAL" {
 		t.Errorf("expected LOW/INFORMATIONAL risk level for non-vulnerable assets, got %s (score=%d)", finalReport.RiskLevel, finalReport.RiskScore)
 	}
+}
+
+// ============================================================================
+// 7. PHASE B REGRESSION: ENDPOINT EXTRACTION, SPA, CLASSIFICATION & AUTH STATE
+// ============================================================================
+
+func TestRegression_PhaseB_DiscoveryAndIntelligence(t *testing.T) {
+	target := "https://webjothishanalyst.site"
+
+	// 1. JavaScript Endpoint Extraction & Normalization
+	t.Run("EndpointExtraction_Comprehensive", func(t *testing.T) {
+		jsCode := `
+			// Standard calls
+			fetch("/api/v1/users");
+			fetch('/api/auth/token', { method: "POST" });
+			axios.get("/api/products");
+			axios.post("/api/checkout");
+			axios.request({ url: "/api/data", method: "POST" });
+
+			// Dynamic template literals & colon params
+			fetch(` + "`" + `/api/users/${userId}` + "`" + `);
+			fetch(` + "`" + `/api/projects/${projectId}/tasks` + "`" + `);
+
+			// Base URL concatenation
+			const API_BASE = "/api/v2";
+			fetch(API_BASE + "/inventory");
+
+			// Absolute same-origin vs out-of-scope third-party
+			fetch("https://webjothishanalyst.site/api/projects");
+			fetch("https://api.thirdparty-analytics.com/collect");
+
+			// Operational endpoints
+			fetch("/healthz");
+			fetch("/actuator/prometheus");
+			fetch("/api/webhook/stripe");
+		`
+
+		endpoints := api.ExtractEndpointsFromJS("app.js", []byte(jsCode), target)
+		if len(endpoints) == 0 {
+			t.Fatalf("expected extracted endpoints, got 0")
+		}
+
+		epMap := make(map[string]api.DiscoveredEndpoint)
+		for _, ep := range endpoints {
+			epMap[ep.Path] = ep
+		}
+
+		// Verify extraction
+		expectedPaths := []struct {
+			path               string
+			expectedMethod     string
+			expectedClass      api.EndpointClassification
+			staticallyResolved bool
+		}{
+			{"/api/v1/users", "UNKNOWN", api.ClassUser, true},
+			{"/api/auth/token", "POST", api.ClassAuthentication, true},
+			{"/api/products", "GET", api.ClassAPI, true},
+			{"/api/checkout", "POST", api.ClassPayment, true},
+			{"/api/data", "POST", api.ClassAPI, true},
+			{"/api/users/{param}", "UNKNOWN", api.ClassUser, false},
+			{"/api/projects/{param}/tasks", "UNKNOWN", api.ClassAPI, false},
+			{"/api/v2/inventory", "UNKNOWN", api.ClassAPI, true},
+			{"/api/projects", "UNKNOWN", api.ClassAPI, true},
+			{"/healthz", "UNKNOWN", api.ClassHealth, true},
+			{"/actuator/prometheus", "UNKNOWN", api.ClassMetrics, true},
+			{"/api/webhook/stripe", "UNKNOWN", api.ClassWebhook, true},
+		}
+
+		for _, exp := range expectedPaths {
+			ep, exists := epMap[exp.path]
+			if !exists {
+				t.Errorf("missing expected endpoint: %s", exp.path)
+				continue
+			}
+			if ep.Method != exp.expectedMethod {
+				t.Errorf("%s: expected method %s, got %s", exp.path, exp.expectedMethod, ep.Method)
+			}
+			if ep.Classification != exp.expectedClass {
+				t.Errorf("%s: expected classification %s, got %s", exp.path, exp.expectedClass, ep.Classification)
+			}
+			if ep.StaticallyResolved != exp.staticallyResolved {
+				t.Errorf("%s: expected StaticallyResolved=%v, got %v", exp.path, exp.staticallyResolved, ep.StaticallyResolved)
+			}
+		}
+
+		// Verify third-party URL was NOT extracted
+		for path := range epMap {
+			if strings.Contains(path, "thirdparty") {
+				t.Errorf("third-party endpoint leaked into extracted routes: %s", path)
+			}
+		}
+	})
+
+	// 2. SPA Route & Source Map Discovery
+	t.Run("SPARouteAndSourceMapDiscovery", func(t *testing.T) {
+		routerJS := `
+			const routes = [
+				{ path: '/dashboard', component: Dashboard },
+				{ path: '/admin/settings', component: AdminSettings },
+				{ path: '/profile/:userId', component: Profile }
+			];
+			const nextRoute = "/_next/data/build123/projects.json";
+		`
+		routes := api.DiscoverSPARoutes("router.js", []byte(routerJS), target)
+		routeMap := make(map[string]bool)
+		for _, r := range routes {
+			routeMap[r.Path] = true
+		}
+
+		if !routeMap["/dashboard"] {
+			t.Errorf("missing SPA route /dashboard")
+		}
+		if !routeMap["/admin/settings"] {
+			t.Errorf("missing SPA route /admin/settings")
+		}
+		if !routeMap["/profile/{param}"] {
+			t.Errorf("missing parameterized SPA route /profile/{param}")
+		}
+		if !routeMap["/_next/data/build123/projects.json"] {
+			t.Errorf("missing Next.js data route")
+		}
+
+		// Source map extraction
+		sourceMapJSON := `{
+			"version": 3,
+			"file": "bundle.js",
+			"sources": ["src/api.ts"],
+			"sourcesContent": ["const API = '/api/internal/config'; fetch('/api/v3/metrics');"]
+		}`
+		smEndpoints := api.ExtractEndpointsFromSourceMap("bundle.js.map", []byte(sourceMapJSON), target)
+		smMap := make(map[string]bool)
+		for _, ep := range smEndpoints {
+			smMap[ep.Path] = true
+		}
+		if !smMap["/api/internal/config"] {
+			t.Errorf("missing sourcemap endpoint /api/internal/config")
+		}
+		if !smMap["/api/v3/metrics"] {
+			t.Errorf("missing sourcemap endpoint /api/v3/metrics")
+		}
+	})
+
+	// 3. Classification Full Coverage & Severity Invariance
+	t.Run("EndpointClassification_FullTaxonomy", func(t *testing.T) {
+		taxonomyTests := map[string]api.EndpointClassification{
+			"/api/auth/login":         api.ClassAuthentication,
+			"/api/auth/session":       api.ClassAuthentication,
+			"/api/oauth/authorize":    api.ClassAuthentication,
+			"/auth/roles":             api.ClassAuthorization,
+			"/auth/permissions":       api.ClassAuthorization,
+			"/auth/service":           api.ClassAuth,
+			"/api/users":              api.ClassUser,
+			"/api/users/profile":      api.ClassUser,
+			"/admin/dashboard":        api.ClassAdmin,
+			"/api/account/settings":   api.ClassAccount,
+			"/api/billing/invoices":   api.ClassPayment,
+			"/api/checkout":           api.ClassPayment,
+			"/graphql":                api.ClassGraphQL,
+			"/api/upload/avatar":      api.ClassUpload,
+			"/api/export/download":    api.ClassDownload,
+			"/api/search":             api.ClassSearch,
+			"/api/webhook/stripe":     api.ClassWebhook,
+			"/actuator/health":        api.ClassHealth,
+			"/actuator/prometheus":    api.ClassMetrics,
+			"/swagger.json":           api.ClassDocumentation,
+			"/bundle.js":              api.ClassStatic,
+			"/logo.png":               api.ClassStatic,
+			"/api/custom/resource":    api.ClassAPI,
+			"/unrecognized/route":     api.ClassUnknown,
+		}
+
+		for path, expectedClass := range taxonomyTests {
+			got := api.ClassifyEndpoint(path)
+			if got != expectedClass {
+				t.Errorf("%s: expected classification %s, got %s", path, expectedClass, got)
+			}
+
+			// Verify classification never changes severity beyond INFO
+			finding := api.APIFinding{
+				Category:       api.CategoryEndpointDiscovered,
+				Endpoint:       path,
+				Severity:       api.SeverityInfo,
+				Confidence:     api.ConfidenceMedium,
+				Classification: got,
+				AuthState:      api.AuthStateUnknown,
+			}
+			rf := report.FromAPIFinding(target, finding)
+			if rf.Severity != report.SeverityInfo {
+				t.Errorf("%s: classification increased severity to %s (must be INFO)", path, rf.Severity)
+			}
+		}
+	})
+
+	// 4. Authentication-State Reasoning & Evidence Semantics
+	t.Run("AuthStateReasoning_EvidenceModel", func(t *testing.T) {
+		states := []struct {
+			status       int
+			headers      map[string]string
+			body         string
+			expectedAuth api.AuthState
+			expectedVer  report.VerificationStatus
+		}{
+			{200, map[string]string{"Content-Type": "application/json"}, `{"ok":true}`, api.AuthStatePublic, report.VerificationObserved},
+			{401, map[string]string{"WWW-Authenticate": "Bearer"}, `{"error":"unauthorized"}`, api.AuthStateAuthRequired, report.VerificationNotExposed},
+			{403, map[string]string{"Content-Type": "text/plain"}, `Forbidden`, api.AuthStateForbidden, report.VerificationNotExposed},
+			{404, map[string]string{"Content-Type": "text/html"}, `<html>Not Found</html>`, api.AuthStateNotFound, report.VerificationNotExposed},
+			{302, map[string]string{"Location": "/login"}, ``, api.AuthStateRedirect, report.VerificationObserved},
+			{500, map[string]string{}, `Internal Server Error`, api.AuthStateUnknown, report.VerificationObserved},
+		}
+
+		for _, s := range states {
+			h := make(http.Header)
+			for k, v := range s.headers {
+				h.Set(k, v)
+			}
+			authRes := api.ReasonAuthState(s.status, h, []byte(s.body))
+			if authRes.State != s.expectedAuth {
+				t.Errorf("status %d: expected auth state %s, got %s", s.status, s.expectedAuth, authRes.State)
+			}
+
+			finding := api.APIFinding{
+				Category:       api.CategoryEndpointDiscovered,
+				Endpoint:       "/api/test",
+				Severity:       api.SeverityInfo,
+				Confidence:     api.ConfidenceMedium,
+				Classification: api.ClassAPI,
+				AuthState:      authRes.State,
+				SourceAsset:    "app.js",
+				Mechanism:      "fetch",
+			}
+			rf := report.FromAPIFinding(target, finding)
+			if rf.Verification.Status != s.expectedVer {
+				t.Errorf("status %d: expected verification status %s, got %s", s.status, s.expectedVer, rf.Verification.Status)
+			}
+
+			// Verify details contains Phase B metadata
+			if rf.EvidenceDetails.Details["classification"] != string(api.ClassAPI) {
+				t.Errorf("status %d: missing classification in evidence details", s.status)
+			}
+			if rf.EvidenceDetails.Details["auth_state"] != string(s.expectedAuth) {
+				t.Errorf("status %d: missing auth_state in evidence details", s.status)
+			}
+		}
+	})
 }

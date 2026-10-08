@@ -36,6 +36,7 @@ func AuditSensitiveEndpoints(ctx context.Context, client *Client, targetBaseURL 
 
 	pathsToCheck := DefaultSensitivePaths
 	if len(customPaths) > 0 {
+		var merged []string
 		seen := make(map[string]struct{})
 		for _, p := range append(DefaultSensitivePaths, customPaths...) {
 			cleanP := strings.TrimSpace(p)
@@ -47,11 +48,8 @@ func AuditSensitiveEndpoints(ctx context.Context, client *Client, targetBaseURL 
 			}
 			if _, exists := seen[cleanP]; !exists {
 				seen[cleanP] = struct{}{}
+				merged = append(merged, cleanP)
 			}
-		}
-		var merged []string
-		for p := range seen {
-			merged = append(merged, p)
 		}
 		pathsToCheck = merged
 	}

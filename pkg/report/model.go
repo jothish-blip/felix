@@ -409,10 +409,45 @@ func FromAPIFinding(target string, f api.APIFinding) Finding {
 		verResult = "Unauthenticated GET request to environment file returned HTTP 200 OK with configuration keys."
 		negEvidence = "Secret values were redacted from output."
 
+	case cat == "endpoint-discovered":
+		detMethod = f.Mechanism
+		if detMethod == "" {
+			detMethod = "static_analysis"
+		}
+		detStatus = "OBSERVED"
+		switch f.AuthState {
+		case api.AuthStateAuthRequired, api.AuthStateForbidden, api.AuthStateNotFound:
+			verStatus = VerificationNotExposed
+			negEvidence = fmt.Sprintf("Authentication or authorization barrier active (%s); unauthenticated access not permitted.", f.AuthState)
+		default:
+			verStatus = VerificationObserved
+			negEvidence = "Informational endpoint inventory observation; no vulnerability or unauthorized exposure."
+		}
+		verResult = fmt.Sprintf("Endpoint %s (%s) discovered in client assets [%s].", f.Endpoint, f.Method, f.Classification)
+
 	case cat == "git-metadata-exposure":
 		detStatus = "DETECTED"
 		verStatus = VerificationVerified
 		verResult = "Unauthenticated GET request to /.git/HEAD returned valid Git HEAD branch reference."
+	}
+
+	details := map[string]string{
+		"category": cat,
+	}
+	if f.Classification != "" {
+		details["classification"] = string(f.Classification)
+	}
+	if f.AuthState != "" {
+		details["auth_state"] = string(f.AuthState)
+	}
+	if f.SourceAsset != "" {
+		details["source_asset"] = f.SourceAsset
+	}
+	if f.Mechanism != "" {
+		details["mechanism"] = f.Mechanism
+	}
+	if f.LineNumber > 0 {
+		details["line_number"] = strconv.Itoa(f.LineNumber)
 	}
 
 	evDetails := EvidenceDetails{
@@ -423,9 +458,7 @@ func FromAPIFinding(target string, f api.APIFinding) Finding {
 		DetectionMethod:  detMethod,
 		DetectionStatus:  detStatus,
 		NegativeEvidence: negEvidence,
-		Details: map[string]string{
-			"category": cat,
-		},
+		Details:          details,
 	}
 
 	ver := VerificationRecord{

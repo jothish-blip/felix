@@ -35,18 +35,24 @@ const (
 	CategoryMissingXFrameOptions = "missing-x-frame-options"
 	CategoryMissingXContentType  = "missing-x-content-type-options"
 	CategoryMissingPermissions   = "missing-permissions-policy"
+	CategoryEndpointDiscovered   = "endpoint-discovered"
 )
 
 // APIFinding represents a verified API security exposure, configuration issue, or hardening observation.
 type APIFinding struct {
-	Category    string `json:"category"`
-	Endpoint    string `json:"endpoint"`
-	Method      string `json:"method"`
-	Description string `json:"description"`
-	Evidence    string `json:"evidence"`
-	Severity    string `json:"severity"`
-	Confidence  string `json:"confidence"`
-	Fingerprint string `json:"fingerprint"`
+	Category       string                 `json:"category"`
+	Endpoint       string                 `json:"endpoint"`
+	Method         string                 `json:"method"`
+	Description    string                 `json:"description"`
+	Evidence       string                 `json:"evidence"`
+	Severity       string                 `json:"severity"`
+	Confidence     string                 `json:"confidence"`
+	Fingerprint    string                 `json:"fingerprint"`
+	Classification EndpointClassification `json:"classification,omitempty"`
+	AuthState      AuthState              `json:"auth_state,omitempty"`
+	SourceAsset    string                 `json:"source_asset,omitempty"`
+	LineNumber     int                    `json:"line_number,omitempty"`
+	Mechanism      string                 `json:"mechanism,omitempty"`
 }
 
 // GenerateFingerprint generates a stable SHA-256 deduplication fingerprint for the finding.

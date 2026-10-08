@@ -241,6 +241,9 @@ func main() {
 		fmt.Println("ENGINE 4 — MODERN API & ENDPOINT INTELLIGENCE")
 		fmt.Println("────────────────────────────────────────")
 		fmt.Printf("Endpoints audited: %d\n", apiResult.EndpointsScanned)
+		if len(apiResult.DiscoveredEndpoints) > 0 {
+			fmt.Printf("[+] Discovered endpoints: %d\n", len(apiResult.DiscoveredEndpoints))
+		}
 		fmt.Printf("[+] GraphQL endpoints:     %d\n", apiResult.GraphQLCount)
 		fmt.Printf("[+] Sensitive endpoints:   %d\n", apiResult.SensitiveCount)
 		fmt.Printf("[+] CORS observations:     %d\n", apiResult.CORSCount)
