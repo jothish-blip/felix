@@ -21,14 +21,18 @@ const (
 
 // CloudFinding represents an assessed cloud exposure or configuration observation.
 type CloudFinding struct {
-	Provider    Provider `json:"provider"`
-	Category    string   `json:"category"`
-	Endpoint    string   `json:"endpoint"`
-	Description string   `json:"description"`
-	Evidence    string   `json:"evidence"`
-	Severity    string   `json:"severity"`
-	Confidence  string   `json:"confidence"`
-	Fingerprint string   `json:"fingerprint"`
+	Provider         Provider          `json:"provider"`
+	Category         string            `json:"category"`
+	Endpoint         string            `json:"endpoint"`
+	Description      string            `json:"description"`
+	Evidence         string            `json:"evidence"`
+	Severity         string            `json:"severity"`
+	Confidence       string            `json:"confidence"`
+	Fingerprint      string            `json:"fingerprint"`
+	HTTPMethod       string            `json:"http_method,omitempty"`
+	HTTPStatus       int               `json:"http_status,omitempty"`
+	NegativeEvidence string            `json:"negative_evidence,omitempty"`
+	Details          map[string]string `json:"details,omitempty"`
 }
 
 // GenerateFingerprint generates a unique SHA-256 deduplication fingerprint for the finding.

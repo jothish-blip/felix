@@ -225,18 +225,44 @@ const htmlReportTemplate = `<!DOCTYPE html>
         <div class="card-val color-LOW">{{add .Summary.LowCount .Summary.InfoCount}}</div>
       </div>
     </div>
+
+    <h3 style="font-size:0.95rem; color:#94a3b8; margin: 1.5rem 0 0.75rem 0; text-transform:uppercase; letter-spacing:0.05em;">Verification Breakdown</h3>
+    <div class="grid">
+      <div class="card">
+        <div class="card-lbl">Verified Exposures</div>
+        <div class="card-val" style="color:#6ee7b7;">{{.Summary.VerifiedCount}}</div>
+      </div>
+      <div class="card">
+        <div class="card-lbl">Detected Candidates</div>
+        <div class="card-val" style="color:#fde047;">{{.Summary.DetectedCount}}</div>
+      </div>
+      <div class="card">
+        <div class="card-lbl">Observed Inventory</div>
+        <div class="card-val" style="color:#93c5fd;">{{.Summary.ObservedCount}}</div>
+      </div>
+      <div class="card">
+        <div class="card-lbl">Defended / Protected</div>
+        <div class="card-val" style="color:#5eead4;">{{.Summary.NotExposedCount}}</div>
+      </div>
+    </div>
   </section>
 
   {{if .SecurityStories}}
   <section>
-    <h2>Correlated Security Stories</h2>
+    <h2>Correlated Security Stories ({{len .SecurityStories}})</h2>
     {{range .SecurityStories}}
     <div class="story-card">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem; flex-wrap:wrap; gap:0.5rem;">
         <div class="story-title">{{.Title}}</div>
-        <span class="badge badge-{{.Severity}}">{{.Severity}}</span>
+        <div style="display:flex; gap:0.4rem; align-items:center;">
+          {{if .RiskContribution}}<span class="badge badge-INFO">+{{.RiskContribution}} Risk Pts</span>{{end}}
+          <span class="badge badge-{{.Severity}}">{{.Severity}}</span>
+        </div>
       </div>
-      <p style="margin-bottom:0.75rem; font-size:0.95rem;">{{.Description}}</p>
+      {{if .Summary}}
+      <p style="margin-bottom:0.5rem; font-size:0.95rem; font-weight:600; color:#e2e8f0;">{{.Summary}}</p>
+      {{end}}
+      <p style="margin-bottom:0.75rem; font-size:0.9rem; color:#cbd5e1;">{{.Description}}</p>
       <div style="font-size:0.85rem; font-weight:600; color:#94a3b8; margin-bottom:0.25rem;">Correlated Evidence:</div>
       <ul class="story-list">
         {{range .Evidence}}
@@ -245,6 +271,11 @@ const htmlReportTemplate = `<!DOCTYPE html>
       </ul>
       <div style="font-size:0.85rem; font-weight:600; color:#fca5a5; margin-bottom:0.25rem;">Security Impact:</div>
       <p style="font-size:0.9rem; margin-bottom:0.75rem; color:#fecaca;">{{.Impact}}</p>
+      {{if .InvestigateFirst}}
+      <div style="background-color:#1e1b4b; border-left:4px solid #818cf8; padding:0.6rem 0.8rem; border-radius:0 0.25rem 0.25rem 0; font-size:0.88rem; color:#c7d2fe; margin-bottom:0.75rem;">
+        <strong>Investigate First:</strong> {{.InvestigateFirst}}
+      </div>
+      {{end}}
       <div class="remediation-box">
         <strong>Remediation:</strong> {{.Remediation}}
       </div>

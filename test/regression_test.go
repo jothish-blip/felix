@@ -1038,3 +1038,752 @@ func TestRegression_PhaseB_DiscoveryAndIntelligence(t *testing.T) {
 		}
 	})
 }
+
+// ============================================================================
+// 8. PHASE C REGRESSION: CORS, SECURITY HEADERS, CLOUD/BaaS & GRAPHQL DEPTH
+// ============================================================================
+
+func TestRegression_PhaseC_DetectionDepth(t *testing.T) {
+	// ------------------------------------------------------------------------
+	// #9 CORS Verification
+	// ------------------------------------------------------------------------
+	t.Run("CORS_Verification_5Cases", func(t *testing.T) {
+		corsCases := []struct {
+			name             string
+			mockACAO         string
+			mockACAC         string
+			expectFinding    bool
+			expectedCategory string
+			expectedSeverity string
+			expectedVerState string
+		}{
+			{
+				name:          "Case1_NoCORSHeader",
+				mockACAO:      "",
+				mockACAC:      "",
+				expectFinding: false,
+			},
+			{
+				name:             "Case2_WildcardCORS_NoCredentials",
+				mockACAO:         "*",
+				mockACAC:         "",
+				expectFinding:    true,
+				expectedCategory: api.CategoryCORSWildcard,
+				expectedSeverity: api.SeverityInfo,
+				expectedVerState: string(report.VerificationObserved),
+			},
+			{
+				name:             "Case3_ArbitraryOriginReflected_NoCredentials",
+				mockACAO:         "https://felix.invalid",
+				mockACAC:         "",
+				expectFinding:    true,
+				expectedCategory: api.CategoryCORSOriginReflection,
+				expectedSeverity: api.SeverityLow,
+				expectedVerState: string(report.VerificationObserved),
+			},
+			{
+				name:             "Case4_CredentialedArbitraryOriginReflection",
+				mockACAO:         "https://felix.invalid",
+				mockACAC:         "true",
+				expectFinding:    true,
+				expectedCategory: api.CategoryCORSOriginReflection,
+				expectedSeverity: api.SeverityHigh,
+				expectedVerState: string(report.VerificationVerified),
+			},
+			{
+				name:          "Case5_OriginAllowlist_RejectedProbe",
+				mockACAO:      "https://trusted-portal.corp",
+				mockACAC:      "true",
+				expectFinding: false, // Must not report arbitrary reflection when trusted allowlist is returned
+			},
+		}
+
+		for _, tc := range corsCases {
+			t.Run(tc.name, func(t *testing.T) {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if tc.mockACAO != "" {
+						w.Header().Set("Access-Control-Allow-Origin", tc.mockACAO)
+					}
+					if tc.mockACAC != "" {
+						w.Header().Set("Access-Control-Allow-Credentials", tc.mockACAC)
+					}
+					w.WriteHeader(http.StatusOK)
+					fmt.Fprint(w, "OK")
+				}))
+				defer server.Close()
+
+				client := api.NewClient(api.ClientOptions{HTTPClient: server.Client()})
+				findings := api.AuditCORS(context.Background(), client, server.URL)
+
+				if !tc.expectFinding {
+					if len(findings) != 0 {
+						t.Errorf("%s: expected 0 findings, got %d: %+v", tc.name, len(findings), findings)
+					}
+					return
+				}
+
+				if len(findings) == 0 {
+					t.Fatalf("%s: expected finding, got 0", tc.name)
+				}
+
+				f := findings[0]
+				if f.Category != tc.expectedCategory {
+					t.Errorf("%s: expected category %s, got %s", tc.name, tc.expectedCategory, f.Category)
+				}
+				if f.Severity != tc.expectedSeverity {
+					t.Errorf("%s: expected severity %s, got %s", tc.name, tc.expectedSeverity, f.Severity)
+				}
+
+				rf := report.FromAPIFinding(server.URL, f)
+				if string(rf.Verification.Status) != tc.expectedVerState {
+					t.Errorf("%s: expected verification status %s, got %s", tc.name, tc.expectedVerState, rf.Verification.Status)
+				}
+
+				// Negative evidence must be populated when uncredentialed
+				if tc.expectedSeverity != api.SeverityHigh && rf.EvidenceDetails.NegativeEvidence == "" {
+					t.Errorf("%s: expected negative evidence explaining absent credential risk", tc.name)
+				}
+			})
+		}
+	})
+
+	// ------------------------------------------------------------------------
+	// #10 CSP and Security-Header Analysis
+	// ------------------------------------------------------------------------
+	t.Run("SecurityHeaders_Analysis", func(t *testing.T) {
+		// Subtest A: All headers missing on HTTP target (HSTS must NOT be flagged on plain HTTP)
+		t.Run("MissingHeaders_PlainHTTP", func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				fmt.Fprint(w, "OK")
+			}))
+			defer server.Close()
+
+			client := api.NewClient(api.ClientOptions{HTTPClient: server.Client()})
+			findings := api.AuditSecurityHeaders(context.Background(), client, server.URL)
+
+			hasMissingCSP := false
+			hasMissingXFO := false
+			hasMissingXCTO := false
+			hasMissingPerm := false
+			hasMissingRef := false
+			hasMissingHSTS := false
+
+			for _, f := range findings {
+				switch f.Category {
+				case api.CategoryMissingCSP:
+					hasMissingCSP = true
+				case api.CategoryMissingXFrameOptions:
+					hasMissingXFO = true
+				case api.CategoryMissingXContentType:
+					hasMissingXCTO = true
+				case api.CategoryMissingPermissions:
+					hasMissingPerm = true
+				case api.CategoryMissingReferrerPolicy:
+					hasMissingRef = true
+				case api.CategoryMissingHSTS:
+					hasMissingHSTS = true
+				}
+			}
+
+			if !hasMissingCSP || !hasMissingXFO || !hasMissingXCTO || !hasMissingPerm || !hasMissingRef {
+				t.Errorf("expected missing security header findings on plain HTTP server")
+			}
+			if hasMissingHSTS {
+				t.Errorf("HSTS must NOT be flagged as missing on plain HTTP server: %s", server.URL)
+			}
+		})
+
+		// Subtest B: Fully hardened modern headers (frame-ancestors satisfies clickjacking)
+		t.Run("HardenedHeaders_FrameAncestorsEquivalence", func(t *testing.T) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' https:; object-src 'none'; frame-ancestors 'none'")
+				w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
+				w.Header().Set("X-Content-Type-Options", "nosniff")
+				w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+				w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+				w.WriteHeader(http.StatusOK)
+				fmt.Fprint(w, "OK")
+			}))
+			defer server.Close()
+
+			client := api.NewClient(api.ClientOptions{HTTPClient: server.Client()})
+			findings := api.AuditSecurityHeaders(context.Background(), client, server.URL)
+
+			for _, f := range findings {
+				if f.Category == api.CategoryMissingCSP || f.Category == api.CategoryWeakCSP ||
+					f.Category == api.CategoryMissingXFrameOptions || f.Category == api.CategoryMissingHSTS ||
+					f.Category == api.CategoryWeakHSTS || f.Category == api.CategoryMissingXContentType ||
+					f.Category == api.CategoryMissingReferrerPolicy || f.Category == api.CategoryWeakReferrerPolicy {
+					t.Errorf("hardened server produced unexpected finding: %s (%s)", f.Category, f.Evidence)
+				}
+			}
+		})
+
+		// Subtest C: Weak header configurations
+		t.Run("WeakHeaders_Inspection", func(t *testing.T) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Security-Policy", "default-src *; script-src 'self' 'unsafe-inline' 'unsafe-eval'; object-src *")
+				w.Header().Set("Strict-Transport-Security", "max-age=600")
+				w.Header().Set("Referrer-Policy", "unsafe-url")
+				w.WriteHeader(http.StatusOK)
+				fmt.Fprint(w, "OK")
+			}))
+			defer server.Close()
+
+			client := api.NewClient(api.ClientOptions{HTTPClient: server.Client()})
+			findings := api.AuditSecurityHeaders(context.Background(), client, server.URL)
+
+			var foundWeakCSP, foundWeakHSTS, foundWeakRef bool
+			for _, f := range findings {
+				if f.Category == api.CategoryWeakCSP {
+					foundWeakCSP = true
+					if !strings.Contains(f.Evidence, "unsafe-inline") {
+						t.Errorf("weak CSP evidence should mention unsafe-inline: %s", f.Evidence)
+					}
+				}
+				if f.Category == api.CategoryWeakHSTS {
+					foundWeakHSTS = true
+				}
+				if f.Category == api.CategoryWeakReferrerPolicy {
+					foundWeakRef = true
+				}
+			}
+
+			if !foundWeakCSP {
+				t.Errorf("expected weak-csp finding for unsafe-inline/unsafe-eval")
+			}
+			if !foundWeakHSTS {
+				t.Errorf("expected weak-hsts finding for short max-age")
+			}
+			if !foundWeakRef {
+				t.Errorf("expected weak-referrer-policy finding for unsafe-url")
+			}
+		})
+	})
+
+	// ------------------------------------------------------------------------
+	// #11 Cloud & BaaS Verification
+	// ------------------------------------------------------------------------
+	t.Run("Cloud_BaaS_Verification", func(t *testing.T) {
+		// Subtest A: Supabase anon vs service_role static safety
+		t.Run("Supabase_StaticCredentialSafety", func(t *testing.T) {
+			svc := cloud.Service{
+				Provider: cloud.ProviderSupabase,
+				URL:      "https://testproject.supabase.co",
+			}
+			// Service role key detection: must be static only, zero network requests
+			findings := cloud.AuditSupabase(context.Background(), nil, svc, nil, "", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.service_role")
+			if len(findings) == 0 {
+				t.Fatalf("expected service_role finding, got 0")
+			}
+			f := findings[0]
+			if f.Severity != cloud.SeverityCritical {
+				t.Errorf("expected CRITICAL severity for service_role key, got %s", f.Severity)
+			}
+			if !strings.Contains(f.Evidence, "No live transmission performed for safety") {
+				t.Errorf("evidence must state no live transmission performed: %s", f.Evidence)
+			}
+
+			rf := report.FromCloudFinding(svc.URL, f)
+			if rf.Verification.Status != report.VerificationNotVerified {
+				t.Errorf("service_role key verification status must be NOT_VERIFIED (got %s)", rf.Verification.Status)
+			}
+		})
+
+		// Subtest B: Supabase 401/403 RLS protection vs 200 exposure
+		t.Run("Supabase_LiveResponses", func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/rest/v1/protected" {
+					w.WriteHeader(http.StatusUnauthorized)
+					fmt.Fprint(w, `{"error":"unauthorized"}`)
+				} else if r.URL.Path == "/rest/v1/empty" {
+					w.WriteHeader(http.StatusOK)
+					fmt.Fprint(w, `[]`)
+				} else if r.URL.Path == "/rest/v1/leaked" {
+					w.WriteHeader(http.StatusOK)
+					fmt.Fprint(w, `[{"id":1,"secret_token":"abc123xyz"}]`)
+				}
+			}))
+			defer server.Close()
+
+			client := cloud.NewClient(cloud.ClientOptions{HTTPClient: server.Client()})
+			svc := cloud.Service{
+				Provider: cloud.ProviderSupabase,
+				URL:      server.URL,
+			}
+
+			// Protected endpoint -> must produce 0 exposure findings
+			fProtected := cloud.AuditSupabase(context.Background(), client, svc, []string{"/rest/v1/protected"}, "anon-key", "")
+			for _, f := range fProtected {
+				if f.Category == "Unauthorized Data Exposure" {
+					t.Errorf("protected resource produced Unauthorized Data Exposure: %+v", f)
+				}
+			}
+
+			// Empty 200 -> must produce 0 exposure findings
+			fEmpty := cloud.AuditSupabase(context.Background(), client, svc, []string{"/rest/v1/empty"}, "anon-key", "")
+			for _, f := range fEmpty {
+				if f.Category == "Unauthorized Data Exposure" {
+					t.Errorf("empty 200 resource produced Unauthorized Data Exposure: %+v", f)
+				}
+			}
+
+			// Leaked 200 -> must produce Unauthorized Data Exposure (HIGH)
+			fLeaked := cloud.AuditSupabase(context.Background(), client, svc, []string{"/rest/v1/leaked"}, "anon-key", "")
+			var foundLeaked bool
+			for _, f := range fLeaked {
+				if f.Category == "Unauthorized Data Exposure" {
+					foundLeaked = true
+					if f.Severity != cloud.SeverityHigh {
+						t.Errorf("expected HIGH severity, got %s", f.Severity)
+					}
+					rf := report.FromCloudFinding(server.URL, f)
+					if rf.Verification.Status != report.VerificationVerified {
+						t.Errorf("expected VERIFIED status for leaked records, got %s", rf.Verification.Status)
+					}
+				}
+			}
+			if !foundLeaked {
+				t.Errorf("expected Unauthorized Data Exposure finding for leaked records")
+			}
+		})
+
+		// Subtest C: Firebase 401/403 protection vs unauthenticated access
+		t.Run("Firebase_ProtectionVsExposure", func(t *testing.T) {
+			serverProtected := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusForbidden)
+				fmt.Fprint(w, `{"error":"Permission denied"}`)
+			}))
+			defer serverProtected.Close()
+
+			clientProt := cloud.NewClient(cloud.ClientOptions{HTTPClient: serverProtected.Client()})
+			fProt := cloud.AuditFirebase(context.Background(), clientProt, cloud.Service{Provider: cloud.ProviderFirebase, URL: serverProtected.URL})
+			if len(fProt) != 0 {
+				t.Errorf("protected Firebase database produced exposure findings: %+v", fProt)
+			}
+
+			serverExposed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				fmt.Fprint(w, `{"app_config": true, "users": true}`)
+			}))
+			defer serverExposed.Close()
+
+			clientExp := cloud.NewClient(cloud.ClientOptions{HTTPClient: serverExposed.Client()})
+			fExp := cloud.AuditFirebase(context.Background(), clientExp, cloud.Service{Provider: cloud.ProviderFirebase, URL: serverExposed.URL})
+			if len(fExp) == 0 {
+				t.Fatalf("expected Firebase unauthenticated database access finding, got 0")
+			}
+			if fExp[0].Severity != cloud.SeverityHigh {
+				t.Errorf("expected HIGH severity, got %s", fExp[0].Severity)
+			}
+		})
+
+		// Subtest D: Storage listing protection vs public XML
+		t.Run("Storage_ListingProtectionVsExposure", func(t *testing.T) {
+			serverProt := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusForbidden)
+				fmt.Fprint(w, `<Error><Code>AccessDenied</Code></Error>`)
+			}))
+			defer serverProt.Close()
+
+			clientProt := cloud.NewClient(cloud.ClientOptions{HTTPClient: serverProt.Client()})
+			fProt := cloud.AuditStorage(context.Background(), clientProt, cloud.Service{Provider: cloud.ProviderAWS, URL: serverProt.URL})
+			if len(fProt) != 0 {
+				t.Errorf("protected S3 bucket produced exposure findings: %+v", fProt)
+			}
+
+			serverExp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/xml")
+				w.WriteHeader(http.StatusOK)
+				fmt.Fprint(w, `<ListBucketResult><Name>test-bucket</Name><Contents><Key>backup.zip</Key></Contents></ListBucketResult>`)
+			}))
+			defer serverExp.Close()
+
+			clientExp := cloud.NewClient(cloud.ClientOptions{HTTPClient: serverExp.Client()})
+			fExp := cloud.AuditStorage(context.Background(), clientExp, cloud.Service{Provider: cloud.ProviderAWS, URL: serverExp.URL})
+			if len(fExp) == 0 {
+				t.Fatalf("expected Anonymous Bucket Listing finding, got 0")
+			}
+			if fExp[0].Severity != cloud.SeverityMedium {
+				t.Errorf("expected MEDIUM severity for public bucket listing, got %s", fExp[0].Severity)
+			}
+			rf := report.FromCloudFinding(serverExp.URL, fExp[0])
+			if rf.Verification.Status != report.VerificationVerified {
+				t.Errorf("expected VERIFIED status for public bucket listing, got %s", rf.Verification.Status)
+			}
+		})
+	})
+
+	// ------------------------------------------------------------------------
+	// #12 GraphQL Analysis
+	// ------------------------------------------------------------------------
+	t.Run("GraphQL_AnalysisAndSchemaIntelligence", func(t *testing.T) {
+		// Subtest A: Introspection denied (401)
+		t.Run("IntrospectionDenied_ZeroExposure", func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusUnauthorized)
+				fmt.Fprint(w, `{"errors":[{"message":"Authentication required"}]}`)
+			}))
+			defer server.Close()
+
+			client := api.NewClient(api.ClientOptions{HTTPClient: server.Client()})
+			findings := api.AuditGraphQL(context.Background(), client, server.URL, []string{"/graphql"})
+			if len(findings) != 0 {
+				t.Errorf("protected GraphQL endpoint produced exposure findings: %+v", findings)
+			}
+		})
+
+		// Subtest B: Introspection allowed with schema intelligence
+		t.Run("IntrospectionAllowed_SensitiveSchemaIntelligence", func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				fmt.Fprint(w, `{
+					"data": {
+						"__schema": {
+							"types": [
+								{"name": "Query"},
+								{"name": "User"},
+								{"name": "AdminRole"},
+								{"name": "PaymentMethod"},
+								{"name": "AuthToken"},
+								{"name": "__Schema"}
+							]
+						}
+					}
+				}`)
+			}))
+			defer server.Close()
+
+			client := api.NewClient(api.ClientOptions{HTTPClient: server.Client()})
+			findings := api.AuditGraphQL(context.Background(), client, server.URL, []string{"/graphql"})
+			if len(findings) == 0 {
+				t.Fatalf("expected GraphQL introspection finding, got 0")
+			}
+
+			f := findings[0]
+			if f.Severity != api.SeverityLow {
+				t.Errorf("GraphQL introspection must be conservative LOW severity (got %s)", f.Severity)
+			}
+			if !strings.Contains(f.Evidence, "AdminRole") && !strings.Contains(f.Evidence, "PaymentMethod") {
+				t.Errorf("evidence should highlight sensitive schema indicators: %s", f.Evidence)
+			}
+
+			rf := report.FromAPIFinding(server.URL, f)
+			if rf.Verification.Status != report.VerificationVerified {
+				t.Errorf("expected VERIFIED status for allowed introspection, got %s", rf.Verification.Status)
+			}
+			if rf.EvidenceDetails.Details["sensitive_indicators"] == "" {
+				t.Errorf("expected sensitive_indicators in evidence details")
+			}
+		})
+	})
+}
+
+// ============================================================================
+// #13–#16 PHASE D: REPORTING & RISK QUALITY REGRESSION
+// ============================================================================
+
+func TestRegression_PhaseD_ReportingAndRisk(t *testing.T) {
+	// ------------------------------------------------------------------------
+	// #13 Better Security Stories
+	// ------------------------------------------------------------------------
+	t.Run("SecurityStories_SynthesisAndActionability", func(t *testing.T) {
+		// Case 1: Supabase story has Summary, InvestigateFirst, and RiskContribution
+		secFinding := report.Finding{
+			ID:          "SEC-SB-TEST",
+			Title:       "Supabase service_role Key",
+			Category:    "supabase-service-key",
+			Severity:    report.SeverityCritical,
+			Confidence:  report.ConfidenceHigh,
+			Target:      "https://example.com",
+			Endpoint:    "https://example.com/app.js",
+			Method:      "GET",
+			Source:      report.SourceSecrets,
+			Fingerprint: "fp-sb-service",
+		}
+		cloudFinding := report.Finding{
+			ID:          "CLD-SB-TEST",
+			Title:       "Supabase Project Identified",
+			Category:    "supabase-provider",
+			Severity:    report.SeverityInfo,
+			Confidence:  report.ConfidenceHigh,
+			Target:      "https://example.com",
+			Endpoint:    "https://project-id.supabase.co",
+			Method:      "GET",
+			Source:      report.SourceCloud,
+			Fingerprint: "fp-sb-proj",
+		}
+
+		_, stories := report.Correlate("https://example.com", []report.Finding{secFinding, cloudFinding})
+		if len(stories) == 0 {
+			t.Fatalf("expected Supabase correlated security story")
+		}
+		sbStory := stories[0]
+		if sbStory.Summary == "" {
+			t.Errorf("expected non-empty Summary in Supabase story")
+		}
+		if sbStory.InvestigateFirst == "" {
+			t.Errorf("expected non-empty InvestigateFirst in Supabase story")
+		}
+		if sbStory.RiskContribution <= 0 {
+			t.Errorf("expected positive RiskContribution in Supabase story, got %d", sbStory.RiskContribution)
+		}
+
+		// Case 2: GraphQL story with sensitive models
+		gqlFinding := report.Finding{
+			ID:          "API-GQL-SENS",
+			Title:       "GraphQL Schema Introspection Enabled",
+			Category:    "graphql-introspection",
+			Severity:    report.SeverityMedium,
+			Confidence:  report.ConfidenceHigh,
+			Target:      "https://example.com",
+			Endpoint:    "https://example.com/graphql",
+			Method:      "POST",
+			Evidence:    "Types found: AdminRole, UserSession, PaymentMethod",
+			Source:      report.SourceAPI,
+			Fingerprint: "fp-gql-sens",
+			EvidenceDetails: report.EvidenceDetails{
+				Details: map[string]string{
+					"sensitive_indicators": "AdminRole, PaymentMethod",
+				},
+			},
+		}
+		_, gqlStories := report.Correlate("https://example.com", []report.Finding{gqlFinding})
+		if len(gqlStories) == 0 {
+			t.Fatalf("expected GraphQL security story")
+		}
+		if !strings.Contains(gqlStories[0].Title, "Sensitive") {
+			t.Errorf("expected sensitive schema model mention in GraphQL story title, got %s", gqlStories[0].Title)
+		}
+		if gqlStories[0].RiskContribution < 5 {
+			t.Errorf("expected RiskContribution >= 5 for sensitive GraphQL schema, got %d", gqlStories[0].RiskContribution)
+		}
+		if gqlStories[0].InvestigateFirst == "" {
+			t.Errorf("expected non-empty InvestigateFirst for GraphQL story")
+		}
+	})
+
+	// ------------------------------------------------------------------------
+	// #14 Better Risk Scoring & Baseline Preservation
+	// ------------------------------------------------------------------------
+	t.Run("RiskScoring_VerificationAwarenessAndBaseline", func(t *testing.T) {
+		// Finding scores: NOT_EXPOSED must yield 0
+		fNotExposed := report.Finding{
+			Category:   "access-denied-403",
+			Severity:   report.SeverityInfo,
+			Confidence: report.ConfidenceHigh,
+			Verification: report.VerificationRecord{
+				Status: report.VerificationNotExposed,
+			},
+		}
+		if score := report.CalculateFindingScore(fNotExposed); score != 0 {
+			t.Errorf("NOT_EXPOSED finding must contribute 0 risk score, got %d", score)
+		}
+
+		// Finding with auth_state = AUTH_REQUIRED must yield 0
+		fAuthReq := report.Finding{
+			Category:   "endpoint-discovered",
+			Severity:   report.SeverityInfo,
+			Confidence: report.ConfidenceHigh,
+			EvidenceDetails: report.EvidenceDetails{
+				Details: map[string]string{
+					"auth_state": "AUTH_REQUIRED",
+				},
+			},
+		}
+		if score := report.CalculateFindingScore(fAuthReq); score != 0 {
+			t.Errorf("AUTH_REQUIRED finding must contribute 0 risk score, got %d", score)
+		}
+
+		// Real-world baseline test: Target with solely missing/weak defense-in-depth headers
+		// must preserve exact 20/100 LOW baseline without inflation.
+		hardeningFindings := []report.Finding{
+			{Category: "missing-csp", Severity: report.SeverityLow, Confidence: report.ConfidenceHigh, Verification: report.VerificationRecord{Status: report.VerificationVerified}},
+			{Category: "missing-hsts", Severity: report.SeverityLow, Confidence: report.ConfidenceHigh, Verification: report.VerificationRecord{Status: report.VerificationVerified}},
+			{Category: "missing-x-frame-options", Severity: report.SeverityLow, Confidence: report.ConfidenceHigh, Verification: report.VerificationRecord{Status: report.VerificationVerified}},
+			{Category: "missing-x-content-type-options", Severity: report.SeverityInfo, Confidence: report.ConfidenceHigh, Verification: report.VerificationRecord{Status: report.VerificationVerified}},
+			{Category: "missing-permissions-policy", Severity: report.SeverityInfo, Confidence: report.ConfidenceHigh, Verification: report.VerificationRecord{Status: report.VerificationVerified}},
+			{Category: "missing-referrer-policy", Severity: report.SeverityInfo, Confidence: report.ConfidenceHigh, Verification: report.VerificationRecord{Status: report.VerificationVerified}},
+		}
+
+		score, level := report.CalculateReportRisk(hardeningFindings, nil)
+		if score != 20 || level != "LOW" {
+			t.Errorf("hardening headers alone must produce exact 20/100 LOW baseline, got score=%d level=%s", score, level)
+		}
+
+		// Hardening cap: even with 10 duplicate hardening findings, score must NOT exceed 20
+		manyHardening := append(hardeningFindings, hardeningFindings...)
+		scoreMany, levelMany := report.CalculateReportRisk(manyHardening, nil)
+		if scoreMany != 20 || levelMany != "LOW" {
+			t.Errorf("hardening cap violated: expected 20/100 LOW, got score=%d level=%s", scoreMany, levelMany)
+		}
+
+		// Verified Critical exposure correctly anchors to CRITICAL (>= 80)
+		critVerified := report.Finding{
+			Category:     "supabase-service-key",
+			Severity:     report.SeverityCritical,
+			Confidence:   report.ConfidenceHigh,
+			Verification: report.VerificationRecord{Status: report.VerificationVerified},
+		}
+		scoreCrit, levelCrit := report.CalculateReportRisk([]report.Finding{critVerified}, nil)
+		if scoreCrit < 80 || levelCrit != "CRITICAL" {
+			t.Errorf("verified critical exposure must yield >= 80 CRITICAL, got score=%d level=%s", scoreCrit, levelCrit)
+		}
+	})
+
+	// ------------------------------------------------------------------------
+	// #15 HTML/JSON Reports & Verification Breakdown
+	// ------------------------------------------------------------------------
+	t.Run("Reports_SummaryCountersAndRendering", func(t *testing.T) {
+		findings := []report.Finding{
+			{Category: "missing-csp", Severity: report.SeverityLow, Verification: report.VerificationRecord{Status: report.VerificationVerified}},
+			{Category: "aws-secret", Severity: report.SeverityHigh, Verification: report.VerificationRecord{Status: report.VerificationDetected}},
+			{Category: "api-endpoint", Severity: report.SeverityInfo, Verification: report.VerificationRecord{Status: report.VerificationObserved}},
+			{Category: "secret-key", Severity: report.SeverityCritical, Verification: report.VerificationRecord{Status: report.VerificationNotVerified}},
+			{Category: "403-forbidden", Severity: report.SeverityInfo, Verification: report.VerificationRecord{Status: report.VerificationNotExposed}},
+		}
+
+		sum := report.Summarize(findings)
+		if sum.VerifiedCount != 1 || sum.DetectedCount != 1 || sum.ObservedCount != 1 || sum.NotVerifiedCount != 1 || sum.NotExposedCount != 1 {
+			t.Errorf("Summarize verification counters incorrect: %+v", sum)
+		}
+
+		rep := report.BuildReport("https://example.com", findings)
+		if rep.Summary.VerifiedCount != 1 {
+			t.Errorf("report summary verified count mismatch: %d", rep.Summary.VerifiedCount)
+		}
+
+		html, err := report.GenerateHTML(rep)
+		if err != nil {
+			t.Fatalf("GenerateHTML failed: %v", err)
+		}
+		if !strings.Contains(html, "Verification Breakdown") {
+			t.Errorf("HTML report missing Verification Breakdown section")
+		}
+		if !strings.Contains(html, "Verified Exposures") {
+			t.Errorf("HTML report missing Verified Exposures card")
+		}
+
+		jsonBytes, err := report.GenerateJSON(rep)
+		if err != nil {
+			t.Fatalf("GenerateJSON failed: %v", err)
+		}
+		var parsed report.Report
+		if err := json.Unmarshal(jsonBytes, &parsed); err != nil {
+			t.Fatalf("unmarshal generated JSON failed: %v", err)
+		}
+		if parsed.Summary.VerifiedCount != 1 || parsed.Summary.NotExposedCount != 1 {
+			t.Errorf("JSON report missing accurate verification counters: %+v", parsed.Summary)
+		}
+	})
+
+	// ------------------------------------------------------------------------
+	// #16 Deduplication Improvements & Prioritization
+	// ------------------------------------------------------------------------
+	t.Run("Deduplication_EvidenceMergingAndPrioritization", func(t *testing.T) {
+		// Test merging locations, negative evidence, and details
+		f1 := report.Finding{
+			Target:      "https://example.com",
+			Category:    "test-token",
+			Endpoint:    "https://example.com/app.js",
+			Method:      "GET",
+			Severity:    report.SeverityMedium,
+			Confidence:  report.ConfidenceMedium,
+			Evidence:    "token=abc",
+			Fingerprint: "fp-dup-1",
+			Verification: report.VerificationRecord{
+				Status: report.VerificationObserved,
+			},
+			EvidenceDetails: report.EvidenceDetails{
+				Location: "app.js:10",
+				Details:  map[string]string{"key1": "val1"},
+			},
+		}
+		f2 := report.Finding{
+			Target:      "https://example.com",
+			Category:    "test-token",
+			Endpoint:    "https://example.com/app.js",
+			Method:      "GET",
+			Severity:    report.SeverityHigh,
+			Confidence:  report.ConfidenceHigh,
+			Evidence:    "token=abc_variant",
+			Fingerprint: "fp-dup-1",
+			Verification: report.VerificationRecord{
+				Status: report.VerificationVerified,
+			},
+			EvidenceDetails: report.EvidenceDetails{
+				Location: "app.js:55",
+				Details:  map[string]string{"key2": "val2"},
+			},
+		}
+
+		deduped := report.DeduplicateFindings([]report.Finding{f1, f2})
+		if len(deduped) != 1 {
+			t.Fatalf("expected 1 deduped finding, got %d", len(deduped))
+		}
+
+		d := deduped[0]
+		// Verification precedence: VERIFIED overrides OBSERVED
+		if d.Verification.Status != report.VerificationVerified {
+			t.Errorf("expected VERIFIED precedence, got %s", d.Verification.Status)
+		}
+		// Severity precedence: HIGH overrides MEDIUM
+		if d.Severity != report.SeverityHigh {
+			t.Errorf("expected HIGH severity precedence, got %s", d.Severity)
+		}
+		// Confidence precedence: HIGH overrides MEDIUM
+		if d.Confidence != report.ConfidenceHigh {
+			t.Errorf("expected HIGH confidence precedence, got %s", d.Confidence)
+		}
+		// Location merging
+		if !strings.Contains(d.EvidenceDetails.Location, "app.js:10") || !strings.Contains(d.EvidenceDetails.Location, "app.js:55") {
+			t.Errorf("merged location should contain both lines: %s", d.EvidenceDetails.Location)
+		}
+		// Details merging
+		if d.EvidenceDetails.Details["key1"] != "val1" || d.EvidenceDetails.Details["key2"] != "val2" {
+			t.Errorf("merged details should contain both keys: %+v", d.EvidenceDetails.Details)
+		}
+
+		// Prioritization: Verified exposures must surface before observed findings
+		pObservedCrit := report.Finding{
+			Severity:     report.SeverityCritical,
+			Confidence:   report.ConfidenceHigh,
+			Verification: report.VerificationRecord{Status: report.VerificationObserved},
+			Category:     "a-cat",
+			Endpoint:     "/crit",
+		}
+		pVerifiedHigh := report.Finding{
+			Severity:     report.SeverityHigh,
+			Confidence:   report.ConfidenceHigh,
+			Verification: report.VerificationRecord{Status: report.VerificationVerified},
+			Category:     "b-cat",
+			Endpoint:     "/high",
+		}
+		pNotExposedLow := report.Finding{
+			Severity:     report.SeverityLow,
+			Confidence:   report.ConfidenceHigh,
+			Verification: report.VerificationRecord{Status: report.VerificationNotExposed},
+			Category:     "c-cat",
+			Endpoint:     "/low",
+		}
+
+		prioritized := report.Prioritize([]report.Finding{pObservedCrit, pNotExposedLow, pVerifiedHigh})
+		if len(prioritized) != 3 {
+			t.Fatalf("expected 3 prioritized items")
+		}
+		// Rank 1: VERIFIED high
+		if prioritized[0].Verification.Status != report.VerificationVerified {
+			t.Errorf("top prioritized finding should be VERIFIED, got %s", prioritized[0].Verification.Status)
+		}
+		// Rank 2: OBSERVED crit
+		if prioritized[1].Verification.Status != report.VerificationObserved {
+			t.Errorf("second prioritized finding should be OBSERVED, got %s", prioritized[1].Verification.Status)
+		}
+		// Rank 3: NOT_EXPOSED low
+		if prioritized[2].Verification.Status != report.VerificationNotExposed {
+			t.Errorf("third prioritized finding should be NOT_EXPOSED, got %s", prioritized[2].Verification.Status)
+		}
+	})
+}

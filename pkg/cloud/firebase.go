@@ -49,14 +49,21 @@ func AuditFirebase(ctx context.Context, client *Client, service Service) []Cloud
 		}
 
 		findings = append(findings, CloudFinding{
-			Provider:    ProviderFirebase,
-			Category:    "Unauthenticated Database Access",
-			Endpoint:    service.URL,
-			Description: "Firebase Realtime Database allows unauthenticated public read access",
+			Provider:         ProviderFirebase,
+			Category:         "Unauthenticated Database Access",
+			Endpoint:         service.URL,
+			Description:      "Firebase Realtime Database allows unauthenticated public read access",
 			Evidence: fmt.Sprintf("HTTP 200 OK. Public JSON returned (%d bytes). Top-level keys: [%s] (database values redacted)",
 				len(resp.Body), keySummary),
-			Severity:    SeverityHigh,
-			Confidence:  ConfidenceHigh,
+			Severity:         SeverityHigh,
+			Confidence:       ConfidenceHigh,
+			HTTPMethod:       http.MethodGet,
+			HTTPStatus:       resp.StatusCode,
+			NegativeEvidence: "",
+			Details: map[string]string{
+				"top_level_keys": keySummary,
+				"payload_bytes":  fmt.Sprintf("%d", len(resp.Body)),
+			},
 			Fingerprint: GenerateFingerprint(ProviderFirebase, service.URL, "Unauthenticated Database Access"),
 		})
 	}

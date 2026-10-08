@@ -91,26 +91,34 @@ type Finding struct {
 
 // SecurityStory represents a correlated relationship between multiple findings.
 type SecurityStory struct {
-	ID          string   `json:"id"`
-	Title       string   `json:"title"`
-	Description string   `json:"description"`
-	Evidence    []string `json:"evidence"`
-	Impact      string   `json:"impact"`
-	Severity    string   `json:"severity"`
-	Confidence  string   `json:"confidence"`
-	Remediation string   `json:"remediation"`
-	RelatedIDs  []string `json:"related_finding_ids"`
+	ID               string   `json:"id"`
+	Title            string   `json:"title"`
+	Summary          string   `json:"summary,omitempty"`
+	Description      string   `json:"description"`
+	Evidence         []string `json:"evidence"`
+	Impact           string   `json:"impact"`
+	Severity         string   `json:"severity"`
+	Confidence       string   `json:"confidence"`
+	RiskContribution int      `json:"risk_contribution,omitempty"`
+	InvestigateFirst string   `json:"investigate_first,omitempty"`
+	Remediation      string   `json:"remediation"`
+	RelatedIDs       []string `json:"related_finding_ids"`
 }
 
 // Summary provides a statistical breakdown of findings.
 type Summary struct {
-	TotalFindings int            `json:"total_findings"`
-	CriticalCount int            `json:"critical_count"`
-	HighCount     int            `json:"high_count"`
-	MediumCount   int            `json:"medium_count"`
-	LowCount      int            `json:"low_count"`
-	InfoCount     int            `json:"info_count"`
-	BySource      map[string]int `json:"by_source"`
+	TotalFindings    int            `json:"total_findings"`
+	CriticalCount    int            `json:"critical_count"`
+	HighCount        int            `json:"high_count"`
+	MediumCount      int            `json:"medium_count"`
+	LowCount         int            `json:"low_count"`
+	InfoCount        int            `json:"info_count"`
+	VerifiedCount    int            `json:"verified_count"`
+	DetectedCount    int            `json:"detected_count"`
+	ObservedCount    int            `json:"observed_count"`
+	NotVerifiedCount int            `json:"not_verified_count"`
+	NotExposedCount  int            `json:"not_exposed_count"`
+	BySource         map[string]int `json:"by_source"`
 }
 
 // Report represents the complete audit results ready for presentation or export.
@@ -274,6 +282,20 @@ func FromCloudFinding(target string, f cloud.CloudFinding) Finding {
 		negEvidence = "Bucket contents were not downloaded."
 	}
 
+	if f.HTTPStatus > 0 {
+		httpStatus = f.HTTPStatus
+	}
+	if f.NegativeEvidence != "" {
+		negEvidence = f.NegativeEvidence
+	}
+	cldDetails := map[string]string{
+		"provider": string(f.Provider),
+		"category": f.Category,
+	}
+	for k, v := range f.Details {
+		cldDetails[k] = v
+	}
+
 	evDetails := EvidenceDetails{
 		Observation:      f.Evidence,
 		Location:         f.Endpoint,
@@ -282,10 +304,7 @@ func FromCloudFinding(target string, f cloud.CloudFinding) Finding {
 		DetectionMethod:  detMethod,
 		DetectionStatus:  detStatus,
 		NegativeEvidence: negEvidence,
-		Details: map[string]string{
-			"provider": string(f.Provider),
-			"category": f.Category,
-		},
+		Details:          cldDetails,
 	}
 
 	ver := VerificationRecord{
@@ -377,6 +396,13 @@ func FromAPIFinding(target string, f api.APIFinding) Finding {
 		verResult = fmt.Sprintf("Evaluated server HTTP response headers; %s defense-in-depth header was not present.", cat)
 		negEvidence = "No defense-in-depth security header was returned by the web server."
 
+	case strings.HasPrefix(cat, "weak-"):
+		detMethod = "header_inspection"
+		detStatus = "DETECTED"
+		verStatus = VerificationVerified
+		verResult = fmt.Sprintf("Evaluated server HTTP response headers; weak configuration detected in %s.", cat)
+		negEvidence = "Defense-in-depth posture observation; exploitability requires an independent injection vector."
+
 	case cat == "api-docs-exposure":
 		detStatus = "OBSERVED"
 		verStatus = VerificationObserved
@@ -448,6 +474,16 @@ func FromAPIFinding(target string, f api.APIFinding) Finding {
 	}
 	if f.LineNumber > 0 {
 		details["line_number"] = strconv.Itoa(f.LineNumber)
+	}
+	for k, v := range f.Details {
+		details[k] = v
+	}
+
+	if f.NegativeEvidence != "" {
+		negEvidence = f.NegativeEvidence
+	}
+	if f.HTTPStatus > 0 {
+		httpStatus = f.HTTPStatus
 	}
 
 	evDetails := EvidenceDetails{

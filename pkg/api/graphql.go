@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 )
 
@@ -93,15 +94,55 @@ func AuditGraphQL(ctx context.Context, client *Client, targetBaseURL string, can
 			var ir introspectionResponse
 			if err := json.Unmarshal(resp.Body, &ir); err == nil && len(ir.Data.Schema.Types) > 0 {
 				typeCount := len(ir.Data.Schema.Types)
+
+				// Identify potentially sensitive schema types without claiming exploitability
+				sensitiveKeywords := []string{
+					"admin", "user", "account", "payment", "billing", "password", "token", "secret", "internal", "auth",
+				}
+				var sensitiveIndicators []string
+				for _, t := range ir.Data.Schema.Types {
+					tLower := strings.ToLower(t.Name)
+					if strings.HasPrefix(tLower, "__") {
+						continue // skip internal meta types
+					}
+					for _, kw := range sensitiveKeywords {
+						if strings.Contains(tLower, kw) {
+							sensitiveIndicators = append(sensitiveIndicators, t.Name)
+							break
+						}
+					}
+				}
+				sort.Strings(sensitiveIndicators)
+
+				indicatorSummary := "none"
+				if len(sensitiveIndicators) > 0 {
+					if len(sensitiveIndicators) > 6 {
+						indicatorSummary = strings.Join(sensitiveIndicators[:6], ", ") + fmt.Sprintf(" ... +%d more", len(sensitiveIndicators)-6)
+					} else {
+						indicatorSummary = strings.Join(sensitiveIndicators, ", ")
+					}
+				}
+
+				ev := fmt.Sprintf("HTTP 200 OK. Introspection query succeeded (%d types observed). Full schema dump omitted.", typeCount)
+				if len(sensitiveIndicators) > 0 {
+					ev = fmt.Sprintf("HTTP 200 OK. Introspection query succeeded (%d types observed; sensitive schema indicators: [%s]). Full schema dump omitted.",
+						typeCount, indicatorSummary)
+				}
+
 				findings = append(findings, APIFinding{
-					Category:    CategoryGraphQLIntrospection,
-					Endpoint:    endpointURL,
-					Method:      http.MethodGet,
-					Description: "GraphQL endpoint has public introspection enabled",
-					Evidence: fmt.Sprintf("HTTP 200 OK. Introspection query succeeded (%d types observed). Full schema dump omitted.",
-						typeCount),
-					Severity:    SeverityLow,
-					Confidence:  ConfidenceHigh,
+					Category:         CategoryGraphQLIntrospection,
+					Endpoint:         endpointURL,
+					Method:           http.MethodGet,
+					Description:      "GraphQL endpoint has public introspection enabled",
+					Evidence:         ev,
+					Severity:         SeverityLow,
+					Confidence:       ConfidenceHigh,
+					HTTPStatus:       resp.StatusCode,
+					NegativeEvidence: "Full schema dump omitted to preserve audit bounds; operations not exploited.",
+					Details: map[string]string{
+						"type_count":           fmt.Sprintf("%d", typeCount),
+						"sensitive_indicators": indicatorSummary,
+					},
 					Fingerprint: GenerateFingerprint(CategoryGraphQLIntrospection, endpointURL, http.MethodGet),
 				})
 			}

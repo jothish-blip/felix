@@ -7,7 +7,20 @@ import (
 )
 
 // CalculateFindingScore calculates the deterministic risk score (0-40) for an individual finding.
+// It is verification-aware: verified exposures receive full weight, while unverified,
+// observed, or confirmed non-exposures (defensive boundaries) receive reduced or zero weight.
 func CalculateFindingScore(f Finding) int {
+	// Defended / boundary confirmed findings contribute 0 risk
+	if f.Verification.Status == VerificationNotExposed {
+		return 0
+	}
+	if f.EvidenceDetails.Details != nil {
+		auth := strings.ToUpper(f.EvidenceDetails.Details["auth_state"])
+		if auth == "AUTH_REQUIRED" || auth == "FORBIDDEN" || auth == "NOT_FOUND" {
+			return 0
+		}
+	}
+
 	var base float64
 	switch NormalizeSeverity(f.Severity) {
 	case SeverityCritical:
@@ -32,19 +45,38 @@ func CalculateFindingScore(f Finding) int {
 	}
 
 	// Confidence weight
-	var mult float64
+	var confMult float64
 	switch NormalizeConfidence(f.Confidence) {
 	case ConfidenceHigh:
-		mult = 1.0
+		confMult = 1.0
 	case ConfidenceMedium:
-		mult = 0.75
+		confMult = 0.75
 	case ConfidenceLow:
-		mult = 0.5
+		confMult = 0.5
 	default:
-		mult = 0.75
+		confMult = 0.75
 	}
 
-	score := int(math.Round(base * mult))
+	// Verification weight
+	verMult := 1.0
+	if f.Verification.Status != "" {
+		switch NormalizeVerificationStatus(f.Verification.Status) {
+		case VerificationVerified:
+			verMult = 1.0
+		case VerificationDetected:
+			verMult = 0.8
+		case VerificationNotVerified:
+			verMult = 0.7
+		case VerificationObserved:
+			verMult = 0.3
+		case VerificationNotExposed:
+			verMult = 0.0
+		default:
+			verMult = 0.5
+		}
+	}
+
+	score := int(math.Round(base * confMult * verMult))
 	if score < 0 {
 		return 0
 	}
@@ -54,67 +86,143 @@ func CalculateFindingScore(f Finding) int {
 	return score
 }
 
+func isHardeningCategory(cat string) bool {
+	c := NormalizeCategory(cat)
+	return strings.HasPrefix(c, "missing-") ||
+		strings.HasPrefix(c, "weak-") ||
+		c == "cors-wildcard" ||
+		c == "api-docs-exposure" ||
+		strings.HasPrefix(c, "asset-") ||
+		c == "source-map-discovered" ||
+		c == "source-map-exposure"
+}
+
 // CalculateReportRisk evaluates all findings and correlated security stories
 // to produce a bounded (0-100) Felix Risk Score and categorical risk band.
 //
 // The scoring model is deterministic, explainable, and deliberately not CVSS:
 // - Top verified findings anchor the primary risk band.
 // - Additional independent exposures provide bounded diminishing contributions.
+// - Hardening/defense-in-depth header findings are strictly capped at max 20 points
+//   to prevent false risk inflation on otherwise secure targets.
 // - Correlated security stories add targeted threat escalation bonuses.
 func CalculateReportRisk(findings []Finding, stories []SecurityStory) (int, string) {
 	if len(findings) == 0 {
 		return 0, "INFORMATIONAL"
 	}
 
-	scores := make([]int, len(findings))
-	for i, f := range findings {
-		scores[i] = f.Score
-		if scores[i] == 0 {
-			scores[i] = CalculateFindingScore(f)
+	var exposureScores []int
+	var hardeningScores []int
+
+	topExposureScore := 0
+	topExposureSeverity := ""
+	topExposureConfidence := ""
+
+	hasAnyLow := false
+	hasAnyHighConf := false
+
+	for _, f := range findings {
+		s := f.Score
+		if f.Verification.Status == VerificationNotExposed {
+			s = 0
+		} else if s == 0 {
+			s = CalculateFindingScore(f)
+		}
+
+		if NormalizeSeverity(f.Severity) == SeverityLow {
+			hasAnyLow = true
+		}
+		if NormalizeConfidence(f.Confidence) == ConfidenceHigh {
+			hasAnyHighConf = true
+		}
+
+		if isHardeningCategory(f.Category) {
+			if s > 0 {
+				hardeningScores = append(hardeningScores, s)
+			}
+		} else {
+			if s > 0 {
+				exposureScores = append(exposureScores, s)
+				if s > topExposureScore {
+					topExposureScore = s
+					topExposureSeverity = NormalizeSeverity(f.Severity)
+					topExposureConfidence = NormalizeConfidence(f.Confidence)
+				}
+			}
 		}
 	}
 
-	// Sort finding scores descending
-	sort.Slice(scores, func(i, j int) bool {
-		return scores[i] > scores[j]
+	// Sort descending
+	sort.Slice(exposureScores, func(i, j int) bool {
+		return exposureScores[i] > exposureScores[j]
+	})
+	sort.Slice(hardeningScores, func(i, j int) bool {
+		return hardeningScores[i] > hardeningScores[j]
 	})
 
-	topScore := scores[0]
-	topSeverity := NormalizeSeverity(findings[0].Severity)
-	topConfidence := NormalizeConfidence(findings[0].Confidence)
-
-	// Diminishing returns accumulator
-	var accumulated float64
+	// Diminishing returns accumulator for true exposures
+	var exposureAccum float64
 	weights := []float64{1.0, 0.5, 0.3, 0.2}
-	for i, s := range scores {
+	for i, s := range exposureScores {
 		if i < len(weights) {
-			accumulated += float64(s) * weights[i]
+			exposureAccum += float64(s) * weights[i]
 		} else {
-			// Diminishing tail
-			accumulated += float64(s) * 0.1
+			exposureAccum += float64(s) * 0.1
 		}
 	}
 
-	// Story bonus (+5 per correlated story, capped at +15)
-	storyBonus := math.Min(15.0, float64(len(stories))*5.0)
-	totalScore := int(math.Round(accumulated + storyBonus))
+	// Hardening scores accumulator (capped at 20.0 max)
+	var hardeningAccum float64
+	for i, s := range hardeningScores {
+		if i < len(weights) {
+			hardeningAccum += float64(s) * weights[i]
+		} else {
+			hardeningAccum += float64(s) * 0.1
+		}
+	}
+	if hardeningAccum > 20.0 {
+		hardeningAccum = 20.0
+	}
+
+	// Story bonus: sum of story RiskContributions, capped at +15
+	var storyBonus float64
+	for _, st := range stories {
+		contrib := st.RiskContribution
+		if contrib <= 0 {
+			contrib = 5
+		}
+		storyBonus += float64(contrib)
+	}
+	if storyBonus > 15.0 {
+		storyBonus = 15.0
+	}
+
+	totalScore := int(math.Round(exposureAccum + hardeningAccum + storyBonus))
 
 	// Floor alignment based on highest confirmed vulnerability
-	if topScore >= 40 && topConfidence == ConfidenceHigh {
+	if topExposureScore >= 40 && topExposureConfidence == ConfidenceHigh {
 		if totalScore < 80 {
 			totalScore = 80
 		}
-	} else if topScore >= 25 && topConfidence == ConfidenceHigh {
+	} else if topExposureScore >= 25 && topExposureConfidence == ConfidenceHigh {
 		if totalScore < 60 {
 			totalScore = 60
 		}
-	} else if topSeverity == SeverityMedium && topConfidence == ConfidenceHigh {
+	} else if topExposureSeverity == SeverityMedium && topExposureConfidence == ConfidenceHigh {
 		if totalScore < 40 {
 			totalScore = 40
 		}
-	} else if topSeverity == SeverityLow && topConfidence == ConfidenceHigh {
+	} else if hasAnyLow && hasAnyHighConf {
+		// When target has verified Low severity defense-in-depth issues (e.g. missing CSP)
+		// with High confidence, align floor to 20 (LOW band baseline).
 		if totalScore < 20 {
 			totalScore = 20
+		}
+		// If there are no Medium/High/Critical exposures, score should not exceed 20.
+		if topExposureSeverity != SeverityCritical && topExposureSeverity != SeverityHigh && topExposureSeverity != SeverityMedium {
+			if totalScore > 20 {
+				totalScore = 20
+			}
 		}
 	}
 

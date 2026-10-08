@@ -319,13 +319,35 @@ func main() {
 	fmt.Printf("  LOW       %d\n", rep.Summary.LowCount)
 	fmt.Printf("  INFO      %d\n\n", rep.Summary.InfoCount)
 
+	fmt.Println("Verification Status:")
+	fmt.Printf("  VERIFIED     %d\n", rep.Summary.VerifiedCount)
+	fmt.Printf("  DETECTED     %d\n", rep.Summary.DetectedCount)
+	fmt.Printf("  OBSERVED     %d\n", rep.Summary.ObservedCount)
+	if rep.Summary.NotVerifiedCount > 0 {
+		fmt.Printf("  NOT_VERIFIED %d\n", rep.Summary.NotVerifiedCount)
+	}
+	if rep.Summary.NotExposedCount > 0 {
+		fmt.Printf("  NOT_EXPOSED  %d\n", rep.Summary.NotExposedCount)
+	}
+	fmt.Println()
+
 	if len(rep.SecurityStories) > 0 {
 		fmt.Printf("CORRELATED SECURITY STORIES (%d)\n", len(rep.SecurityStories))
 		fmt.Println("────────────────────────────────────────")
 		for _, s := range rep.SecurityStories {
-			fmt.Printf("[%s] %s\n", s.Severity, s.Title)
-			fmt.Printf("  Impact:      %s\n", s.Impact)
-			fmt.Printf("  Remediation: %s\n\n", s.Remediation)
+			bonus := ""
+			if s.RiskContribution > 0 {
+				bonus = fmt.Sprintf(" (+%d Risk Pts)", s.RiskContribution)
+			}
+			fmt.Printf("[%s] %s%s\n", s.Severity, s.Title, bonus)
+			if s.Summary != "" {
+				fmt.Printf("  Summary:          %s\n", s.Summary)
+			}
+			fmt.Printf("  Impact:           %s\n", s.Impact)
+			if s.InvestigateFirst != "" {
+				fmt.Printf("  Investigate First: %s\n", s.InvestigateFirst)
+			}
+			fmt.Printf("  Remediation:      %s\n\n", s.Remediation)
 		}
 	}
 

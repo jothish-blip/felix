@@ -47,14 +47,21 @@ func AuditStorage(ctx context.Context, client *Client, service Service) []CloudF
 		}
 
 		findings = append(findings, CloudFinding{
-			Provider:    service.Provider,
-			Category:    "Anonymous Bucket Listing",
-			Endpoint:    service.URL,
-			Description: fmt.Sprintf("%s storage bucket permits anonymous object listing", providerName),
+			Provider:         service.Provider,
+			Category:         "Anonymous Bucket Listing",
+			Endpoint:         service.URL,
+			Description:      fmt.Sprintf("%s storage bucket permits anonymous object listing", providerName),
 			Evidence: fmt.Sprintf("HTTP 200 OK. Public ListBucketResult observed (%d bytes). Object listing is publicly readable (file contents not downloaded).",
 				len(resp.Body)),
-			Severity:    SeverityMedium,
-			Confidence:  ConfidenceHigh,
+			Severity:         SeverityMedium,
+			Confidence:       ConfidenceHigh,
+			HTTPMethod:       http.MethodGet,
+			HTTPStatus:       resp.StatusCode,
+			NegativeEvidence: "Object listing is publicly readable; file contents were not downloaded.",
+			Details: map[string]string{
+				"storage_provider": providerName,
+				"payload_bytes":    fmt.Sprintf("%d", len(resp.Body)),
+			},
 			Fingerprint: GenerateFingerprint(service.Provider, service.URL, "Anonymous Bucket Listing"),
 		})
 	}

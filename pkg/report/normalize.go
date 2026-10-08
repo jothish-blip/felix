@@ -122,15 +122,16 @@ func NormalizeVerificationStatus(v VerificationStatus) VerificationStatus {
 }
 
 // VerificationRank returns an ordering rank for verification statuses (higher is more verified).
+// Deterministic precedence: VERIFIED > DETECTED > NOT_VERIFIED > OBSERVED > NOT_EXPOSED.
 func VerificationRank(v VerificationStatus) int {
 	switch NormalizeVerificationStatus(v) {
 	case VerificationVerified:
 		return 4
 	case VerificationDetected:
 		return 3
-	case VerificationObserved:
-		return 2
 	case VerificationNotVerified:
+		return 2
+	case VerificationObserved:
 		return 1
 	case VerificationNotExposed:
 		return 0

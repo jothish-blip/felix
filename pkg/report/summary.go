@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// Summarize counts findings across severity tiers and sources.
+// Summarize counts findings across severity tiers, verification states, and sources.
 func Summarize(findings []Finding) Summary {
 	s := Summary{
 		TotalFindings: len(findings),
@@ -27,6 +27,19 @@ func Summarize(findings []Finding) Summary {
 			s.InfoCount++
 		}
 
+		switch NormalizeVerificationStatus(f.Verification.Status) {
+		case VerificationVerified:
+			s.VerifiedCount++
+		case VerificationDetected:
+			s.DetectedCount++
+		case VerificationNotVerified:
+			s.NotVerifiedCount++
+		case VerificationObserved:
+			s.ObservedCount++
+		case VerificationNotExposed:
+			s.NotExposedCount++
+		}
+
 		src := NormalizeSource(f.Source)
 		s.BySource[src]++
 	}
@@ -35,11 +48,12 @@ func Summarize(findings []Finding) Summary {
 }
 
 // Prioritize deterministically sorts findings by:
-// 1. Severity rank (CRITICAL -> INFO)
-// 2. Confidence rank (HIGH -> LOW)
-// 3. Risk score (descending)
-// 4. Category (alphabetical)
-// 5. Endpoint (alphabetical)
+// 1. Verification rank (VERIFIED -> DETECTED -> NOT_VERIFIED -> OBSERVED -> NOT_EXPOSED)
+// 2. Severity rank (CRITICAL -> INFO)
+// 3. Confidence rank (HIGH -> LOW)
+// 4. Risk score (descending)
+// 5. Category (alphabetical)
+// 6. Endpoint (alphabetical)
 func Prioritize(findings []Finding) []Finding {
 	if len(findings) == 0 {
 		return nil
@@ -52,33 +66,40 @@ func Prioritize(findings []Finding) []Finding {
 		fi := sorted[i]
 		fj := sorted[j]
 
-		// 1. Severity rank
+		// 1. Verification rank
+		vi := VerificationRank(fi.Verification.Status)
+		vj := VerificationRank(fj.Verification.Status)
+		if vi != vj {
+			return vi > vj
+		}
+
+		// 2. Severity rank
 		si := SeverityRank(fi.Severity)
 		sj := SeverityRank(fj.Severity)
 		if si != sj {
 			return si > sj
 		}
 
-		// 2. Confidence rank
+		// 3. Confidence rank
 		ci := ConfidenceRank(fi.Confidence)
 		cj := ConfidenceRank(fj.Confidence)
 		if ci != cj {
 			return ci > cj
 		}
 
-		// 3. Risk score
+		// 4. Risk score
 		if fi.Score != fj.Score {
 			return fi.Score > fj.Score
 		}
 
-		// 4. Category
+		// 5. Category
 		cati := strings.ToLower(fi.Category)
 		catj := strings.ToLower(fj.Category)
 		if cati != catj {
 			return cati < catj
 		}
 
-		// 5. Endpoint
+		// 6. Endpoint
 		epi := strings.ToLower(fi.Endpoint)
 		epj := strings.ToLower(fj.Endpoint)
 		return epi < epj

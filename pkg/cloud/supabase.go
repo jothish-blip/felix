@@ -17,28 +17,34 @@ func AuditSupabase(ctx context.Context, client *Client, service Service, candida
 	// IMPORTANT: Felix MUST NEVER attempt to execute requests using the service_role key.
 	if serviceRoleKey != "" {
 		findings = append(findings, CloudFinding{
-			Provider:    ProviderSupabase,
-			Category:    "Privileged Credential Exposure",
-			Endpoint:    service.URL,
-			Description: "Privileged Supabase service_role key exposed in client assets",
-			Evidence:    "A service_role key was extracted from client-side bundles. This allows full database administration bypassing Row Level Security (RLS). Not tested against live API.",
-			Severity:    SeverityCritical,
-			Confidence:  ConfidenceHigh,
-			Fingerprint: GenerateFingerprint(ProviderSupabase, service.URL, "Privileged Credential Exposure"),
+			Provider:         ProviderSupabase,
+			Category:         "Privileged Credential Exposure",
+			Endpoint:         service.URL,
+			Description:      "Privileged Supabase service_role key exposed in client assets",
+			Evidence:         "Privileged credential detected statically. No live transmission performed for safety. A service_role key was extracted from client-side bundles allowing full administrative database access bypassing Row Level Security (RLS).",
+			Severity:         SeverityCritical,
+			Confidence:       ConfidenceHigh,
+			HTTPMethod:       "GET",
+			HTTPStatus:       0,
+			NegativeEvidence: "Privileged credentials were strictly NOT used to probe live cloud infrastructure.",
+			Fingerprint:      GenerateFingerprint(ProviderSupabase, service.URL, "Privileged Credential Exposure"),
 		})
 	}
 
 	// 2. If an anon key was discovered, note it as an INFO finding (expected client-side configuration).
 	if anonKey != "" {
 		findings = append(findings, CloudFinding{
-			Provider:    ProviderSupabase,
-			Category:    "Client Configuration",
-			Endpoint:    service.URL,
-			Description: "Supabase publishable anon key detected",
-			Evidence:    "Public anon key observed in client-accessible assets (expected client-side configuration; authorization governed by Row Level Security).",
-			Severity:    SeverityInfo,
-			Confidence:  ConfidenceHigh,
-			Fingerprint: GenerateFingerprint(ProviderSupabase, service.URL, "Client Configuration"),
+			Provider:         ProviderSupabase,
+			Category:         "Client Configuration",
+			Endpoint:         service.URL,
+			Description:      "Supabase publishable anon key detected",
+			Evidence:         "Public anon key observed in client-accessible assets (expected client-side configuration; authorization governed by Row Level Security).",
+			Severity:         SeverityInfo,
+			Confidence:       ConfidenceHigh,
+			HTTPMethod:       "GET",
+			HTTPStatus:       0,
+			NegativeEvidence: "Public client configuration only; no privileged credential exposure or unauthorized data access demonstrated.",
+			Fingerprint:      GenerateFingerprint(ProviderSupabase, service.URL, "Client Configuration"),
 		})
 	}
 
@@ -107,14 +113,21 @@ func AuditSupabase(ctx context.Context, client *Client, service Service, candida
 				sort.Strings(fields)
 
 				findings = append(findings, CloudFinding{
-					Provider:    ProviderSupabase,
-					Category:    "Unauthorized Data Exposure",
-					Endpoint:    service.URL + ep,
-					Description: fmt.Sprintf("Public read access allowed on Supabase resource %s", ep),
+					Provider:         ProviderSupabase,
+					Category:         "Unauthorized Data Exposure",
+					Endpoint:         service.URL + ep,
+					Description:      fmt.Sprintf("Public read access allowed on Supabase resource %s", ep),
 					Evidence: fmt.Sprintf("HTTP 200 OK. Returned %d record(s). Observed fields: [%s] (record contents redacted)",
 						len(records), strings.Join(fields, ", ")),
-					Severity:    SeverityHigh,
-					Confidence:  ConfidenceHigh,
+					Severity:         SeverityHigh,
+					Confidence:       ConfidenceHigh,
+					HTTPMethod:       http.MethodGet,
+					HTTPStatus:       resp.StatusCode,
+					NegativeEvidence: "",
+					Details: map[string]string{
+						"record_count": fmt.Sprintf("%d", len(records)),
+						"fields":       strings.Join(fields, ", "),
+					},
 					Fingerprint: GenerateFingerprint(ProviderSupabase, service.URL+ep, "Unauthorized Data Exposure"),
 				})
 			}

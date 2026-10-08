@@ -28,6 +28,9 @@ func AuditCORS(ctx context.Context, client *Client, endpointURL string) []APIFin
 	acao := strings.TrimSpace(resp.Header.Get("Access-Control-Allow-Origin"))
 	acac := strings.TrimSpace(resp.Header.Get("Access-Control-Allow-Credentials"))
 
+	usedMethod := http.MethodGet
+	statusCode := resp.StatusCode
+
 	// If GET did not return CORS headers, attempt standard preflight OPTIONS probe
 	if acao == "" {
 		optsReq, err := http.NewRequestWithContext(ctx, http.MethodOptions, endpointURL, nil)
@@ -37,52 +40,91 @@ func AuditCORS(ctx context.Context, client *Client, endpointURL string) []APIFin
 			if optsResp, optsErr := client.Do(ctx, optsReq); optsErr == nil {
 				acao = strings.TrimSpace(optsResp.Header.Get("Access-Control-Allow-Origin"))
 				acac = strings.TrimSpace(optsResp.Header.Get("Access-Control-Allow-Credentials"))
+				usedMethod = http.MethodOptions
+				statusCode = optsResp.StatusCode
 			}
 		}
 	}
 
-	// 1. Arbitrary Origin Reflection + Credentials Allowed -> High Severity
+	// Case 1: No CORS header present (acao == "")
+	// Normal, secure browser behavior. Not a vulnerability.
+	if acao == "" {
+		return findings
+	}
+
+	// Case 5: Origin allowlist enforced (server returned an allowlisted origin, not our probe)
+	if !strings.EqualFold(acao, testProbeOrigin) && acao != "*" {
+		// Server returned a specific origin without reflecting arbitrary origin -> secure allowlist behavior
+		return findings
+	}
+
+	// Case 4: Arbitrary Origin Reflection + Credentials Allowed -> High Severity
 	if strings.EqualFold(acao, testProbeOrigin) && strings.EqualFold(acac, "true") {
 		findings = append(findings, APIFinding{
 			Category:    CategoryCORSOriginReflection,
 			Endpoint:    endpointURL,
-			Method:      http.MethodGet,
+			Method:      usedMethod,
 			Description: "CORS configuration reflects arbitrary Origin with credentials allowed",
-			Evidence: fmt.Sprintf("Supplied Origin: %s. Response returned Access-Control-Allow-Origin: %s, Access-Control-Allow-Credentials: true",
-				testProbeOrigin, acao),
-			Severity:    SeverityHigh,
-			Confidence:  ConfidenceHigh,
+			Evidence: fmt.Sprintf("Supplied Origin: %s. Response returned Access-Control-Allow-Origin: %s, Access-Control-Allow-Credentials: true (HTTP %d %s). Rationale: Permits cross-origin credentialed access from arbitrary domains.",
+				testProbeOrigin, acao, statusCode, usedMethod),
+			Severity:         SeverityHigh,
+			Confidence:       ConfidenceHigh,
+			HTTPStatus:       statusCode,
+			NegativeEvidence: "",
+			Details: map[string]string{
+				"origin": testProbeOrigin,
+				"acao":   acao,
+				"acac":   "true",
+				"method": usedMethod,
+			},
 			Fingerprint: GenerateFingerprint(CategoryCORSOriginReflection, endpointURL, "CORS_CREDS"),
 		})
 		return findings
 	}
 
-	// 2. Arbitrary Origin Reflection without Credentials -> Low Severity
+	// Case 3: Arbitrary Origin Reflection without Credentials -> Low Severity
 	if strings.EqualFold(acao, testProbeOrigin) {
 		findings = append(findings, APIFinding{
 			Category:    CategoryCORSOriginReflection,
 			Endpoint:    endpointURL,
-			Method:      http.MethodGet,
+			Method:      usedMethod,
 			Description: "CORS configuration reflects arbitrary Origin without credentials",
-			Evidence: fmt.Sprintf("Supplied Origin: %s. Response returned Access-Control-Allow-Origin: %s",
-				testProbeOrigin, acao),
-			Severity:    SeverityLow,
-			Confidence:  ConfidenceHigh,
+			Evidence: fmt.Sprintf("Supplied Origin: %s. Response returned Access-Control-Allow-Origin: %s (HTTP %d %s). Rationale: Origin is reflected, but credentials cannot be sent without Access-Control-Allow-Credentials: true.",
+				testProbeOrigin, acao, statusCode, usedMethod),
+			Severity:         SeverityLow,
+			Confidence:       ConfidenceHigh,
+			HTTPStatus:       statusCode,
+			NegativeEvidence: "Access-Control-Allow-Credentials header was absent or false; browsers will not permit credentialed access.",
+			Details: map[string]string{
+				"origin": testProbeOrigin,
+				"acao":   acao,
+				"acac":   acac,
+				"method": usedMethod,
+			},
 			Fingerprint: GenerateFingerprint(CategoryCORSOriginReflection, endpointURL, "CORS_REFLECT"),
 		})
 		return findings
 	}
 
-	// 3. Wildcard ACAO (*) -> Informational
+	// Case 2: Wildcard ACAO (*) -> Informational
 	if acao == "*" {
 		findings = append(findings, APIFinding{
 			Category:    CategoryCORSWildcard,
 			Endpoint:    endpointURL,
-			Method:      http.MethodGet,
+			Method:      usedMethod,
 			Description: "CORS policy permits wildcard (*) origin",
-			Evidence:    "Response returned Access-Control-Allow-Origin: *",
-			Severity:    SeverityInfo,
-			Confidence:  ConfidenceHigh,
+			Evidence: fmt.Sprintf("Supplied Origin: %s. Response returned Access-Control-Allow-Origin: * (HTTP %d %s). Rationale: Wildcard origin permits unauthenticated cross-origin resource sharing.",
+				testProbeOrigin, statusCode, usedMethod),
+			Severity:         SeverityInfo,
+			Confidence:       ConfidenceHigh,
+			HTTPStatus:       statusCode,
+			NegativeEvidence: "Access-Control-Allow-Credentials header was absent. Credentialed cross-origin exposure was not demonstrated.",
+			Details: map[string]string{
+				"origin": testProbeOrigin,
+				"acao":   "*",
+				"acac":   acac,
+				"method": usedMethod,
+			},
 			Fingerprint: GenerateFingerprint(CategoryCORSWildcard, endpointURL, "CORS_WILDCARD"),
 		})
 	}

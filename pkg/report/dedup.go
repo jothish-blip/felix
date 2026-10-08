@@ -36,7 +36,7 @@ func DeduplicateFindings(findings []Finding) []Finding {
 		fp := norm.Fingerprint
 
 		if existing, exists := seen[fp]; exists {
-			// Merge string evidence if different
+			// Merge string evidence if different without duplicate substrings
 			if norm.Evidence != "" && !strings.Contains(existing.Evidence, norm.Evidence) {
 				if existing.Evidence == "" {
 					existing.Evidence = norm.Evidence
@@ -52,9 +52,20 @@ func DeduplicateFindings(findings []Finding) []Finding {
 				existing.EvidenceDetails.Observation = existing.EvidenceDetails.Observation + "; Also: " + norm.EvidenceDetails.Observation
 			}
 
-			// Merge negative evidence if missing
-			if existing.EvidenceDetails.NegativeEvidence == "" && norm.EvidenceDetails.NegativeEvidence != "" {
+			// Merge location if different (e.g. multiple lines or assets where candidate occurs)
+			if norm.EvidenceDetails.Location != "" && !strings.Contains(existing.EvidenceDetails.Location, norm.EvidenceDetails.Location) {
+				if existing.EvidenceDetails.Location == "" {
+					existing.EvidenceDetails.Location = norm.EvidenceDetails.Location
+				} else {
+					existing.EvidenceDetails.Location = existing.EvidenceDetails.Location + ", " + norm.EvidenceDetails.Location
+				}
+			}
+
+			// Merge negative evidence
+			if existing.EvidenceDetails.NegativeEvidence == "" {
 				existing.EvidenceDetails.NegativeEvidence = norm.EvidenceDetails.NegativeEvidence
+			} else if norm.EvidenceDetails.NegativeEvidence != "" && !strings.Contains(existing.EvidenceDetails.NegativeEvidence, norm.EvidenceDetails.NegativeEvidence) {
+				existing.EvidenceDetails.NegativeEvidence = existing.EvidenceDetails.NegativeEvidence + " " + norm.EvidenceDetails.NegativeEvidence
 			}
 
 			// Merge details map
@@ -63,28 +74,31 @@ func DeduplicateFindings(findings []Finding) []Finding {
 					existing.EvidenceDetails.Details = make(map[string]string)
 				}
 				for k, v := range norm.EvidenceDetails.Details {
-					if _, has := existing.EvidenceDetails.Details[k]; !has {
+					if oldV, has := existing.EvidenceDetails.Details[k]; !has {
 						existing.EvidenceDetails.Details[k] = v
+					} else if oldV != v && !strings.Contains(oldV, v) {
+						existing.EvidenceDetails.Details[k] = oldV + ", " + v
 					}
 				}
 			}
 
-			// Keep highest verification status
+			// Deterministic precedence:
+			// 1. Keep highest verification status (VERIFIED > DETECTED > NOT_VERIFIED > OBSERVED > NOT_EXPOSED)
 			if VerificationRank(norm.Verification.Status) > VerificationRank(existing.Verification.Status) {
 				existing.Verification = norm.Verification
 			}
 
-			// Keep highest severity
+			// 2. Keep highest severity (CRITICAL > HIGH > MEDIUM > LOW > INFO)
 			if SeverityRank(norm.Severity) > SeverityRank(existing.Severity) {
 				existing.Severity = norm.Severity
 			}
 
-			// Keep highest confidence
+			// 3. Keep highest confidence (HIGH > MEDIUM > LOW)
 			if ConfidenceRank(norm.Confidence) > ConfidenceRank(existing.Confidence) {
 				existing.Confidence = norm.Confidence
 			}
 
-			// Update score with updated severity/confidence
+			// Update score with updated severity, confidence, and verification status
 			existing.Score = CalculateFindingScore(*existing)
 		} else {
 			copyFinding := norm

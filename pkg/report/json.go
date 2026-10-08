@@ -71,6 +71,9 @@ func SanitizeReport(rep Report) Report {
 	cleanStories := make([]SecurityStory, len(rep.SecurityStories))
 	for i, s := range rep.SecurityStories {
 		cleanS := s
+		cleanS.Summary = SanitizeEvidence(s.Summary)
+		cleanS.Description = SanitizeEvidence(s.Description)
+		cleanS.InvestigateFirst = SanitizeEvidence(s.InvestigateFirst)
 		cleanEv := make([]string, len(s.Evidence))
 		for j, ev := range s.Evidence {
 			cleanEv[j] = SanitizeEvidence(ev)

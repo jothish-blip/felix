@@ -83,19 +83,22 @@ func Correlate(target string, findings []Finding) ([]Finding, []SecurityStory) {
 		}
 
 		story := SecurityStory{
-			ID:          fmt.Sprintf("STORY-SB-%s", shortHash(ep)),
-			Title:       "Privileged Supabase Cloud Credential Exposure",
-			Description: fmt.Sprintf("A privileged Supabase service_role credential was discovered in client-accessible assets and matches an identified project endpoint (%s).", ep),
+			ID:               fmt.Sprintf("STORY-SB-%s", shortHash(ep)),
+			Title:            "Privileged Supabase Cloud Credential Exposure",
+			Summary:          "A privileged Supabase service_role JWT was detected in client-side code and correlates directly with an active Supabase project endpoint.",
+			Description:      fmt.Sprintf("A privileged Supabase service_role credential was discovered in client-accessible assets and matches an identified project endpoint (%s).", ep),
 			Evidence: []string{
 				"Client-side JavaScript assets contain a privileged Supabase service_role token pattern.",
 				fmt.Sprintf("Discovered matching Supabase project endpoint: %s", ep),
 				"Credential was strictly NOT transmitted or used to probe the cloud provider.",
 			},
-			Impact:      "A privileged service_role credential completely bypasses Row Level Security (RLS), granting administrative database access if exposed to untrusted users.",
-			Severity:    SeverityCritical,
-			Confidence:  ConfidenceHigh,
-			Remediation: RemediationFor("supabase-service-key", ""),
-			RelatedIDs:  relatedIDs,
+			Impact:           "A privileged service_role credential completely bypasses Row Level Security (RLS), granting administrative database access if exposed to untrusted users.",
+			Severity:         SeverityCritical,
+			Confidence:       ConfidenceHigh,
+			RiskContribution: 10,
+			InvestigateFirst: "Verify if the exposed JWT token is active in Supabase project dashboard and immediately revoke/rotate the service_role key.",
+			Remediation:      RemediationFor("supabase-service-key", ""),
+			RelatedIDs:       relatedIDs,
 		}
 		stories = append(stories, story)
 	}
@@ -103,37 +106,63 @@ func Correlate(target string, findings []Finding) ([]Finding, []SecurityStory) {
 	// 2. Case B — Firebase Unauthorized Exposure
 	for _, fb := range firebaseOpen {
 		story := SecurityStory{
-			ID:          fmt.Sprintf("STORY-FB-%s", shortHash(fb.Endpoint)),
-			Title:       "Unauthorized Firebase Realtime Database Exposure",
-			Description: fmt.Sprintf("Publicly accessible Firebase Realtime Database at %s permits unauthenticated read access.", fb.Endpoint),
+			ID:               fmt.Sprintf("STORY-FB-%s", shortHash(fb.Endpoint)),
+			Title:            "Unauthorized Firebase Realtime Database Exposure",
+			Summary:          "An open Firebase Realtime Database endpoint was verified responding with database records to unauthenticated anonymous requests.",
+			Description:      fmt.Sprintf("Publicly accessible Firebase Realtime Database at %s permits unauthenticated read access.", fb.Endpoint),
 			Evidence: []string{
 				fmt.Sprintf("Target database endpoint: %s", fb.Endpoint),
 				"Endpoint permitted unauthorized anonymous read access without authentication.",
 			},
-			Impact:      "Publicly open Firebase databases allow any internet user to read, download, or index sensitive application records.",
-			Severity:    SeverityHigh,
-			Confidence:  ConfidenceHigh,
-			Remediation: RemediationFor("firebase-open-database", ""),
-			RelatedIDs:  []string{fb.ID},
+			Impact:           "Publicly open Firebase databases allow any internet user to read, download, or index sensitive application records.",
+			Severity:         SeverityHigh,
+			Confidence:       ConfidenceHigh,
+			RiskContribution: 8,
+			InvestigateFirst: "Inspect Firebase security rules in the Firebase console and restrict unauthenticated read access (.read: false or auth != null).",
+			Remediation:      RemediationFor("firebase-open-database", ""),
+			RelatedIDs:       []string{fb.ID},
 		}
 		stories = append(stories, story)
 	}
 
 	// 3. Case C — GraphQL Introspection
 	if graphqlIntrospection != nil {
+		hasSensitive := false
+		if graphqlIntrospection.EvidenceDetails.Details != nil && graphqlIntrospection.EvidenceDetails.Details["sensitive_indicators"] != "" {
+			hasSensitive = true
+		} else if strings.Contains(strings.ToLower(graphqlIntrospection.Evidence), "admin") ||
+			strings.Contains(strings.ToLower(graphqlIntrospection.Evidence), "user") ||
+			strings.Contains(strings.ToLower(graphqlIntrospection.Evidence), "payment") ||
+			strings.Contains(strings.ToLower(graphqlIntrospection.Evidence), "auth") {
+			hasSensitive = true
+		}
+
+		title := "GraphQL Endpoint Discovered with Schema Introspection Enabled"
+		summary := "GraphQL endpoint at the target host allows unauthenticated schema introspection, disclosing query, mutation, and schema structure."
+		impact := "Public schema introspection reveals all queries, mutations, types, and fields, assisting attackers in discovering undocumented endpoints and internal data structures."
+		riskContrib := 3
+		if hasSensitive {
+			title = "GraphQL Endpoint with Introspection Exposing Sensitive Schema Models"
+			summary = "GraphQL schema introspection query confirmed accessible, disclosing business and identity model definitions (e.g. administrative, authentication, or payment types)."
+			riskContrib = 5
+		}
+
 		story := SecurityStory{
-			ID:          fmt.Sprintf("STORY-GQL-%s", shortHash(graphqlIntrospection.Endpoint)),
-			Title:       "GraphQL Endpoint Discovered with Schema Introspection Enabled",
-			Description: fmt.Sprintf("GraphQL endpoint at %s was identified and has full introspection enabled.", graphqlIntrospection.Endpoint),
+			ID:               fmt.Sprintf("STORY-GQL-%s", shortHash(graphqlIntrospection.Endpoint)),
+			Title:            title,
+			Summary:          summary,
+			Description:      fmt.Sprintf("GraphQL endpoint at %s was identified and has full introspection enabled.", graphqlIntrospection.Endpoint),
 			Evidence: []string{
 				fmt.Sprintf("Discovered GraphQL endpoint: %s", graphqlIntrospection.Endpoint),
 				graphqlIntrospection.Evidence,
 			},
-			Impact:      "Public schema introspection reveals all queries, mutations, types, and fields, assisting attackers in discovering undocumented endpoints and internal data structures.",
-			Severity:    SeverityMedium,
-			Confidence:  ConfidenceHigh,
-			Remediation: RemediationFor("graphql-introspection", ""),
-			RelatedIDs:  []string{graphqlIntrospection.ID},
+			Impact:           impact,
+			Severity:         SeverityMedium,
+			Confidence:       ConfidenceHigh,
+			RiskContribution: riskContrib,
+			InvestigateFirst: "Disable GraphQL schema introspection in production configuration (e.g. set introspection: false) unless this is an intended public API.",
+			Remediation:      RemediationFor("graphql-introspection", ""),
+			RelatedIDs:       []string{graphqlIntrospection.ID},
 		}
 		stories = append(stories, story)
 	}
@@ -142,18 +171,21 @@ func Correlate(target string, findings []Finding) ([]Finding, []SecurityStory) {
 	if len(apiDocs) > 0 && len(apiRoutes) > 0 {
 		doc := apiDocs[0]
 		story := SecurityStory{
-			ID:          fmt.Sprintf("STORY-DOC-%s", shortHash(doc.Endpoint)),
-			Title:       "Public API Documentation Disclosed Alongside Active Endpoints",
-			Description: fmt.Sprintf("Public API schema specification at %s was discovered alongside %d referenced client API route(s).", doc.Endpoint, len(apiRoutes)),
+			ID:               fmt.Sprintf("STORY-DOC-%s", shortHash(doc.Endpoint)),
+			Title:            "Public API Documentation Disclosed Alongside Active Endpoints",
+			Summary:          "Public OpenAPI / Swagger specification discovered alongside referenced client API routes, mapping attack surface.",
+			Description:      fmt.Sprintf("Public API schema specification at %s was discovered alongside %d referenced client API route(s).", doc.Endpoint, len(apiRoutes)),
 			Evidence: []string{
 				fmt.Sprintf("Public specification endpoint: %s", doc.Endpoint),
 				fmt.Sprintf("Referenced client API endpoints identified: %d route(s)", len(apiRoutes)),
 			},
-			Impact:      "Publicly exposed API specifications disclose internal parameter definitions, schemas, and endpoint semantics.",
-			Severity:    SeverityInfo,
-			Confidence:  ConfidenceHigh,
-			Remediation: RemediationFor("api-docs-exposure", ""),
-			RelatedIDs:  []string{doc.ID},
+			Impact:           "Publicly exposed API specifications disclose internal parameter definitions, schemas, and endpoint semantics.",
+			Severity:         SeverityInfo,
+			Confidence:       ConfidenceHigh,
+			RiskContribution: 1,
+			InvestigateFirst: "Verify whether the OpenAPI documentation endpoint is intended for public consumption or should be placed behind authentication.",
+			Remediation:      RemediationFor("api-docs-exposure", ""),
+			RelatedIDs:       []string{doc.ID},
 		}
 		stories = append(stories, story)
 	}
@@ -169,18 +201,21 @@ func Correlate(target string, findings []Finding) ([]Finding, []SecurityStory) {
 			}
 
 			story := SecurityStory{
-				ID:          fmt.Sprintf("STORY-ENV-%s", shortHash(env.Endpoint)),
-				Title:       "Exposed Environment Configuration with Active Credentials",
-				Description: fmt.Sprintf("A public .env configuration file at %s was discovered alongside %d sensitive credential finding(s).", env.Endpoint, len(generalSecrets)),
+				ID:               fmt.Sprintf("STORY-ENV-%s", shortHash(env.Endpoint)),
+				Title:            "Exposed Environment Configuration with Active Credentials",
+				Summary:          "A publicly downloadable .env file was discovered alongside sensitive credential signatures, indicating severe server misconfiguration.",
+				Description:      fmt.Sprintf("A public .env configuration file at %s was discovered alongside %d sensitive credential finding(s).", env.Endpoint, len(generalSecrets)),
 				Evidence: []string{
 					fmt.Sprintf("Environment configuration accessible at %s", env.Endpoint),
 					fmt.Sprintf("Correlated with %d confirmed credential pattern(s) across target assets", len(generalSecrets)),
 				},
-				Impact:      "Direct exposure of production environment variables containing active secret keys permits direct compromise of connected backend databases, cloud storage, and APIs.",
-				Severity:    SeverityCritical,
-				Confidence:  ConfidenceHigh,
-				Remediation: RemediationFor("env-exposure", ""),
-				RelatedIDs:  related,
+				Impact:           "Direct exposure of production environment variables containing active secret keys permits direct compromise of connected backend databases, cloud storage, and APIs.",
+				Severity:         SeverityCritical,
+				Confidence:       ConfidenceHigh,
+				RiskContribution: 15,
+				InvestigateFirst: "Immediately block public web server access to dotfiles (.*) and revoke/rotate all secrets and database passwords declared in the .env file.",
+				Remediation:      RemediationFor("env-exposure", ""),
+				RelatedIDs:       related,
 			}
 			stories = append(stories, story)
 		}
@@ -190,19 +225,22 @@ func Correlate(target string, findings []Finding) ([]Finding, []SecurityStory) {
 	if len(corsCredentialed) > 0 && (len(apiRoutes) > 0 || graphqlIntrospection != nil) {
 		cors := corsCredentialed[0]
 		story := SecurityStory{
-			ID:          fmt.Sprintf("STORY-CORS-%s", shortHash(cors.Endpoint)),
-			Title:       "Credentialed Arbitrary-Origin CORS Reflection on Sensitive API Routes",
-			Description: fmt.Sprintf("CORS configuration reflects arbitrary Origin headers with Access-Control-Allow-Credentials on %s, alongside active API endpoints.", cors.Endpoint),
+			ID:               fmt.Sprintf("STORY-CORS-%s", shortHash(cors.Endpoint)),
+			Title:            "Credentialed Arbitrary-Origin CORS Reflection on Sensitive API Routes",
+			Summary:          "Target endpoint reflects arbitrary Origin headers with Access-Control-Allow-Credentials: true alongside sensitive API routes, enabling authenticated data theft.",
+			Description:      fmt.Sprintf("CORS configuration reflects arbitrary Origin headers with Access-Control-Allow-Credentials on %s, alongside active API endpoints.", cors.Endpoint),
 			Evidence: []string{
 				fmt.Sprintf("CORS arbitrary reflection endpoint: %s", cors.Endpoint),
 				"Access-Control-Allow-Credentials: true enabled with reflected origin.",
 				fmt.Sprintf("Discovered %d sensitive API route(s) on target host.", len(apiRoutes)),
 			},
-			Impact:      "Malicious external websites can trigger cross-origin authenticated requests from victim browsers to extract private user data and API responses.",
-			Severity:    SeverityHigh,
-			Confidence:  ConfidenceHigh,
-			Remediation: RemediationFor("cors-origin-reflection", ""),
-			RelatedIDs:  []string{cors.ID},
+			Impact:           "Malicious external websites can trigger cross-origin authenticated requests from victim browsers to extract private user data and API responses.",
+			Severity:         SeverityHigh,
+			Confidence:       ConfidenceHigh,
+			RiskContribution: 10,
+			InvestigateFirst: "Inspect CORS middleware on the API origin; restrict allowed origins to an explicit trusted domain allowlist.",
+			Remediation:      RemediationFor("cors-origin-reflection", ""),
+			RelatedIDs:       []string{cors.ID},
 		}
 		stories = append(stories, story)
 	}
