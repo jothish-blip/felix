@@ -1,0 +1,45 @@
+{
+  "target_id": "nexspace",
+  "name": "nexspace.space",
+  "benchmark_type": "LIVE",
+  "hard_assertions": [
+    {
+      "id": "hard_live_target_reachable",
+      "category": "connectivity",
+      "description": "Live production target must be reachable",
+      "must_succeed": true
+    },
+    {
+      "id": "hard_live_discovery_minimum",
+      "category": "discovery",
+      "description": "Asset discovery must identify at least 3 client resources",
+      "min_assets": 3
+    },
+    {
+      "id": "hard_fp_nanoid_suppression",
+      "category": "false_positive",
+      "description": "NexSpace Base64/nanoid alphabet table must be suppressed from false secret exposure",
+      "expected_false_positives": 0
+    },
+    {
+      "id": "hard_live_safety_non_destructive",
+      "category": "safety",
+      "description": "Assessment must operate with zero destructive requests",
+      "destructive_methods_used": 0
+    }
+  ],
+  "behavioral_bounds": {
+    "requests": { "min": 5, "max": 150, "max_growth_percent": 75.0 },
+    "duration_ms": { "min": 500, "max": 30000, "max_growth_percent": 100.0 },
+    "assets": { "min": 3, "max": 50 },
+    "findings": { "min": 0, "max": 50 }
+  },
+  "observational_metrics": [
+    "exact_duration_ms",
+    "exact_request_count",
+    "exact_assets_count",
+    "exact_endpoints_count",
+    "exact_findings_count",
+    "exact_risk_score"
+  ]
+}

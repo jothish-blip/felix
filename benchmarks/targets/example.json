@@ -1,0 +1,10 @@
+{
+  "name": "example.com",
+  "id": "example",
+  "url": "https://example.com",
+  "scope": "same-origin",
+  "benchmark_type": "LIVE",
+  "purpose": "Minimal baseline HTML target for HTTP connection hygiene, header assessment, and low-noise control target.",
+  "authorization_note": "RFC 2606 / IANA reserved example domain for testing and documentation.",
+  "environment": "external_control"
+}

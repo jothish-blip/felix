@@ -1,0 +1,10 @@
+{
+  "name": "webjothishanalyst.site",
+  "id": "webjothishanalyst",
+  "url": "https://webjothishanalyst.site",
+  "scope": "same-origin",
+  "benchmark_type": "LIVE",
+  "purpose": "Primary real-world Next.js production portfolio asset discovery, endpoint extraction, security headers verification, and baseline auditing.",
+  "authorization_note": "Explicitly authorized primary live benchmark target owned and controlled by user.",
+  "environment": "production"
+}

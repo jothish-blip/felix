@@ -1,0 +1,317 @@
+{
+  "timestamp": "2026-10-08T17:53:55.5450746Z",
+  "felix_version": "1.0.0",
+  "git_commit": "4b02d3c",
+  "environment": {
+    "os": "windows",
+    "arch": "amd64",
+    "go_version": "go1.27.0"
+  },
+  "status": "PASS",
+  "summary": {
+    "total_targets": 4,
+    "deterministic_passed": true,
+    "live_passed": true,
+    "hard_assertions_total": 26,
+    "hard_assertions_passed": 26,
+    "bounds_checked": 15,
+    "bounds_passed": 15,
+    "false_positives_count": 0,
+    "false_negatives_count": 0,
+    "total_requests": 126,
+    "total_duration_ms": 14869
+  },
+  "targets": [
+    {
+      "name": "Synthetic Certification Harness",
+      "target_id": "synthetic",
+      "url": "http://127.0.0.1:54029",
+      "benchmark_type": "DETERMINISTIC",
+      "status": "PASS",
+      "duration_ms": 1024,
+      "duration": "1.025s",
+      "requests": 38,
+      "assets": 4,
+      "endpoints": 17,
+      "findings": 30,
+      "verified_count": 10,
+      "detected_count": 0,
+      "observed_count": 8,
+      "not_verified_count": 10,
+      "not_exposed_count": 2,
+      "risk_score": 100,
+      "risk_level": "CRITICAL",
+      "assertions_passed": 14,
+      "assertions_failed": 0,
+      "false_positives": 0,
+      "false_negatives": 0,
+      "bounds_checked": 3,
+      "bounds_passed": 3,
+      "assertion_details": [
+        {
+          "assertion_id": "hard_tp_secret_aws",
+          "category": "secrets",
+          "passed": true,
+          "description": "AWS access key must be detected as high severity"
+        },
+        {
+          "assertion_id": "hard_tp_secret_github",
+          "category": "secrets",
+          "passed": true,
+          "description": "GitHub token must be detected as high severity"
+        },
+        {
+          "assertion_id": "hard_tp_secret_stripe",
+          "category": "secrets",
+          "passed": true,
+          "description": "Stripe secret must be detected as high severity"
+        },
+        {
+          "assertion_id": "hard_tp_secret_private_key",
+          "category": "secrets",
+          "passed": true,
+          "description": "Private key must be detected as critical severity"
+        },
+        {
+          "assertion_id": "hard_tp_secret_supabase_service_role",
+          "category": "secrets",
+          "passed": true,
+          "description": "Supabase service-role token must be detected as critical without live transmission"
+        },
+        {
+          "assertion_id": "hard_fp_secrets_suppressed",
+          "category": "false_positive",
+          "passed": true,
+          "description": "Known false positive candidates (UUID, placeholder, nanoid alphabet) must yield zero findings"
+        },
+        {
+          "assertion_id": "hard_tp_cors_credentialed",
+          "category": "api",
+          "passed": true,
+          "description": "CORS with reflected origin and credentials:true must be verified"
+        },
+        {
+          "assertion_id": "hard_fp_cors_wildcard",
+          "category": "api",
+          "passed": true,
+          "description": "Wildcard CORS without credentials must not be reported as verified credential exposure"
+        },
+        {
+          "assertion_id": "hard_tp_api_env_exposure",
+          "category": "api",
+          "passed": true,
+          "description": "Exposed .env database configuration must be verified"
+        },
+        {
+          "assertion_id": "hard_tp_api_git_exposure",
+          "category": "api",
+          "passed": true,
+          "description": "Exposed .git/HEAD repository reference must be verified"
+        },
+        {
+          "assertion_id": "hard_tp_api_graphql_introspection",
+          "category": "api",
+          "passed": true,
+          "description": "GraphQL introspection returning schema must be verified"
+        },
+        {
+          "assertion_id": "hard_tp_cloud_supabase_exposure",
+          "category": "cloud",
+          "passed": true,
+          "description": "Unauthenticated Supabase table returning user data must be verified"
+        },
+        {
+          "assertion_id": "hard_negative_evidence_protected",
+          "category": "api",
+          "passed": true,
+          "description": "Protected endpoints returning 401/403 must remain NOT_EXPOSED"
+        },
+        {
+          "assertion_id": "hard_safety_controls",
+          "category": "safety",
+          "passed": true,
+          "description": "Safety controls: zero destructive methods, safe read-only operations, scope enforced"
+        }
+      ]
+    },
+    {
+      "name": "webjothishanalyst.site",
+      "target_id": "webjothishanalyst",
+      "url": "https://webjothishanalyst.site",
+      "benchmark_type": "LIVE",
+      "status": "PASS",
+      "duration_ms": 2580,
+      "duration": "2.581s",
+      "requests": 41,
+      "assets": 19,
+      "endpoints": 22,
+      "findings": 14,
+      "verified_count": 2,
+      "detected_count": 0,
+      "observed_count": 11,
+      "not_verified_count": 0,
+      "not_exposed_count": 1,
+      "risk_score": 20,
+      "risk_level": "LOW",
+      "assertions_passed": 4,
+      "assertions_failed": 0,
+      "false_positives": 0,
+      "false_negatives": 0,
+      "bounds_checked": 4,
+      "bounds_passed": 4,
+      "assertion_details": [
+        {
+          "assertion_id": "hard_live_target_reachable",
+          "category": "connectivity",
+          "passed": true,
+          "description": "Live production asset target must be reachable and return 200 OK"
+        },
+        {
+          "assertion_id": "hard_live_discovery_minimum",
+          "category": "discovery",
+          "passed": true,
+          "description": "Next.js asset discovery must identify at least 10 client resources"
+        },
+        {
+          "assertion_id": "hard_live_scope_enforcement",
+          "category": "safety",
+          "passed": true,
+          "description": "Auditor must strictly respect same-origin scope and avoid external hosts"
+        },
+        {
+          "assertion_id": "hard_live_safety_non_destructive",
+          "category": "safety",
+          "passed": true,
+          "description": "Assessment must operate with zero destructive requests"
+        }
+      ]
+    },
+    {
+      "name": "nexspace.space",
+      "target_id": "nexspace",
+      "url": "https://nexspace.space",
+      "benchmark_type": "LIVE",
+      "status": "PASS",
+      "duration_ms": 775,
+      "duration": "776ms",
+      "requests": 35,
+      "assets": 18,
+      "endpoints": 17,
+      "findings": 12,
+      "verified_count": 1,
+      "detected_count": 0,
+      "observed_count": 9,
+      "not_verified_count": 1,
+      "not_exposed_count": 1,
+      "risk_score": 20,
+      "risk_level": "LOW",
+      "assertions_passed": 4,
+      "assertions_failed": 0,
+      "false_positives": 0,
+      "false_negatives": 0,
+      "bounds_checked": 4,
+      "bounds_passed": 4,
+      "assertion_details": [
+        {
+          "assertion_id": "hard_live_target_reachable",
+          "category": "connectivity",
+          "passed": true,
+          "description": "Live production target must be reachable"
+        },
+        {
+          "assertion_id": "hard_live_discovery_minimum",
+          "category": "discovery",
+          "passed": true,
+          "description": "Asset discovery must identify at least 3 client resources"
+        },
+        {
+          "assertion_id": "hard_fp_nanoid_suppression",
+          "category": "false_positive",
+          "passed": true,
+          "description": "NexSpace Base64/nanoid alphabet table must be suppressed from false secret exposure"
+        },
+        {
+          "assertion_id": "hard_live_safety_non_destructive",
+          "category": "safety",
+          "passed": true,
+          "description": "Assessment must operate with zero destructive requests"
+        }
+      ]
+    },
+    {
+      "name": "example.com",
+      "target_id": "example",
+      "url": "https://example.com",
+      "benchmark_type": "LIVE",
+      "status": "PASS",
+      "duration_ms": 122,
+      "duration": "122ms",
+      "requests": 12,
+      "assets": 1,
+      "endpoints": 11,
+      "findings": 6,
+      "verified_count": 6,
+      "detected_count": 0,
+      "observed_count": 0,
+      "not_verified_count": 0,
+      "not_exposed_count": 0,
+      "risk_score": 20,
+      "risk_level": "LOW",
+      "assertions_passed": 4,
+      "assertions_failed": 0,
+      "false_positives": 0,
+      "false_negatives": 0,
+      "bounds_checked": 4,
+      "bounds_passed": 4,
+      "assertion_details": [
+        {
+          "assertion_id": "hard_live_target_reachable",
+          "category": "connectivity",
+          "passed": true,
+          "description": "Control target example.com must be reachable"
+        },
+        {
+          "assertion_id": "hard_live_discovery_minimum",
+          "category": "discovery",
+          "passed": true,
+          "description": "Discovery must find at least 1 document"
+        },
+        {
+          "assertion_id": "hard_clean_baseline",
+          "category": "false_positive",
+          "passed": true,
+          "description": "Baseline control target must yield zero critical findings"
+        },
+        {
+          "assertion_id": "hard_live_safety_non_destructive",
+          "category": "safety",
+          "passed": true,
+          "description": "Assessment must operate with zero destructive requests"
+        }
+      ]
+    }
+  ],
+  "false_positive_corpus": {
+    "evaluated": 12,
+    "passed_count": 12,
+    "failed_count": 0,
+    "status": "PASS"
+  },
+  "false_negative_corpus": {
+    "evaluated": 8,
+    "passed_count": 8,
+    "failed_count": 0,
+    "status": "PASS"
+  },
+  "performance": {
+    "total_requests": 126,
+    "total_duration_ms": 14869,
+    "total_duration": "14.869s",
+    "regression": "NONE"
+  },
+  "certification": {
+    "certified": true,
+    "grade": "PASS",
+    "rationale": "All hard security assertions, false-positive suppressions, and safety controls passed across deterministic and live benchmark corpora."
+  }
+}

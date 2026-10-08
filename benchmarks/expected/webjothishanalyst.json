@@ -1,0 +1,45 @@
+{
+  "target_id": "webjothishanalyst",
+  "name": "webjothishanalyst.site",
+  "benchmark_type": "LIVE",
+  "hard_assertions": [
+    {
+      "id": "hard_live_target_reachable",
+      "category": "connectivity",
+      "description": "Live production asset target must be reachable and return 200 OK",
+      "must_succeed": true
+    },
+    {
+      "id": "hard_live_discovery_minimum",
+      "category": "discovery",
+      "description": "Next.js asset discovery must identify at least 10 client resources",
+      "min_assets": 10
+    },
+    {
+      "id": "hard_live_scope_enforcement",
+      "category": "safety",
+      "description": "Auditor must strictly respect same-origin scope and avoid external hosts",
+      "scope_enforced": true
+    },
+    {
+      "id": "hard_live_safety_non_destructive",
+      "category": "safety",
+      "description": "Assessment must operate with zero destructive requests",
+      "destructive_methods_used": 0
+    }
+  ],
+  "behavioral_bounds": {
+    "requests": { "min": 10, "max": 200, "max_growth_percent": 75.0 },
+    "duration_ms": { "min": 500, "max": 45000, "max_growth_percent": 100.0 },
+    "assets": { "min": 10, "max": 60 },
+    "findings": { "min": 0, "max": 80 }
+  },
+  "observational_metrics": [
+    "exact_duration_ms",
+    "exact_request_count",
+    "exact_assets_count",
+    "exact_endpoints_count",
+    "exact_findings_count",
+    "exact_risk_score"
+  ]
+}

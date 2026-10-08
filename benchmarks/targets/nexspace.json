@@ -1,0 +1,10 @@
+{
+  "name": "nexspace.space",
+  "id": "nexspace",
+  "url": "https://nexspace.space",
+  "scope": "same-origin",
+  "benchmark_type": "LIVE",
+  "purpose": "Secondary real-world target with Supabase integration, client-side routing, high-entropy character lookup tables (nanoid false-positive suppression validation), and API endpoints.",
+  "authorization_note": "Explicitly authorized secondary live benchmark target.",
+  "environment": "production"
+}

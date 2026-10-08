@@ -1,0 +1,122 @@
+{
+  "target_id": "synthetic",
+  "name": "Synthetic Certification Harness",
+  "benchmark_type": "DETERMINISTIC",
+  "hard_assertions": [
+    {
+      "id": "hard_tp_secret_aws",
+      "category": "secrets",
+      "description": "AWS access key must be detected as high severity",
+      "pattern": "AWS Access Key",
+      "expected_severity": "HIGH",
+      "expected_verification": "NOT_VERIFIED"
+    },
+    {
+      "id": "hard_tp_secret_github",
+      "category": "secrets",
+      "description": "GitHub token must be detected as high severity",
+      "pattern": "GitHub Personal Access Token",
+      "expected_severity": "HIGH",
+      "expected_verification": "NOT_VERIFIED"
+    },
+    {
+      "id": "hard_tp_secret_stripe",
+      "category": "secrets",
+      "description": "Stripe secret must be detected as high severity",
+      "pattern": "Stripe Live Secret Key",
+      "expected_severity": "HIGH",
+      "expected_verification": "NOT_VERIFIED"
+    },
+    {
+      "id": "hard_tp_secret_private_key",
+      "category": "secrets",
+      "description": "Private key must be detected as critical severity",
+      "pattern": "Private Cryptographic Key",
+      "expected_severity": "CRITICAL",
+      "expected_verification": "NOT_VERIFIED"
+    },
+    {
+      "id": "hard_tp_secret_supabase_service_role",
+      "category": "secrets",
+      "description": "Supabase service-role token must be detected as critical without live transmission",
+      "pattern": "Supabase Service Role Secret Key",
+      "expected_severity": "CRITICAL",
+      "expected_verification": "NOT_VERIFIED"
+    },
+    {
+      "id": "hard_fp_secrets_suppressed",
+      "category": "false_positive",
+      "description": "Known false positive candidates (UUID, placeholder, nanoid alphabet) must yield zero findings",
+      "expected_false_positives": 0
+    },
+    {
+      "id": "hard_tp_cors_credentialed",
+      "category": "api",
+      "description": "CORS with reflected origin and credentials:true must be verified",
+      "endpoint_contains": "/api/profile",
+      "expected_verification": "VERIFIED"
+    },
+    {
+      "id": "hard_fp_cors_wildcard",
+      "category": "api",
+      "description": "Wildcard CORS without credentials must not be reported as verified credential exposure",
+      "endpoint_contains": "/api/public",
+      "must_not_verify_credentials": true
+    },
+    {
+      "id": "hard_tp_api_env_exposure",
+      "category": "api",
+      "description": "Exposed .env database configuration must be verified",
+      "endpoint_contains": ".env",
+      "expected_verification": "VERIFIED"
+    },
+    {
+      "id": "hard_tp_api_git_exposure",
+      "category": "api",
+      "description": "Exposed .git/HEAD repository reference must be verified",
+      "endpoint_contains": ".git/HEAD",
+      "expected_verification": "VERIFIED"
+    },
+    {
+      "id": "hard_tp_api_graphql_introspection",
+      "category": "api",
+      "description": "GraphQL introspection returning schema must be verified",
+      "endpoint_contains": "/graphql",
+      "expected_verification": "VERIFIED"
+    },
+    {
+      "id": "hard_tp_cloud_supabase_exposure",
+      "category": "cloud",
+      "description": "Unauthenticated Supabase table returning user data must be verified",
+      "endpoint_contains": "/rest/v1/exposed_users",
+      "expected_verification": "VERIFIED"
+    },
+    {
+      "id": "hard_negative_evidence_protected",
+      "category": "api",
+      "description": "Protected endpoints returning 401/403 must remain NOT_EXPOSED",
+      "endpoint_contains": "/api/v1/admin",
+      "expected_verification": "NOT_EXPOSED"
+    },
+    {
+      "id": "hard_safety_controls",
+      "category": "safety",
+      "description": "Safety controls: zero destructive methods, safe read-only operations, scope enforced",
+      "scope_enforced": true,
+      "destructive_methods_used": 0
+    }
+  ],
+  "behavioral_bounds": {
+    "requests": { "min": 5, "max": 75, "max_growth_percent": 60.0 },
+    "duration_ms": { "min": 50, "max": 10000, "max_growth_percent": 100.0 },
+    "assets": { "min": 2, "max": 20 },
+    "findings": { "min": 5, "max": 40 }
+  },
+  "observational_metrics": [
+    "exact_duration_ms",
+    "exact_request_count",
+    "exact_findings_count",
+    "exact_risk_score",
+    "exact_verified_count"
+  ]
+}

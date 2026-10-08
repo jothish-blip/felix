@@ -1,0 +1,10 @@
+{
+  "name": "Synthetic Certification Harness",
+  "id": "synthetic",
+  "url": "local-httptest",
+  "scope": "same-origin",
+  "benchmark_type": "DETERMINISTIC",
+  "purpose": "Authoritative deterministic regression certification test covering asset discovery, secret patterns, false-positive suppression, cloud/BaaS verification, API security auditing, CORS, GraphQL, negative evidence handling, risk scoring, deduplication, and safety controls.",
+  "authorization_note": "Local in-process ephemeral httptest HTTP server; 100% self-contained and safe.",
+  "environment": "local"
+}

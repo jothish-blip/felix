@@ -1,0 +1,44 @@
+{
+  "target_id": "example",
+  "name": "example.com",
+  "benchmark_type": "LIVE",
+  "hard_assertions": [
+    {
+      "id": "hard_live_target_reachable",
+      "category": "connectivity",
+      "description": "Control target example.com must be reachable",
+      "must_succeed": true
+    },
+    {
+      "id": "hard_live_discovery_minimum",
+      "category": "discovery",
+      "description": "Discovery must find at least 1 document",
+      "min_assets": 1
+    },
+    {
+      "id": "hard_clean_baseline",
+      "category": "false_positive",
+      "description": "Baseline control target must yield zero critical findings",
+      "max_critical_findings": 0
+    },
+    {
+      "id": "hard_live_safety_non_destructive",
+      "category": "safety",
+      "description": "Assessment must operate with zero destructive requests",
+      "destructive_methods_used": 0
+    }
+  ],
+  "behavioral_bounds": {
+    "requests": { "min": 1, "max": 25, "max_growth_percent": 100.0 },
+    "duration_ms": { "min": 100, "max": 15000, "max_growth_percent": 100.0 },
+    "assets": { "min": 1, "max": 10 },
+    "findings": { "min": 0, "max": 20 }
+  },
+  "observational_metrics": [
+    "exact_duration_ms",
+    "exact_request_count",
+    "exact_assets_count",
+    "exact_findings_count",
+    "exact_risk_score"
+  ]
+}
