@@ -258,6 +258,70 @@ felix scan https://example.com --quiet --verbose
 
 ---
 
+## Secure Updates & Maintenance (`felix update`)
+
+Felix features a built-in cryptographic updater that retrieves, validates, and installs official releases directly from GitHub.
+
+### 1. Check for Available Updates (`--check`)
+Query official release channels to see if a newer release is published without downloading or modifying local files:
+```bash
+felix update --check
+```
+
+Example output:
+```text
+[*] Checking for updates (current version: 1.0.0)...
+Current version: 1.0.0
+Latest version:  1.0.1
+
+Update available. Run 'felix update' to upgrade.
+Release details: https://github.com/jothish-blip/felix/releases/tag/v1.0.1
+```
+
+### 2. Perform Verified Self-Update (`felix update`)
+Download the platform-specific release package, verify its SHA-256 digest against `SHA256SUMS`, stage and test the executable, and atomically apply the update:
+```bash
+felix update
+```
+
+Example output:
+```text
+[*] Starting Felix secure update (current: v1.0.0)...
+ [CHECK   ] Querying official release channels...
+ [RESOLVE ] Resolving platform distribution for windows/amd64...
+ [CHECKSUM] Downloading SHA256SUMS verification manifest...
+ [DOWNLOAD] Downloading felix_1.0.1_windows_amd64.zip (3.91 MB)...
+ [VERIFY  ] Verifying SHA256 cryptographic digest...
+ [EXTRACT ] Extracting verified release package...
+ [STAGE   ] Validating extracted binary integrity...
+ [INSTALL ] Applying atomic self-replacement...
+ [DONE    ] Successfully updated Felix to v1.0.1
+
+[+] Felix successfully updated to v1.0.1 (windows/amd64)
+Run 'felix doctor' to verify system runtime readiness.
+```
+
+### 3. Update Options Reference
+
+| Option | Argument Syntax | Purpose |
+| :--- | :--- | :--- |
+| **`--check`**, `-c` | *boolean flag* | Check for updates only; does not download archive or replace binary. |
+| **`--version`**, `-v` | `<version>` (`1.0.1`) | Update or reinstall a specific release version. |
+| **`--force`**, `-f` | *boolean flag* | Force reinstallation even if already on the target version or downgrading. |
+| **`--dry-run`** | *boolean flag* | Download and verify release archive without replacing the running executable. |
+| **`--repo`** | `<owner/repo>` | Override update source repository [default: `jothish-blip/felix`]. |
+
+### 4. Integrity Verification & Atomic Rollback
+Felix protects your installation through strict defensive controls:
+- **HTTPS Only:** Updates are downloaded exclusively over TLS 1.2+ from official GitHub release infrastructure (`github.com/jothish-blip/felix` or verified GitHub CDN endpoints).
+- **Cryptographic Hashing:** The archive is hashed and compared against the authoritative `SHA256SUMS` manifest before any files are unpacked.
+- **ZipSlip Defense:** Archive extraction enforces destination sandboxing; any archive entry with `..`, absolute paths, or escaping prefixes is immediately rejected.
+- **Pre-Install Execution Probe:** The extracted binary is tested in a temporary sandbox (`version` execution check) before replacing the active binary.
+- **Atomic Replacement & Rollback:** On Windows, the running `.exe` is renamed to `.old` and the verified binary is copied into place. If the replacement or post-install verification fails, the original binary is automatically restored from backup.
+- **No Silent Installs:** Automatic installation is disabled by default (`auto_install: false`). Updates are only installed upon explicit user command.
+
+---
+
 ## Configuration Management (`felix config`)
 
 Felix stores persistent defaults in `~/.felix/config.json`. These settings are applied automatically to scans unless overridden by explicit CLI flags.

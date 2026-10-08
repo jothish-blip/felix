@@ -88,6 +88,7 @@ felix scan https://example.com --export report.html
 | `felix report <file> --html <out>` | Generate HTML assessment report offline (0 network requests) |
 | `felix doctor` | Validate runtime readiness, executable integrity, and PATH status |
 | `felix version` | Display semantic version, commit hash, build time, and architecture |
+| `felix update` | Check for (`--check`) or install verified updates with rollback |
 | `felix install` / `uninstall` | Register or remove Felix from user PATH |
 | `felix config` | Manage persistent configuration defaults |
 | `felix completion <shell>` | Generate shell autocomplete scripts (powershell, bash, zsh, fish) |

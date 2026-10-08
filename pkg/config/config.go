@@ -18,13 +18,20 @@ const (
 	DefaultUserAgent      = "Mozilla/5.0 (compatible; Felix/1.0; +https://github.com/jothish-blip/felix)"
 )
 
+// UpdateConfig holds optional preferences for Felix release checks.
+type UpdateConfig struct {
+	Check       bool `json:"check"`        // Check for updates on appropriate triggers
+	AutoInstall bool `json:"auto_install"` // Automatic installation (always false by default)
+}
+
 // Config holds operational settings for Felix CLI and scanning pipelines.
 type Config struct {
-	Timeout     int    `json:"timeout"`       // Request timeout in seconds
-	Concurrency int    `json:"concurrency"`   // Concurrent worker threads
-	Scope       string `json:"scope"`         // same-origin, subdomains, explicit
-	MaxSizeMB   int    `json:"max_size_mb"`   // Max asset size in MB
-	UserAgent   string `json:"user_agent"`    // User-Agent string
+	Timeout     int          `json:"timeout"`       // Request timeout in seconds
+	Concurrency int          `json:"concurrency"`   // Concurrent worker threads
+	Scope       string       `json:"scope"`         // same-origin, subdomains, explicit
+	MaxSizeMB   int          `json:"max_size_mb"`   // Max asset size in MB
+	UserAgent   string       `json:"user_agent"`    // User-Agent string
+	Updates     UpdateConfig `json:"updates"`       // Update configuration
 }
 
 // Default returns standard, defensive configuration defaults.
@@ -35,6 +42,10 @@ func Default() Config {
 		Scope:       DefaultScope,
 		MaxSizeMB:   DefaultMaxSizeMB,
 		UserAgent:   DefaultUserAgent,
+		Updates: UpdateConfig{
+			Check:       true,
+			AutoInstall: false,
+		},
 	}
 }
 
@@ -138,8 +149,12 @@ func (c Config) Get(key string) (string, error) {
 		return strconv.Itoa(c.MaxSizeMB), nil
 	case "user_agent", "user-agent", "useragent":
 		return c.UserAgent, nil
+	case "update_check", "update-check", "updates.check":
+		return strconv.FormatBool(c.Updates.Check), nil
+	case "auto_install", "auto-install", "updates.auto_install":
+		return strconv.FormatBool(c.Updates.AutoInstall), nil
 	default:
-		return "", fmt.Errorf("unknown configuration key %q (available: timeout, concurrency, scope, max_size_mb, user_agent)", key)
+		return "", fmt.Errorf("unknown configuration key %q (available: timeout, concurrency, scope, max_size_mb, user_agent, update_check, auto_install)", key)
 	}
 }
 
@@ -178,8 +193,20 @@ func (c *Config) Set(key, val string) error {
 			return fmt.Errorf("user_agent cannot be empty")
 		}
 		c.UserAgent = v
+	case "update_check", "update-check", "updates.check":
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("update_check must be true or false")
+		}
+		c.Updates.Check = b
+	case "auto_install", "auto-install", "updates.auto_install":
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("auto_install must be true or false")
+		}
+		c.Updates.AutoInstall = b
 	default:
-		return fmt.Errorf("unknown configuration key %q (available: timeout, concurrency, scope, max_size_mb, user_agent)", key)
+		return fmt.Errorf("unknown configuration key %q (available: timeout, concurrency, scope, max_size_mb, user_agent, update_check, auto_install)", key)
 	}
 
 	return nil

@@ -111,41 +111,58 @@ shasum -a 256 felix_darwin_arm64
 
 ## Quick Start
 
-### Installation
+### Windows (Zero Dependencies)
+1. Download `felix_1.0.0_windows_amd64.zip` from [Official Releases](https://github.com/jothish-blip/felix/releases/latest).
+2. Extract the archive.
+3. Run the automated installer:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\scripts\install\install.ps1
+   ```
+4. Open a new PowerShell terminal and verify:
+   ```powershell
+   felix version
+   felix doctor
+   ```
+5. Execute an audit:
+   ```powershell
+   felix scan https://example.com --export report.html --json result.json
+   ```
 
-#### Windows (PowerShell)
-```powershell
-# Automated User-Level Installer (installs to %LOCALAPPDATA%\Felix\bin and adds to PATH)
-powershell -ExecutionPolicy Bypass -File .\scripts\install\install.ps1
+### Linux & macOS (POSIX)
+1. Download and extract the archive for your architecture:
+   ```bash
+   tar -xzf felix_1.0.0_linux_amd64.tar.gz
+   mkdir -p ~/.felix/bin
+   mv felix ~/.felix/bin/
+   export PATH="$HOME/.felix/bin:$PATH"
+   ```
+2. Verify installation:
+   ```bash
+   felix version
+   felix doctor
+   felix scan https://example.com --export report.html --json result.json
+   ```
 
-# Or self-install directly from the downloaded binary
-.\felix_windows_amd64.exe install
-```
+### Secure Updates
+Felix includes a built-in cryptographic updater to check for and install releases directly from official GitHub distribution channels:
 
-#### Linux & macOS (POSIX)
 ```bash
-# Extract and install binary to ~/.felix/bin (or /usr/local/bin)
-mkdir -p ~/.felix/bin
-cp felix ~/.felix/bin/
-chmod +x ~/.felix/bin/felix
-export PATH="$HOME/.felix/bin:$PATH"
+# Check if a new version is available (does not download or modify files)
+felix update --check
 
-# Or self-install directly from the downloaded binary
-./felix install
+# Download, verify SHA256 checksum, stage, and safely self-replace with rollback
+felix update
 ```
 
-#### From Source (Go 1.22+)
-```bash
-git clone https://github.com/jothish-blip/felix.git
-cd felix
-go build -o bin/felix ./cmd/felix
-```
+---
 
-### System Health Diagnostic
-Validate your runtime environment, TLS stack, report subsystem, and PATH:
-```bash
-felix doctor
-```
+## Trusted Distribution & Integrity
+
+- **Cryptographic Checksums:** Every release package and binary is accompanied by an authoritative `SHA256SUMS` manifest and machine-readable `update.json` metadata.
+- **Windows Signing:** Windows binaries are Authenticode/Artifact Signing signed when the production signing integration is configured. *(Note: As with all newly published Windows executables, Microsoft Defender SmartScreen reputation develops over initial download volume).*
+- **macOS Gatekeeper:** macOS binaries are Developer ID signed and notarized when Apple signing credentials are configured.
+- **Atomic Replacement & Rollback:** `felix update` validates SHA256 hashes, unpacks in a sandbox with ZipSlip mitigation, verifies binary execution in a sub-process, and restores the previous binary automatically if replacement or validation fails.
+- **No Background Telemetry:** Felix respects user privacy. Updates are only checked when explicitly commanded via `felix update --check` or `felix update`. Zero telemetry, tracking, or background daemons.
 
 ---
 
@@ -158,6 +175,16 @@ felix scan https://example.com
 ```
 
 ### 2. Export HTML Assessment Report
+Export an offline HTML report:
+```bash
+felix scan https://example.com --export report.html
+```
+
+### 3. Machine-Readable JSON Export
+Export structured JSON results for pipeline integration:
+```bash
+felix scan https://example.com --json scan-result.json
+```
 Generate a single-file, self-contained HTML assessment report:
 ```bash
 felix scan https://example.com --export report.html

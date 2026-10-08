@@ -18,8 +18,8 @@ func runCompletion(args []string) int {
 # PowerShell completion for Felix
 Register-ArgumentCompleter -Native -CommandName felix -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
-    $commands = @('scan', 'report', 'config', 'doctor', 'version', 'install', 'uninstall', 'completion', 'help')
-    $flags = @('--html', '--json', '--out', '-c', '-t', '--max-size', '--scope', '--user-agent', '-v', '-l')
+    $commands = @('scan', 'report', 'config', 'doctor', 'version', 'update', 'install', 'uninstall', 'completion', 'help')
+    $flags = @('--export', '--json', '--timeout', '-t', '--concurrency', '-c', '--scope', '--max-assets', '--max-response-size', '--quiet', '-q', '--verbose', '-v', '-l', '--user-agent', '--check', '--force', '--dry-run')
     
     if ($commandAst.ToString() -notmatch ' ') {
         $commands | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
@@ -42,8 +42,8 @@ _felix_completions() {
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
-    commands="scan report config doctor version install uninstall completion help"
-    flags="--html --json --out -c -t --max-size --scope --user-agent -v -l"
+    commands="scan report config doctor version update install uninstall completion help"
+    flags="--export --json --timeout -t --concurrency -c --scope --max-assets --max-response-size --quiet -q --verbose -v -l --user-agent --check --force --dry-run"
 
     if [[ ${COMP_CWORD} -eq 1 ]]; then
         COMPREPLY=( $(compgen -W "${commands}" -- ${cur}) )
@@ -72,6 +72,7 @@ _felix() {
         'config:Manage Felix operational settings'
         'doctor:Diagnose Felix runtime and installation health'
         'version:Show Felix version and build details'
+        'update:Check for or install verified updates from official releases'
         'install:Install Felix binary to user environment'
         'uninstall:Remove Felix binary and user environment settings'
         'completion:Generate shell autocomplete script'
@@ -87,12 +88,19 @@ _felix() {
             ;;
         args)
             _arguments \
-                '--html[Export HTML report]' \
-                '--json[Export JSON report]' \
-                '--out[Save scan result]' \
-                '-c[Concurrency]' \
-                '-t[Timeout seconds]' \
-                '-v[Verbose output]'
+                '--export[Export assessment report]' \
+                '--json[Save or output JSON result]' \
+                '--timeout[Request timeout]' \
+                '-t[Request timeout]' \
+                '--concurrency[Worker count]' \
+                '-c[Worker count]' \
+                '--scope[Crawl scope]' \
+                '--quiet[Suppress output]' \
+                '-q[Suppress output]' \
+                '--verbose[Detailed output]' \
+                '-v[Detailed output]' \
+                '--check[Check for updates only]' \
+                '--force[Force installation]'
             ;;
     esac
 }
@@ -109,6 +117,7 @@ complete -c felix -n "__fish_use_subcommand" -a "report" -d "Generate report fro
 complete -c felix -n "__fish_use_subcommand" -a "config" -d "Manage operational settings"
 complete -c felix -n "__fish_use_subcommand" -a "doctor" -d "Diagnose runtime health"
 complete -c felix -n "__fish_use_subcommand" -a "version" -d "Show version information"
+complete -c felix -n "__fish_use_subcommand" -a "update" -d "Check for or install updates"
 complete -c felix -n "__fish_use_subcommand" -a "completion" -d "Generate shell completion"
 complete -c felix -n "__fish_use_subcommand" -a "help" -d "Show help"
 `)

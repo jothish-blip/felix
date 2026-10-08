@@ -76,6 +76,15 @@ Felix is designed to be a high-signal component of an in-depth defensive securit
 
 ---
 
+## 9. Platform Code Signing & Operating System Trust
+
+Operating system application reputation is governed by external operating system policies:
+- **Windows SmartScreen Reputation:** Microsoft Defender SmartScreen evaluates binary and certificate reputation over time. Newly released versions may initially trigger SmartScreen reputation warnings until download volume and reputation accrue across the Windows user base, regardless of whether binaries are Authenticode-signed. Felix never attempts to disable, bypass, or circumvent Windows security protections.
+- **macOS Gatekeeper Notarization:** macOS requires Apple Developer ID signing and Apple notarization tickets for binaries distributed outside the App Store. When binaries are installed manually without Apple signing credentials configured in CI/CD, macOS marks the binary with the `com.apple.quarantine` extended attribute, requiring operator quarantine clearance (`xattr -d com.apple.quarantine`).
+- **Linux Distribution Verification:** On Linux, trust is established cryptographically through published SHA-256 digests and source-available reproducibility, rather than operating system certificate trust stores.
+
+---
+
 ## Navigation & Cross-References
 
 - **[README](README.md)** — Project overview and quick start.

@@ -122,6 +122,53 @@ foreach ($t in $Targets) {
 }
 
 Write-Host ""
+Write-Host "[*] Generating update.json release metadata..."
+$UpdateMetaFile = Join-Path $DistDir "update.json"
+$winHash = (Get-FileHash -Path (Join-Path $DistDir "felix_${Version}_windows_amd64.zip") -Algorithm SHA256).Hash.ToLower()
+$linAmdHash = (Get-FileHash -Path (Join-Path $DistDir "felix_${Version}_linux_amd64.tar.gz") -Algorithm SHA256).Hash.ToLower()
+$linArmHash = (Get-FileHash -Path (Join-Path $DistDir "felix_${Version}_linux_arm64.tar.gz") -Algorithm SHA256).Hash.ToLower()
+$macAmdHash = (Get-FileHash -Path (Join-Path $DistDir "felix_${Version}_darwin_amd64.tar.gz") -Algorithm SHA256).Hash.ToLower()
+$macArmHash = (Get-FileHash -Path (Join-Path $DistDir "felix_${Version}_darwin_arm64.tar.gz") -Algorithm SHA256).Hash.ToLower()
+
+$updateJson = @"
+{
+  "product": "felix",
+  "channel": "stable",
+  "version": "$Version",
+  "release": "https://github.com/jothish-blip/felix/releases/tag/v$Version",
+  "assets": {
+    "windows-amd64": {
+      "archive": "felix_${Version}_windows_amd64.zip",
+      "sha256": "$winHash",
+      "signed": false
+    },
+    "linux-amd64": {
+      "archive": "felix_${Version}_linux_amd64.tar.gz",
+      "sha256": "$linAmdHash"
+    },
+    "linux-arm64": {
+      "archive": "felix_${Version}_linux_arm64.tar.gz",
+      "sha256": "$linArmHash"
+    },
+    "darwin-amd64": {
+      "archive": "felix_${Version}_darwin_amd64.tar.gz",
+      "sha256": "$macAmdHash",
+      "signed": false,
+      "notarized": false
+    },
+    "darwin-arm64": {
+      "archive": "felix_${Version}_darwin_arm64.tar.gz",
+      "sha256": "$macArmHash",
+      "signed": false,
+      "notarized": false
+    }
+  }
+}
+"@
+$updateJson | Out-File -FilePath $UpdateMetaFile -Encoding ascii
+Write-Host "[OK] update.json generated."
+
+Write-Host ""
 Write-Host "[*] Generating SHA256SUMS..."
 $SumsFile = Join-Path $DistDir "SHA256SUMS"
 $hashLines = @()

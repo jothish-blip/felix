@@ -45,6 +45,59 @@ for target in "${TARGETS[@]}"; do
   rm -rf "${STAGE_DIR}"
 done
 
+echo "[*] Generating update.json release metadata..."
+get_hash() {
+  local f="${DIST_DIR}/$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$f" | awk '{print $1}'
+  else
+    shasum -a 256 "$f" | awk '{print $1}'
+  fi
+}
+
+WIN_HASH="$(get_hash "felix_${VERSION}_windows_amd64.zip")"
+LIN_AMD_HASH="$(get_hash "felix_${VERSION}_linux_amd64.tar.gz")"
+LIN_ARM_HASH="$(get_hash "felix_${VERSION}_linux_arm64.tar.gz")"
+MAC_AMD_HASH="$(get_hash "felix_${VERSION}_darwin_amd64.tar.gz")"
+MAC_ARM_HASH="$(get_hash "felix_${VERSION}_darwin_arm64.tar.gz")"
+
+cat <<EOF > "${DIST_DIR}/update.json"
+{
+  "product": "felix",
+  "channel": "stable",
+  "version": "${VERSION}",
+  "release": "https://github.com/jothish-blip/felix/releases/tag/v${VERSION}",
+  "assets": {
+    "windows-amd64": {
+      "archive": "felix_${VERSION}_windows_amd64.zip",
+      "sha256": "${WIN_HASH}",
+      "signed": false
+    },
+    "linux-amd64": {
+      "archive": "felix_${VERSION}_linux_amd64.tar.gz",
+      "sha256": "${LIN_AMD_HASH}"
+    },
+    "linux-arm64": {
+      "archive": "felix_${VERSION}_linux_arm64.tar.gz",
+      "sha256": "${LIN_ARM_HASH}"
+    },
+    "darwin-amd64": {
+      "archive": "felix_${VERSION}_darwin_amd64.tar.gz",
+      "sha256": "${MAC_AMD_HASH}",
+      "signed": false,
+      "notarized": false
+    },
+    "darwin-arm64": {
+      "archive": "felix_${VERSION}_darwin_arm64.tar.gz",
+      "sha256": "${MAC_ARM_HASH}",
+      "signed": false,
+      "notarized": false
+    }
+  }
+}
+EOF
+echo "[✓] update.json generated."
+
 echo "[*] Computing SHA256 checksums..."
 cd "${DIST_DIR}"
 sha256sum * 2>/dev/null | grep -v "SHA256SUMS" > SHA256SUMS || shasum -a 256 * | grep -v "SHA256SUMS" > SHA256SUMS

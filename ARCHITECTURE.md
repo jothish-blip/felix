@@ -156,7 +156,7 @@ Analyzes application routes, authorization barriers, and defense-in-depth header
 A fundamental design requirement in Felix is the total separation between scanning and reporting:
 
 ```text
-felix scan <target> --out scan.json
+felix scan <target> --json scan.json
              │
              ├── 1. Performs single network crawl & audit
              ├── 2. Builds unified report in memory

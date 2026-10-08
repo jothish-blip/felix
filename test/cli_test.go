@@ -693,3 +693,27 @@ func TestCLI_ScanReportZeroRescanSeparation(t *testing.T) {
 	}
 }
 
+func TestCLI_UpdateHelp(t *testing.T) {
+	out, code := runFelix(t, "update", "--help")
+	if code != 0 {
+		t.Errorf("expected exit code 0 for felix update --help, got %d", code)
+	}
+	if !strings.Contains(out, "felix update [options]") {
+		t.Errorf("expected usage in help output, got: %s", out)
+	}
+	if !strings.Contains(out, "--check") || !strings.Contains(out, "--version") {
+		t.Errorf("expected update flags in help output, got: %s", out)
+	}
+}
+
+func TestCLI_UpdateInvalidFlag(t *testing.T) {
+	out, code := runFelix(t, "update", "--unknown-flag-123")
+	if code != 2 {
+		t.Errorf("expected exit code 2 for invalid update flag, got %d (output: %s)", code, out)
+	}
+	if !strings.Contains(out, "unknown argument") {
+		t.Errorf("expected unknown argument error message, got: %s", out)
+	}
+}
+
+

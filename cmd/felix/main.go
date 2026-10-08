@@ -41,6 +41,8 @@ func main() {
 		os.Exit(runUninstall(os.Args[2:]))
 	case "completion":
 		os.Exit(runCompletion(os.Args[2:]))
+	case "update":
+		os.Exit(runUpdate(os.Args[2:]))
 	case "help", "--help", "-h":
 		if len(os.Args) > 2 {
 			sub := os.Args[2]
@@ -53,6 +55,8 @@ func main() {
 				os.Exit(runConfig([]string{"--help"}))
 			case "doctor":
 				os.Exit(runDoctor([]string{"--help"}))
+			case "update":
+				os.Exit(runUpdate([]string{"--help"}))
 			case "completion":
 				os.Exit(runCompletion([]string{"--help"}))
 			default:
@@ -83,13 +87,15 @@ func printRootHelp() {
 	fmt.Println("  config      Manage persistent CLI configuration settings")
 	fmt.Println("  doctor      Diagnose environment, network stack, and permissions")
 	fmt.Println("  version     Display Felix version and build environment")
+	fmt.Println("  update      Check for or install verified updates from official releases")
 	fmt.Println("  install     Install Felix binary to user system PATH")
 	fmt.Println("  uninstall   Remove Felix binary from system PATH")
 	fmt.Println("  completion  Generate shell autocompletion script")
 	fmt.Println("  help        Show help for Felix or a specific command")
 	fmt.Println("\nQuick Start:")
-	fmt.Println("  felix scan https://example.com --out scan.json --html report.html")
+	fmt.Println("  felix scan https://example.com --export report.html --json scan.json")
 	fmt.Println("  felix report scan.json --html new_report.html")
+	fmt.Println("  felix update --check")
 	fmt.Println("  felix doctor")
 	fmt.Println("  felix config show")
 	fmt.Println("\nRun 'felix <command> --help' for details on a specific command.")

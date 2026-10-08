@@ -88,6 +88,18 @@ Felix enforces a decoupled operational model:
 
 ---
 
+## 7. Trusted Updates & Supply-Chain Integrity
+
+Felix's update subsystem (`pkg/update`) protects against software supply-chain threats:
+- **Official GitHub Distribution Only:** Felix strictly restricts update downloads to official GitHub release infrastructure (`github.com/jothish-blip/felix` or authenticated GitHub CDN objects). Arbitrary remote URLs are rejected.
+- **Cryptographic SHA-256 Verification:** Release packages are verified against the authoritative `SHA256SUMS` manifest before extraction. Tampered or corrupted archives are rejected immediately.
+- **ZipSlip Path Traversal Defense:** The archive extraction engine strictly sandboxes every file path against directory traversal (`..`, root slashes, or volume names).
+- **Staging & Pre-Execution Verification:** Extracted binaries undergo PE/ELF/Mach-O magic byte verification and a sub-process execution probe (`version` check) inside an isolated temporary directory before being copied to the user bin directory.
+- **Atomic Replacement & Automatic Rollback:** The active executable is backed up prior to replacement. If file copying or post-install verification fails, the original binary is immediately restored.
+- **No Background Telemetry:** Updates are evaluated exclusively on explicit user command (`felix update --check` or `felix update`). Felix does not execute background telemetry, analytics, or automated background processes.
+
+---
+
 ## Navigation & Cross-References
 
 - **[README](README.md)** — Project overview and quick start.
