@@ -96,26 +96,39 @@ jobs:
 
       - name: Windows Microsoft Artifact Signing (Azure Trusted Signing)
         id: win_signing
-        if: env.AZURE_CLIENT_ID != '' && env.AZURE_TENANT_ID != ''
+        if: ${{ secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_TENANT_ID != '' && secrets.AZURE_CLIENT_SECRET != '' }}
         uses: azure/trusted-signing-action@v0.5.1
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
           azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
-          endpoint: 'https://eus.codesigning.azure.net'
-          trusted-signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
-          certificate-profile-name: ${{ secrets.AZURE_CERT_PROFILE }}
+          endpoint: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT || 'https://eus.codesigning.azure.net' }}
+          trusted-signing-account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT || secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_TRUSTED_SIGNING_PROFILE || secrets.AZURE_CERT_PROFILE }}
           files: 'dist/felix_windows_amd64.exe'
-        env:
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
 
-      - name: Windows Signing Status Report
+      - name: Windows Signing Status & Repackaging
         run: |
+          VERSION="${{ steps.version_check.outputs.version }}"
           if [ -z "${{ secrets.AZURE_CLIENT_ID }}" ]; then
             echo "[*] Windows signing: CONFIGURED (Azure Trusted Signing credentials not configured in repository secrets; unsigned binary packaged)"
           else
             echo "[✓] Windows signing: EXECUTED via Azure Trusted Signing"
+            echo "[*] Updating Windows release archive with signed binary..."
+            STAGE_DIR="dist/stage_signed"
+            mkdir -p "$STAGE_DIR"
+            cp dist/felix_windows_amd64.exe "$STAGE_DIR/felix.exe"
+            for doc in README.md USAGE.md SECURITY.md; do
+              if [ -f "$doc" ]; then cp "$doc" "$STAGE_DIR/"; fi
+            done
+            zip -q -j "dist/felix_${VERSION}_windows_amd64.zip" "$STAGE_DIR"/*
+            rm -rf "$STAGE_DIR"
+            
+            sed -i 's/"signed": false/"signed": true/' dist/update.json
+            cd dist
+            sha256sum * 2>/dev/null | grep -v "SHA256SUMS" > SHA256SUMS || shasum -a 256 * | grep -v "SHA256SUMS" > SHA256SUMS
+            cd ..
+            echo "[✓] Windows signed archive and checksums updated."
           fi
 
       - name: macOS Signing & Notarization
