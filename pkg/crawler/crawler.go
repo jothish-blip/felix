@@ -1,9 +1,12 @@
 package crawler
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -13,30 +16,21 @@ import (
 	"golang.org/x/net/html"
 )
 
-// Config defines crawler runtime options.
-type Config struct {
-	Concurrency int
-	Timeout     time.Duration
-	UserAgent   string
-}
-
-// DefaultConfig provides sensible defaults for web auditing.
-func DefaultConfig() Config {
-	return Config{
-		Concurrency: 10,
-		Timeout:     10 * time.Second,
-		UserAgent:   "Felix/1.0 (Security Auditing CLI; +https://github.com/felix-sec)",
-	}
-}
-
-// Result holds the extracted script URLs for a given target.
+// Result holds the extracted assets and metadata for a given target.
 type Result struct {
-	Target  string
-	Scripts []string
-	Err     error
+	Target  string   `json:"target"`
+	Scripts []string `json:"scripts"` // Discovered script URLs (for backward compatibility)
+	Assets  []Asset  `json:"assets"`  // Full inventory of discovered and processed assets
+	Err     error    `json:"error,omitempty"`
 }
 
-// Crawler manages concurrent web asset discovery.
+// DiscoveredAsset stores a URL and its initial detected type from HTML tags.
+type DiscoveredAsset struct {
+	URL  string
+	Type AssetType
+}
+
+// Crawler manages concurrent web asset discovery and ingestion.
 type Crawler struct {
 	config Config
 	client *http.Client
@@ -45,30 +39,65 @@ type Crawler struct {
 // New creates a new Crawler instance with the specified configuration.
 func New(cfg Config) *Crawler {
 	if cfg.Concurrency <= 0 {
-		cfg.Concurrency = 10
+		cfg.Concurrency = DefaultConcurrency
 	}
 	if cfg.Timeout <= 0 {
-		cfg.Timeout = 10 * time.Second
+		cfg.Timeout = DefaultTimeout
+	}
+	if cfg.MaxAssetSize <= 0 {
+		cfg.MaxAssetSize = DefaultMaxAssetSize
 	}
 	if cfg.UserAgent == "" {
-		cfg.UserAgent = DefaultConfig().UserAgent
+		cfg.UserAgent = DefaultUserAgent
+	}
+	if cfg.ScopeMode == "" {
+		cfg.ScopeMode = ScopeSameOrigin
 	}
 
-	return &Crawler{
-		config: cfg,
-		client: &http.Client{
-			Timeout: cfg.Timeout,
+	client := cfg.Client
+	if client == nil {
+		tlsConfig := &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		}
+		if cfg.InsecureSkipVerify {
+			tlsConfig.InsecureSkipVerify = true
+		}
+
+		transport := &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				Timeout:   cfg.Timeout,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			MaxIdleConns:          100,
+			MaxIdleConnsPerHost:   20,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+			ForceAttemptHTTP2:     true,
+			TLSClientConfig:       tlsConfig,
+		}
+
+		client = &http.Client{
+			Transport: transport,
+			Timeout:   cfg.Timeout,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= 10 {
 					return fmt.Errorf("stopped after 10 redirects")
 				}
 				return nil
 			},
-		},
+		}
+	}
+
+	return &Crawler{
+		config: cfg,
+		client: client,
 	}
 }
 
 // ExtractScripts fetches a single HTML page and extracts all resolved <script src="..."> URLs.
+// Preserved for backward compatibility.
 func (c *Crawler) ExtractScripts(ctx context.Context, rawURL string) ([]string, error) {
 	parsedBase, err := url.Parse(rawURL)
 	if err != nil {
@@ -95,11 +124,391 @@ func (c *Crawler) ExtractScripts(ctx context.Context, rawURL string) ([]string, 
 	return parseScriptTags(resp.Body, parsedBase)
 }
 
+// Crawl executes the full Engine 1 pipeline against a single target URL:
+// Scope validation -> HTTP request -> HTML parsing -> Asset discovery -> URL normalization ->
+// Deduplication -> Worker pool -> Asset download -> Response validation -> Size limits ->
+// Asset classification -> Source map detection -> Asset inventory.
+func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
+	res := Result{
+		Target: rawTarget,
+	}
+
+	scope, err := NewScope(rawTarget, c.config.ScopeMode, c.config.AllowedHosts...)
+	if err != nil {
+		res.Err = fmt.Errorf("scope initialization failed: %w", err)
+		return res
+	}
+
+	parsedBase, err := url.Parse(rawTarget)
+	if err != nil {
+		res.Err = fmt.Errorf("invalid target URL: %w", err)
+		return res
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawTarget, nil)
+	if err != nil {
+		res.Err = fmt.Errorf("failed to create request: %w", err)
+		return res
+	}
+	req.Header.Set("User-Agent", c.config.UserAgent)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		res.Err = fmt.Errorf("request failed: %w", err)
+		return res
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		res.Err = fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		return res
+	}
+
+	// Size limit on initial HTML page
+	if resp.ContentLength > c.config.MaxAssetSize {
+		res.Err = ErrAssetTooLarge
+		return res
+	}
+
+	lr := io.LimitReader(resp.Body, c.config.MaxAssetSize+1)
+	bodyBytes, err := io.ReadAll(lr)
+	if err != nil {
+		res.Err = fmt.Errorf("failed to read response body: %w", err)
+		return res
+	}
+	if int64(len(bodyBytes)) > c.config.MaxAssetSize {
+		res.Err = ErrAssetTooLarge
+		return res
+	}
+
+	// Parse HTML for assets
+	discovered, scriptURLs, err := parseHTMLAssets(bytes.NewReader(bodyBytes), parsedBase)
+	if err != nil && len(discovered) == 0 {
+		res.Err = fmt.Errorf("HTML parsing failed: %w", err)
+		return res
+	}
+
+	res.Scripts = scriptURLs
+
+	// Concurrently download assets with worker pool
+	var (
+		assetsMu sync.Mutex
+		assets   []Asset
+		seen     = make(map[string]struct{})
+		wg       sync.WaitGroup
+		sem      = make(chan struct{}, c.config.Concurrency)
+	)
+
+	// Filter and mark seen
+	var toDownload []DiscoveredAsset
+	for _, da := range discovered {
+		if _, exists := seen[da.URL]; exists {
+			continue
+		}
+		seen[da.URL] = struct{}{}
+		toDownload = append(toDownload, da)
+	}
+
+	// Phase 1: Download discovered assets
+	for _, da := range toDownload {
+		inScope := scope.IsAllowed(da.URL)
+		if !inScope {
+			assetsMu.Lock()
+			assets = append(assets, Asset{
+				URL:     da.URL,
+				Type:    da.Type,
+				InScope: false,
+			})
+			assetsMu.Unlock()
+			continue
+		}
+
+		wg.Add(1)
+		sem <- struct{}{}
+
+		go func(item DiscoveredAsset) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			downloaded := c.downloadAsset(ctx, item.URL, item.Type)
+			assetsMu.Lock()
+			assets = append(assets, downloaded)
+			assetsMu.Unlock()
+		}(da)
+	}
+
+	wg.Wait()
+
+	// Phase 2: Source map discovery from downloaded JavaScript assets
+	var sourceMapJobs []string
+	for _, a := range assets {
+		if (a.Type == AssetJavaScript || strings.HasSuffix(a.URL, ".js")) && len(a.Content) > 0 {
+			smRef := ExtractSourceMapURL(a.Content)
+			if smRef != "" {
+				parsedAssetURL, err := url.Parse(a.URL)
+				if err == nil {
+					smURL, err := resolveURL(parsedAssetURL, smRef)
+					if err == nil {
+						if _, exists := seen[smURL]; !exists {
+							seen[smURL] = struct{}{}
+							sourceMapJobs = append(sourceMapJobs, smURL)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Download discovered source maps
+	for _, smURL := range sourceMapJobs {
+		inScope := scope.IsAllowed(smURL)
+		if !inScope {
+			assetsMu.Lock()
+			assets = append(assets, Asset{
+				URL:         smURL,
+				Type:        AssetSourceMap,
+				IsSourceMap: true,
+				InScope:     false,
+			})
+			assetsMu.Unlock()
+			continue
+		}
+
+		wg.Add(1)
+		sem <- struct{}{}
+
+		go func(targetURL string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			smAsset := c.downloadAsset(ctx, targetURL, AssetSourceMap)
+			smAsset.Type = AssetSourceMap
+			smAsset.IsSourceMap = true
+			assetsMu.Lock()
+			assets = append(assets, smAsset)
+			assetsMu.Unlock()
+		}(smURL)
+	}
+
+	wg.Wait()
+
+	res.Assets = assets
+	return res
+}
+
+// downloadAsset fetches an individual asset subject to size limits and error handling.
+func (c *Crawler) downloadAsset(ctx context.Context, assetURL string, defaultType AssetType) Asset {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, assetURL, nil)
+	if err != nil {
+		return Asset{
+			URL:     assetURL,
+			Type:    defaultType,
+			InScope: true,
+			Error:   err,
+		}
+	}
+	req.Header.Set("User-Agent", c.config.UserAgent)
+	req.Header.Set("Accept", "*/*")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return Asset{
+			URL:     assetURL,
+			Type:    defaultType,
+			InScope: true,
+			Error:   err,
+		}
+	}
+	defer resp.Body.Close()
+
+	contentType := resp.Header.Get("Content-Type")
+	classifiedType := ClassifyAsset(assetURL, contentType)
+	if classifiedType == AssetUnknown && defaultType != AssetUnknown {
+		classifiedType = defaultType
+	}
+
+	asset := Asset{
+		URL:         assetURL,
+		Type:        classifiedType,
+		StatusCode:  resp.StatusCode,
+		ContentType: contentType,
+		IsSourceMap: classifiedType == AssetSourceMap,
+		InScope:     true,
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		asset.Error = fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		return asset
+	}
+
+	// Size Limit Validation
+	if resp.ContentLength > c.config.MaxAssetSize {
+		asset.Error = ErrAssetTooLarge
+		return asset
+	}
+
+	limit := c.config.MaxAssetSize
+	lr := io.LimitReader(resp.Body, limit+1)
+	content, err := io.ReadAll(lr)
+	if err != nil {
+		asset.Error = err
+		return asset
+	}
+
+	if int64(len(content)) > limit {
+		asset.Error = ErrAssetTooLarge
+		return asset
+	}
+
+	asset.Content = content
+	asset.Size = int64(len(content))
+	return asset
+}
+
+// parseHTMLAssets extracts discovered script, stylesheet, and manifest assets.
+func parseHTMLAssets(r io.Reader, baseURL *url.URL) ([]DiscoveredAsset, []string, error) {
+	tokenizer := html.NewTokenizer(r)
+	seen := make(map[string]struct{})
+	seenScripts := make(map[string]struct{})
+
+	var assets []DiscoveredAsset
+	var scripts []string
+
+	currentBase := baseURL
+
+	for {
+		tt := tokenizer.Next()
+		switch tt {
+		case html.ErrorToken:
+			err := tokenizer.Err()
+			if err == io.EOF {
+				return assets, scripts, nil
+			}
+			return assets, scripts, err
+
+		case html.StartTagToken, html.SelfClosingTagToken:
+			token := tokenizer.Token()
+
+			// Check for <base href="...">
+			if strings.EqualFold(token.Data, "base") {
+				for _, attr := range token.Attr {
+					if strings.EqualFold(attr.Key, "href") {
+						baseHref := strings.TrimSpace(attr.Val)
+						if baseHref != "" {
+							if newBase, err := resolveURL(currentBase, baseHref); err == nil {
+								if parsed, err := url.Parse(newBase); err == nil {
+									currentBase = parsed
+								}
+							}
+						}
+					}
+				}
+				continue
+			}
+
+			// 1. <script src="...">
+			if strings.EqualFold(token.Data, "script") {
+				for _, attr := range token.Attr {
+					if strings.EqualFold(attr.Key, "src") {
+						src := strings.TrimSpace(attr.Val)
+						if src == "" {
+							continue
+						}
+
+						resolved, err := resolveURL(currentBase, src)
+						if err != nil {
+							continue
+						}
+
+						if _, exists := seenScripts[resolved]; !exists {
+							seenScripts[resolved] = struct{}{}
+							scripts = append(scripts, resolved)
+						}
+
+						if _, exists := seen[resolved]; !exists {
+							seen[resolved] = struct{}{}
+							assets = append(assets, DiscoveredAsset{
+								URL:  resolved,
+								Type: AssetJavaScript,
+							})
+						}
+					}
+				}
+				continue
+			}
+
+			// 2. <link rel="..." href="...">
+			if strings.EqualFold(token.Data, "link") {
+				var relVal, hrefVal, asVal string
+				for _, attr := range token.Attr {
+					switch strings.ToLower(attr.Key) {
+					case "rel":
+						relVal = strings.TrimSpace(attr.Val)
+					case "href":
+						hrefVal = strings.TrimSpace(attr.Val)
+					case "as":
+						asVal = strings.TrimSpace(attr.Val)
+					}
+				}
+
+				if hrefVal == "" {
+					continue
+				}
+
+				resolved, err := resolveURL(currentBase, hrefVal)
+				if err != nil {
+					continue
+				}
+
+				var assetType AssetType
+				lowerRel := strings.ToLower(relVal)
+				lowerAs := strings.ToLower(asVal)
+
+				switch {
+				case strings.Contains(lowerRel, "stylesheet"):
+					assetType = AssetStylesheet
+				case strings.Contains(lowerRel, "manifest"):
+					assetType = AssetManifest
+				case strings.Contains(lowerRel, "preload") || strings.Contains(lowerRel, "modulepreload"):
+					if lowerAs == "script" {
+						assetType = AssetJavaScript
+					} else if lowerAs == "style" {
+						assetType = AssetStylesheet
+					} else {
+						assetType = ClassifyAsset(resolved, "")
+					}
+				default:
+					assetType = ClassifyAsset(resolved, "")
+				}
+
+				if assetType != AssetUnknown {
+					if _, exists := seen[resolved]; !exists {
+						seen[resolved] = struct{}{}
+						assets = append(assets, DiscoveredAsset{
+							URL:  resolved,
+							Type: assetType,
+						})
+						if assetType == AssetJavaScript {
+							if _, exists := seenScripts[resolved]; !exists {
+								seenScripts[resolved] = struct{}{}
+								scripts = append(scripts, resolved)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
 // parseScriptTags scans an HTML stream and returns unique, absolute script URLs.
 func parseScriptTags(r io.Reader, baseURL *url.URL) ([]string, error) {
 	tokenizer := html.NewTokenizer(r)
 	seen := make(map[string]struct{})
 	var scripts []string
+
+	currentBase := baseURL
 
 	for {
 		tt := tokenizer.Next()
@@ -113,6 +522,23 @@ func parseScriptTags(r io.Reader, baseURL *url.URL) ([]string, error) {
 
 		case html.StartTagToken, html.SelfClosingTagToken:
 			token := tokenizer.Token()
+
+			if strings.EqualFold(token.Data, "base") {
+				for _, attr := range token.Attr {
+					if strings.EqualFold(attr.Key, "href") {
+						baseHref := strings.TrimSpace(attr.Val)
+						if baseHref != "" {
+							if newBase, err := resolveURL(currentBase, baseHref); err == nil {
+								if parsed, err := url.Parse(newBase); err == nil {
+									currentBase = parsed
+								}
+							}
+						}
+					}
+				}
+				continue
+			}
+
 			if strings.EqualFold(token.Data, "script") {
 				for _, attr := range token.Attr {
 					if strings.EqualFold(attr.Key, "src") {
@@ -121,7 +547,7 @@ func parseScriptTags(r io.Reader, baseURL *url.URL) ([]string, error) {
 							continue
 						}
 
-						resolved, err := resolveURL(baseURL, src)
+						resolved, err := resolveURL(currentBase, src)
 						if err != nil {
 							continue
 						}
@@ -163,12 +589,8 @@ func (c *Crawler) CrawlConcurrently(ctx context.Context, targets []string) <-cha
 				defer wg.Done()
 				defer func() { <-sem }()
 
-				scripts, err := c.ExtractScripts(ctx, t)
-				results <- Result{
-					Target:  t,
-					Scripts: scripts,
-					Err:     err,
-				}
+				res := c.Crawl(ctx, t)
+				results <- res
 			}(target)
 		}
 

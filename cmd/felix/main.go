@@ -25,29 +25,45 @@ func main() {
 	var (
 		concurrency int
 		timeoutSec  int
+		maxSizeMB   int
+		scopeMode   string
+		userAgent   string
 		inputFile   string
 		verbose     bool
 	)
 
-	flag.IntVar(&concurrency, "c", 10, "Number of concurrent workers")
-	flag.IntVar(&timeoutSec, "t", 10, "HTTP timeout in seconds per target")
-	flag.StringVar(&inputFile, "l", "", "Path to file containing target URLs (one per line)")
-	flag.BoolVar(&verbose, "v", false, "Enable verbose output")
-	flag.Usage = func() {
+	fs := flag.NewFlagSet("felix", flag.ExitOnError)
+	fs.IntVar(&concurrency, "c", 10, "Number of concurrent workers")
+	fs.IntVar(&timeoutSec, "t", 10, "HTTP timeout in seconds per target")
+	fs.IntVar(&maxSizeMB, "max-size", 10, "Maximum asset size limit in MB")
+	fs.StringVar(&scopeMode, "scope", string(crawler.ScopeSameOrigin), "Crawl scope mode (same-origin, subdomains, explicit)")
+	fs.StringVar(&userAgent, "user-agent", crawler.DefaultUserAgent, "User-Agent header string")
+	fs.StringVar(&inputFile, "l", "", "Path to file containing target URLs (one per line)")
+	fs.BoolVar(&verbose, "v", false, "Enable verbose output")
+
+	fs.Usage = func() {
 		fmt.Print(banner)
-		fmt.Printf("Usage: felix [options] <target-url>\n\nOptions:\n")
-		flag.PrintDefaults()
+		fmt.Printf("Usage: felix scan [options] <target-url>\n       felix [options] <target-url>\n\nOptions:\n")
+		fs.PrintDefaults()
 	}
-	flag.Parse()
+
+	args := os.Args[1:]
+	if len(args) > 0 && args[0] == "scan" {
+		args = args[1:]
+	}
+
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Failed to parse flags: %v\n", err)
+		os.Exit(1)
+	}
 
 	var targets []string
-
-	// Load targets from argument
-	if flag.NArg() > 0 {
-		targets = append(targets, flag.Args()...)
+	for _, arg := range fs.Args() {
+		if arg != "scan" && strings.TrimSpace(arg) != "" {
+			targets = append(targets, strings.TrimSpace(arg))
+		}
 	}
 
-	// Load targets from file if specified
 	if inputFile != "" {
 		fileTargets, err := readLines(inputFile)
 		if err != nil {
@@ -58,16 +74,20 @@ func main() {
 	}
 
 	if len(targets) == 0 {
-		flag.Usage()
+		fs.Usage()
 		os.Exit(1)
 	}
 
 	fmt.Print(banner)
-	fmt.Printf("[*] Loaded %d target(s) | Concurrency: %d | Timeout: %ds\n\n", len(targets), concurrency, timeoutSec)
+	fmt.Printf("[*] Loaded %d target(s) | Concurrency: %d | Timeout: %ds | Scope: %s\n\n",
+		len(targets), concurrency, timeoutSec, scopeMode)
 
 	cfg := crawler.Config{
-		Concurrency: concurrency,
-		Timeout:     time.Duration(timeoutSec) * time.Second,
+		Concurrency:  concurrency,
+		Timeout:      time.Duration(timeoutSec) * time.Second,
+		MaxAssetSize: int64(maxSizeMB) * 1024 * 1024,
+		ScopeMode:    crawler.ScopeMode(scopeMode),
+		UserAgent:    userAgent,
 	}
 	c := crawler.New(cfg)
 
@@ -77,22 +97,83 @@ func main() {
 
 	results := c.CrawlConcurrently(ctx, targets)
 
-	totalScripts := 0
+	totalDiscovered := 0
 	for res := range results {
 		if res.Err != nil {
-			fmt.Printf("[-] [%s] Error: %v\n", res.Target, res.Err)
+			fmt.Printf("[-] [%s] Error: %v\n\n", res.Target, res.Err)
 			continue
 		}
 
-		fmt.Printf("[+] [%s] Extracted %d script bundles:\n", res.Target, len(res.Scripts))
-		for _, s := range res.Scripts {
-			fmt.Printf("    -> %s\n", s)
-			totalScripts++
+		jsCount := 0
+		cssCount := 0
+		mapCount := 0
+		manifestCount := 0
+
+		for _, a := range res.Assets {
+			switch a.Type {
+			case crawler.AssetJavaScript:
+				jsCount++
+			case crawler.AssetStylesheet:
+				cssCount++
+			case crawler.AssetSourceMap:
+				mapCount++
+			case crawler.AssetManifest:
+				manifestCount++
+			}
+		}
+
+		fmt.Printf("Target: %s\n\n", res.Target)
+		fmt.Printf("[+] Target reachable\n")
+		fmt.Printf("[+] HTML retrieved\n")
+		fmt.Printf("[+] Assets discovered: %d\n", len(res.Assets))
+		if jsCount > 0 {
+			fmt.Printf("[+] JavaScript: %d\n", jsCount)
+		}
+		if cssCount > 0 {
+			fmt.Printf("[+] Stylesheets: %d\n", cssCount)
+		}
+		if mapCount > 0 {
+			fmt.Printf("[+] Source maps: %d\n", mapCount)
+		}
+		if manifestCount > 0 {
+			fmt.Printf("[+] Manifests: %d\n", manifestCount)
 		}
 		fmt.Println()
+
+		if len(res.Assets) > 0 {
+			fmt.Println("Assets")
+			fmt.Println("────────────────────────────────────────")
+			for _, a := range res.Assets {
+				label := assetLabel(a.Type)
+				statusSuffix := ""
+				if a.Error != nil {
+					statusSuffix = fmt.Sprintf(" [%v]", a.Error)
+				} else if !a.InScope {
+					statusSuffix = " [external / skipped]"
+				}
+				fmt.Printf("%-8s %s%s\n", label, a.URL, statusSuffix)
+				totalDiscovered++
+			}
+			fmt.Println()
+		}
 	}
 
-	fmt.Printf("[*] Scan complete. %d total scripts discovered across %d targets.\n", totalScripts, len(targets))
+	fmt.Printf("[*] Scan complete. %d total asset(s) ingested across %d target(s).\n", totalDiscovered, len(targets))
+}
+
+func assetLabel(t crawler.AssetType) string {
+	switch t {
+	case crawler.AssetJavaScript:
+		return "JS"
+	case crawler.AssetStylesheet:
+		return "CSS"
+	case crawler.AssetSourceMap:
+		return "MAP"
+	case crawler.AssetManifest:
+		return "MANIFEST"
+	default:
+		return "ASSET"
+	}
 }
 
 func readLines(path string) ([]string, error) {
