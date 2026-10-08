@@ -40,15 +40,27 @@ felix/
 │   │   ├── client.go          # Bounded HTTP probe client
 │   │   └── cloud_test.go      # Engine 3 test suite
 │   │
-│   └── api/                   # Engine 4: Modern API & Endpoint Auditor
-│       ├── finding.go         # API finding model & redaction
-│       ├── client.go          # Bounded probe client with scope protection
-│       ├── graphql.go         # Safe GraphQL introspection auditor
-│       ├── cors.go            # Conservative CORS origin reflection auditor
-│       ├── endpoints.go       # Sensitive endpoint auditor (.env, .git, metrics)
-│       ├── headers.go         # Defensive security headers auditor
-│       ├── detector.go        # Engine 4 coordinator & endpoint discovery
-│       └── api_test.go        # Engine 4 test suite
+│   ├── api/                   # Engine 4: Modern API & Endpoint Auditor
+│   │   ├── finding.go         # API finding model & redaction
+│   │   ├── client.go          # Bounded probe client with scope protection
+│   │   ├── graphql.go         # Safe GraphQL introspection auditor
+│   │   ├── cors.go            # Conservative CORS origin reflection auditor
+│   │   ├── endpoints.go       # Sensitive endpoint auditor (.env, .git, metrics)
+│   │   ├── headers.go         # Defensive security headers auditor
+│   │   ├── detector.go        # Engine 4 coordinator & endpoint discovery
+│   │   └── api_test.go        # Engine 4 test suite
+│   │
+│   └── report/                # Engine 5: Correlation, Risk & Reporting
+│       ├── model.go           # Unified finding & report models
+│       ├── normalize.go       # URL, method, severity & category normalization
+│       ├── dedup.go           # Deterministic finding deduplication
+│       ├── correlate.go       # Multi-engine finding correlation & security stories
+│       ├── risk.go            # Felix Risk Score (0-100) scoring model
+│       ├── severity.go        # Explainable severity ratings & rankings
+│       ├── summary.go         # Summarization & deterministic prioritization
+│       ├── html.go            # Self-contained offline HTML report generator
+│       ├── json.go            # Machine-readable sanitized JSON exporter
+│       └── report_test.go     # Engine 5 test suite
 │
 ├── .gitignore
 ├── go.mod
@@ -267,6 +279,51 @@ API Finding Inventory
 
 ---
 
+## Engine 5 — Finding Correlation, Risk Scoring & Professional Reporting (`felix-report`)
+
+Engine 5 is the final correlation, prioritization, and intelligence layer. It synthesizes signals from Engines 1–4 into explainable security conclusions and generates professional, client-ready reports.
+
+```text
+Engine 1 (Crawler) ──┐
+Engine 2 (Secrets)  ──┼──► Normalize ──► Deduplicate ──► Correlate ──► Felix Risk Score ──► Prioritize ──► Terminal / JSON / HTML
+Engine 3 (Cloud)    ──┤
+Engine 4 (API)      ──┘
+```
+
+### Core Principle
+
+> **Raw findings are signals. Correlation turns signals into security conclusions.**
+
+### Key Capabilities
+
+- **Unified Finding Model (`pkg/report/model.go`)**:
+  - Ingests observations across all engines (`crawler`, `secrets`, `cloud`, `api`) into a structured schema without discarding source metadata.
+- **Strict Normalization (`pkg/report/normalize.go`)**:
+  - Canonicalizes URLs, removes default ports (:80, :443), standardizes HTTP methods (uppercase), categories (kebab-case), and severity levels while strictly preserving URL path semantics (`/api` vs `/api/`).
+- **Identity Deduplication (`pkg/report/dedup.go`)**:
+  - Uses SHA-256 identity fingerprints based on target, category, endpoint, method, and key material. Merges multi-asset exposures (e.g. same token across multiple JS bundles) into a single finding with aggregated evidence.
+- **Cross-Engine Correlation & Security Stories (`pkg/report/correlate.go`)**:
+  - **Case A (Supabase)**: Correlates client-exposed `service_role` credentials with discovered Supabase project endpoints into a Critical threat narrative. Never transmits or tests the credential.
+  - **Case B (Firebase)**: Combines open Firebase database discovery with unauthenticated read confirmation.
+  - **Case C (GraphQL)**: Unifies GraphQL endpoint detection and public introspection into a single schema-exposure finding.
+  - **Case D (API Documentation)**: Correlates OpenAPI/Swagger schema files with discovered client routes without artificial severity escalation.
+  - **Case E (.env Exposure)**: Correlates exposed configuration files with active credentials found within application scope.
+  - **Case F (CORS Reflection)**: Connects credentialed arbitrary-origin CORS reflection to discovered sensitive backend API routes.
+- **Felix Risk Score (`pkg/report/risk.go`)**:
+  - Bounded 0–100 integer score based on severity, confidence, privilege levels, and correlation bonuses.
+  - Transparent diminishing returns formula preventing low-severity noise from artificially reaching Critical.
+  - Categorical bands: **Critical** (80–100), **High** (60–79), **Medium** (40–59), **Low** (20–39), and **Informational** (0–19).
+  - *Note*: Felix Risk Score is a defensible prioritization score and is **not** CVSS.
+- **Deterministic Prioritization (`pkg/report/summary.go`)**:
+  - Sorts findings stably by Severity, Confidence, Risk Score, Category, and Endpoint.
+- **Defensive Remediation Engine**:
+  - Provides practical, actionable remediation guidance tailored to each finding category.
+- **Client-Ready Reporting (`pkg/report/json.go`, `pkg/report/html.go`)**:
+  - **JSON Export**: Machine-readable format containing scan metadata, findings, security stories, and risk scores with full evidence sanitization.
+  - **HTML Export**: Standalone, offline-ready report with dark cybersecurity theme, executive metrics, and detailed finding breakdowns with zero external CDN dependencies.
+
+---
+
 ## Installation & Building
 
 Compile the binary:
@@ -292,6 +349,14 @@ Scan a single target:
 .\bin\felix.exe scan https://example.com
 ```
 
+Export results to JSON or HTML:
+
+```powershell
+.\bin\felix.exe scan https://example.com --export=report.json
+.\bin\felix.exe scan https://example.com --export=report.html
+.\bin\felix.exe scan https://example.com --export=report.json,report.html
+```
+
 Or pass targets directly:
 
 ```powershell
@@ -313,6 +378,8 @@ Or pass targets directly:
         User-Agent header string (default "Felix/0.1")
   -l string
         Path to file containing target URLs (one per line)
+  -export string
+        Export report to file (e.g. report.json or report.html)
   -v    Enable verbose output
 ```
 
@@ -339,10 +406,10 @@ ENGINE 2 — SECRET INTELLIGENCE
 
 Findings
 ────────────────────────────────────
-HIGH    Stripe Live Secret Key
-        app.js:481
-        Value: sk_live_********************7890
-        Confidence: High
+CRITICAL Supabase service_role Secret Key
+         app.js:481
+         Value: eyJhbGciOiJIUzI1NiIsIn...********************.[REDACTED_SIG]
+         Confidence: High
 
 ENGINE 3 — CLOUD & BaaS INTELLIGENCE
 ────────────────────────────────────────
@@ -376,7 +443,51 @@ Findings:
           Evidence: HTTP 200 OK. Observed variable declarations: [APP_ENV, DB_HOST, ...] (secret values redacted).
           Confidence: High
 
-[*] Scan complete. 8 asset(s) ingested, 1 secret, 1 cloud, 2 API finding(s) discovered across 1 target(s).
+===========================================================
+ FELIX :: WEB SECURITY AUDITING REPORT
+===========================================================
+Target:
+https://example.com
+
+Scan completed.
+
+Risk Score: 85/100
+Risk Level: CRITICAL
+
+Findings:
+  CRITICAL  2
+  HIGH      2
+  MEDIUM    0
+  LOW       3
+  INFO      2
+
+CORRELATED SECURITY STORIES (2)
+────────────────────────────────────────
+[CRITICAL] Privileged Supabase Cloud Credential Exposure
+  Impact:      A privileged service_role credential completely bypasses Row Level Security (RLS), granting administrative database access if exposed to untrusted users.
+  Remediation: Immediately revoke and rotate the exposed service_role key in the provider dashboard. Ensure administrative operations run exclusively on server-side functions and never bundle privileged keys in client-accessible assets.
+
+[CRITICAL] Exposed Environment Configuration with Active Credentials
+  Impact:      Direct exposure of production environment variables containing active secret keys permits direct compromise of connected backend databases, cloud storage, and APIs.
+  Remediation: Immediately remove .env and environment configuration files from web server document roots. Rotate all credentials declared in the file.
+
+TOP PRIORITIES
+────────────────────────────────────────
+[CRITICAL] Supabase service_role Secret Key
+Confidence: HIGH
+Endpoint:   https://example.com/app.js (GET)
+Action:     Immediately revoke and rotate the exposed service_role key in the provider dashboard. Ensure administrative operations run exclusively on server-side functions.
+
+[CRITICAL] Public exposure of sensitive /.env configuration file
+Confidence: HIGH
+Endpoint:   https://example.com/.env (GET)
+Action:     Immediately remove .env and environment configuration files from web server document roots. Rotate all credentials declared in the file.
+
+Reports:
+  HTML: report.html
+  JSON: report.json
+
+[*] Scan complete. 8 asset(s) ingested, 9 finding(s) reported (Risk: 85/100, CRITICAL) across 1 target(s).
 ```
 
 ---
@@ -388,3 +499,4 @@ Felix is strictly designed for authorized defensive security assessments:
 - **No Brute-Forcing or Wordlists**: Probes only bounded, application-referenced routes and standard security metadata paths.
 - **No Credential Guessing**: Never attempts to guess passwords, test stolen API keys, or brute-force authentication.
 - **Strict Evidence Redaction**: Passwords, API tokens, JWTs, and database records are always masked in memory and terminal outputs.
+- **Deterministic Prioritization**: Risk scores reflect defensible evidence without artificial inflation or speculative claims.

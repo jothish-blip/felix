@@ -14,6 +14,7 @@ import (
 	"felix/pkg/api"
 	"felix/pkg/cloud"
 	"felix/pkg/crawler"
+	"felix/pkg/report"
 	"felix/pkg/secrets"
 )
 
@@ -33,6 +34,7 @@ func main() {
 		userAgent   string
 		inputFile   string
 		verbose     bool
+		exportPath  string
 	)
 
 	fs := flag.NewFlagSet("felix", flag.ExitOnError)
@@ -43,6 +45,7 @@ func main() {
 	fs.StringVar(&userAgent, "user-agent", crawler.DefaultUserAgent, "User-Agent header string")
 	fs.StringVar(&inputFile, "l", "", "Path to file containing target URLs (one per line)")
 	fs.BoolVar(&verbose, "v", false, "Enable verbose output")
+	fs.StringVar(&exportPath, "export", "", "Export report to file (e.g. report.json or report.html)")
 
 	fs.Usage = func() {
 		fmt.Print(banner)
@@ -55,15 +58,36 @@ func main() {
 		args = args[1:]
 	}
 
-	if err := fs.Parse(args); err != nil {
+	var flagArgs []string
+	var targets []string
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if strings.HasPrefix(arg, "-") {
+			flagArgs = append(flagArgs, arg)
+			if !strings.Contains(arg, "=") && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				flagName := strings.TrimLeft(arg, "-")
+				switch flagName {
+				case "c", "t", "max-size", "scope", "user-agent", "l", "export":
+					i++
+					flagArgs = append(flagArgs, args[i])
+				}
+			}
+		} else {
+			if arg != "scan" && strings.TrimSpace(arg) != "" {
+				targets = append(targets, strings.TrimSpace(arg))
+			}
+		}
+	}
+
+	if err := fs.Parse(flagArgs); err != nil {
 		fmt.Fprintf(os.Stderr, "[-] Failed to parse flags: %v\n", err)
 		os.Exit(1)
 	}
 
-	var targets []string
-	for _, arg := range fs.Args() {
-		if arg != "scan" && strings.TrimSpace(arg) != "" {
-			targets = append(targets, strings.TrimSpace(arg))
+	for _, extra := range fs.Args() {
+		if extra != "scan" && strings.TrimSpace(extra) != "" {
+			targets = append(targets, strings.TrimSpace(extra))
 		}
 	}
 
@@ -107,6 +131,7 @@ func main() {
 	totalSecretFindings := 0
 	totalCloudFindings := 0
 	totalAPIFindings := 0
+	var allReportFindings []report.Finding
 
 	for res := range results {
 		if res.Err != nil {
@@ -234,6 +259,22 @@ func main() {
 			}
 		}
 
+		// Aggregate into Engine 5 unified model
+		for _, a := range res.Assets {
+			if f, ok := report.FromCrawlerAsset(res.Target, a); ok {
+				allReportFindings = append(allReportFindings, f)
+			}
+		}
+		for _, f := range secretFindings {
+			allReportFindings = append(allReportFindings, report.FromSecretFinding(res.Target, f))
+		}
+		for _, f := range cloudResult.Findings {
+			allReportFindings = append(allReportFindings, report.FromCloudFinding(res.Target, f))
+		}
+		for _, f := range apiResult.Findings {
+			allReportFindings = append(allReportFindings, report.FromAPIFinding(res.Target, f))
+		}
+
 		if verbose && len(res.Assets) > 0 {
 			fmt.Println("Assets")
 			fmt.Println("────────────────────────────────────")
@@ -251,6 +292,84 @@ func main() {
 		}
 
 		totalDiscovered += len(res.Assets)
+	}
+
+	// Engine 5: Finding Correlation, Risk Scoring & Reporting
+	rep := report.BuildMultiTargetReport(targets, allReportFindings)
+
+	fmt.Println("===========================================================")
+	fmt.Println(" FELIX :: WEB SECURITY AUDITING REPORT")
+	fmt.Println("===========================================================")
+	if len(targets) == 1 {
+		fmt.Printf("Target:\n%s\n\n", targets[0])
+	} else {
+		fmt.Printf("Targets (%d):\n%s\n\n", len(targets), strings.Join(targets, "\n"))
+	}
+	fmt.Println("Scan completed.")
+	fmt.Printf("\nRisk Score: %d/100\n", rep.RiskScore)
+	fmt.Printf("Risk Level: %s\n\n", rep.RiskLevel)
+
+	fmt.Println("Findings:")
+	fmt.Printf("  CRITICAL  %d\n", rep.Summary.CriticalCount)
+	fmt.Printf("  HIGH      %d\n", rep.Summary.HighCount)
+	fmt.Printf("  MEDIUM    %d\n", rep.Summary.MediumCount)
+	fmt.Printf("  LOW       %d\n", rep.Summary.LowCount)
+	fmt.Printf("  INFO      %d\n\n", rep.Summary.InfoCount)
+
+	if len(rep.SecurityStories) > 0 {
+		fmt.Printf("CORRELATED SECURITY STORIES (%d)\n", len(rep.SecurityStories))
+		fmt.Println("────────────────────────────────────────")
+		for _, s := range rep.SecurityStories {
+			fmt.Printf("[%s] %s\n", s.Severity, s.Title)
+			fmt.Printf("  Impact:      %s\n", s.Impact)
+			fmt.Printf("  Remediation: %s\n\n", s.Remediation)
+		}
+	}
+
+	if len(rep.TopPriorities) > 0 {
+		fmt.Println("TOP PRIORITIES")
+		fmt.Println("────────────────────────────────────────")
+		for _, p := range rep.TopPriorities {
+			fmt.Printf("[%s] %s\n", p.Severity, p.Title)
+			fmt.Printf("Confidence: %s\n", p.Confidence)
+			fmt.Printf("Endpoint:   %s (%s)\n", p.Endpoint, p.Method)
+			if p.Remediation != "" {
+				fmt.Printf("Action:     %s\n", p.Remediation)
+			}
+			fmt.Println()
+		}
+	}
+
+	if exportPath != "" {
+		files := strings.Split(exportPath, ",")
+		var exported []string
+		for _, f := range files {
+			f = strings.TrimSpace(f)
+			if f == "" {
+				continue
+			}
+			if strings.HasSuffix(strings.ToLower(f), ".html") {
+				if err := report.WriteHTML(rep, f); err != nil {
+					fmt.Fprintf(os.Stderr, "[-] Failed to export HTML to %s: %v\n", f, err)
+				} else {
+					exported = append(exported, fmt.Sprintf("  HTML: %s", f))
+				}
+			} else {
+				// Default to JSON
+				if err := report.WriteJSON(rep, f); err != nil {
+					fmt.Fprintf(os.Stderr, "[-] Failed to export JSON to %s: %v\n", f, err)
+				} else {
+					exported = append(exported, fmt.Sprintf("  JSON: %s", f))
+				}
+			}
+		}
+		if len(exported) > 0 {
+			fmt.Println("Reports:")
+			for _, exp := range exported {
+				fmt.Println(exp)
+			}
+			fmt.Println()
+		}
 	}
 
 	fmt.Printf("[*] Scan complete. %d asset(s) ingested, %d secret, %d cloud, %d API finding(s) discovered across %d target(s).\n",
