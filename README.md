@@ -77,26 +77,61 @@ Report
 
 ---
 
+## Download Felix
+
+Download pre-compiled, standalone binaries and release packages from the **[Official GitHub Releases](https://github.com/jothish-blip/felix/releases/latest)** page.
+
+No Go compiler, Git toolchain, or source code is required to run Felix.
+
+| Platform | Architecture | Standalone Binary | Package Archive | Checksum |
+| :--- | :--- | :--- | :--- | :--- |
+| **Windows** | x86_64 / amd64 | [`felix_windows_amd64.exe`](https://github.com/jothish-blip/felix/releases/latest/download/felix_windows_amd64.exe) | [`felix_1.0.0_windows_amd64.zip`](https://github.com/jothish-blip/felix/releases/latest/download/felix_1.0.0_windows_amd64.zip) | [SHA256SUMS](https://github.com/jothish-blip/felix/releases/latest/download/SHA256SUMS) |
+| **Linux** | x86_64 / amd64 | [`felix_linux_amd64`](https://github.com/jothish-blip/felix/releases/latest/download/felix_linux_amd64) | [`felix_1.0.0_linux_amd64.tar.gz`](https://github.com/jothish-blip/felix/releases/latest/download/felix_1.0.0_linux_amd64.tar.gz) | [SHA256SUMS](https://github.com/jothish-blip/felix/releases/latest/download/SHA256SUMS) |
+| **Linux** | ARM64 / aarch64 | [`felix_linux_arm64`](https://github.com/jothish-blip/felix/releases/latest/download/felix_linux_arm64) | [`felix_1.0.0_linux_arm64.tar.gz`](https://github.com/jothish-blip/felix/releases/latest/download/felix_1.0.0_linux_arm64.tar.gz) | [SHA256SUMS](https://github.com/jothish-blip/felix/releases/latest/download/SHA256SUMS) |
+| **macOS** | Intel (x86_64) | [`felix_darwin_amd64`](https://github.com/jothish-blip/felix/releases/latest/download/felix_darwin_amd64) | [`felix_1.0.0_darwin_amd64.tar.gz`](https://github.com/jothish-blip/felix/releases/latest/download/felix_1.0.0_darwin_amd64.tar.gz) | [SHA256SUMS](https://github.com/jothish-blip/felix/releases/latest/download/SHA256SUMS) |
+| **macOS** | Apple Silicon (M-series) | [`felix_darwin_arm64`](https://github.com/jothish-blip/felix/releases/latest/download/felix_darwin_arm64) | [`felix_1.0.0_darwin_arm64.tar.gz`](https://github.com/jothish-blip/felix/releases/latest/download/felix_1.0.0_darwin_arm64.tar.gz) | [SHA256SUMS](https://github.com/jothish-blip/felix/releases/latest/download/SHA256SUMS) |
+
+### Integrity Verification
+
+Verify the SHA-256 hash of your downloaded binary before execution:
+
+```powershell
+# Windows PowerShell
+Get-FileHash .\felix_windows_amd64.exe -Algorithm SHA256
+```
+
+```bash
+# Linux / macOS
+sha256sum felix_linux_amd64
+# or macOS
+shasum -a 256 felix_darwin_arm64
+```
+
+---
+
 ## Quick Start
 
 ### Installation
 
 #### Windows (PowerShell)
 ```powershell
-# Run the automated installer
-powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
+# Automated User-Level Installer (installs to %LOCALAPPDATA%\Felix\bin and adds to PATH)
+powershell -ExecutionPolicy Bypass -File .\scripts\install\install.ps1
 
-# Or install from compiled binary
-felix install
+# Or self-install directly from the downloaded binary
+.\felix_windows_amd64.exe install
 ```
 
 #### Linux & macOS (POSIX)
 ```bash
-# Run the automated installer
-./scripts/install.sh
+# Extract and install binary to ~/.felix/bin (or /usr/local/bin)
+mkdir -p ~/.felix/bin
+cp felix ~/.felix/bin/
+chmod +x ~/.felix/bin/felix
+export PATH="$HOME/.felix/bin:$PATH"
 
-# Or install from compiled binary
-felix install
+# Or self-install directly from the downloaded binary
+./felix install
 ```
 
 #### From Source (Go 1.22+)

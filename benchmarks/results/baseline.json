@@ -1,7 +1,7 @@
 {
-  "timestamp": "2026-10-08T17:53:55.5450746Z",
+  "timestamp": "2026-10-08T18:13:23.8090515Z",
   "felix_version": "1.0.0",
-  "git_commit": "4b02d3c",
+  "git_commit": "750cd82",
   "environment": {
     "os": "windows",
     "arch": "amd64",
@@ -19,17 +19,17 @@
     "false_positives_count": 0,
     "false_negatives_count": 0,
     "total_requests": 126,
-    "total_duration_ms": 14869
+    "total_duration_ms": 13086
   },
   "targets": [
     {
       "name": "Synthetic Certification Harness",
       "target_id": "synthetic",
-      "url": "http://127.0.0.1:54029",
+      "url": "http://127.0.0.1:50610",
       "benchmark_type": "DETERMINISTIC",
       "status": "PASS",
-      "duration_ms": 1024,
-      "duration": "1.025s",
+      "duration_ms": 687,
+      "duration": "687ms",
       "requests": 38,
       "assets": 4,
       "endpoints": 17,
@@ -140,8 +140,8 @@
       "url": "https://webjothishanalyst.site",
       "benchmark_type": "LIVE",
       "status": "PASS",
-      "duration_ms": 2580,
-      "duration": "2.581s",
+      "duration_ms": 2124,
+      "duration": "2.125s",
       "requests": 41,
       "assets": 19,
       "endpoints": 22,
@@ -192,8 +192,8 @@
       "url": "https://nexspace.space",
       "benchmark_type": "LIVE",
       "status": "PASS",
-      "duration_ms": 775,
-      "duration": "776ms",
+      "duration_ms": 328,
+      "duration": "329ms",
       "requests": 35,
       "assets": 18,
       "endpoints": 17,
@@ -244,8 +244,8 @@
       "url": "https://example.com",
       "benchmark_type": "LIVE",
       "status": "PASS",
-      "duration_ms": 122,
-      "duration": "122ms",
+      "duration_ms": 80,
+      "duration": "81ms",
       "requests": 12,
       "assets": 1,
       "endpoints": 11,
@@ -305,8 +305,8 @@
   },
   "performance": {
     "total_requests": 126,
-    "total_duration_ms": 14869,
-    "total_duration": "14.869s",
+    "total_duration_ms": 13086,
+    "total_duration": "13.086s",
     "regression": "NONE"
   },
   "certification": {

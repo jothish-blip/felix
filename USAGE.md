@@ -4,41 +4,141 @@ This guide provides practical instructions for installing, configuring, running,
 
 ---
 
-## Installation
+## Installation & Distribution
 
-### Method 1: Automated Script Installation
+Felix is distributed as self-contained, standalone native binaries with **zero runtime dependencies**. End users and operators do not need Go, Git, compilers, or developer tools.
 
-#### Windows (PowerShell)
-Run the PowerShell installer to build (if necessary), install to `%LOCALAPPDATA%\Felix\bin`, and register the directory in your User `PATH`:
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
-```
+### Option 1: Standalone Binary Release (Recommended)
 
-#### Linux & macOS (POSIX)
-Run the POSIX installer to build and copy to `~/.felix/bin`, updating shell profile files (`~/.bashrc`, `~/.zshrc`):
+Download the pre-compiled archive for your platform from the [GitHub Releases](https://github.com/jothish-blip/felix/releases):
+
+| Platform | Architecture | Archive | Binary |
+| :--- | :--- | :--- | :--- |
+| **Windows** | x86_64 (`amd64`) | `felix_1.0.0_windows_amd64.zip` | `felix_windows_amd64.exe` (`felix.exe`) |
+| **Linux** | x86_64 (`amd64`) | `felix_1.0.0_linux_amd64.tar.gz` | `felix_linux_amd64` (`felix`) |
+| **Linux** | ARM64 (`aarch64`) | `felix_1.0.0_linux_arm64.tar.gz` | `felix_linux_arm64` (`felix`) |
+| **macOS** | Apple Silicon (`arm64`) | `felix_1.0.0_darwin_arm64.tar.gz` | `felix_darwin_arm64` (`felix`) |
+| **macOS** | Intel x86_64 (`amd64`) | `felix_1.0.0_darwin_amd64.tar.gz` | `felix_darwin_amd64` (`felix`) |
+
+#### Windows Installation (No Go Required)
+1. Download `felix_1.0.0_windows_amd64.zip`.
+2. Extract the archive.
+3. Run the automated installer:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\scripts\install\install.ps1
+   ```
+   *Alternatively, copy `felix.exe` to `%LOCALAPPDATA%\Felix\bin\felix.exe` and add `%LOCALAPPDATA%\Felix\bin` to your User `PATH`.*
+4. Open a new terminal and verify:
+   ```cmd
+   felix version
+   felix doctor
+   ```
+
+#### Linux Installation
+1. Download and extract the archive for your architecture:
+   ```bash
+   tar -xzf felix_1.0.0_linux_amd64.tar.gz
+   ```
+2. Move the binary into your user bin directory:
+   ```bash
+   mkdir -p ~/.felix/bin
+   mv felix ~/.felix/bin/
+   ```
+3. Add Felix to your `PATH` (in `~/.bashrc`, `~/.zshrc`, or profile):
+   ```bash
+   export PATH="$HOME/.felix/bin:$PATH"
+   ```
+4. Verify installation:
+   ```bash
+   felix version
+   felix doctor
+   ```
+
+#### macOS Installation (Apple Silicon & Intel)
+1. Download and extract the archive:
+   ```bash
+   # For Apple Silicon (M1/M2/M3/M4):
+   tar -xzf felix_1.0.0_darwin_arm64.tar.gz
+
+   # For Intel:
+   tar -xzf felix_1.0.0_darwin_amd64.tar.gz
+   ```
+2. Move binary into user bin directory:
+   ```bash
+   mkdir -p ~/.felix/bin
+   mv felix ~/.felix/bin/
+   export PATH="$HOME/.felix/bin:$PATH"
+   ```
+3. Remove macOS Gatekeeper quarantine attribute:
+   ```bash
+   xattr -d com.apple.quarantine ~/.felix/bin/felix
+   ```
+4. Verify:
+   ```bash
+   felix version
+   felix doctor
+   ```
+
+---
+
+### Option 2: Self-Installation via Felix Binary
+Once downloaded, Felix can automatically copy itself to the user bin directory and register itself in your user PATH:
 ```bash
-chmod +x ./scripts/install.sh
-./scripts/install.sh
-```
-
-### Method 2: Self-Installation via Felix Binary
-Once compiled, Felix can install itself into your system PATH:
-```bash
+# Windows / Linux / macOS
 felix install
 ```
 
-To remove the binary from your system PATH (preserving user configurations):
+To cleanly uninstall the binary and remove it from your PATH:
 ```bash
 felix uninstall
 ```
 
-### Method 3: Building from Source
+---
+
+### Option 3: Clean Automated Uninstallation
+
+#### Windows (PowerShell)
+Run the dedicated uninstaller to remove the binary, delete the directory if empty, and cleanly purge the PATH entry without touching your configuration files or scan reports:
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install\uninstall.ps1
+```
+
+#### Linux & macOS
+```bash
+rm -f ~/.felix/bin/felix
+felix uninstall
+```
+
+---
+
+### Option 4: Building from Source
 Ensure you have Go 1.22 or newer installed:
 ```bash
 git clone https://github.com/jothish-blip/felix.git
 cd felix
 go build -o bin/felix ./cmd/felix
 ```
+
+---
+
+### Upgrading Felix
+To upgrade Felix:
+1. Download the new release archive from [GitHub Releases](https://github.com/jothish-blip/felix/releases).
+2. Run `powershell -ExecutionPolicy Bypass -File .\scripts\install\install.ps1` (Windows) or overwrite `~/.felix/bin/felix` (Linux/macOS).
+3. Verify the updated version with `felix version`. Existing configurations in `~/.felix/config.json` and reports remain untouched.
+
+---
+
+### Common PATH & Environment Troubleshooting
+
+| Symptom | Cause | Remediation |
+| :--- | :--- | :--- |
+| `'felix' is not recognized as an internal or external command` (Windows) | Current command prompt session has cached old `PATH` environment variable. | Close and restart your terminal or PowerShell session. Verify `%LOCALAPPDATA%\Felix\bin` is present in User PATH via `[Environment]::GetEnvironmentVariable("Path", "User")`. |
+| `felix: command not found` (Linux/macOS) | `~/.felix/bin` is not in active shell `PATH`. | Add `export PATH="$HOME/.felix/bin:$PATH"` to `~/.bashrc` or `~/.zshrc` and run `source ~/.bashrc` (or `source ~/.zshrc`). |
+| `scripts cannot be run because the execution policy is Restricted` (Windows) | PowerShell execution policy restricts unsigned local scripts. | Run with the bypass flag: `powershell -ExecutionPolicy Bypass -File .\scripts\install\install.ps1`. |
+| `felix cannot be opened because the developer cannot be verified` (macOS) | macOS Gatekeeper quarantined the downloaded archive. | Clear quarantine flag: `xattr -d com.apple.quarantine ~/.felix/bin/felix` or `xattr -cr ~/.felix/bin/felix`. |
+| Permissions Denied on Linux/macOS | Executable bit not set after extraction. | Run `chmod +x ~/.felix/bin/felix`. |
+
 
 ---
 
