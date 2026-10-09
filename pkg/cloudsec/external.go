@@ -349,7 +349,7 @@ func (ee *ExternalEvaluator) evalAzureBlob(ctx context.Context, actx *Assessment
 			r.VerificationState = StateVerified
 			r.Severity = report.SeverityHigh
 			r.Confidence = report.ConfidenceHigh
-			r.EvidenceSummary = fmt.Sprintf("Target %s exposes anonymous container enumeration (confirmed via x-ms-blob-public-access: container header on HEAD request; zero blob bodies retrieved).", target.URL)
+			r.EvidenceSummary = fmt.Sprintf("Target %s exposes anonymous container enumeration (confirmed via x-ms-blob-public-access: container header on HEAD request; zero blob bodies retrieved). Storage account settings not inspected.", target.URL)
 			r.EvidenceDetails = map[string]string{
 				"endpoint": target.URL,
 				"status":   "200",
@@ -664,12 +664,19 @@ func createCloudFinding(
 			Observation:     RedactText(evidence),
 			Location:        sanitizedEndpoint,
 			DetectionMethod: "CLOUD_SECURITY_ENGINE",
-			Details: map[string]string{
-				"provider": string(r.Provider),
-				"service":  r.Service,
-				"mode":     string(r.Mode),
-				"check_id": r.CheckID,
-			},
+			Details: func() map[string]string {
+				d := map[string]string{
+					"provider": string(r.Provider),
+					"service":  r.Service,
+					"mode":     string(r.Mode),
+					"check_id": r.CheckID,
+				}
+				if actx.SyntheticFixture {
+					d["synthetic_fixture"] = "true"
+					d["evaluation_environment"] = "SYNTHETIC_FIXTURE_SIMULATION"
+				}
+				return d
+			}(),
 		},
 		Verification: report.VerificationRecord{
 			Status:    report.VerificationStatus(r.VerificationState),

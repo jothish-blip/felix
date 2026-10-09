@@ -197,7 +197,7 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 		}
 	}
 
-	summary := e.compileSummary(actx.Mode, actx.Provider, targetScope, verifiedPrincipal, allResults, coverageMap)
+	summary := e.compileSummary(actx.Mode, actx.Provider, targetScope, verifiedPrincipal, allResults, coverageMap, actx.SyntheticFixture)
 	return allResults, allFindings, summary, nil
 }
 
@@ -208,12 +208,14 @@ func (e *Engine) compileSummary(
 	verifiedPrincipal string,
 	results []Result,
 	coverage map[string]ServiceCoverage,
+	syntheticFixture bool,
 ) *Summary {
 	sum := &Summary{
 		Mode:               mode,
 		Provider:           provider,
 		TargetScope:        targetScope,
 		VerifiedPrincipal:  verifiedPrincipal,
+		SyntheticFixture:   syntheticFixture,
 		TotalChecks:        len(results),
 		ServicesAssessed:   len(coverage),
 		ServiceCoverageMap: coverage,

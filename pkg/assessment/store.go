@@ -3196,12 +3196,18 @@ func (s *SQLiteStore) GetCloudSecSummary(assessmentID string, executionID string
 				Provider:           run.Provider,
 				TargetScope:        run.ScopeIdentifier,
 				VerifiedPrincipal:  run.VerifiedPrincipal,
+				SyntheticFixture:   run.SyntheticFixture,
 				TotalChecks:        run.TotalChecks,
 				ServicesAssessed:   run.ServicesAssessed,
 				VerifiedCount:      run.VerifiedCount,
 				CandidateCount:     run.CandidateCount,
 				ObservedCount:      run.ObservedCount,
 				ServiceCoverageMap: covMap,
+			}
+			for _, cov := range covMap {
+				summary.InconclusiveCount += cov.Inconclusive
+				summary.NotVulnerableCount += cov.NotVulnerable
+				summary.BlockedCount += cov.Blocked
 			}
 			return summary, nil
 		}

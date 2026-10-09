@@ -27,14 +27,7 @@ func (a *AzureAdapter) Assess(ctx context.Context, actx *AssessmentContext, clie
 	var findings []report.Finding
 
 	services := []string{"blob", "appservice", "functions", "keyvault", "identity"}
-	for _, s := range services {
-		coverage[s] = ServiceCoverage{
-			Provider: ProviderAzure,
-			Service:  s,
-			Status:   CoverageAssessed,
-		}
-	}
-
+	// Filter by scope if specific services requested
 	isServiceRequested := func(svc string) bool {
 		if len(actx.Scope.Services) == 0 {
 			return true
@@ -45,6 +38,21 @@ func (a *AzureAdapter) Assess(ctx context.Context, actx *AssessmentContext, clie
 			}
 		}
 		return false
+	}
+
+	for _, s := range services {
+		status := CoverageAssessed
+		explanation := ""
+		if len(actx.Scope.Services) > 0 && !isServiceRequested(s) {
+			status = CoverageSkippedScope
+			explanation = "Service excluded by declared assessment scope filter"
+		}
+		coverage[s] = ServiceCoverage{
+			Provider:    ProviderAzure,
+			Service:     s,
+			Status:      status,
+			Explanation: explanation,
+		}
 	}
 
 	if isServiceRequested("blob") {

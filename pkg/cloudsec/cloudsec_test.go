@@ -934,3 +934,239 @@ func TestCloudSec_Credentialed_MissingPermissionsInconclusive(t *testing.T) {
 		})
 	}
 }
+
+// 15. Regression Test: Scope Filtering Sets CoverageSkippedScope for Excluded Services
+func TestCloudSec_ScopeFilter_SkippedServices(t *testing.T) {
+	engine := NewEngine(DefaultConfig())
+
+	actx := &AssessmentContext{
+		AssessmentID:     "asm-scope-filter",
+		Mode:             ModeCredentialed,
+		Provider:         ProviderAWS,
+		SyntheticFixture: true,
+		Credentials: Credentials{
+			Provider:           ProviderAWS,
+			AWSAccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
+			AWSSecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+		},
+		Scope: DeclaredScope{
+			Provider:        ProviderAWS,
+			TargetAccountID: "123456789012",
+			Services:        []string{"s3"}, // Only s3 requested; all other 7 services excluded
+		},
+	}
+
+	results, findings, summary, err := engine.Assess(context.Background(), actx)
+	if err != nil {
+		t.Fatalf("unexpected assessment error: %v", err)
+	}
+
+	// Only 1 check from s3 should be executed
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result from s3, got %d", len(results))
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding from s3, got %d", len(findings))
+	}
+
+	// Verify coverage map: s3 is ASSESSED; all others are SKIPPED_SCOPE
+	covS3 := summary.ServiceCoverageMap["s3"]
+	if covS3.Status != CoverageAssessed || covS3.ChecksRun != 1 {
+		t.Fatalf("expected s3 to be ASSESSED with 1 check, got status=%s, checks=%d", covS3.Status, covS3.ChecksRun)
+	}
+
+	skippedServices := []string{"iam", "ec2", "apigateway", "lambda", "cognito", "rds", "cloudfront"}
+	for _, svc := range skippedServices {
+		cov := summary.ServiceCoverageMap[svc]
+		if cov.Status != CoverageSkippedScope {
+			t.Errorf("expected %s to have CoverageSkippedScope, got %s", svc, cov.Status)
+		}
+		if cov.ChecksRun != 0 {
+			t.Errorf("expected 0 checks run for out-of-scope %s, got %d", svc, cov.ChecksRun)
+		}
+	}
+}
+
+// 16. Regression Test: Synthetic Fixtures Are Explicitly Labeled in Findings and Summaries
+func TestCloudSec_SyntheticFixture_ExplicitLabeling(t *testing.T) {
+	engine := NewEngine(DefaultConfig())
+
+	// Fixture ON
+	actxFixture := &AssessmentContext{
+		AssessmentID:     "asm-fixture-labeling",
+		Mode:             ModeCredentialed,
+		Provider:         ProviderAWS,
+		SyntheticFixture: true,
+		Credentials: Credentials{
+			Provider:           ProviderAWS,
+			AWSAccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
+			AWSSecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+		},
+		Scope: DeclaredScope{
+			Provider:        ProviderAWS,
+			TargetAccountID: "123456789012",
+			Services:        []string{"s3"},
+		},
+	}
+
+	_, findingsFixture, summaryFixture, err := engine.Assess(context.Background(), actxFixture)
+	if err != nil {
+		t.Fatalf("assessment error: %v", err)
+	}
+	if !summaryFixture.SyntheticFixture {
+		t.Fatalf("expected summary.SyntheticFixture to be true")
+	}
+	if len(findingsFixture) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findingsFixture))
+	}
+	if findingsFixture[0].EvidenceDetails.Details["synthetic_fixture"] != "true" {
+		t.Fatalf("expected finding detail 'synthetic_fixture' to be 'true'")
+	}
+	if findingsFixture[0].EvidenceDetails.Details["evaluation_environment"] != "SYNTHETIC_FIXTURE_SIMULATION" {
+		t.Fatalf("expected evaluation_environment to be 'SYNTHETIC_FIXTURE_SIMULATION'")
+	}
+
+	// Fixture OFF
+	actxLiveOffline := &AssessmentContext{
+		AssessmentID:     "asm-live-offline",
+		Mode:             ModeCredentialed,
+		Provider:         ProviderAWS,
+		SyntheticFixture: false,
+		Credentials: Credentials{
+			Provider:           ProviderAWS,
+			AWSAccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
+			AWSSecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+		},
+		Scope: DeclaredScope{
+			Provider:        ProviderAWS,
+			TargetAccountID: "123456789012",
+			Services:        []string{"s3"},
+		},
+	}
+
+	_, findingsLive, summaryLive, err := engine.Assess(context.Background(), actxLiveOffline)
+	if err != nil {
+		t.Fatalf("assessment error: %v", err)
+	}
+	if summaryLive.SyntheticFixture {
+		t.Fatalf("expected summaryLive.SyntheticFixture to be false")
+	}
+	if len(findingsLive) != 0 {
+		t.Fatalf("expected 0 findings in offline mode, got %d", len(findingsLive))
+	}
+}
+
+// 17. Regression Test: External Storage Probes Adhere to Minimum Necessary Evidence
+func TestCloudSec_External_StorageProbes_MinimumEvidenceIntegrity(t *testing.T) {
+	// S3 Server
+	s3Server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Server", "AmazonS3")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>public-bucket</Name></ListBucketResult>`)
+	}))
+	defer s3Server.Close()
+
+	// Azure Server
+	azureServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Server", "Windows-Azure-Blob/1.0")
+		w.Header().Set("x-ms-blob-public-access", "container")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer azureServer.Close()
+
+	// GCS Server
+	gcsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Server", "GCS")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>public-gcs-bucket</Name></ListBucketResult>`)
+	}))
+	defer gcsServer.Close()
+
+	engine := NewEngine(DefaultConfig())
+
+	tests := []struct {
+		name          string
+		provider      Provider
+		url           string
+		hostname      string
+		headers       map[string]string
+		expectedTitle string
+	}{
+		{
+			name:          "AWS S3 Listing Title & Evidence Claim",
+			provider:      ProviderAWS,
+			url:           s3Server.URL + "/public-bucket",
+			hostname:      "public-bucket.s3.amazonaws.com",
+			headers:       map[string]string{"server": "AmazonS3"},
+			expectedTitle: "Publicly Accessible AWS S3 Bucket Listing",
+		},
+		{
+			name:          "Azure Blob Listing Title & Evidence Claim",
+			provider:      ProviderAzure,
+			url:           azureServer.URL + "/public-cont",
+			hostname:      "myaccount.blob.core.windows.net",
+			headers:       map[string]string{"server": "Windows-Azure-Blob/1.0"},
+			expectedTitle: "Publicly Accessible Azure Blob Container Listing",
+		},
+		{
+			name:          "GCS Listing Title & Evidence Claim",
+			provider:      ProviderGCP,
+			url:           gcsServer.URL,
+			hostname:      "storage.googleapis.com",
+			headers:       map[string]string{"server": "GCS"},
+			expectedTitle: "Publicly Accessible Google Cloud Storage Bucket Listing",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			actx := &AssessmentContext{
+				AssessmentID: "asm-evidence-integrity-" + string(tt.provider),
+				Mode:         ModeExternal,
+				Provider:     tt.provider,
+				ExternalTargets: []ExternalTarget{
+					{
+						URL:      tt.url,
+						Hostname: tt.hostname,
+						Headers:  tt.headers,
+					},
+				},
+			}
+
+			results, findings, _, err := engine.Assess(context.Background(), actx)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(findings) != 1 {
+				t.Fatalf("expected 1 finding, got %d", len(findings))
+			}
+
+			finding := findings[0]
+			if finding.Title != tt.expectedTitle {
+				t.Fatalf("expected title %q, got %q", tt.expectedTitle, finding.Title)
+			}
+
+			// Proves only listing access: title must contain "Listing"
+			if !strings.Contains(finding.Title, "Listing") {
+				t.Errorf("finding title must describe listing permission only: %s", finding.Title)
+			}
+
+			// Proves findings do NOT claim object download
+			if strings.Contains(strings.ToLower(finding.Description), "object downloaded") ||
+				strings.Contains(strings.ToLower(finding.Evidence), "object downloaded") {
+				t.Errorf("finding must NOT claim object contents were downloaded")
+			}
+
+			// Proves finding explicitly acknowledges account/project policies were not inspected
+			if !strings.Contains(finding.Evidence, "not inspected") {
+				t.Errorf("finding must acknowledge account/project policy was not inspected: %s", finding.Evidence)
+			}
+
+			// Proves results have safety annotation
+			res := results[0]
+			if res.EvidenceDetails["safety"] == "" {
+				t.Errorf("result must contain explicit safety probe annotation")
+			}
+		})
+	}
+}

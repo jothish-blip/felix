@@ -3796,6 +3796,7 @@ func runAssessmentCloudSec(args []string) int {
 			Provider:          provider,
 			ScopeIdentifier:   summary.TargetScope,
 			VerifiedPrincipal: summary.VerifiedPrincipal,
+			SyntheticFixture:  summary.SyntheticFixture,
 			TotalChecks:       summary.TotalChecks,
 			ServicesAssessed:  summary.ServicesAssessed,
 			VerifiedCount:     summary.VerifiedCount,
@@ -3827,8 +3828,8 @@ func runAssessmentCloudSec(args []string) int {
 
 		fmt.Printf("\n[+] Assessment Complete in %v\n", duration.Round(time.Millisecond))
 		fmt.Printf("    Total Checks: %d | Services Assessed: %d\n", summary.TotalChecks, summary.ServicesAssessed)
-		fmt.Printf("    Verified Issues: %d | Candidates: %d | Observations: %d | Not Vulnerable: %d\n",
-			summary.VerifiedCount, summary.CandidateCount, summary.ObservedCount, summary.NotVulnerableCount)
+		fmt.Printf("    Verified Issues: %d | Candidates: %d | Observations: %d | Inconclusive: %d | Not Vulnerable: %d\n",
+			summary.VerifiedCount, summary.CandidateCount, summary.ObservedCount, summary.InconclusiveCount, summary.NotVulnerableCount)
 	}
 
 	// 3. Reporting / Inspection Mode
@@ -3856,24 +3857,28 @@ func runAssessmentCloudSec(args []string) int {
 	if summary != nil {
 		fmt.Println("\n================================================================================")
 		fmt.Printf("  FELIX :: REAL CLOUD SECURITY REPORT: %s\n", asm.Ref)
-		fmt.Printf("  Assessment: %s | Mode: %s | Provider: %s\n", asm.Name, summary.Mode, summary.Provider)
+		modeDisplay := string(summary.Mode)
+		if summary.SyntheticFixture {
+			modeDisplay += " [SYNTHETIC FIXTURE SIMULATION]"
+		}
+		fmt.Printf("  Assessment: %s | Mode: %s | Provider: %s\n", asm.Name, modeDisplay, summary.Provider)
 		fmt.Printf("  Target Scope: %s\n", summary.TargetScope)
 		if summary.VerifiedPrincipal != "" {
 			fmt.Printf("  Verified Principal: %s\n", summary.VerifiedPrincipal)
 		}
 		fmt.Printf("  Total Checks: %d | Services Assessed: %d\n", summary.TotalChecks, summary.ServicesAssessed)
-		fmt.Printf("  Verified Issues: %d | Candidates: %d | Observations: %d | Not Vulnerable: %d\n",
-			summary.VerifiedCount, summary.CandidateCount, summary.ObservedCount, summary.NotVulnerableCount)
+		fmt.Printf("  Verified Issues: %d | Candidates: %d | Observations: %d | Inconclusive: %d | Not Vulnerable: %d\n",
+			summary.VerifiedCount, summary.CandidateCount, summary.ObservedCount, summary.InconclusiveCount, summary.NotVulnerableCount)
 		fmt.Println("================================================================================")
 
 		if len(summary.ServiceCoverageMap) > 0 {
 			fmt.Println("\n[+] SERVICE COVERAGE:")
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "PROVIDER\tSERVICE\tSTATUS\tCHECKS\tVERIFIED\tCANDIDATES\tOBSERVED\tNOT VULN")
+			fmt.Fprintln(w, "PROVIDER\tSERVICE\tSTATUS\tCHECKS\tVERIFIED\tCANDIDATES\tOBSERVED\tINCONCLUSIVE\tNOT VULN")
 			for svc, cov := range summary.ServiceCoverageMap {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\n",
+				fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\n",
 					cov.Provider, svc, cov.Status, cov.ChecksRun,
-					cov.Verified, cov.Candidates, cov.Observations, cov.NotVulnerable)
+					cov.Verified, cov.Candidates, cov.Observations, cov.Inconclusive, cov.NotVulnerable)
 			}
 			_ = w.Flush()
 		}

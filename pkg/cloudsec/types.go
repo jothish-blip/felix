@@ -202,6 +202,7 @@ type Summary struct {
 	Provider           Provider                   `json:"provider"`
 	TargetScope        string                     `json:"target_scope"`
 	VerifiedPrincipal  string                     `json:"verified_principal,omitempty"`
+	SyntheticFixture   bool                       `json:"synthetic_fixture,omitempty"`
 	TotalChecks        int                        `json:"total_checks"`
 	ServicesAssessed   int                        `json:"services_assessed"`
 	VerifiedCount      int                        `json:"verified_count"`
@@ -222,6 +223,7 @@ type RunRecord struct {
 	Provider          Provider       `json:"provider"`
 	ScopeIdentifier   string         `json:"scope_identifier"`
 	VerifiedPrincipal string         `json:"verified_principal,omitempty"`
+	SyntheticFixture  bool           `json:"synthetic_fixture,omitempty"`
 	TotalChecks       int            `json:"total_checks"`
 	ServicesAssessed  int            `json:"services_assessed"`
 	VerifiedCount     int            `json:"verified_count"`

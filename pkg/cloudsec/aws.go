@@ -27,13 +27,6 @@ func (a *AWSAdapter) Assess(ctx context.Context, actx *AssessmentContext, client
 	var findings []report.Finding
 
 	services := []string{"s3", "iam", "ec2", "apigateway", "lambda", "cognito", "rds", "cloudfront"}
-	for _, s := range services {
-		coverage[s] = ServiceCoverage{
-			Provider: ProviderAWS,
-			Service:  s,
-			Status:   CoverageAssessed,
-		}
-	}
 
 	// Filter by scope if specific services requested
 	isServiceRequested := func(svc string) bool {
@@ -46,6 +39,21 @@ func (a *AWSAdapter) Assess(ctx context.Context, actx *AssessmentContext, client
 			}
 		}
 		return false
+	}
+
+	for _, s := range services {
+		status := CoverageAssessed
+		explanation := ""
+		if len(actx.Scope.Services) > 0 && !isServiceRequested(s) {
+			status = CoverageSkippedScope
+			explanation = "Service excluded by declared assessment scope filter"
+		}
+		coverage[s] = ServiceCoverage{
+			Provider:    ProviderAWS,
+			Service:     s,
+			Status:      status,
+			Explanation: explanation,
+		}
 	}
 
 	if isServiceRequested("s3") {
