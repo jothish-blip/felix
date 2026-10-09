@@ -52,6 +52,8 @@ Report
 
 ## Key Capabilities
 
+- **Attack-Surface Intelligence (Felix 2.0):** Relational attack surface inventory connecting domains, subdomains, web applications, API bases, endpoints, forms, parameters, authentication surfaces, cloud dependencies, and technologies with strict scope isolation.
+- **Form & Parameter Analysis:** Static extraction of HTML forms and control elements without executing submissions; detection of query, path, and body parameters with type inference.
 - **Asset & Endpoint Discovery:** Safe concurrent ingestion of HTML, JavaScript bundles, stylesheets, manifests, and production source maps with strict scope boundaries.
 - **Secret Intelligence:** Shannon entropy heuristics combined with contextual keyword weighting, structured alphabet filtering, and aggressive false-positive reduction for over 20+ secret patterns.
 - **Cloud & BaaS Auditing:** Non-destructive exposure verification for Supabase, Firebase Realtime Database, AWS S3, and Google Cloud Storage. Distinguishes public config from unauthorized data exposure.

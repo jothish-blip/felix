@@ -178,6 +178,18 @@ func TestAssessment_CLI_EndToEndLifecycle(t *testing.T) {
 		t.Fatalf("assessment reports failed: code=%d, out=%s", code, out)
 	}
 
+	// 14b. Assessment Attack-Surface Inventory inspection
+	out, code = runFelixWithEnv(t, env, "assessment", "inventory", asmRef)
+	if code != 0 || !strings.Contains(out, "ATTACK-SURFACE INVENTORY") {
+		t.Fatalf("assessment inventory failed: code=%d, out=%s", code, out)
+	}
+
+	// 14c. Assessment Inventory JSON inspection
+	out, code = runFelixWithEnv(t, env, "assessment", "inventory", asmRef, "--json")
+	if code != 0 || !strings.Contains(out, "assets") || !strings.Contains(out, "relations") {
+		t.Fatalf("assessment inventory JSON failed: code=%d, out=%s", code, out)
+	}
+
 	// 15. Assessment Cancel
 	out, code = runFelixWithEnv(t, env, "assessment", "cancel", asmRef)
 	if code != 0 || !strings.Contains(out, "CANCELLED") {

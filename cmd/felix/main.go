@@ -108,6 +108,7 @@ func printRootHelp() {
 	fmt.Println("  felix assessment create --client \"Acme Corp\" --name \"Q1 Audit\" --target https://example.com")
 	fmt.Println("  felix assessment authorize <asm-ref> --authorizer \"Jane Doe\" --role \"CISO\"")
 	fmt.Println("  felix assessment run <asm-ref>")
+	fmt.Println("  felix assessment inventory <asm-ref>")
 	fmt.Println("  felix report scan.json --html new_report.html")
 	fmt.Println("  felix update --check")
 	fmt.Println("  felix doctor")

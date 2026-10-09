@@ -306,6 +306,21 @@ func TestController_SyntheticExecutionAndTraceability(t *testing.T) {
 	if err != nil || len(reports) < 2 {
 		t.Errorf("expected at least 2 report records (HTML & JSON), got %d (err: %v)", len(reports), err)
 	}
+
+	// 11. Verify Attack-Surface Inventory recorded in SQLite
+	invAssets, invRelations, err := store.GetInventory(asmID, res.Execution.ID, "", false)
+	if err != nil {
+		t.Fatalf("failed to retrieve attack-surface inventory: %v", err)
+	}
+	if len(invAssets) == 0 {
+		t.Errorf("expected discovered inventory assets to be recorded in SQLite")
+	}
+	if len(invRelations) == 0 {
+		t.Errorf("expected inventory relationships to be recorded in SQLite")
+	}
+	if res.InventorySummary == nil || res.InventorySummary.TotalAssets == 0 {
+		t.Errorf("expected non-nil InventorySummary on ExecutionResult")
+	}
 }
 
 func TestController_NetworkRedirectAndExclusionEnforcement(t *testing.T) {

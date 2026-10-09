@@ -303,6 +303,14 @@ felix assessment authorize <assessment-ref> --authorizer "Jane Doe" --role "Head
 # Execute authorized assessment (Fails closed if unauthorized or expired)
 felix assessment run <assessment-ref> [--concurrency 5] [--timeout 15s] [--max-assets 100] [--quiet] [--verbose]
 
+# Inspect discovered attack-surface inventory (Stage 2)
+felix assessment inventory <assessment-ref>
+felix assessment inventory <assessment-ref> --type ENDPOINT
+felix assessment inventory <assessment-ref> --type FORM --in-scope
+felix assessment inventory <assessment-ref> --type TECHNOLOGY
+felix assessment inventory <assessment-ref> --type AUTH_SURFACE
+felix assessment inventory <assessment-ref> --json
+
 # Inspect recorded findings with optional severity or verification filters
 felix assessment findings <assessment-ref> [--severity HIGH] [--verification VERIFIED] [--json]
 
@@ -313,7 +321,40 @@ felix assessment reports <assessment-ref>
 felix assessment cancel <assessment-ref>
 ```
 
-### 3. Fail-Closed Security Guarantees
+### 3. Attack-Surface Inventory Inspection (`felix assessment inventory`)
+
+The `inventory` subcommand inspects all attack-surface assets and relationships mapped during authorized assessment execution:
+
+```bash
+felix assessment inventory <assessment-ref> [flags]
+```
+
+**Supported Flags:**
+- `--type`, `-t <string>`: Filter assets by type (`DOMAIN`, `SUBDOMAIN`, `APPLICATION`, `API_SERVICE`, `ENDPOINT`, `FORM`, `PARAMETER`, `AUTH_SURFACE`, `CLOUD_SERVICE`, `TECHNOLOGY`).
+- `--in-scope`: Restrict display to in-scope assets only (filters out external/out-of-scope assets).
+- `--json`: Output full inventory including graph relations and summary metrics in JSON format.
+
+**Example Terminal Output:**
+```text
+[+] Assessment Attack Surface Inventory: ASM-2026-9812
+    Total Assets: 39 | In-Scope: 38 | Out-of-Scope: 1 | Relations: 37
+
+[ASSETS]
+• DOMAIN              example.com (in-scope) [active]
+• SUBDOMAIN           api.example.com (in-scope) [active]
+• APPLICATION         Root Application (/) (in-scope) [active]
+• APPLICATION         Admin Portal (/admin) (in-scope) [active]
+• API_SERVICE         REST API Base (https://api.example.com/api/v1) (in-scope) [active]
+• ENDPOINT            GET /api/v1/users/{id} (in-scope) [active]
+• PARAMETER           id [path] (in-scope) [active]
+• FORM                POST /auth/login (application/x-www-form-urlencoded) (in-scope) [active]
+• AUTH_SURFACE        Login Gateway (/auth/login) (in-scope) [active]
+• TECHNOLOGY          Next.js (framework) (in-scope) [active]
+• TECHNOLOGY          Nginx (web_server) (in-scope) [active]
+• CLOUD_SERVICE       AWS S3 (production-assets) (in-scope) [active]
+```
+
+### 4. Fail-Closed Security Guarantees
 - **No Authorization, No Audit:** If an assessment has no authorization record or its status is `PENDING`, `EXPIRED`, or `REVOKED`, `felix assessment run` exits immediately with a **security refusal** and performs **zero network requests**.
 - **Exclusion Precedence:** Exclusions (`HOSTNAME`, `PATH_PREFIX`, `EXACT_URL`) are evaluated before any scope rule. Any target or URL matching an exclusion is strictly skipped.
 - **Interrupted Run Recovery:** If a scan process crashes or is terminated abruptly, the store automatically recovers abandoned `RUNNING` executions on the next invocation, marking them `FAILED` and preserving partial findings.

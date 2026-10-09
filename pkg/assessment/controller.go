@@ -3,6 +3,7 @@ package assessment
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"felix/pkg/cloud"
 	"felix/pkg/config"
 	"felix/pkg/crawler"
+	"felix/pkg/discovery"
 	"felix/pkg/report"
 	"felix/pkg/secrets"
 	"github.com/google/uuid"
@@ -47,11 +49,12 @@ type ExecutionOptions struct {
 
 // ExecutionResult encapsulates the outcome of an assessment run.
 type ExecutionResult struct {
-	Execution *AssessmentExecution
-	Report    *report.Report
-	HTMLPath  string
-	JSONPath  string
-	Error     error
+	Execution        *AssessmentExecution
+	Report           *report.Report
+	InventorySummary *discovery.InventorySummary
+	HTMLPath         string
+	JSONPath         string
+	Error            error
 }
 
 // RunAssessment executes a complete assessment run against authorized targets.
@@ -257,6 +260,14 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 	startTime := time.Now()
 	crawlResultsChan := cEng.CrawlConcurrently(ctx, runnableTargets)
 
+	discoveryEng := discovery.NewEngine(discovery.Config{
+		Concurrency: concurrency,
+		Timeout:     timeoutDur,
+		MaxAssets:   maxAssets,
+	})
+	var allInventoryAssets []discovery.Asset
+	var allInventoryRelations []discovery.Relation
+
 	var allReportFindings []report.Finding
 	var allAssessmentFindings []AssessmentFinding
 	totalDiscovered := 0
@@ -329,6 +340,26 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 			allReportFindings = append(allReportFindings, rf)
 			allAssessmentFindings = append(allAssessmentFindings, toAssessmentFinding(assessmentID, execID, targetRecord.ID, rf))
 		}
+
+		// Engine 5: Unified Attack-Surface Intelligence
+		var certs []*x509.Certificate
+		if res.TLS != nil {
+			certs = res.TLS.PeerCertificates
+		}
+		targetInv := discoveryEng.AnalyzeTarget(
+			ctx,
+			assessmentID,
+			execID,
+			targetRecord.ID,
+			res.Target,
+			string(res.HTML),
+			res.Header,
+			certs,
+			inScopeAssets,
+			scopeVal.IsAllowed,
+		)
+		allInventoryAssets = append(allInventoryAssets, targetInv.Assets...)
+		allInventoryRelations = append(allInventoryRelations, targetInv.Relations...)
 	}
 
 	duration := time.Since(startTime)
@@ -337,6 +368,13 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 	execRecord.DurationMs = duration.Milliseconds()
 	execRecord.RequestCount = totalDiscovered + totalEndpointsAudited
 	execRecord.FindingCount = len(allAssessmentFindings)
+
+	// Persist Attack-Surface Inventory
+	if err := c.store.SaveInventory(allInventoryAssets, allInventoryRelations); err != nil {
+		opts.ProgressFunc(fmt.Sprintf("[-] Warning: Failed to persist attack-surface inventory: %v", err))
+	} else if len(allInventoryAssets) > 0 {
+		opts.ProgressFunc(fmt.Sprintf("[+] Attack-surface inventory recorded: %d assets, %d relationships mapped", len(allInventoryAssets), len(allInventoryRelations)))
+	}
 
 	// Preserve partial results on error or cancellation
 	if scanErr != nil || ctx.Err() != nil {
@@ -434,11 +472,14 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 	opts.ProgressFunc(fmt.Sprintf("[✓] Assessment %s completed in %s (%d findings, %d requests).",
 		asm.Ref, duration.Round(time.Millisecond), len(allAssessmentFindings), execRecord.RequestCount))
 
+	invSummary, _ := c.store.GetInventorySummary(assessmentID, execID)
+
 	return &ExecutionResult{
-		Execution: execRecord,
-		Report:    &rep,
-		HTMLPath:  htmlPath,
-		JSONPath:  jsonPath,
+		Execution:        execRecord,
+		Report:           &rep,
+		InventorySummary: invSummary,
+		HTMLPath:         htmlPath,
+		JSONPath:         jsonPath,
 	}, nil
 }
 

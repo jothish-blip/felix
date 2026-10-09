@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"felix/pkg/config"
+	"felix/pkg/discovery"
 	"felix/pkg/report"
 	_ "modernc.org/sqlite"
 )
@@ -56,6 +57,11 @@ type Store interface {
 	// Findings and Traceability
 	SaveFindings(findings []AssessmentFinding) error
 	GetFindings(assessmentID string, executionID string) ([]AssessmentFinding, error)
+
+	// Attack-Surface Inventory
+	SaveInventory(assets []discovery.Asset, relations []discovery.Relation) error
+	GetInventory(assessmentID string, executionID string, assetType string, inScopeOnly bool) ([]discovery.Asset, []discovery.Relation, error)
+	GetInventorySummary(assessmentID string, executionID string) (*discovery.InventorySummary, error)
 
 	// Report Records
 	SaveReport(r *ReportRecord) error
@@ -292,6 +298,70 @@ func (s *SQLiteStore) migrate() error {
 
 		if _, err := tx.Exec(schemaV1); err != nil {
 			return fmt.Errorf("migration v1 failed: %w", err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+
+	// Migration 2: Unified attack-surface inventory (assets & relations)
+	if currentVersion < 2 {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		schemaV2 := `
+		CREATE TABLE IF NOT EXISTS assessment_inventory_assets (
+			id TEXT PRIMARY KEY,
+			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+			execution_id TEXT NOT NULL REFERENCES assessment_executions(id) ON DELETE CASCADE,
+			target_id TEXT,
+			asset_type TEXT NOT NULL,
+			canonical_id TEXT NOT NULL,
+			parent_id TEXT,
+			display_name TEXT NOT NULL,
+			source_asset TEXT,
+			discovery_method TEXT NOT NULL,
+			discovery_status TEXT NOT NULL,
+			confidence TEXT NOT NULL,
+			in_scope INTEGER NOT NULL DEFAULT 1,
+			metadata_json TEXT,
+			evidence_json TEXT,
+			fingerprint TEXT NOT NULL,
+			first_seen TIMESTAMP NOT NULL,
+			last_seen TIMESTAMP NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_inv_assets_asm_id ON assessment_inventory_assets(assessment_id);
+		CREATE INDEX IF NOT EXISTS idx_inv_assets_exec_id ON assessment_inventory_assets(execution_id);
+		CREATE INDEX IF NOT EXISTS idx_inv_assets_type ON assessment_inventory_assets(asset_type);
+		CREATE INDEX IF NOT EXISTS idx_inv_assets_fingerprint ON assessment_inventory_assets(fingerprint);
+
+		CREATE TABLE IF NOT EXISTS assessment_inventory_relations (
+			id TEXT PRIMARY KEY,
+			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+			execution_id TEXT NOT NULL REFERENCES assessment_executions(id) ON DELETE CASCADE,
+			source_asset_id TEXT NOT NULL,
+			target_asset_id TEXT NOT NULL,
+			relation_type TEXT NOT NULL,
+			evidence TEXT,
+			confidence TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_inv_relations_asm_id ON assessment_inventory_relations(assessment_id);
+		CREATE INDEX IF NOT EXISTS idx_inv_relations_exec_id ON assessment_inventory_relations(execution_id);
+		CREATE INDEX IF NOT EXISTS idx_inv_relations_source ON assessment_inventory_relations(source_asset_id);
+		CREATE INDEX IF NOT EXISTS idx_inv_relations_target ON assessment_inventory_relations(target_asset_id);
+
+		INSERT INTO schema_migrations (version, applied_at) VALUES (2, CURRENT_TIMESTAMP);
+		`
+
+		if _, err := tx.Exec(schemaV2); err != nil {
+			return fmt.Errorf("migration v2 failed: %w", err)
 		}
 
 		if err := tx.Commit(); err != nil {
@@ -1083,3 +1153,207 @@ func boolToInt(b bool) int {
 	}
 	return 0
 }
+
+// --- Attack-Surface Inventory Methods ---
+
+func (s *SQLiteStore) SaveInventory(assets []discovery.Asset, relations []discovery.Relation) error {
+	if len(assets) == 0 && len(relations) == 0 {
+		return nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if len(assets) > 0 {
+		stmtAsset, err := tx.Prepare(`
+			INSERT INTO assessment_inventory_assets (
+				id, assessment_id, execution_id, target_id, asset_type, canonical_id,
+				parent_id, display_name, source_asset, discovery_method, discovery_status,
+				confidence, in_scope, metadata_json, evidence_json, fingerprint, first_seen, last_seen
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(id) DO UPDATE SET
+				last_seen = excluded.last_seen,
+				discovery_status = excluded.discovery_status,
+				metadata_json = excluded.metadata_json,
+				evidence_json = excluded.evidence_json
+		`)
+		if err != nil {
+			return err
+		}
+		defer stmtAsset.Close()
+
+		for _, a := range assets {
+			a.AssessmentID = s.resolveAssessmentID(a.AssessmentID)
+			metaJSON, _ := json.Marshal(a.Metadata)
+			evJSON, _ := json.Marshal(a.Evidence)
+			inScopeInt := 0
+			if a.InScope {
+				inScopeInt = 1
+			}
+			if a.FirstSeen.IsZero() {
+				a.FirstSeen = time.Now().UTC()
+			}
+			if a.LastSeen.IsZero() {
+				a.LastSeen = a.FirstSeen
+			}
+			if a.Fingerprint == "" {
+				a.Fingerprint = a.ComputeFingerprint()
+			}
+
+			_, err = stmtAsset.Exec(
+				a.ID, a.AssessmentID, a.ExecutionID, a.TargetID, string(a.Type), a.CanonicalID,
+				a.ParentID, a.DisplayName, a.SourceAsset, a.DiscoveryMethod, string(a.DiscoveryStatus),
+				string(a.Confidence), inScopeInt, string(metaJSON), string(evJSON), a.Fingerprint, a.FirstSeen, a.LastSeen,
+			)
+			if err != nil {
+				return fmt.Errorf("failed to insert inventory asset %s: %w", a.ID, err)
+			}
+		}
+	}
+
+	if len(relations) > 0 {
+		stmtRel, err := tx.Prepare(`
+			INSERT OR IGNORE INTO assessment_inventory_relations (
+				id, assessment_id, execution_id, source_asset_id, target_asset_id,
+				relation_type, evidence, confidence, created_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`)
+		if err != nil {
+			return err
+		}
+		defer stmtRel.Close()
+
+		for _, r := range relations {
+			r.AssessmentID = s.resolveAssessmentID(r.AssessmentID)
+			if r.CreatedAt.IsZero() {
+				r.CreatedAt = time.Now().UTC()
+			}
+			_, err = stmtRel.Exec(
+				r.ID, r.AssessmentID, r.ExecutionID, r.SourceAssetID, r.TargetAssetID,
+				string(r.RelationType), r.Evidence, string(r.Confidence), r.CreatedAt,
+			)
+			if err != nil {
+				return fmt.Errorf("failed to insert inventory relation %s: %w", r.ID, err)
+			}
+		}
+	}
+
+	return tx.Commit()
+}
+
+func (s *SQLiteStore) GetInventory(assessmentID string, executionID string, assetType string, inScopeOnly bool) ([]discovery.Asset, []discovery.Relation, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	assessmentID = s.resolveAssessmentID(assessmentID)
+	query := `
+		SELECT id, assessment_id, execution_id, target_id, asset_type, canonical_id,
+		       parent_id, display_name, source_asset, discovery_method, discovery_status,
+		       confidence, in_scope, metadata_json, evidence_json, fingerprint, first_seen, last_seen
+		FROM assessment_inventory_assets
+		WHERE assessment_id = ?
+	`
+	args := []any{assessmentID}
+	if executionID != "" {
+		query += " AND execution_id = ?"
+		args = append(args, executionID)
+	}
+	if assetType != "" {
+		query += " AND asset_type = ?"
+		args = append(args, assetType)
+	}
+	if inScopeOnly {
+		query += " AND in_scope = 1"
+	}
+	query += " ORDER BY asset_type ASC, canonical_id ASC"
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+
+	var assets []discovery.Asset
+	for rows.Next() {
+		var a discovery.Asset
+		var aType, status, conf string
+		var inScopeInt int
+		var metaJSON, evJSON string
+		err := rows.Scan(
+			&a.ID, &a.AssessmentID, &a.ExecutionID, &a.TargetID, &aType, &a.CanonicalID,
+			&a.ParentID, &a.DisplayName, &a.SourceAsset, &a.DiscoveryMethod, &status,
+			&conf, &inScopeInt, &metaJSON, &evJSON, &a.Fingerprint, &a.FirstSeen, &a.LastSeen,
+		)
+		if err != nil {
+			return nil, nil, err
+		}
+		a.Type = discovery.AssetType(aType)
+		a.DiscoveryStatus = discovery.DiscoveryStatus(status)
+		a.Confidence = discovery.Confidence(conf)
+		a.InScope = inScopeInt == 1
+		if metaJSON != "" {
+			_ = json.Unmarshal([]byte(metaJSON), &a.Metadata)
+		}
+		if evJSON != "" {
+			_ = json.Unmarshal([]byte(evJSON), &a.Evidence)
+		}
+		assets = append(assets, a)
+	}
+
+	// Relations query
+	relQuery := `
+		SELECT id, assessment_id, execution_id, source_asset_id, target_asset_id,
+		       relation_type, evidence, confidence, created_at
+		FROM assessment_inventory_relations
+		WHERE assessment_id = ?
+	`
+	relArgs := []any{assessmentID}
+	if executionID != "" {
+		relQuery += " AND execution_id = ?"
+		relArgs = append(relArgs, executionID)
+	}
+	relQuery += " ORDER BY relation_type ASC, created_at ASC"
+
+	relRows, err := s.db.Query(relQuery, relArgs...)
+	if err != nil {
+		return assets, nil, err
+	}
+	defer relRows.Close()
+
+	var relations []discovery.Relation
+	for relRows.Next() {
+		var r discovery.Relation
+		var rType, conf string
+		err := relRows.Scan(
+			&r.ID, &r.AssessmentID, &r.ExecutionID, &r.SourceAssetID, &r.TargetAssetID,
+			&rType, &r.Evidence, &conf, &r.CreatedAt,
+		)
+		if err != nil {
+			return assets, nil, err
+		}
+		r.RelationType = discovery.RelationType(rType)
+		r.Confidence = discovery.Confidence(conf)
+		relations = append(relations, r)
+	}
+
+	return assets, relations, nil
+}
+
+func (s *SQLiteStore) GetInventorySummary(assessmentID string, executionID string) (*discovery.InventorySummary, error) {
+	assets, relations, err := s.GetInventory(assessmentID, executionID, "", false)
+	if err != nil {
+		return nil, err
+	}
+	inv := discovery.NewInventory()
+	inv.Assets = assets
+	inv.Relations = relations
+	sum := inv.Summary()
+	return &sum, nil
+}
+

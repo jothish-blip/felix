@@ -148,6 +148,36 @@ When web targets return HTTP 301, 302, 307, or 308 redirects:
 
 ---
 
+## 10. Attack-Surface Discovery Safety & Zero-Exploitation Guarantees
+
+Stage 2 introduces deep attack-surface intelligence with rigorous safety boundaries:
+
+### Strict Zero Form Submission Guarantee
+Felix statically parses HTML `<form>` tags, actions, HTTP methods, and input controls. Felix **strictly executes zero form submissions**.
+- It does **not** simulate form POST or GET submissions.
+- It does **not** trigger backend state modifications, account creations, password resets, or newsletter subscriptions.
+- This invariant is strictly verified by unit and corpus test assertions ensuring `formSubmissionCount == 0`.
+
+### Zero Credential Probing & Password Spraying Policy
+Authentication surfaces (e.g. login gateways, registration endpoints, OAuth/OIDC handlers, MFA screens) are identified exclusively for structural inventory modeling.
+- Felix **never** executes automated password guessing, dictionary attacks, or credential stuffing.
+- Felix **never** tests default passwords or fuzzes authentication endpoints.
+- Authentication endpoints remain structural inventory records and are never subjected to invasive brute-forcing.
+
+### Safe Lexical JavaScript Analysis
+Felix parses client JavaScript bundles and inline scripts using safe regex-based lexical scanners and static syntax patterns.
+- No JavaScript code is executed in an engine or runtime.
+- No headless browser or DOM execution environment is spawned.
+- All extracted API keys and credential candidates are automatically sanitized (`[REDACTED_SECRET]`) in evidence fields.
+
+### Scope Boundary Isolation for Attack Surface Assets
+Every discovered asset (subdomain, API service, cloud bucket, third-party dependency) is evaluated against the assessment's approved scope rules:
+- In-scope assets are flagged `in_scope = true`.
+- External or unapproved assets (e.g. third-party CDNs, external analytics, unrelated apex domains) are strictly classified as `in_scope = false` with `status = OUT_OF_SCOPE`.
+- Out-of-scope assets are completely excluded from active probing.
+
+---
+
 ## Navigation & Cross-References
 
 - **[README](README.md)** — Project overview and quick start.

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"felix/pkg/discovery"
 	"felix/pkg/report"
 	"github.com/google/uuid"
 )
@@ -328,3 +329,210 @@ func TestStore_InterruptedRunRecovery(t *testing.T) {
 		t.Errorf("expected recovered assessment to be FAILED, got status=%s, err=%v", asm.Status, err)
 	}
 }
+
+func TestStore_InventoryPersistenceAndTraceability(t *testing.T) {
+	store, cleanup := newTestStore(t)
+	defer cleanup()
+
+	now := time.Now().UTC()
+
+	clientID := uuid.New().String()
+	_ = store.CreateClient(&Client{ID: clientID, Name: "Inventory Corp"})
+
+	asmID := uuid.New().String()
+	_ = store.CreateAssessment(&Assessment{
+		ID:        asmID,
+		Ref:       "ASM-2026-INV",
+		ClientID:  clientID,
+		Name:      "Inventory Architecture Test",
+		Status:    StatusReady,
+		CreatedAt: now,
+	})
+
+	execID := uuid.New().String()
+	_ = store.CreateExecution(&AssessmentExecution{
+		ID:           execID,
+		AssessmentID: asmID,
+		Status:       StatusCompleted,
+		StartedAt:    now,
+	})
+
+	// 1. Create assets across different categories
+	domainID := uuid.New().String()
+	subID := uuid.New().String()
+	appID := uuid.New().String()
+	formID := uuid.New().String()
+	paramID := uuid.New().String()
+
+	assets := []discovery.Asset{
+		{
+			ID:              domainID,
+			AssessmentID:    asmID,
+			ExecutionID:     execID,
+			Type:            discovery.AssetTypeDomain,
+			CanonicalID:     "example.com",
+			DisplayName:     "example.com",
+			DiscoveryMethod: "SEED",
+			DiscoveryStatus: discovery.StatusObserved,
+			Confidence:      discovery.ConfidenceHigh,
+			InScope:         true,
+			FirstSeen:       now,
+			LastSeen:        now,
+		},
+		{
+			ID:              subID,
+			AssessmentID:    asmID,
+			ExecutionID:     execID,
+			Type:            discovery.AssetTypeSubdomain,
+			CanonicalID:     "app.example.com",
+			ParentID:        domainID,
+			DisplayName:     "app.example.com",
+			DiscoveryMethod: "DNS_LOOKUP",
+			DiscoveryStatus: discovery.StatusResolved,
+			Confidence:      discovery.ConfidenceHigh,
+			InScope:         true,
+			FirstSeen:       now,
+			LastSeen:        now,
+		},
+		{
+			ID:              appID,
+			AssessmentID:    asmID,
+			ExecutionID:     execID,
+			Type:            discovery.AssetTypeApplication,
+			CanonicalID:     "https://app.example.com/",
+			ParentID:        subID,
+			DisplayName:     "app.example.com (React)",
+			DiscoveryMethod: "HTML_ANALYSIS",
+			DiscoveryStatus: discovery.StatusObserved,
+			Confidence:      discovery.ConfidenceHigh,
+			InScope:         true,
+			Metadata: map[string]any{
+				"framework": "React",
+			},
+			FirstSeen: now,
+			LastSeen:  now,
+		},
+		{
+			ID:              formID,
+			AssessmentID:    asmID,
+			ExecutionID:     execID,
+			Type:            discovery.AssetTypeForm,
+			CanonicalID:     "POST https://app.example.com/login#0",
+			ParentID:        appID,
+			DisplayName:     "Form [POST] /login",
+			DiscoveryMethod: "HTML_PARSING",
+			DiscoveryStatus: discovery.StatusObserved,
+			Confidence:      discovery.ConfidenceHigh,
+			InScope:         true,
+			Metadata: map[string]any{
+				"purpose": "LOGIN",
+			},
+			FirstSeen: now,
+			LastSeen:  now,
+		},
+		{
+			ID:              paramID,
+			AssessmentID:    asmID,
+			ExecutionID:     execID,
+			Type:            discovery.AssetTypeParameter,
+			CanonicalID:     "https://app.example.com/login:form:password",
+			ParentID:        formID,
+			DisplayName:     "Field password (password)",
+			DiscoveryMethod: "HTML_PARSING",
+			DiscoveryStatus: discovery.StatusObserved,
+			Confidence:      discovery.ConfidenceHigh,
+			InScope:         true,
+			Metadata: map[string]any{
+				"location": "FORM",
+			},
+			FirstSeen: now,
+			LastSeen:  now,
+		},
+	}
+
+	// 2. Create relationships between assets
+	relations := []discovery.Relation{
+		{
+			ID:            uuid.New().String(),
+			AssessmentID:  asmID,
+			ExecutionID:   execID,
+			SourceAssetID: domainID,
+			TargetAssetID: subID,
+			RelationType:  discovery.RelHasSubdomain,
+			Evidence:      "app.example.com is child of example.com",
+			Confidence:    discovery.ConfidenceHigh,
+			CreatedAt:     now,
+		},
+		{
+			ID:            uuid.New().String(),
+			AssessmentID:  asmID,
+			ExecutionID:   execID,
+			SourceAssetID: subID,
+			TargetAssetID: appID,
+			RelationType:  discovery.RelExposesApplication,
+			Evidence:      "app.example.com hosts React application",
+			Confidence:    discovery.ConfidenceHigh,
+			CreatedAt:     now,
+		},
+		{
+			ID:            uuid.New().String(),
+			AssessmentID:  asmID,
+			ExecutionID:   execID,
+			SourceAssetID: appID,
+			TargetAssetID: formID,
+			RelationType:  discovery.RelContainsForm,
+			Evidence:      "React app contains login form",
+			Confidence:    discovery.ConfidenceHigh,
+			CreatedAt:     now,
+		},
+		{
+			ID:            uuid.New().String(),
+			AssessmentID:  asmID,
+			ExecutionID:   execID,
+			SourceAssetID: formID,
+			TargetAssetID: paramID,
+			RelationType:  discovery.RelHasInput,
+			Evidence:      "Form accepts password parameter",
+			Confidence:    discovery.ConfidenceHigh,
+			CreatedAt:     now,
+		},
+	}
+
+	if err := store.SaveInventory(assets, relations); err != nil {
+		t.Fatalf("SaveInventory failed: %v", err)
+	}
+
+	// 3. Query all inventory
+	fetchedAssets, fetchedRelations, err := store.GetInventory(asmID, execID, "", false)
+	if err != nil {
+		t.Fatalf("GetInventory failed: %v", err)
+	}
+	if len(fetchedAssets) != 5 {
+		t.Errorf("expected 5 assets, got %d", len(fetchedAssets))
+	}
+	if len(fetchedRelations) != 4 {
+		t.Errorf("expected 4 relations, got %d", len(fetchedRelations))
+	}
+
+	// 4. Query with asset type filter
+	formAssets, _, err := store.GetInventory(asmID, execID, string(discovery.AssetTypeForm), false)
+	if err != nil {
+		t.Fatalf("GetInventory with type filter failed: %v", err)
+	}
+	if len(formAssets) != 1 || formAssets[0].ID != formID {
+		t.Errorf("expected 1 form asset matching %s, got %v", formID, formAssets)
+	}
+
+	// 5. Query summary
+	summary, err := store.GetInventorySummary(asmID, execID)
+	if err != nil {
+		t.Fatalf("GetInventorySummary failed: %v", err)
+	}
+	if summary.TotalAssets != 5 {
+		t.Errorf("expected TotalAssets = 5, got %d", summary.TotalAssets)
+	}
+	if summary.DomainsCount != 1 || summary.FormsCount != 1 || summary.ParametersCount != 1 {
+		t.Errorf("summary counts mismatch: %+v", summary)
+	}
+}
+

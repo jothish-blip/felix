@@ -18,10 +18,13 @@ import (
 
 // Result holds the extracted assets and metadata for a given target.
 type Result struct {
-	Target  string   `json:"target"`
-	Scripts []string `json:"scripts"` // Discovered script URLs (for backward compatibility)
-	Assets  []Asset  `json:"assets"`  // Full inventory of discovered and processed assets
-	Err     error    `json:"error,omitempty"`
+	Target  string               `json:"target"`
+	Scripts []string             `json:"scripts"` // Discovered script URLs (for backward compatibility)
+	Assets  []Asset              `json:"assets"`  // Full inventory of discovered and processed assets
+	HTML    []byte               `json:"-"`       // Raw HTML body of target page
+	Header  http.Header          `json:"-"`       // HTTP response headers from target page
+	TLS     *tls.ConnectionState `json:"-"`       // TLS handshake state if HTTPS
+	Err     error                `json:"error,omitempty"`
 }
 
 // DiscoveredAsset stores a URL and its initial detected type from HTML tags.
@@ -181,6 +184,10 @@ func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
 		res.Err = ErrAssetTooLarge
 		return res
 	}
+
+	res.HTML = bodyBytes
+	res.Header = resp.Header
+	res.TLS = resp.TLS
 
 	// Parse HTML for assets
 	discovered, scriptURLs, err := parseHTMLAssets(bytes.NewReader(bodyBytes), parsedBase)

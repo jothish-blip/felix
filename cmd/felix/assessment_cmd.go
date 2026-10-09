@@ -53,6 +53,8 @@ func runAssessment(args []string) int {
 		return runAssessmentRun(subArgs)
 	case "findings":
 		return runAssessmentFindings(subArgs)
+	case "inventory":
+		return runAssessmentInventory(subArgs)
 	case "reports":
 		return runAssessmentReports(subArgs)
 	case "cancel":
@@ -76,6 +78,7 @@ func printAssessmentHelp() {
 	fmt.Println("  authorize    Record client authorization and approve assessment")
 	fmt.Println("  run          Execute authorized assessment against approved targets")
 	fmt.Println("  findings     Inspect findings recorded for an assessment")
+	fmt.Println("  inventory    Inspect discovered attack-surface assets and relationships")
 	fmt.Println("  reports      List generated report files for an assessment")
 	fmt.Println("  cancel       Cancel an active or pending assessment")
 	fmt.Println("\nExamples:")
@@ -1341,3 +1344,119 @@ func runAssessmentCancel(args []string) int {
 	fmt.Printf("[+] Assessment %s marked as CANCELLED\n", asm.Ref)
 	return 0
 }
+
+func runAssessmentInventory(args []string) int {
+	var (
+		assessmentRef string
+		assetTypeFil  string
+		inScopeOnly   bool
+		jsonOutput    bool
+	)
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--assessment", "--id", "--ref":
+			if i+1 < len(args) {
+				assessmentRef = args[i+1]
+				i++
+			}
+		case "--type", "-t":
+			if i+1 < len(args) {
+				assetTypeFil = strings.ToUpper(args[i+1])
+				i++
+			}
+		case "--in-scope":
+			inScopeOnly = true
+		case "--json":
+			jsonOutput = true
+		case "--help", "-h":
+			fmt.Println("Usage: felix assessment inventory <assessment-id> [flags]")
+			fmt.Println("\nFlags:")
+			fmt.Println("  --type, -t <string>  Filter by asset type (DOMAIN, SUBDOMAIN, APPLICATION, API_SERVICE, ENDPOINT, FORM, PARAMETER, AUTH_SURFACE, CLOUD_SERVICE, TECHNOLOGY)")
+			fmt.Println("  --in-scope           Display in-scope assets only")
+			fmt.Println("  --json               Output attack-surface inventory as JSON")
+			return 0
+		default:
+			if !strings.HasPrefix(arg, "-") && assessmentRef == "" {
+				assessmentRef = arg
+			}
+		}
+	}
+
+	if assessmentRef == "" {
+		fmt.Fprintf(os.Stderr, "[-] Error: assessment ID or Ref is required\n")
+		return 2
+	}
+
+	store, err := getAssessmentStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Database error: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+
+	asm, err := store.GetAssessment(assessmentRef)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Assessment %q not found: %v\n", assessmentRef, err)
+		return 1
+	}
+
+	assets, relations, err := store.GetInventory(asm.ID, "", assetTypeFil, inScopeOnly)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Failed to fetch inventory: %v\n", err)
+		return 1
+	}
+
+	if jsonOutput {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		output := map[string]any{
+			"assessment_ref": asm.Ref,
+			"assessment_id":  asm.ID,
+			"assets":         assets,
+			"relations":      relations,
+		}
+		_ = enc.Encode(output)
+		return 0
+	}
+
+	summary, _ := store.GetInventorySummary(asm.ID, "")
+	fmt.Println("===========================================================")
+	fmt.Printf("  FELIX :: ATTACK-SURFACE INVENTORY: %s\n", asm.Ref)
+	fmt.Printf("  Assessment Name: %s | Client ID: %s\n", asm.Name, asm.ClientID)
+	fmt.Println("===========================================================")
+	if summary != nil {
+		fmt.Printf("  Total Assets:        %d (%d in-scope, %d out-of-scope)\n", summary.TotalAssets, summary.InScopeAssets, summary.OutOfScopeAssets)
+		fmt.Printf("  Total Relations:     %d\n", summary.TotalRelations)
+		fmt.Printf("  Domains / Hosts:     %d / %d\n", summary.DomainsCount, summary.SubdomainsCount)
+		fmt.Printf("  Web Services:        %d\n", summary.WebServicesCount)
+		fmt.Printf("  Applications:        %d\n", summary.ApplicationsCount)
+		fmt.Printf("  API Services:        %d\n", summary.APIServicesCount)
+		fmt.Printf("  Endpoints:           %d\n", summary.EndpointsCount)
+		fmt.Printf("  Forms / Inputs:      %d / %d\n", summary.FormsCount, summary.ParametersCount)
+		fmt.Printf("  Auth Surfaces:       %d\n", summary.AuthSurfacesCount)
+		fmt.Printf("  Cloud Services:      %d\n", summary.CloudServicesCount)
+		fmt.Printf("  Technologies:        %d\n", summary.TechnologiesCount)
+		fmt.Println("-----------------------------------------------------------")
+	}
+
+	if len(assets) == 0 {
+		fmt.Println("No attack-surface assets recorded for this assessment yet.")
+		return 0
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "TYPE\tSTATUS\tCONFIDENCE\tIDENTIFIER\tDISCOVERY METHOD")
+	for _, a := range assets {
+		scopeTag := ""
+		if !a.InScope {
+			scopeTag = " [OUT_OF_SCOPE]"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s%s\t%s\n",
+			a.Type, a.DiscoveryStatus, a.Confidence, a.CanonicalID, scopeTag, a.DiscoveryMethod)
+	}
+	_ = w.Flush()
+	return 0
+}
+

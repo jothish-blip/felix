@@ -75,6 +75,7 @@ The codebase is organized into modular packages under `pkg/` and a thin CLI laye
 | **`pkg/cloud`** | Cloud provider discovery and non-destructive exposure verification (Supabase, Firebase, S3, GCP). | `detector.go`, `provider.go`, `supabase.go`, `firebase.go`, `storage.go`, `client.go`, `finding.go` |
 | **`pkg/api`** | Client route extraction, endpoint classification, authentication reasoning, CORS, and header checks. | `detector.go`, `endpoints.go`, `cors.go`, `graphql.go`, `headers.go`, `client.go`, `finding.go` |
 | **`pkg/assessment`** | Assessment lifecycle, authorization verification, scope/exclusion engine, embedded SQLite store, and finding traceability. | `models.go`, `scope.go`, `store.go`, `controller.go` |
+| **`pkg/discovery`** | Advanced attack-surface intelligence engine: relational graph modeling, domains, applications, APIs, forms, parameters, auth surfaces, cloud services, and passive tech detection. | `types.go`, `domains.go`, `apps.go`, `forms.go`, `parameters.go`, `auth.go`, `tech.go`, `js.go`, `engine.go` |
 | **`pkg/report`** | Finding normalization, deduplication, multi-signal correlation, risk scoring, HTML/JSON generation. | `model.go`, `normalize.go`, `dedup.go`, `correlate.go`, `risk.go`, `summary.go`, `html.go`, `json.go` |
 | **`pkg/config`** | Persistent operational configuration storage (`~/.felix/config.json`). | `config.go` |
 | **`test`** | Integration testing, regression corpus, CLI end-to-end validation, and assessment lifecycle tests. | `regression_test.go`, `cli_test.go`, `assessment_cli_test.go` |
@@ -237,6 +238,122 @@ Assessments move through strictly governed transitions:
 - Exclusions are evaluated **before** checking whether a target or asset is in-scope.
 - If a target URL or discovered asset matches an active exclusion (`HOSTNAME`, wildcard `*.subdomain`, `PATH_PREFIX`, or `EXACT_URL`), it is discarded immediately.
 - Redirects that escape the approved scope or enter an excluded path are blocked with an immediate security refusal.
+
+---
+
+## Felix 2.0 Stage 2: Advanced Attack-Surface Intelligence (`pkg/discovery`)
+
+Stage 2 transforms Felix's discovery engine from a flat URL crawler into a structured, relational, evidence-backed attack-surface intelligence inventory.
+
+### 1. Relational Inventory Model
+
+Every discovered element is modeled as an `Asset` connected by directed `Relation` graph links:
+
+```text
+Domain / Subdomain
+   │ (HOSTS)
+   ▼
+Application
+   │
+   ├── (EXPOSES_API) ─────────► API Service
+   │                               │ (EXPOSES_ENDPOINT)
+   │                               ▼
+   ├── (EXPOSES_ENDPOINT) ────► Endpoint
+   │                               │ (HAS_PARAMETER)
+   │                               ▼
+   ├── (CONTAINS_FORM) ───────► Form ──► Parameter
+   │
+   ├── (AUTHENTICATES_TO) ────► Auth Surface (Login, Reset, SSO)
+   │
+   ├── (USES_TECHNOLOGY) ─────► Technology (Framework, Runtime, CMS)
+   │
+   ├── (INTEGRATES_WITH) ─────► Cloud Service (S3, Firebase, Supabase)
+   │
+   └── (LOADS_SCRIPT) ────────► JavaScript Asset
+                                   │ (REFERENCES_SOURCE_MAP)
+                                   ▼
+                                Source Map
+```
+
+### 2. Supported Asset & Relation Types
+
+- **14 Asset Types:**
+  - `DOMAIN`: Root apex domain (e.g., `example.com`).
+  - `SUBDOMAIN`: Discovered hostnames and subdomains (`api.example.com`, `admin.example.com`).
+  - `APPLICATION`: Distinct web application or portal root (`/`, `/admin`, `/portal`).
+  - `API_SERVICE`: Detected API base (REST, GraphQL, versioned routes).
+  - `ENDPOINT`: Concrete HTTP path with method (`GET /api/v1/users`).
+  - `PARAMETER`: Discovered query parameter, path variable, form input, or JSON key.
+  - `FORM`: Statically parsed HTML `<form>` element.
+  - `AUTH_SURFACE`: Dedicated authentication gateway (Login, Register, MFA, Password Reset, SSO).
+  - `CLOUD_SERVICE`: Cloud storage bucket or BaaS backend (S3, GCP, Supabase, Firebase).
+  - `TECHNOLOGY`: Detected technology, library, framework, or web server.
+  - `SOURCE_MAP`: Bound or discovered JavaScript source map.
+  - `DATA_ASSET`: Static data document, download, or configuration schema.
+  - `NETWORK_HOST`: Resolved IP address for a host.
+  - `THIRD_PARTY_SERVICE`: External dependency or CDN host.
+
+- **12 Relation Types:**
+  - `CONTAINS`: Domain contains Subdomain or Application.
+  - `HOSTS`: Host serves Application or API Service.
+  - `EXPOSES_API`: Application exposes API Service.
+  - `EXPOSES_ENDPOINT`: Application or API exposes specific Endpoint.
+  - `HAS_PARAMETER`: Endpoint or Form accepts Parameter.
+  - `CONTAINS_FORM`: Application or Endpoint contains HTML Form.
+  - `USES_TECHNOLOGY`: Application or Host runs Technology.
+  - `DEPENDS_ON`: Asset depends on external Service.
+  - `AUTHENTICATES_TO`: Application routes through Auth Surface.
+  - `INTEGRATES_WITH`: Application integrates with Cloud Service.
+  - `LOADS_SCRIPT`: Application loads JavaScript Asset.
+  - `REFERENCES_SOURCE_MAP`: JavaScript asset points to Source Map.
+
+### 3. Specialized Intelligence Extractors
+
+1. **Domain & Subdomain Intelligence (`domains.go`):**
+   - Extracts apex domains using strict public suffix heuristics (handling dual suffixes like `.co.uk`).
+   - Parses hostnames from HTML markup, script tags, stylesheets, and anchors.
+   - Extracts Subject Alternative Names (SAN) from TLS certificates when available without additional network round-trips.
+   - Performs safe DNS A/AAAA resolution (`net.LookupIP`) to identify network IPs.
+   - Strictly tags third-party or out-of-scope hostnames (`InScope = false`, `DiscoveryStatus = OUT_OF_SCOPE`).
+
+2. **Application Intelligence (`apps.go`):**
+   - Identifies root and sub-applications (`/admin`, `/portal`, `/app`, `/api`).
+   - Detects SPA routing mechanisms (React Router, Next.js, Nuxt, Angular, Vue).
+
+3. **Form Intelligence (`forms.go`):**
+   - Statically parses HTML `<form>` elements and nested controls (`<input>`, `<textarea>`, `<select>`).
+   - Normalizes action URLs, HTTP methods (default `GET`), and encoding types (`application/x-www-form-urlencoded`, `multipart/form-data`).
+   - Classifies form purpose (`LOGIN`, `REGISTRATION`, `PASSWORD_RESET`, `FILE_UPLOAD`, `SEARCH`).
+   - **Zero Form Submission Guarantee:** Verified by tests with `atomic.LoadInt64(&formSubmissionCount) == 0`. Forms are parsed purely for structural intelligence.
+
+4. **Parameter Intelligence (`parameters.go`):**
+   - Extracts query parameters from crawled URLs and templates.
+   - Normalizes path segment parameters (`/api/v1/users/{id}`).
+   - Captures form inputs and static JavaScript payload keys.
+   - Records parameter locations (`QUERY`, `PATH`, `BODY_FORM`, `BODY_JSON`, `HEADER`, `COOKIE`) and inferred data types (`INTEGER`, `UUID`, `STRING`, `BOOLEAN`).
+
+5. **Authentication Surface Intelligence (`auth.go`):**
+   - Discovers login forms, registration endpoints, password resets, MFA gateways, OAuth/OIDC redirects, session cookies, and logout paths.
+   - Extracts OAuth/OIDC client IDs and scopes from markup and client scripts.
+   - **Zero Credential Probing Policy:** Authentication entrypoints are mapped defensively; no password spraying, credential stuffing, or session brute-forcing is executed.
+
+6. **Technology Intelligence (`tech.go`):**
+   - Passive signature engine evaluating HTTP response headers (`Server`, `X-Powered-By`), cookies, and DOM markup.
+   - Detects Web Servers (Nginx, Apache), Frameworks (Express, Django, Laravel, Rails, ASP.NET, Next.js, Nuxt), CMS (WordPress, Drupal), and UI Libraries (React, Vue, Angular, Tailwind, Bootstrap).
+   - Extracts version numbers when present; distinguishes observed versions (`version_observed = true`) from unverified estimates.
+
+7. **JavaScript Static Intelligence (`js.go`):**
+   - Safe static regex/lexical analysis without code execution or browser DOM rendering.
+   - Extracts API routes, base URLs, WebSocket endpoints (`ws://`, `wss://`), cloud references, and environment variable references.
+   - Inspects bounded source map references (`//# sourceMappingURL=`).
+   - Masks all detected secret candidates (`[REDACTED_SECRET]`) in evidence.
+
+### 4. Database Schema Migration v2
+
+Stage 2 applies Migration `2` to `~/.felix/assessments.db`:
+- `assessment_inventory_assets`: Persistent table storing assets with canonical SHA-256 fingerprint deduplication, type, display name, in-scope flag, status, confidence, structured metadata JSON, evidence JSON, and observation timestamps.
+- `assessment_inventory_relations`: Persistent directed graph table linking `source_asset_id` to `target_asset_id` with `relation_type`, evidence, and confidence.
+- Foreign keys cascade-delete inventory records when an assessment is removed. Indexed on `(assessment_id, asset_type)` and `(assessment_id, canonical_id)` for high-performance querying.
 
 ---
 
