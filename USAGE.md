@@ -311,6 +311,9 @@ felix assessment inventory <assessment-ref> --type TECHNOLOGY
 felix assessment inventory <assessment-ref> --type AUTH_SURFACE
 felix assessment inventory <assessment-ref> --json
 
+# Inspect authentication intelligence (surfaces, cookies, tokens, protection)
+felix assessment auth <assessment-ref> [--category LOGIN] [--verbose] [--json]
+
 # Inspect recorded findings with optional severity or verification filters
 felix assessment findings <assessment-ref> [--severity HIGH] [--verification VERIFIED] [--json]
 
@@ -354,7 +357,57 @@ felix assessment inventory <assessment-ref> [flags]
 • CLOUD_SERVICE       AWS S3 (production-assets) (in-scope) [active]
 ```
 
-### 4. Fail-Closed Security Guarantees
+### 4. Authentication Intelligence Inspection (`felix assessment auth`)
+
+The `auth` subcommand inspects all authentication surfaces, cookie security flags, token artifacts, and endpoint protection states discovered during authorized assessment:
+
+```bash
+felix assessment auth <assessment-ref> [flags]
+```
+
+**Supported Flags:**
+- `--category`, `-c <string>`: Filter surfaces by category (`LOGIN`, `REGISTRATION`, `PASSWORD_RESET`, `MFA`, `SESSION`, `OAUTH_SSO`, `ALTERNATIVE`, `PROTECTED_ENDPOINT`).
+- `--verbose`, `-v`: Display extended evidence details, authentication states, and heuristic explanations.
+- `--json`: Output complete authentication inventory and summary metrics in structured JSON.
+
+**Example Terminal Output:**
+```text
+===========================================================
+  FELIX :: AUTHENTICATION INTELLIGENCE: ASM-2026-9812
+  Assessment Name: Q1 Web Security Audit | Client ID: client-123
+===========================================================
+  Total Surfaces:         4
+  Session / Insecure Ck:  2 / 1
+  Token Artifacts:        2
+  Protected Endpoints:    3
+  Category Breakdown:     LOGIN=2, SESSION=1, MFA=1
+-----------------------------------------------------------
+
+[+] AUTHENTICATION SURFACES (4)
+CATEGORY  SUBTYPE   CONFIDENCE  IDENTIFIER            DISCOVERY METHOD
+LOGIN     PASSWORD  HIGH        /api/login            ROUTE_AND_PARAMETER_CORRELATION
+LOGIN     PASSWORD  HIGH        /auth/login           HTML_FORM
+SESSION   LOGOUT    HIGH        /auth/logout          ROUTE_NAMING
+MFA       TOTP      MEDIUM      /auth/mfa/verify      ROUTE_NAMING
+
+[+] COOKIE SECURITY ANALYSIS (2)
+COOKIE NAME   PURPOSE  SECURE  HTTPONLY  SAMESITE  DEFECTS
+session_id    SESSION  true    true      Lax       -
+auth_token    SESSION  false   true      None      Missing Secure attribute; Lax/Strict SameSite recommended
+
+[+] TOKEN ARTIFACTS (2)
+TYPE  SUBTYPE     NAME            LOCATION                  ALGORITHM
+PKCE  OAUTH_PKCE  code_challenge  /static/js/bundle.js:120  S256
+JWT   BEARER      id_token        /auth/callback:44         RS256
+
+[+] PROTECTED ENDPOINTS (3)
+METHOD  ENDPOINT         STATUS  PROTECTION           AUTH CHALLENGE
+GET     /admin/portal    401     CONFIRMED_PROTECTED  Bearer realm="admin"
+GET     /api/v1/profile  403     CONFIRMED_PROTECTED  -
+GET     /public/docs     200     ANONYMOUS_ACCESSIBLE -
+```
+
+### 5. Fail-Closed Security Guarantees
 - **No Authorization, No Audit:** If an assessment has no authorization record or its status is `PENDING`, `EXPIRED`, or `REVOKED`, `felix assessment run` exits immediately with a **security refusal** and performs **zero network requests**.
 - **Exclusion Precedence:** Exclusions (`HOSTNAME`, `PATH_PREFIX`, `EXACT_URL`) are evaluated before any scope rule. Any target or URL matching an exclusion is strictly skipped.
 - **Interrupted Run Recovery:** If a scan process crashes or is terminated abruptly, the store automatically recovers abandoned `RUNNING` executions on the next invocation, marking them `FAILED` and preserving partial findings.

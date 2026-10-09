@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"felix/pkg/auth"
 	"felix/pkg/discovery"
 	"felix/pkg/report"
 	"github.com/google/uuid"
@@ -535,4 +536,174 @@ func TestStore_InventoryPersistenceAndTraceability(t *testing.T) {
 		t.Errorf("summary counts mismatch: %+v", summary)
 	}
 }
+
+func TestStore_AuthInventoryPersistenceAndMigration(t *testing.T) {
+	store, cleanup := newTestStore(t)
+	defer cleanup()
+
+	now := time.Now().UTC()
+	clientID := uuid.New().String()
+	client := &Client{
+		ID:   clientID,
+		Name: "Auth Client",
+	}
+	if err := store.CreateClient(client); err != nil {
+		t.Fatalf("CreateClient failed: %v", err)
+	}
+
+	asmID := uuid.New().String()
+	asmRef := "ASM-2026-AUTH"
+	execID := uuid.New().String()
+	targetID := uuid.New().String()
+
+	// Setup baseline assessment records
+	asm := &Assessment{
+		ID:        asmID,
+		Ref:       asmRef,
+		ClientID:  clientID,
+		Name:      "Auth Audit",
+		Status:    StatusRunning,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := store.CreateAssessment(asm); err != nil {
+		t.Fatalf("CreateAssessment failed: %v", err)
+	}
+
+	exec := &AssessmentExecution{
+		ID:           execID,
+		AssessmentID: asmID,
+		Status:       StatusRunning,
+		StartedAt:    now,
+		ConfigSnapshot: ScanConfigSnapshot{
+			ScopeMode:   "same-origin",
+			Concurrency: 5,
+		},
+	}
+	if err := store.CreateExecution(exec); err != nil {
+		t.Fatalf("CreateExecution failed: %v", err)
+	}
+
+	// 1. Build sample AuthInventory
+	authInv := auth.AuthInventory{
+		Surfaces: []auth.AuthSurface{
+			{
+				ID:                 uuid.New().String(),
+				AssessmentID:       asmID,
+				ExecutionID:        execID,
+				TargetID:           targetID,
+				CanonicalID:        "LOGIN:/auth/login",
+				Category:           auth.CategoryLogin,
+				Subtype:            auth.SubtypePassword,
+				Identifier:         "/auth/login",
+				DiscoveryMethod:    "HTML_FORM",
+				Confidence:         auth.ConfidenceHigh,
+				VerificationStatus: auth.VerificationDiscovered,
+				AuthState:          auth.AuthStateAnonymousObserved,
+				InScope:            true,
+				Explanation:        "HTML form posting to /auth/login with password field",
+				Evidence: map[string]any{
+					"action": "/auth/login",
+				},
+				CreatedAt: now,
+				UpdatedAt: now,
+			},
+			{
+				ID:                 uuid.New().String(),
+				AssessmentID:       asmID,
+				ExecutionID:        execID,
+				TargetID:           targetID,
+				CanonicalID:        "MFA:/auth/mfa",
+				Category:           auth.CategoryMFA,
+				Subtype:            auth.SubtypeTOTP,
+				Identifier:         "/auth/mfa",
+				DiscoveryMethod:    "ROUTE_NAMING",
+				Confidence:         auth.ConfidenceHigh,
+				VerificationStatus: auth.VerificationDiscovered,
+				AuthState:          auth.AuthStateIndicatorPresent,
+				InScope:            true,
+				Explanation:        "Route matches MFA taxonomy",
+				CreatedAt:          now,
+				UpdatedAt:          now,
+			},
+		},
+		Cookies: []auth.CookieMetadata{
+			{
+				ID:               uuid.New().String(),
+				AssessmentID:     asmID,
+				ExecutionID:      execID,
+				TargetID:         targetID,
+				Name:             "sid",
+				IsSecure:         false,
+				IsHTTPOnly:       false,
+				SameSite:         "Unset",
+				Purpose:          auth.CookiePurposeSession,
+				IsSession:        true,
+				HasSecurityIssue: true,
+				SecurityDefects:  []string{"Missing HttpOnly", "Missing Secure"},
+				SourceURL:        "https://app.example.com",
+				CreatedAt:        now,
+			},
+		},
+		Tokens: []auth.TokenArtifact{
+			{
+				ID:              uuid.New().String(),
+				AssessmentID:    asmID,
+				ExecutionID:     execID,
+				TargetID:        targetID,
+				TokenType:       "JWT",
+				Subtype:         auth.SubtypeBearerToken,
+				Name:            "jwt_bearer",
+				Location:        "SCRIPT",
+				Format:          "JWT_3_PART",
+				Algorithm:       "RS256",
+				EvidenceSummary: "Observed JWT structure with algorithm RS256",
+				SourceAsset:     "https://app.example.com/main.js",
+				CreatedAt:       now,
+			},
+		},
+	}
+
+	// 2. Persist Auth Inventory
+	if err := store.SaveAuthInventory(authInv); err != nil {
+		t.Fatalf("SaveAuthInventory failed: %v", err)
+	}
+
+	// 3. Query all Auth Inventory
+	fetchedInv, err := store.GetAuthInventory(asmID, execID, "")
+	if err != nil {
+		t.Fatalf("GetAuthInventory failed: %v", err)
+	}
+	if len(fetchedInv.Surfaces) != 2 {
+		t.Errorf("expected 2 surfaces, got %d", len(fetchedInv.Surfaces))
+	}
+	if len(fetchedInv.Cookies) != 1 {
+		t.Errorf("expected 1 cookie, got %d", len(fetchedInv.Cookies))
+	}
+	if len(fetchedInv.Tokens) != 1 {
+		t.Errorf("expected 1 token, got %d", len(fetchedInv.Tokens))
+	}
+
+	// 4. Query with category filter
+	loginInv, err := store.GetAuthInventory(asmID, execID, string(auth.CategoryLogin))
+	if err != nil {
+		t.Fatalf("GetAuthInventory with category filter failed: %v", err)
+	}
+	if len(loginInv.Surfaces) != 1 || loginInv.Surfaces[0].Category != auth.CategoryLogin {
+		t.Errorf("expected 1 LOGIN surface, got: %v", loginInv.Surfaces)
+	}
+
+	// 5. Query Auth Summary
+	summary, err := store.GetAuthSummary(asmID, execID)
+	if err != nil {
+		t.Fatalf("GetAuthSummary failed: %v", err)
+	}
+	if summary.TotalSurfaces != 2 {
+		t.Errorf("expected TotalSurfaces = 2, got %d", summary.TotalSurfaces)
+	}
+	if summary.SessionCookies != 1 || summary.InsecureCookies != 1 {
+		t.Errorf("expected 1 session cookie with security issue, got %+v", summary)
+	}
+}
+
 

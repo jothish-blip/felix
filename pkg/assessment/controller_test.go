@@ -167,6 +167,7 @@ func TestController_SyntheticExecutionAndTraceability(t *testing.T) {
 		switch r.URL.Path {
 		case "/":
 			w.Header().Set("Content-Type", "text/html")
+			w.Header().Set("Set-Cookie", "auth_sess=xyz123; Path=/; HttpOnly; SameSite=Lax")
 			// Provide links and a secret exposure in page
 			fmt.Fprint(w, `
 				<html>
@@ -174,6 +175,10 @@ func TestController_SyntheticExecutionAndTraceability(t *testing.T) {
 				<body>
 					<a href="/dashboard">Dashboard</a>
 					<a href="/api/v1/users">API Users</a>
+					<form action="/login" method="POST">
+						<input type="text" name="username"/>
+						<input type="password" name="password"/>
+					</form>
 					<script>
 						const aws_key = "AKIAIOSFODNN7EXAMPLE";
 					</script>
@@ -320,6 +325,21 @@ func TestController_SyntheticExecutionAndTraceability(t *testing.T) {
 	}
 	if res.InventorySummary == nil || res.InventorySummary.TotalAssets == 0 {
 		t.Errorf("expected non-nil InventorySummary on ExecutionResult")
+	}
+
+	// 12. Verify Authentication Intelligence recorded in SQLite
+	authInv, err := store.GetAuthInventory(asmID, res.Execution.ID, "")
+	if err != nil {
+		t.Fatalf("failed to retrieve auth inventory: %v", err)
+	}
+	if len(authInv.Surfaces) == 0 {
+		t.Errorf("expected discovered auth surfaces to be recorded in SQLite")
+	}
+	if len(authInv.Cookies) == 0 {
+		t.Errorf("expected cookies to be recorded in SQLite")
+	}
+	if res.AuthSummary == nil || res.AuthSummary.TotalSurfaces == 0 {
+		t.Errorf("expected non-nil AuthSummary with discovered surfaces on ExecutionResult")
 	}
 }
 

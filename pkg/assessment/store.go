@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"felix/pkg/auth"
 	"felix/pkg/config"
 	"felix/pkg/discovery"
 	"felix/pkg/report"
@@ -62,6 +63,11 @@ type Store interface {
 	SaveInventory(assets []discovery.Asset, relations []discovery.Relation) error
 	GetInventory(assessmentID string, executionID string, assetType string, inScopeOnly bool) ([]discovery.Asset, []discovery.Relation, error)
 	GetInventorySummary(assessmentID string, executionID string) (*discovery.InventorySummary, error)
+
+	// Authentication Intelligence (Stage 3)
+	SaveAuthInventory(authInv auth.AuthInventory) error
+	GetAuthInventory(assessmentID string, executionID string, category string) (*auth.AuthInventory, error)
+	GetAuthSummary(assessmentID string, executionID string) (*auth.AuthSummary, error)
 
 	// Report Records
 	SaveReport(r *ReportRecord) error
@@ -362,6 +368,96 @@ func (s *SQLiteStore) migrate() error {
 
 		if _, err := tx.Exec(schemaV2); err != nil {
 			return fmt.Errorf("migration v2 failed: %w", err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+
+	// Migration 3: Dedicated Authentication Intelligence subsystem (surfaces, cookies, tokens)
+	if currentVersion < 3 {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		schemaV3 := `
+		CREATE TABLE IF NOT EXISTS assessment_auth_surfaces (
+			id TEXT PRIMARY KEY,
+			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+			execution_id TEXT NOT NULL REFERENCES assessment_executions(id) ON DELETE CASCADE,
+			target_id TEXT,
+			canonical_id TEXT NOT NULL,
+			category TEXT NOT NULL,
+			subtype TEXT NOT NULL,
+			identifier TEXT NOT NULL,
+			endpoint_id TEXT,
+			app_id TEXT,
+			discovery_method TEXT NOT NULL,
+			confidence TEXT NOT NULL,
+			verification_status TEXT NOT NULL,
+			auth_state TEXT NOT NULL,
+			in_scope INTEGER NOT NULL DEFAULT 1,
+			explanation TEXT,
+			evidence_json TEXT,
+			metadata_json TEXT,
+			created_at TIMESTAMP NOT NULL,
+			updated_at TIMESTAMP NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_auth_surfaces_asm_id ON assessment_auth_surfaces(assessment_id);
+		CREATE INDEX IF NOT EXISTS idx_auth_surfaces_exec_id ON assessment_auth_surfaces(execution_id);
+		CREATE INDEX IF NOT EXISTS idx_auth_surfaces_cat ON assessment_auth_surfaces(category);
+
+		CREATE TABLE IF NOT EXISTS assessment_auth_cookies (
+			id TEXT PRIMARY KEY,
+			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+			execution_id TEXT NOT NULL REFERENCES assessment_executions(id) ON DELETE CASCADE,
+			target_id TEXT,
+			name TEXT NOT NULL,
+			domain TEXT,
+			path TEXT,
+			is_secure INTEGER NOT NULL DEFAULT 0,
+			is_http_only INTEGER NOT NULL DEFAULT 0,
+			same_site TEXT NOT NULL,
+			max_age INTEGER,
+			expires TEXT,
+			purpose TEXT NOT NULL,
+			is_session INTEGER NOT NULL DEFAULT 0,
+			has_security_issue INTEGER NOT NULL DEFAULT 0,
+			security_defects_json TEXT,
+			source_url TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_auth_cookies_asm_id ON assessment_auth_cookies(assessment_id);
+		CREATE INDEX IF NOT EXISTS idx_auth_cookies_session ON assessment_auth_cookies(is_session);
+
+		CREATE TABLE IF NOT EXISTS assessment_auth_tokens (
+			id TEXT PRIMARY KEY,
+			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+			execution_id TEXT NOT NULL REFERENCES assessment_executions(id) ON DELETE CASCADE,
+			target_id TEXT,
+			token_type TEXT NOT NULL,
+			subtype TEXT NOT NULL,
+			name TEXT NOT NULL,
+			location TEXT NOT NULL,
+			format TEXT NOT NULL,
+			algorithm TEXT,
+			evidence_summary TEXT,
+			source_asset TEXT,
+			created_at TIMESTAMP NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_auth_tokens_asm_id ON assessment_auth_tokens(assessment_id);
+
+		INSERT INTO schema_migrations (version, applied_at) VALUES (3, CURRENT_TIMESTAMP);
+		`
+
+		if _, err := tx.Exec(schemaV3); err != nil {
+			return fmt.Errorf("migration v3 failed: %w", err)
 		}
 
 		if err := tx.Commit(); err != nil {
@@ -1356,4 +1452,280 @@ func (s *SQLiteStore) GetInventorySummary(assessmentID string, executionID strin
 	sum := inv.Summary()
 	return &sum, nil
 }
+
+// SaveAuthInventory persists authentication surfaces, cookies, and tokens atomically.
+func (s *SQLiteStore) SaveAuthInventory(authInv auth.AuthInventory) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// 1. Insert Authentication Surfaces
+	surfaceStmt, err := tx.Prepare(`
+		INSERT OR REPLACE INTO assessment_auth_surfaces (
+			id, assessment_id, execution_id, target_id, canonical_id, category, subtype,
+			identifier, endpoint_id, app_id, discovery_method, confidence, verification_status,
+			auth_state, in_scope, explanation, evidence_json, metadata_json, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare auth surfaces statement: %w", err)
+	}
+	defer surfaceStmt.Close()
+
+	for _, sf := range authInv.Surfaces {
+		evJSON, _ := json.Marshal(sf.Evidence)
+		metaJSON, _ := json.Marshal(sf.Metadata)
+		inScopeInt := 0
+		if sf.InScope {
+			inScopeInt = 1
+		}
+
+		_, err := surfaceStmt.Exec(
+			sf.ID, sf.AssessmentID, sf.ExecutionID, sf.TargetID, sf.CanonicalID,
+			string(sf.Category), string(sf.Subtype), sf.Identifier, sf.EndpointID,
+			sf.AppID, sf.DiscoveryMethod, string(sf.Confidence), string(sf.VerificationStatus),
+			string(sf.AuthState), inScopeInt, sf.Explanation, string(evJSON), string(metaJSON),
+			sf.CreatedAt, sf.UpdatedAt,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to insert auth surface %s: %w", sf.CanonicalID, err)
+		}
+	}
+
+	// 2. Insert Cookies
+	cookieStmt, err := tx.Prepare(`
+		INSERT OR REPLACE INTO assessment_auth_cookies (
+			id, assessment_id, execution_id, target_id, name, domain, path, is_secure,
+			is_http_only, same_site, max_age, expires, purpose, is_session, has_security_issue,
+			security_defects_json, source_url, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare auth cookies statement: %w", err)
+	}
+	defer cookieStmt.Close()
+
+	for _, ck := range authInv.Cookies {
+		defectsJSON, _ := json.Marshal(ck.SecurityDefects)
+		secInt := 0
+		if ck.IsSecure {
+			secInt = 1
+		}
+		httpOnlyInt := 0
+		if ck.IsHTTPOnly {
+			httpOnlyInt = 1
+		}
+		sessInt := 0
+		if ck.IsSession {
+			sessInt = 1
+		}
+		hasIssueInt := 0
+		if ck.HasSecurityIssue {
+			hasIssueInt = 1
+		}
+
+		_, err := cookieStmt.Exec(
+			ck.ID, ck.AssessmentID, ck.ExecutionID, ck.TargetID, ck.Name, ck.Domain,
+			ck.Path, secInt, httpOnlyInt, ck.SameSite, ck.MaxAge, ck.Expires,
+			string(ck.Purpose), sessInt, hasIssueInt, string(defectsJSON), ck.SourceURL,
+			ck.CreatedAt,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to insert auth cookie %s: %w", ck.Name, err)
+		}
+	}
+
+	// 3. Insert Token Artifacts
+	tokenStmt, err := tx.Prepare(`
+		INSERT OR REPLACE INTO assessment_auth_tokens (
+			id, assessment_id, execution_id, target_id, token_type, subtype, name,
+			location, format, algorithm, evidence_summary, source_asset, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare auth tokens statement: %w", err)
+	}
+	defer tokenStmt.Close()
+
+	for _, tk := range authInv.Tokens {
+		_, err := tokenStmt.Exec(
+			tk.ID, tk.AssessmentID, tk.ExecutionID, tk.TargetID, tk.TokenType,
+			string(tk.Subtype), tk.Name, tk.Location, tk.Format, tk.Algorithm,
+			tk.EvidenceSummary, tk.SourceAsset, tk.CreatedAt,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to insert auth token %s: %w", tk.Name, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// GetAuthInventory retrieves stored authentication surfaces, cookies, and tokens for an assessment.
+func (s *SQLiteStore) GetAuthInventory(assessmentID string, executionID string, category string) (*auth.AuthInventory, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	res := &auth.AuthInventory{}
+
+	// Surfaces Query
+	query := `
+		SELECT id, assessment_id, execution_id, target_id, canonical_id, category, subtype,
+		       identifier, endpoint_id, app_id, discovery_method, confidence, verification_status,
+		       auth_state, in_scope, explanation, evidence_json, metadata_json, created_at, updated_at
+		FROM assessment_auth_surfaces
+		WHERE assessment_id = ?
+	`
+	args := []any{assessmentID}
+	if executionID != "" {
+		query += " AND execution_id = ?"
+		args = append(args, executionID)
+	}
+	if category != "" {
+		query += " AND category = ?"
+		args = append(args, category)
+	}
+	query += " ORDER BY category ASC, canonical_id ASC"
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var sf auth.AuthSurface
+		var cat, sub, conf, vStatus, aState string
+		var inScopeInt int
+		var evJSON, metaJSON string
+
+		err := rows.Scan(
+			&sf.ID, &sf.AssessmentID, &sf.ExecutionID, &sf.TargetID, &sf.CanonicalID,
+			&cat, &sub, &sf.Identifier, &sf.EndpointID, &sf.AppID, &sf.DiscoveryMethod,
+			&conf, &vStatus, &aState, &inScopeInt, &sf.Explanation, &evJSON, &metaJSON,
+			&sf.CreatedAt, &sf.UpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		sf.Category = auth.AuthCategory(cat)
+		sf.Subtype = auth.AuthSubtype(sub)
+		sf.Confidence = auth.Confidence(conf)
+		sf.VerificationStatus = auth.VerificationStatus(vStatus)
+		sf.AuthState = auth.AuthState(aState)
+		sf.InScope = inScopeInt == 1
+		if evJSON != "" {
+			_ = json.Unmarshal([]byte(evJSON), &sf.Evidence)
+		}
+		if metaJSON != "" {
+			_ = json.Unmarshal([]byte(metaJSON), &sf.Metadata)
+		}
+
+		res.Surfaces = append(res.Surfaces, sf)
+	}
+
+	// Cookies Query
+	cQuery := `
+		SELECT id, assessment_id, execution_id, target_id, name, domain, path, is_secure,
+		       is_http_only, same_site, max_age, expires, purpose, is_session, has_security_issue,
+		       security_defects_json, source_url, created_at
+		FROM assessment_auth_cookies
+		WHERE assessment_id = ?
+	`
+	cArgs := []any{assessmentID}
+	if executionID != "" {
+		cQuery += " AND execution_id = ?"
+		cArgs = append(cArgs, executionID)
+	}
+	cQuery += " ORDER BY is_session DESC, name ASC"
+
+	cRows, err := s.db.Query(cQuery, cArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer cRows.Close()
+
+	for cRows.Next() {
+		var ck auth.CookieMetadata
+		var secInt, httpOnlyInt, sessInt, hasIssueInt int
+		var purposeStr, defectsJSON string
+
+		err := cRows.Scan(
+			&ck.ID, &ck.AssessmentID, &ck.ExecutionID, &ck.TargetID, &ck.Name, &ck.Domain,
+			&ck.Path, &secInt, &httpOnlyInt, &ck.SameSite, &ck.MaxAge, &ck.Expires,
+			&purposeStr, &sessInt, &hasIssueInt, &defectsJSON, &ck.SourceURL, &ck.CreatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		ck.IsSecure = secInt == 1
+		ck.IsHTTPOnly = httpOnlyInt == 1
+		ck.IsSession = sessInt == 1
+		ck.HasSecurityIssue = hasIssueInt == 1
+		ck.Purpose = auth.CookiePurpose(purposeStr)
+		if defectsJSON != "" {
+			_ = json.Unmarshal([]byte(defectsJSON), &ck.SecurityDefects)
+		}
+
+		res.Cookies = append(res.Cookies, ck)
+	}
+
+	// Tokens Query
+	tQuery := `
+		SELECT id, assessment_id, execution_id, target_id, token_type, subtype, name,
+		       location, format, algorithm, evidence_summary, source_asset, created_at
+		FROM assessment_auth_tokens
+		WHERE assessment_id = ?
+	`
+	tArgs := []any{assessmentID}
+	if executionID != "" {
+		tQuery += " AND execution_id = ?"
+		tArgs = append(tArgs, executionID)
+	}
+	tQuery += " ORDER BY token_type ASC, name ASC"
+
+	tRows, err := s.db.Query(tQuery, tArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer tRows.Close()
+
+	for tRows.Next() {
+		var tk auth.TokenArtifact
+		var subStr string
+
+		err := tRows.Scan(
+			&tk.ID, &tk.AssessmentID, &tk.ExecutionID, &tk.TargetID, &tk.TokenType,
+			&subStr, &tk.Name, &tk.Location, &tk.Format, &tk.Algorithm,
+			&tk.EvidenceSummary, &tk.SourceAsset, &tk.CreatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		tk.Subtype = auth.AuthSubtype(subStr)
+		res.Tokens = append(res.Tokens, tk)
+	}
+
+	return res, nil
+}
+
+// GetAuthSummary calculates the authentication summary for an assessment.
+func (s *SQLiteStore) GetAuthSummary(assessmentID string, executionID string) (*auth.AuthSummary, error) {
+	inv, err := s.GetAuthInventory(assessmentID, executionID, "")
+	if err != nil {
+		return nil, err
+	}
+	engine := auth.NewEngine()
+	sum := engine.GenerateSummary(*inv)
+	return &sum, nil
+}
+
 

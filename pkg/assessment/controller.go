@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"felix/pkg/api"
+	"felix/pkg/auth"
 	"felix/pkg/cloud"
 	"felix/pkg/config"
 	"felix/pkg/crawler"
@@ -52,6 +53,7 @@ type ExecutionResult struct {
 	Execution        *AssessmentExecution
 	Report           *report.Report
 	InventorySummary *discovery.InventorySummary
+	AuthSummary      *auth.AuthSummary
 	HTMLPath         string
 	JSONPath         string
 	Error            error
@@ -76,15 +78,15 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 	}
 
 	// 3. Validate Authorization
-	auth, err := c.store.GetAuthorization(assessmentID)
+	authRecord, err := c.store.GetAuthorization(assessmentID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load authorization record: %w", err)
 	}
-	if auth == nil {
+	if authRecord == nil {
 		return nil, fmt.Errorf("security refusal: no authorization record found for assessment %s", asm.Ref)
 	}
 	now := time.Now().UTC()
-	if valid, reason := auth.IsCurrentlyValid(now); !valid {
+	if valid, reason := authRecord.IsCurrentlyValid(now); !valid {
 		return nil, fmt.Errorf("security refusal: invalid authorization: %s", reason)
 	}
 
@@ -268,6 +270,12 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 	var allInventoryAssets []discovery.Asset
 	var allInventoryRelations []discovery.Relation
 
+	authEng := auth.NewEngine()
+	var allAuthSurfaces []auth.AuthSurface
+	var allAuthCookies []auth.CookieMetadata
+	var allAuthTokens []auth.TokenArtifact
+	var allProtectedEndpoints []auth.ProtectedEndpointInfo
+
 	var allReportFindings []report.Finding
 	var allAssessmentFindings []AssessmentFinding
 	totalDiscovered := 0
@@ -360,6 +368,26 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 		)
 		allInventoryAssets = append(allInventoryAssets, targetInv.Assets...)
 		allInventoryRelations = append(allInventoryRelations, targetInv.Relations...)
+
+		// Engine 6: Authentication Intelligence
+		authInv, authFindings := authEng.AnalyzeAuthentication(
+			targetInv,
+			inScopeAssets,
+			res.Header,
+			res.Target,
+			assessmentID,
+			execID,
+			targetRecord.ID,
+		)
+		allAuthSurfaces = append(allAuthSurfaces, authInv.Surfaces...)
+		allAuthCookies = append(allAuthCookies, authInv.Cookies...)
+		allAuthTokens = append(allAuthTokens, authInv.Tokens...)
+		allProtectedEndpoints = append(allProtectedEndpoints, authInv.ProtectedEndpoints...)
+
+		for _, f := range authFindings {
+			allReportFindings = append(allReportFindings, f)
+			allAssessmentFindings = append(allAssessmentFindings, toAssessmentFinding(assessmentID, execID, targetRecord.ID, f))
+		}
 	}
 
 	duration := time.Since(startTime)
@@ -374,6 +402,20 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 		opts.ProgressFunc(fmt.Sprintf("[-] Warning: Failed to persist attack-surface inventory: %v", err))
 	} else if len(allInventoryAssets) > 0 {
 		opts.ProgressFunc(fmt.Sprintf("[+] Attack-surface inventory recorded: %d assets, %d relationships mapped", len(allInventoryAssets), len(allInventoryRelations)))
+	}
+
+	// Persist Authentication Inventory
+	combinedAuthInv := auth.AuthInventory{
+		Surfaces:           allAuthSurfaces,
+		Cookies:            allAuthCookies,
+		Tokens:             allAuthTokens,
+		ProtectedEndpoints: allProtectedEndpoints,
+	}
+	if err := c.store.SaveAuthInventory(combinedAuthInv); err != nil {
+		opts.ProgressFunc(fmt.Sprintf("[-] Warning: Failed to persist authentication inventory: %v", err))
+	} else if len(allAuthSurfaces) > 0 || len(allAuthCookies) > 0 || len(allAuthTokens) > 0 {
+		opts.ProgressFunc(fmt.Sprintf("[+] Authentication intelligence recorded: %d surfaces, %d cookies, %d token artifacts",
+			len(allAuthSurfaces), len(allAuthCookies), len(allAuthTokens)))
 	}
 
 	// Preserve partial results on error or cancellation
@@ -473,11 +515,13 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 		asm.Ref, duration.Round(time.Millisecond), len(allAssessmentFindings), execRecord.RequestCount))
 
 	invSummary, _ := c.store.GetInventorySummary(assessmentID, execID)
+	authSummary := authEng.GenerateSummary(combinedAuthInv)
 
 	return &ExecutionResult{
 		Execution:        execRecord,
 		Report:           &rep,
 		InventorySummary: invSummary,
+		AuthSummary:      &authSummary,
 		HTMLPath:         htmlPath,
 		JSONPath:         jsonPath,
 	}, nil

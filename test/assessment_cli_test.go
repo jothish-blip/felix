@@ -44,11 +44,16 @@ func TestAssessment_CLI_EndToEndLifecycle(t *testing.T) {
 	// 2. Setup mock target server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
+		w.Header().Set("Set-Cookie", "session_id=mock_session_val; Path=/; HttpOnly")
 		fmt.Fprint(w, `
 			<html>
 			<head><title>Test Application</title></head>
 			<body>
 				<a href="/public">Public Page</a>
+				<form action="/login" method="POST">
+					<input type="text" name="username"/>
+					<input type="password" name="password"/>
+				</form>
 				<script>
 					const fake_api = "AKIAIOSFODNN7EXAMPLE";
 				</script>
@@ -188,6 +193,21 @@ func TestAssessment_CLI_EndToEndLifecycle(t *testing.T) {
 	out, code = runFelixWithEnv(t, env, "assessment", "inventory", asmRef, "--json")
 	if code != 0 || !strings.Contains(out, "assets") || !strings.Contains(out, "relations") {
 		t.Fatalf("assessment inventory JSON failed: code=%d, out=%s", code, out)
+	}
+
+	// 14d. Assessment Authentication Intelligence inspection
+	out, code = runFelixWithEnv(t, env, "assessment", "auth", asmRef, "--verbose")
+	if code != 0 || !strings.Contains(out, "AUTHENTICATION INTELLIGENCE") {
+		t.Fatalf("assessment auth failed: code=%d, out=%s", code, out)
+	}
+	if !strings.Contains(out, "LOGIN") || !strings.Contains(out, "session_id") {
+		t.Fatalf("expected LOGIN surface and session_id cookie in auth output: %s", out)
+	}
+
+	// 14e. Assessment Authentication Intelligence JSON inspection
+	out, code = runFelixWithEnv(t, env, "assessment", "auth", asmRef, "--json")
+	if code != 0 || !strings.Contains(out, "surfaces") || !strings.Contains(out, "cookies") {
+		t.Fatalf("assessment auth JSON failed: code=%d, out=%s", code, out)
 	}
 
 	// 15. Assessment Cancel

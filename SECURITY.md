@@ -78,6 +78,14 @@ Felix adheres to a strict zero-transmission policy:
 - Felix never attempts to authenticate to AWS, Stripe, GitHub, or OpenAI using discovered tokens.
 - Secret candidates remain classified as `NOT_VERIFIED` static observations, requiring human engineer validation.
 
+### Authentication Intelligence Safety & Zero-Probing Guarantees (`pkg/auth`)
+Felix implements uncompromising safety rules for authentication auditing:
+- **Zero Credential Probing:** Felix **never** performs dictionary attacks, password spraying, automated logins, or credential stuffing against login surfaces or API gateways.
+- **Zero Form Submissions:** Discovered HTML `<form>` elements and login entrypoints are parsed strictly for structural intelligence; tests enforce `formSubmissionCount == 0`.
+- **Zero Token Replay:** Discovered session cookies, bearer tokens, or OAuth authorization codes are **never** replayed or submitted to probe unauthorized endpoints or simulate account hijacking.
+- **Strict Cookie Secret Redaction:** Cookie values are **never** stored in SQLite or written to reports. Only cookie metadata (name, domain, path, Secure, HttpOnly, SameSite, expiration) and defect observations are retained.
+- **Header-Only Unverified Token Parsing:** Discovered JWT structures are base64-decoded strictly at the header level to evaluate declared algorithms (e.g. flagging `alg=none`), without storing token payloads or verifying against remote signers.
+
 ---
 
 ## 6. Offline Network Safety

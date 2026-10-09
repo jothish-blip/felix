@@ -76,6 +76,7 @@ The codebase is organized into modular packages under `pkg/` and a thin CLI laye
 | **`pkg/api`** | Client route extraction, endpoint classification, authentication reasoning, CORS, and header checks. | `detector.go`, `endpoints.go`, `cors.go`, `graphql.go`, `headers.go`, `client.go`, `finding.go` |
 | **`pkg/assessment`** | Assessment lifecycle, authorization verification, scope/exclusion engine, embedded SQLite store, and finding traceability. | `models.go`, `scope.go`, `store.go`, `controller.go` |
 | **`pkg/discovery`** | Advanced attack-surface intelligence engine: relational graph modeling, domains, applications, APIs, forms, parameters, auth surfaces, cloud services, and passive tech detection. | `types.go`, `domains.go`, `apps.go`, `forms.go`, `parameters.go`, `auth.go`, `tech.go`, `js.go`, `engine.go` |
+| **`pkg/auth`** | Authentication intelligence subsystem: multi-signal classification, passive cookie auditing, token structure analysis, protected endpoint reasoning, and zero credential probing. | `types.go`, `classifier.go`, `cookies.go`, `tokens.go`, `protected.go`, `engine.go`, `future_accounts.go` |
 | **`pkg/report`** | Finding normalization, deduplication, multi-signal correlation, risk scoring, HTML/JSON generation. | `model.go`, `normalize.go`, `dedup.go`, `correlate.go`, `risk.go`, `summary.go`, `html.go`, `json.go` |
 | **`pkg/config`** | Persistent operational configuration storage (`~/.felix/config.json`). | `config.go` |
 | **`test`** | Integration testing, regression corpus, CLI end-to-end validation, and assessment lifecycle tests. | `regression_test.go`, `cli_test.go`, `assessment_cli_test.go` |
@@ -354,6 +355,19 @@ Stage 2 applies Migration `2` to `~/.felix/assessments.db`:
 - `assessment_inventory_assets`: Persistent table storing assets with canonical SHA-256 fingerprint deduplication, type, display name, in-scope flag, status, confidence, structured metadata JSON, evidence JSON, and observation timestamps.
 - `assessment_inventory_relations`: Persistent directed graph table linking `source_asset_id` to `target_asset_id` with `relation_type`, evidence, and confidence.
 - Foreign keys cascade-delete inventory records when an assessment is removed. Indexed on `(assessment_id, asset_type)` and `(assessment_id, canonical_id)` for high-performance querying.
+
+### 5. Authentication Intelligence Subsystem (`pkg/auth`)
+
+Stage 3 introduces a dedicated, evidence-driven authentication intelligence subsystem:
+- **Multi-Signal Classification (`classifier.go`):** Identifies and classifies authentication entrypoints across 10 categories (Login, Registration, Password Reset, MFA, Session, Cookies, Tokens, Auth State, Alternative Paths, Protected Endpoints) using route heuristics, form attributes, parameter combinations, and client SDK signatures (Supabase GoTrue, Firebase Auth, NextAuth, Clerk, Auth0, WebAuthn).
+- **Passive Cookie Security Inspection (`cookies.go`):** Parses Set-Cookie response headers without storing sensitive cookie values. Audits defensive attributes (`Secure`, `HttpOnly`, `SameSite`), determines functional purpose (`SESSION`, `CSRF`, `PREFERENCE`, `TRACKING`), and flags security defects directly into report findings.
+- **Token Artifact Inspection (`tokens.go`):** Detects token parameters and patterns across client assets. Safely parses unverified JWT headers to extract declared algorithms (flagging `alg=none`), checks OAuth PKCE configurations (flagging `plain` challenge methods), and extracts OAuth/recovery tokens with zero credential replay.
+- **Empirical Protected Endpoint Reasoning (`protected.go`):** Assesses access protection based on empirical HTTP responses (401 with `WWW-Authenticate` challenges, 403 Forbidden, 302/307 redirects to login, 200 anonymous accessible).
+- **Database Schema Migration v3:**
+  - `assessment_auth_surfaces`: Stores classified authentication surfaces with category, subtype, canonical ID, confidence, auth state, and evidence.
+  - `assessment_auth_cookies`: Records cookie metadata, security flags, and defect lists (zero secret value persistence).
+  - `assessment_auth_tokens`: Stores token structure observations, algorithm declarations, and locations.
+- **Future Test Account Architecture (`future_accounts.go`):** Complete architectural abstraction ready for Stage 4+ authenticated auditing with client-provided credentials without brittle automation or invasive state modification.
 
 ---
 

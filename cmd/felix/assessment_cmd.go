@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"felix/pkg/assessment"
+	"felix/pkg/auth"
 	"github.com/google/uuid"
 )
 
@@ -55,6 +56,8 @@ func runAssessment(args []string) int {
 		return runAssessmentFindings(subArgs)
 	case "inventory":
 		return runAssessmentInventory(subArgs)
+	case "auth":
+		return runAssessmentAuth(subArgs)
 	case "reports":
 		return runAssessmentReports(subArgs)
 	case "cancel":
@@ -79,6 +82,7 @@ func printAssessmentHelp() {
 	fmt.Println("  run          Execute authorized assessment against approved targets")
 	fmt.Println("  findings     Inspect findings recorded for an assessment")
 	fmt.Println("  inventory    Inspect discovered attack-surface assets and relationships")
+	fmt.Println("  auth         Inspect discovered authentication surfaces, cookies, tokens, and protection")
 	fmt.Println("  reports      List generated report files for an assessment")
 	fmt.Println("  cancel       Cancel an active or pending assessment")
 	fmt.Println("\nExamples:")
@@ -86,6 +90,8 @@ func printAssessmentHelp() {
 	fmt.Println("  felix assessment authorize <asm-ref> --authorizer \"Jane Doe\" --role \"CISO\" --reference \"AUTH-001\" --valid-days 30")
 	fmt.Println("  felix assessment run <asm-ref> --concurrency 5")
 	fmt.Println("  felix assessment findings <asm-ref>")
+	fmt.Println("  felix assessment inventory <asm-ref>")
+	fmt.Println("  felix assessment auth <asm-ref> --verbose")
 	fmt.Println("  felix assessment reports <asm-ref>")
 }
 
@@ -1457,6 +1463,182 @@ func runAssessmentInventory(args []string) int {
 			a.Type, a.DiscoveryStatus, a.Confidence, a.CanonicalID, scopeTag, a.DiscoveryMethod)
 	}
 	_ = w.Flush()
+	return 0
+}
+
+func runAssessmentAuth(args []string) int {
+	var (
+		assessmentRef  string
+		categoryFilter string
+		jsonOutput     bool
+		verbose        bool
+	)
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--assessment", "--id", "--ref":
+			if i+1 < len(args) {
+				assessmentRef = args[i+1]
+				i++
+			}
+		case "--category", "-c":
+			if i+1 < len(args) {
+				categoryFilter = strings.ToUpper(args[i+1])
+				i++
+			}
+		case "--json":
+			jsonOutput = true
+		case "--verbose", "-v":
+			verbose = true
+		case "--help", "-h":
+			fmt.Println("Usage: felix assessment auth <assessment-ref> [flags]")
+			fmt.Println("\nFlags:")
+			fmt.Println("  --category, -c <string>  Filter by category (LOGIN, REGISTRATION, PASSWORD_RESET, MFA, SESSION, OAUTH_SSO, ALTERNATIVE, PROTECTED_ENDPOINT)")
+			fmt.Println("  --json                   Output authentication intelligence as JSON")
+			fmt.Println("  --verbose, -v            Display extended evidence details and auth state")
+			return 0
+		default:
+			if !strings.HasPrefix(arg, "-") && assessmentRef == "" {
+				assessmentRef = arg
+			}
+		}
+	}
+
+	if assessmentRef == "" {
+		fmt.Fprintf(os.Stderr, "[-] Error: assessment ID or Ref is required\n")
+		return 2
+	}
+
+	store, err := getAssessmentStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Database error: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+
+	asm, err := store.GetAssessment(assessmentRef)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Assessment %q not found: %v\n", assessmentRef, err)
+		return 1
+	}
+
+	var authInv *auth.AuthInventory
+	authInv, err = store.GetAuthInventory(asm.ID, "", categoryFilter)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Failed to fetch auth inventory: %v\n", err)
+		return 1
+	}
+
+	authSummary, _ := store.GetAuthSummary(asm.ID, "")
+
+	if jsonOutput {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		output := map[string]any{
+			"assessment_ref":      asm.Ref,
+			"assessment_id":       asm.ID,
+			"summary":             authSummary,
+			"surfaces":            authInv.Surfaces,
+			"cookies":             authInv.Cookies,
+			"tokens":              authInv.Tokens,
+			"protected_endpoints": authInv.ProtectedEndpoints,
+		}
+		_ = enc.Encode(output)
+		return 0
+	}
+
+	fmt.Println("===========================================================")
+	fmt.Printf("  FELIX :: AUTHENTICATION INTELLIGENCE: %s\n", asm.Ref)
+	fmt.Printf("  Assessment Name: %s | Client ID: %s\n", asm.Name, asm.ClientID)
+	fmt.Println("===========================================================")
+	if authSummary != nil {
+		fmt.Printf("  Total Surfaces:         %d\n", authSummary.TotalSurfaces)
+		fmt.Printf("  Session / Insecure Ck:  %d / %d\n", authSummary.SessionCookies, authSummary.InsecureCookies)
+		fmt.Printf("  Token Artifacts:        %d\n", authSummary.TotalTokens)
+		fmt.Printf("  Protected Endpoints:    %d\n", authSummary.ProtectedEndpoints)
+		if len(authSummary.SurfacesByCategory) > 0 {
+			fmt.Print("  Category Breakdown:     ")
+			var catParts []string
+			for k, v := range authSummary.SurfacesByCategory {
+				catParts = append(catParts, fmt.Sprintf("%s=%d", k, v))
+			}
+			fmt.Println(strings.Join(catParts, ", "))
+		}
+		fmt.Println("-----------------------------------------------------------")
+	}
+
+	// 1. Surfaces Table
+	if len(authInv.Surfaces) > 0 {
+		fmt.Printf("\n[+] AUTHENTICATION SURFACES (%d)\n", len(authInv.Surfaces))
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		if verbose {
+			fmt.Fprintln(w, "CATEGORY\tSUBTYPE\tCONFIDENCE\tSTATE\tIDENTIFIER\tDISCOVERY METHOD\tEXPLANATION")
+			for _, s := range authInv.Surfaces {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					s.Category, s.Subtype, s.Confidence, s.AuthState, s.Identifier, s.DiscoveryMethod, s.Explanation)
+			}
+		} else {
+			fmt.Fprintln(w, "CATEGORY\tSUBTYPE\tCONFIDENCE\tIDENTIFIER\tDISCOVERY METHOD")
+			for _, s := range authInv.Surfaces {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+					s.Category, s.Subtype, s.Confidence, s.Identifier, s.DiscoveryMethod)
+			}
+		}
+		_ = w.Flush()
+	} else {
+		fmt.Println("\nNo authentication surfaces discovered matching criteria.")
+	}
+
+	// 2. Cookies Table
+	if len(authInv.Cookies) > 0 {
+		fmt.Printf("\n[+] COOKIE SECURITY ANALYSIS (%d)\n", len(authInv.Cookies))
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "COOKIE NAME\tPURPOSE\tSECURE\tHTTPONLY\tSAMESITE\tDEFECTS")
+		for _, c := range authInv.Cookies {
+			defects := "-"
+			if len(c.SecurityDefects) > 0 {
+				defects = strings.Join(c.SecurityDefects, "; ")
+			}
+			fmt.Fprintf(w, "%s\t%s\t%t\t%t\t%s\t%s\n",
+				c.Name, c.Purpose, c.IsSecure, c.IsHTTPOnly, c.SameSite, defects)
+		}
+		_ = w.Flush()
+	}
+
+	// 3. Tokens Table
+	if len(authInv.Tokens) > 0 {
+		fmt.Printf("\n[+] TOKEN ARTIFACTS (%d)\n", len(authInv.Tokens))
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "TYPE\tSUBTYPE\tNAME\tLOCATION\tALGORITHM")
+		for _, t := range authInv.Tokens {
+			alg := t.Algorithm
+			if alg == "" {
+				alg = "-"
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+				t.TokenType, t.Subtype, t.Name, t.Location, alg)
+		}
+		_ = w.Flush()
+	}
+
+	// 4. Protected Endpoints Table
+	if len(authInv.ProtectedEndpoints) > 0 {
+		fmt.Printf("\n[+] PROTECTED ENDPOINTS (%d)\n", len(authInv.ProtectedEndpoints))
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "METHOD\tENDPOINT\tSTATUS\tPROTECTION\tAUTH CHALLENGE")
+		for _, p := range authInv.ProtectedEndpoints {
+			challenge := p.AuthChallenge
+			if challenge == "" {
+				challenge = "-"
+			}
+			fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\n",
+				p.Method, p.EndpointPath, p.ObservedStatus, p.ProtectionStatus, challenge)
+		}
+		_ = w.Flush()
+	}
+
+	fmt.Println()
 	return 0
 }
 
