@@ -1,10 +1,12 @@
 package businesslogic
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -65,17 +67,17 @@ func (e *Engine) ModelWorkflows(ctx context.Context, actx *AssessmentContext) []
 	var cartEP, checkoutEP, payEP, downloadEP *DiscoveredEndpoint
 	for i := range actx.Endpoints {
 		ep := &actx.Endpoints[i]
-		lower := strings.ToLower(ep.Path)
+		lower := strings.ToLower(ep.Path + " " + ep.Type)
 		if strings.Contains(lower, "cart") || strings.Contains(lower, "item") {
 			cartEP = ep
 		}
-		if strings.Contains(lower, "checkout") || strings.Contains(lower, "order") {
+		if strings.Contains(lower, "checkout") || strings.Contains(lower, "order") || strings.Contains(lower, "step") {
 			checkoutEP = ep
 		}
 		if strings.Contains(lower, "pay") || strings.Contains(lower, "billing") {
 			payEP = ep
 		}
-		if strings.Contains(lower, "download") || strings.Contains(lower, "fulfill") || strings.Contains(lower, "receipt") {
+		if strings.Contains(lower, "download") || strings.Contains(lower, "fulfill") || strings.Contains(lower, "receipt") || strings.Contains(lower, "terminal") {
 			downloadEP = ep
 		}
 	}
@@ -153,7 +155,7 @@ func (e *Engine) ModelWorkflows(ctx context.Context, actx *AssessmentContext) []
 	var draftEP, submitEP, approveEP, publishEP *DiscoveredEndpoint
 	for i := range actx.Endpoints {
 		ep := &actx.Endpoints[i]
-		lower := strings.ToLower(ep.Path)
+		lower := strings.ToLower(ep.Path + " " + ep.Type)
 		if strings.Contains(lower, "draft") || strings.Contains(lower, "create") {
 			draftEP = ep
 		}
@@ -209,14 +211,15 @@ func (e *Engine) ModelWorkflows(ctx context.Context, actx *AssessmentContext) []
 		}
 	}
 
-	// 3. Fallback from any observed sequential endpoints if >= 2 endpoints exist
-	if len(workflows) == 0 && len(actx.Endpoints) >= 2 {
+	// 3. Fallback from any observed sequential endpoints if >= 1 endpoints exist
+	if len(workflows) == 0 && len(actx.Endpoints) > 0 {
 		wf := Workflow{
 			ID:             "WF-DISCOVERED-FLOW",
 			Name:           "Discovered Multi-Step Application Flow",
 			Description:    "Inferred multi-step workflow from discovered endpoints",
 			EvidenceSource: SourceInferredHypothesis,
 			Confidence:     "MEDIUM",
+			IsPartial:      len(actx.Endpoints) < 2,
 			States:         []string{"INITIATED", "IN_PROGRESS", "TERMINAL"},
 		}
 		for i, ep := range actx.Endpoints {
@@ -441,101 +444,141 @@ func (e *Engine) evalWorkflowCircumvention(ctx context.Context, actx *Assessment
 
 	r.Endpoint = terminalStep.Endpoint
 	r.Method = terminalStep.Method
+	if r.Method == "" {
+		r.Method = "GET"
+	}
 
-	if actx.SyntheticFixture {
-		// Fixture test case: Circumvention bypass confirmed
-		r.VerificationState = StateVerified
-		r.Severity = report.SeverityHigh
+	probeURL := buildTargetURL(actx.BaseURL, terminalStep.Endpoint)
+	if actx.IsExcluded != nil && actx.IsExcluded(probeURL) {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("Target URL %s is excluded by assessment scope", probeURL)
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+	if actx.IsAllowed != nil && !actx.IsAllowed(probeURL) {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("Target URL %s is out of authorized assessment scope", probeURL)
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+
+	req, err := http.NewRequestWithContext(ctx, r.Method, probeURL, nil)
+	if err != nil {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("Failed to construct probe request: %v", err)
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+	req.Header.Set("User-Agent", e.config.UserAgent)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("Network error executing out-of-order probe: %v", err)
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+	defer resp.Body.Close()
+	r.ObservedStatus = resp.StatusCode
+
+	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 65536))
+	bodyStr := string(bodyBytes)
+	bodyLower := strings.ToLower(bodyStr)
+
+	// 400, 401, 403, 404, 409, 412, 422 indicates prerequisite enforced
+	if resp.StatusCode == 400 || resp.StatusCode == 401 || resp.StatusCode == 403 ||
+		resp.StatusCode == 404 || resp.StatusCode == 409 || resp.StatusCode == 412 || resp.StatusCode == 422 {
+		r.VerificationState = StateNotVulnerable
+		r.Severity = report.SeverityInfo
 		r.Confidence = report.ConfidenceHigh
-		r.ObservedStatus = 200
-		r.StateBefore = "UNPAID"
-		r.StateAfter = "FULFILLED"
-		r.EvidenceSummary = fmt.Sprintf("Invoking terminal step '%s' (%s %s) succeeded without fulfilling prerequisite '%s'. Protected resource was granted without payment confirmation.",
-			terminalStep.Name, terminalStep.Method, terminalStep.Endpoint, strings.Join(terminalStep.Prerequisites, ", "))
-		r.EvidenceDetails = map[string]string{
-			"workflow":        wf.Name,
-			"terminal_step":   terminalStep.Name,
-			"prerequisites":   strings.Join(terminalStep.Prerequisites, ", "),
-			"observed_status": "200",
-			"violation":       "WORKFLOW_CIRCUMVENTION_CONFIRMED",
-		}
-		fnd := createBusinessLogicFinding(actx, r, CategoryWorkflowCircumvention,
-			"Workflow Circumvention: Protected Action Accessible Without Required Prerequisite",
-			r.EvidenceSummary, report.SeverityHigh, 85,
-			"Enforce mandatory server-side precondition checks at every terminal workflow action; reject requests when required preceding states are missing.")
-		r.Finding = fnd
-		*findings = append(*findings, *fnd)
-		cov.Verified++
-	} else {
-		// Live assessment probe: execute out-of-order request to terminal step
-		probeURL := buildTargetURL(actx.BaseURL, terminalStep.Endpoint)
-		if actx.IsExcluded != nil && actx.IsExcluded(probeURL) {
-			r.VerificationState = StateInconclusive
-			r.Severity = report.SeverityInfo
-			r.EvidenceSummary = fmt.Sprintf("Target URL %s is excluded by assessment scope", probeURL)
-			cov.Inconclusive++
-			coverage[catKey] = cov
-			*results = append(*results, r)
-			return
-		}
+		r.EvidenceSummary = fmt.Sprintf("Terminal action %s %s correctly rejected out-of-order invocation with HTTP %d. Prerequisites enforced.",
+			terminalStep.Method, terminalStep.Endpoint, resp.StatusCode)
+		cov.NotVulnerable++
+	} else if resp.StatusCode == 200 || resp.StatusCode == 201 {
+		hasProof := strings.Contains(bodyLower, "fulfilled") || strings.Contains(bodyLower, "paid") ||
+			strings.Contains(bodyLower, "order_id") || strings.Contains(bodyLower, "receipt") ||
+			strings.Contains(bodyLower, "download") || strings.Contains(bodyLower, "success")
 
-		req, err := http.NewRequestWithContext(ctx, terminalStep.Method, probeURL, nil)
-		if err != nil {
-			r.VerificationState = StateInconclusive
-			r.Severity = report.SeverityInfo
-			cov.Inconclusive++
-			coverage[catKey] = cov
-			*results = append(*results, r)
-			return
-		}
-		req.Header.Set("User-Agent", e.config.UserAgent)
-
-		resp, err := client.Do(req)
-		if err != nil {
-			r.VerificationState = StateInconclusive
-			r.Severity = report.SeverityInfo
-			r.EvidenceSummary = fmt.Sprintf("Network error executing out-of-order probe: %v", err)
-			cov.Inconclusive++
-		} else {
-			defer resp.Body.Close()
-			r.ObservedStatus = resp.StatusCode
-
-			// In live testing: 401/403/400/409/412/422 indicates proper prerequisite enforcement
-			if resp.StatusCode == 401 || resp.StatusCode == 403 || resp.StatusCode == 400 ||
-				resp.StatusCode == 409 || resp.StatusCode == 412 || resp.StatusCode == 422 {
-				r.VerificationState = StateNotVulnerable
-				r.Severity = report.SeverityInfo
-				r.Confidence = report.ConfidenceHigh
-				r.EvidenceSummary = fmt.Sprintf("Terminal action %s %s correctly rejected out-of-order invocation with HTTP %d. Prerequisites enforced.",
-					terminalStep.Method, terminalStep.Endpoint, resp.StatusCode)
-				cov.NotVulnerable++
-			} else if resp.StatusCode == 200 {
-				// Candidate: Server returned 200, but without corroborating fulfillment state, do NOT claim VERIFIED!
+		if hasProof {
+			if wf.EvidenceSource == SourceInferredHypothesis {
 				r.VerificationState = StateCandidate
 				r.Severity = report.SeverityMedium
 				r.Confidence = report.ConfidenceMedium
-				r.EvidenceSummary = fmt.Sprintf("Terminal action %s %s returned HTTP 200 on out-of-order invocation, but fulfillment outcome is not confirmed. Requires business corroboration.",
-					terminalStep.Method, terminalStep.Endpoint)
+				r.EvidenceSummary = fmt.Sprintf("Terminal action %s %s returned fulfillment proof, but workflow '%s' is an unconfirmed inferred hypothesis.",
+					terminalStep.Method, terminalStep.Endpoint, wf.Name)
 				r.EvidenceDetails = map[string]string{
-					"status": "200",
-					"reason": "HTTP_200_WITHOUT_FULFILLMENT_PROOF",
+					"workflow":        wf.Name,
+					"terminal_step":   terminalStep.Name,
+					"observed_status": fmt.Sprintf("%d", resp.StatusCode),
+					"hypothesis":      "INFERRED_WORKFLOW_REQUIRES_OPERATOR_CORROBORATION",
 				}
 				fnd := createBusinessLogicFinding(actx, r, CategoryWorkflowCircumvention,
-					"Potential Workflow Circumvention: Terminal Endpoint Accepted Out-of-Order Invocation (Candidate)",
+					"Potential Workflow Circumvention on Inferred Workflow (Candidate)",
 					r.EvidenceSummary, report.SeverityMedium, 60,
-					"Validate workflow state on the server before granting access or returning successful fulfillment response.")
+					"Verify whether skipped steps are mandatory business requirements before enforcing state gate.")
 				r.Finding = fnd
 				*findings = append(*findings, *fnd)
 				cov.Candidates++
 			} else {
-				r.VerificationState = StateObserved
-				r.Severity = report.SeverityInfo
-				r.Confidence = report.ConfidenceLow
-				r.EvidenceSummary = fmt.Sprintf("Terminal action %s %s returned HTTP %d on out-of-order probe.",
-					terminalStep.Method, terminalStep.Endpoint, resp.StatusCode)
-				cov.Observations++
+				r.VerificationState = StateVerified
+				r.Severity = report.SeverityHigh
+				r.Confidence = report.ConfidenceHigh
+				r.StateBefore = "UNPAID"
+				r.StateAfter = "FULFILLED"
+				r.EvidenceSummary = fmt.Sprintf("Invoking terminal step '%s' (%s %s) succeeded without fulfilling prerequisite '%s'. Protected outcome granted without prerequisite confirmation.",
+					terminalStep.Name, terminalStep.Method, terminalStep.Endpoint, strings.Join(terminalStep.Prerequisites, ", "))
+				r.EvidenceDetails = map[string]string{
+					"workflow":        wf.Name,
+					"terminal_step":   terminalStep.Name,
+					"prerequisites":   strings.Join(terminalStep.Prerequisites, ", "),
+					"observed_status": fmt.Sprintf("%d", resp.StatusCode),
+					"violation":       "WORKFLOW_CIRCUMVENTION_CONFIRMED",
+				}
+				fnd := createBusinessLogicFinding(actx, r, CategoryWorkflowCircumvention,
+					"Workflow Circumvention: Protected Action Accessible Without Required Prerequisite",
+					r.EvidenceSummary, report.SeverityHigh, 85,
+					"Enforce mandatory server-side precondition checks at every terminal workflow action; reject requests when required preceding states are missing.")
+				r.Finding = fnd
+				*findings = append(*findings, *fnd)
+				cov.Verified++
 			}
+		} else {
+			r.VerificationState = StateCandidate
+			r.Severity = report.SeverityMedium
+			r.Confidence = report.ConfidenceMedium
+			r.EvidenceSummary = fmt.Sprintf("Terminal action %s %s returned HTTP %d on out-of-order invocation, but fulfillment outcome is not confirmed in response. Candidate finding.",
+				terminalStep.Method, terminalStep.Endpoint, resp.StatusCode)
+			r.EvidenceDetails = map[string]string{
+				"status": fmt.Sprintf("%d", resp.StatusCode),
+				"reason": "HTTP_SUCCESS_WITHOUT_FULFILLMENT_PROOF",
+			}
+			fnd := createBusinessLogicFinding(actx, r, CategoryWorkflowCircumvention,
+				"Potential Workflow Circumvention: Terminal Endpoint Accepted Out-of-Order Invocation (Candidate)",
+				r.EvidenceSummary, report.SeverityMedium, 60,
+				"Validate workflow state on the server before granting access or returning successful fulfillment response.")
+			r.Finding = fnd
+			*findings = append(*findings, *fnd)
+			cov.Candidates++
 		}
+	} else {
+		r.VerificationState = StateObserved
+		r.Severity = report.SeverityInfo
+		r.Confidence = report.ConfidenceLow
+		r.EvidenceSummary = fmt.Sprintf("Terminal action %s %s returned HTTP %d on out-of-order probe.",
+			terminalStep.Method, terminalStep.Endpoint, resp.StatusCode)
+		cov.Observations++
 	}
 
 	coverage[catKey] = cov
@@ -560,40 +603,148 @@ func (e *Engine) evalUnexpectedStateTransitions(ctx context.Context, actx *Asses
 		CreatedAt:    time.Now().UTC(),
 	}
 
-	if actx.SyntheticFixture {
-		r.VerificationState = StateVerified
-		r.Severity = report.SeverityHigh
+	// Safety gating: Mutating state-changing checks blocked by default
+	if !e.config.AllowStateChanging {
+		r.VerificationState = StateBlockedBySafety
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("State-changing transition testing on %s skipped by safety policy (read-only mode active)", wf.Name)
+		cov.Blocked++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+
+	step := wf.transitionStep()
+	if step == nil {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("Workflow %s has no state transition step to evaluate", wf.Name)
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+
+	r.Endpoint = step.Endpoint
+	r.Method = "POST"
+	if step.Method != "" {
+		r.Method = step.Method
+	}
+
+	probeURL := buildTargetURL(actx.BaseURL, step.Endpoint)
+	if actx.IsExcluded != nil && actx.IsExcluded(probeURL) {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("Target URL %s is excluded by assessment scope", probeURL)
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+	if actx.IsAllowed != nil && !actx.IsAllowed(probeURL) {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("Target URL %s is out of authorized scope", probeURL)
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+
+	payload := []byte(`{"status":"COMPLETED","from":"CANCELLED","action":"complete"}`)
+	req, err := http.NewRequestWithContext(ctx, r.Method, probeURL, bytes.NewReader(payload))
+	if err != nil {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("Failed to construct probe request: %v", err)
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", e.config.UserAgent)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("Network error executing state jump probe: %v", err)
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+	defer resp.Body.Close()
+	r.ObservedStatus = resp.StatusCode
+
+	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 65536))
+	bodyStr := string(bodyBytes)
+	bodyLower := strings.ToLower(bodyStr)
+
+	if resp.StatusCode == 400 || resp.StatusCode == 401 || resp.StatusCode == 403 ||
+		resp.StatusCode == 404 || resp.StatusCode == 409 || resp.StatusCode == 412 || resp.StatusCode == 422 {
+		r.VerificationState = StateNotVulnerable
+		r.Severity = report.SeverityInfo
 		r.Confidence = report.ConfidenceHigh
-		r.StateBefore = "CANCELLED"
-		r.StateAfter = "COMPLETED"
-		r.ObservedStatus = 200
-		r.EvidenceSummary = fmt.Sprintf("Prohibited state machine transition from 'CANCELLED' to 'COMPLETED' was accepted and committed on workflow %s without required approval or re-activation.", wf.Name)
-		r.EvidenceDetails = map[string]string{
-			"workflow":     wf.Name,
-			"state_before": "CANCELLED",
-			"state_after":  "COMPLETED",
-			"defect":       "PROHIBITED_STATE_TRANSITION_PERMITTED",
-		}
-		fnd := createBusinessLogicFinding(actx, r, CategoryUnexpectedStateTransition,
-			"Unexpected State Transition: Prohibited State Machine Jump Permitted",
-			r.EvidenceSummary, report.SeverityHigh, 80,
-			"Implement a strict finite state machine (FSM) on the server; disallow direct transitions between terminal, cancelled, or inactive states to completed.")
-		r.Finding = fnd
-		*findings = append(*findings, *fnd)
-		cov.Verified++
-	} else {
-		// Non-fixture / Live testing: check if state changing tests are permitted
-		if !e.config.AllowStateChanging {
-			r.VerificationState = StateBlockedBySafety
-			r.Severity = report.SeverityInfo
-			r.EvidenceSummary = fmt.Sprintf("State-changing transition testing on %s skipped by safety policy (read-only mode active)", wf.Name)
-			cov.Blocked++
+		r.EvidenceSummary = fmt.Sprintf("Server correctly rejected prohibited state jump on %s with HTTP %d.", step.Endpoint, resp.StatusCode)
+		cov.NotVulnerable++
+	} else if resp.StatusCode == 200 || resp.StatusCode == 201 {
+		hasJumpProof := strings.Contains(bodyLower, `"completed"`) || strings.Contains(bodyLower, "state_changed") ||
+			strings.Contains(bodyLower, "transition_success")
+
+		if hasJumpProof {
+			if wf.EvidenceSource == SourceInferredHypothesis {
+				r.VerificationState = StateCandidate
+				r.Severity = report.SeverityMedium
+				r.Confidence = report.ConfidenceMedium
+				r.EvidenceSummary = fmt.Sprintf("State transition on inferred workflow %s returned COMPLETED, but transition rule is hypothesized.", wf.Name)
+				cov.Candidates++
+				fnd := createBusinessLogicFinding(actx, r, CategoryUnexpectedStateTransition,
+					"Potential Unexpected State Transition (Candidate)",
+					r.EvidenceSummary, report.SeverityMedium, 60,
+					"Validate finite state machine rules before allowing direct transitions.")
+				r.Finding = fnd
+				*findings = append(*findings, *fnd)
+			} else {
+				r.VerificationState = StateVerified
+				r.Severity = report.SeverityHigh
+				r.Confidence = report.ConfidenceHigh
+				r.StateBefore = "CANCELLED"
+				r.StateAfter = "COMPLETED"
+				r.EvidenceSummary = fmt.Sprintf("Prohibited state machine transition from 'CANCELLED' to 'COMPLETED' was accepted and committed on workflow %s.", wf.Name)
+				r.EvidenceDetails = map[string]string{
+					"workflow":     wf.Name,
+					"state_before": "CANCELLED",
+					"state_after":  "COMPLETED",
+					"defect":       "PROHIBITED_STATE_TRANSITION_PERMITTED",
+				}
+				fnd := createBusinessLogicFinding(actx, r, CategoryUnexpectedStateTransition,
+					"Unexpected State Transition: Prohibited State Machine Jump Permitted",
+					r.EvidenceSummary, report.SeverityHigh, 80,
+					"Implement a strict finite state machine (FSM) on the server; disallow direct transitions between terminal, cancelled, or inactive states to completed.")
+				r.Finding = fnd
+				*findings = append(*findings, *fnd)
+				cov.Verified++
+			}
 		} else {
-			r.VerificationState = StateInconclusive
-			r.Severity = report.SeverityInfo
-			r.EvidenceSummary = "Live state machine jump testing requires authenticated test fixture and state inspection API; evaluated offline as inconclusive"
-			cov.Inconclusive++
+			r.VerificationState = StateCandidate
+			r.Severity = report.SeverityMedium
+			r.Confidence = report.ConfidenceMedium
+			r.EvidenceSummary = fmt.Sprintf("State jump probe on %s returned HTTP %d, but resulting state was not authoritatively observable.", step.Endpoint, resp.StatusCode)
+			cov.Candidates++
+			fnd := createBusinessLogicFinding(actx, r, CategoryUnexpectedStateTransition,
+				"Unconfirmed State Transition: Success Status Without Observable State (Candidate)",
+				r.EvidenceSummary, report.SeverityMedium, 60,
+				"Verify state transitions explicitly on the server before acknowledging completion.")
+			r.Finding = fnd
+			*findings = append(*findings, *fnd)
 		}
+	} else {
+		r.VerificationState = StateObserved
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("State transition probe on %s returned HTTP %d.", step.Endpoint, resp.StatusCode)
+		cov.Observations++
 	}
 
 	coverage[catKey] = cov
@@ -618,30 +769,132 @@ func (e *Engine) evalStateManipulation(ctx context.Context, actx *AssessmentCont
 		CreatedAt:    time.Now().UTC(),
 	}
 
-	if actx.SyntheticFixture {
-		r.VerificationState = StateVerified
-		r.Severity = report.SeverityHigh
-		r.Confidence = report.ConfidenceHigh
-		r.ObservedStatus = 200
-		r.EvidenceSummary = fmt.Sprintf("Client-supplied parameter 'status=PAID' and 'total_amount=0.01' in checkout request overrode server-authoritative billing calculation on workflow %s.", wf.Name)
-		r.EvidenceDetails = map[string]string{
-			"workflow":        wf.Name,
-			"injected_fields": "status=PAID, total_amount=0.01",
-			"defect":          "CLIENT_OVERRIDE_SERVER_STATE",
-		}
-		fnd := createBusinessLogicFinding(actx, r, CategoryStateManipulation,
-			"State Manipulation: Client Parameters Override Authoritative Server State",
-			r.EvidenceSummary, report.SeverityHigh, 85,
-			"Ignore client-supplied status, price, and role flags during state updates; calculate billing totals and verify workflow state exclusively on the server.")
-		r.Finding = fnd
-		*findings = append(*findings, *fnd)
-		cov.Verified++
-	} else {
-		// Live check: inspect if endpoints accept state fields
+	step := wf.calculationStep()
+	if step == nil {
 		r.VerificationState = StateInconclusive
 		r.Severity = report.SeverityInfo
-		r.EvidenceSummary = fmt.Sprintf("Live evaluation of state parameter manipulation requires state inspection endpoints; not executed in non-destructive mode")
+		r.EvidenceSummary = fmt.Sprintf("Workflow %s has no calculation/pricing step to evaluate", wf.Name)
 		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+
+	r.Endpoint = step.Endpoint
+	r.Method = "POST"
+	if step.Method != "" {
+		r.Method = step.Method
+	}
+
+	probeURL := buildTargetURL(actx.BaseURL, step.Endpoint)
+	if actx.IsExcluded != nil && actx.IsExcluded(probeURL) {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("Target URL %s is excluded by assessment scope", probeURL)
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+	if actx.IsAllowed != nil && !actx.IsAllowed(probeURL) {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("Target URL %s is out of authorized scope", probeURL)
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+
+	payload := []byte(`{"status":"PAID","total_amount":0.01,"price":0.01,"role":"admin"}`)
+	req, err := http.NewRequestWithContext(ctx, r.Method, probeURL, bytes.NewReader(payload))
+	if err != nil {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", e.config.UserAgent)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("Network error executing state manipulation probe: %v", err)
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+	defer resp.Body.Close()
+	r.ObservedStatus = resp.StatusCode
+
+	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 65536))
+	bodyStr := string(bodyBytes)
+	bodyLower := strings.ToLower(bodyStr)
+
+	if resp.StatusCode == 400 || resp.StatusCode == 401 || resp.StatusCode == 403 || resp.StatusCode == 422 {
+		r.VerificationState = StateNotVulnerable
+		r.Severity = report.SeverityInfo
+		r.Confidence = report.ConfidenceHigh
+		r.EvidenceSummary = fmt.Sprintf("Server correctly rejected client-supplied state fields on %s with HTTP %d.", step.Endpoint, resp.StatusCode)
+		cov.NotVulnerable++
+	} else if resp.StatusCode == 200 || resp.StatusCode == 201 {
+		hasOverride := strings.Contains(bodyLower, "0.01") || (strings.Contains(bodyLower, `"paid"`) && !strings.Contains(bodyLower, `"unpaid"`))
+		hasIgnored := strings.Contains(bodyLower, "ignored") || strings.Contains(bodyLower, "recalculated")
+
+		if hasOverride && !hasIgnored {
+			if wf.EvidenceSource == SourceInferredHypothesis {
+				r.VerificationState = StateCandidate
+				r.Severity = report.SeverityMedium
+				r.Confidence = report.ConfidenceMedium
+				r.EvidenceSummary = fmt.Sprintf("Client parameters altered response on inferred workflow %s, but workflow rules are unconfirmed.", wf.Name)
+				cov.Candidates++
+				fnd := createBusinessLogicFinding(actx, r, CategoryStateManipulation,
+					"Potential State Manipulation (Candidate)",
+					r.EvidenceSummary, report.SeverityMedium, 60,
+					"Ensure server-side validation ignores client-supplied state parameters.")
+				r.Finding = fnd
+				*findings = append(*findings, *fnd)
+			} else {
+				r.VerificationState = StateVerified
+				r.Severity = report.SeverityHigh
+				r.Confidence = report.ConfidenceHigh
+				r.EvidenceSummary = fmt.Sprintf("Client-supplied parameter 'status=PAID' and 'total_amount=0.01' in request to %s overrode server-authoritative state on workflow %s.", step.Endpoint, wf.Name)
+				r.EvidenceDetails = map[string]string{
+					"workflow":        wf.Name,
+					"endpoint":        step.Endpoint,
+					"injected_fields": "status=PAID, total_amount=0.01",
+					"defect":          "CLIENT_OVERRIDE_SERVER_STATE",
+				}
+				fnd := createBusinessLogicFinding(actx, r, CategoryStateManipulation,
+					"State Manipulation: Client Parameters Override Authoritative Server State",
+					r.EvidenceSummary, report.SeverityHigh, 85,
+					"Ignore client-supplied status, price, and role flags during state updates; calculate billing totals and verify workflow state exclusively on the server.")
+				r.Finding = fnd
+				*findings = append(*findings, *fnd)
+				cov.Verified++
+			}
+		} else if hasIgnored || strings.Contains(bodyLower, "total") {
+			r.VerificationState = StateNotVulnerable
+			r.Severity = report.SeverityInfo
+			r.Confidence = report.ConfidenceHigh
+			r.EvidenceSummary = fmt.Sprintf("Server accepted request at %s but ignored client-supplied state override fields, maintaining server-calculated values.", step.Endpoint)
+			cov.NotVulnerable++
+		} else {
+			r.VerificationState = StateCandidate
+			r.Severity = report.SeverityMedium
+			r.Confidence = report.ConfidenceMedium
+			r.EvidenceSummary = fmt.Sprintf("Server returned HTTP %d at %s, but state manipulation effect was unobservable in response.", resp.StatusCode, step.Endpoint)
+			cov.Candidates++
+		}
+	} else {
+		r.VerificationState = StateObserved
+		r.Severity = report.SeverityInfo
+		cov.Observations++
 	}
 
 	coverage[catKey] = cov
@@ -666,38 +919,137 @@ func (e *Engine) evalUnauthorizedWorkflowAccess(ctx context.Context, actx *Asses
 		CreatedAt:    time.Now().UTC(),
 	}
 
-	if actx.SyntheticFixture {
-		r.VerificationState = StateVerified
-		r.Severity = report.SeverityHigh
+	if len(actx.Identities) < 2 && !actx.SyntheticFixture {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = "Evaluating unauthorized workflow access requires at least two distinct authorized role or identity contexts; reported inconclusive due to missing test identities."
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+
+	step := wf.restrictedStep()
+	if step == nil {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("Workflow %s has no identifiable role-restricted workflow action to evaluate", wf.Name)
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+
+	r.Endpoint = step.Endpoint
+	r.Method = "POST"
+	if step.Method != "" {
+		r.Method = step.Method
+	}
+
+	probeURL := buildTargetURL(actx.BaseURL, step.Endpoint)
+	if actx.IsExcluded != nil && actx.IsExcluded(probeURL) {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("Target URL %s is excluded by assessment scope", probeURL)
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+	if actx.IsAllowed != nil && !actx.IsAllowed(probeURL) {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("Target URL %s is out of authorized scope", probeURL)
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+
+	payload := []byte(`{"action":"approve","comment":"unauthorized role approval"}`)
+	req, err := http.NewRequestWithContext(ctx, r.Method, probeURL, bytes.NewReader(payload))
+	if err != nil {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", e.config.UserAgent)
+	req.Header.Set("X-User-Role", "viewer")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("Network error executing unauthorized workflow probe: %v", err)
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+	defer resp.Body.Close()
+	r.ObservedStatus = resp.StatusCode
+
+	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 65536))
+	bodyStr := string(bodyBytes)
+	bodyLower := strings.ToLower(bodyStr)
+
+	if resp.StatusCode == 401 || resp.StatusCode == 403 || resp.StatusCode == 404 {
+		r.VerificationState = StateNotVulnerable
+		r.Severity = report.SeverityInfo
 		r.Confidence = report.ConfidenceHigh
-		r.ObservedStatus = 200
-		r.EvidenceSummary = fmt.Sprintf("Unprivileged user (Role: 'viewer') successfully executed restricted approval transition '/api/order/approve' on workflow %s without required 'approver' authority.", wf.Name)
-		r.EvidenceDetails = map[string]string{
-			"workflow":        wf.Name,
-			"actor_role":      "viewer",
-			"required_role":   "approver",
-			"restricted_step": "/api/order/approve",
-			"defect":          "ROLE_RESTRICTION_BYPASSED",
-		}
-		fnd := createBusinessLogicFinding(actx, r, CategoryUnauthorizedWorkflowAccess,
-			"Unauthorized Workflow Access: Restricted Transition Executed by Unprivileged Role",
-			r.EvidenceSummary, report.SeverityHigh, 85,
-			"Enforce fine-grained role-based access control (RBAC) at every state transition handler; verify user identity has required permissions for the requested workflow action.")
-		r.Finding = fnd
-		*findings = append(*findings, *fnd)
-		cov.Verified++
-	} else {
-		if len(actx.Identities) < 2 {
-			r.VerificationState = StateInconclusive
-			r.Severity = report.SeverityInfo
-			r.EvidenceSummary = "Cross-role workflow testing requires at least two distinct authorized test identities"
-			cov.Inconclusive++
+		r.EvidenceSummary = fmt.Sprintf("Server correctly denied unprivileged role access to %s with HTTP %d.", step.Endpoint, resp.StatusCode)
+		cov.NotVulnerable++
+	} else if resp.StatusCode == 200 || resp.StatusCode == 201 {
+		hasExecution := strings.Contains(bodyLower, "approved") || strings.Contains(bodyLower, "published") ||
+			strings.Contains(bodyLower, "granted") || strings.Contains(bodyLower, "success")
+
+		if hasExecution {
+			if wf.EvidenceSource == SourceInferredHypothesis {
+				r.VerificationState = StateCandidate
+				r.Severity = report.SeverityMedium
+				r.Confidence = report.ConfidenceMedium
+				r.EvidenceSummary = fmt.Sprintf("Unprivileged request to %s succeeded on inferred workflow %s, but role boundaries are hypothesized.", step.Endpoint, wf.Name)
+				cov.Candidates++
+				fnd := createBusinessLogicFinding(actx, r, CategoryUnauthorizedWorkflowAccess,
+					"Potential Unauthorized Workflow Access (Candidate)",
+					r.EvidenceSummary, report.SeverityMedium, 60,
+					"Verify role-based access control at restricted workflow transitions.")
+				r.Finding = fnd
+				*findings = append(*findings, *fnd)
+			} else {
+				r.VerificationState = StateVerified
+				r.Severity = report.SeverityHigh
+				r.Confidence = report.ConfidenceHigh
+				r.EvidenceSummary = fmt.Sprintf("Unprivileged actor (Role: 'viewer') successfully executed restricted transition '%s' on workflow %s without required role permissions.", step.Endpoint, wf.Name)
+				r.EvidenceDetails = map[string]string{
+					"workflow":        wf.Name,
+					"actor_role":      "viewer",
+					"restricted_step": step.Endpoint,
+					"defect":          "ROLE_RESTRICTION_BYPASSED",
+				}
+				fnd := createBusinessLogicFinding(actx, r, CategoryUnauthorizedWorkflowAccess,
+					"Unauthorized Workflow Access: Restricted Transition Executed by Unprivileged Role",
+					r.EvidenceSummary, report.SeverityHigh, 85,
+					"Enforce fine-grained role-based access control (RBAC) at every state transition handler; verify user identity has required permissions for the requested workflow action.")
+				r.Finding = fnd
+				*findings = append(*findings, *fnd)
+				cov.Verified++
+			}
 		} else {
-			r.VerificationState = StateInconclusive
-			r.Severity = report.SeverityInfo
-			r.EvidenceSummary = "Live cross-identity workflow verification requires pre-seeded workflow entity ownership"
-			cov.Inconclusive++
+			r.VerificationState = StateCandidate
+			r.Severity = report.SeverityMedium
+			r.Confidence = report.ConfidenceMedium
+			r.EvidenceSummary = fmt.Sprintf("Endpoint %s returned HTTP %d to unprivileged role, but execution outcome was not confirmed.", step.Endpoint, resp.StatusCode)
+			cov.Candidates++
 		}
+	} else {
+		r.VerificationState = StateObserved
+		r.Severity = report.SeverityInfo
+		cov.Observations++
 	}
 
 	coverage[catKey] = cov
@@ -722,30 +1074,137 @@ func (e *Engine) evalSensitiveFlowAbuse(ctx context.Context, actx *AssessmentCon
 		CreatedAt:    time.Now().UTC(),
 	}
 
-	if actx.SyntheticFixture {
-		r.VerificationState = StateVerified
-		r.Severity = report.SeverityMedium
-		r.Confidence = report.ConfidenceHigh
-		r.ObservedStatus = 200
-		r.EvidenceSummary = fmt.Sprintf("Promo code 'WELCOME50' was successfully redeemed 10 consecutive times on workflow %s without single-use enforcement or rate limit throttling.", wf.Name)
-		r.EvidenceDetails = map[string]string{
-			"workflow":        wf.Name,
-			"target_action":   "Apply Discount",
-			"repetitions":     "10",
-			"defect":          "UNRESTRICTED_REPEATED_DISCOUNT_REDEMPTION",
-		}
-		fnd := createBusinessLogicFinding(actx, r, CategorySensitiveFlowAbuse,
-			"Sensitive Business-Flow Abuse: Unrestricted Repeated Promo Code Redemption",
-			r.EvidenceSummary, report.SeverityMedium, 70,
-			"Enforce single-use per customer or transaction limits; bind promo code redemptions to completed order records atomically on the server.")
-		r.Finding = fnd
-		*findings = append(*findings, *fnd)
-		cov.Verified++
-	} else {
-		// In live assessment: apply strictly bounded probes (max 3)
+	step := wf.sensitiveStep()
+	if step == nil {
 		r.VerificationState = StateInconclusive
 		r.Severity = report.SeverityInfo
-		r.EvidenceSummary = "Sensitive business flow abuse testing requires client-defined promotion or allocation parameters; skipped in default audit"
+		r.EvidenceSummary = fmt.Sprintf("Workflow %s has no sensitive allocation or promotion action to evaluate", wf.Name)
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+
+	r.Endpoint = step.Endpoint
+	r.Method = "POST"
+	if step.Method != "" {
+		r.Method = step.Method
+	}
+
+	probeURL := buildTargetURL(actx.BaseURL, step.Endpoint)
+	if actx.IsExcluded != nil && actx.IsExcluded(probeURL) {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("Target URL %s is excluded by assessment scope", probeURL)
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+	if actx.IsAllowed != nil && !actx.IsAllowed(probeURL) {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("Target URL %s is out of authorized scope", probeURL)
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+
+	// Send at most 3 strictly bounded requests to test single-use / rate limiting
+	successCount := 0
+	lastStatus := 0
+	var lastBodyLower string
+
+	for i := 1; i <= 3; i++ {
+		payload := []byte(fmt.Sprintf(`{"promo_code":"WELCOME50","coupon":"DISCOUNT50","attempt":%d}`, i))
+		req, err := http.NewRequestWithContext(ctx, r.Method, probeURL, bytes.NewReader(payload))
+		if err != nil {
+			break
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", e.config.UserAgent)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			break
+		}
+		lastStatus = resp.StatusCode
+		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 65536))
+		resp.Body.Close()
+		lastBodyLower = strings.ToLower(string(bodyBytes))
+
+		if resp.StatusCode == 429 || resp.StatusCode == 400 || resp.StatusCode == 409 {
+			// Proper rate limiting or single-use rejection observed!
+			r.VerificationState = StateNotVulnerable
+			r.Severity = report.SeverityInfo
+			r.Confidence = report.ConfidenceHigh
+			r.ObservedStatus = resp.StatusCode
+			r.EvidenceSummary = fmt.Sprintf("Sensitive business flow at %s properly rejected repeated redemption on attempt %d with HTTP %d.", step.Endpoint, i, resp.StatusCode)
+			cov.NotVulnerable++
+			coverage[catKey] = cov
+			*results = append(*results, r)
+			return
+		} else if resp.StatusCode == 200 || resp.StatusCode == 201 {
+			successCount++
+		}
+	}
+
+	r.ObservedStatus = lastStatus
+	if successCount >= 3 {
+		hasBenefitProof := strings.Contains(lastBodyLower, "redeemed") || strings.Contains(lastBodyLower, "applied") ||
+			strings.Contains(lastBodyLower, "discount") || strings.Contains(lastBodyLower, "credit") ||
+			strings.Contains(lastBodyLower, "success")
+
+		if hasBenefitProof {
+			if wf.EvidenceSource == SourceInferredHypothesis {
+				r.VerificationState = StateCandidate
+				r.Severity = report.SeverityMedium
+				r.Confidence = report.ConfidenceMedium
+				r.EvidenceSummary = fmt.Sprintf("Sensitive flow %s accepted repeated requests, but workflow %s is an inferred hypothesis.", step.Endpoint, wf.Name)
+				cov.Candidates++
+				fnd := createBusinessLogicFinding(actx, r, CategorySensitiveFlowAbuse,
+					"Potential Sensitive Business-Flow Abuse (Candidate)",
+					r.EvidenceSummary, report.SeverityMedium, 60,
+					"Enforce single-use redemption and transaction rate limits.")
+				r.Finding = fnd
+				*findings = append(*findings, *fnd)
+			} else {
+				r.VerificationState = StateVerified
+				r.Severity = report.SeverityMedium
+				r.Confidence = report.ConfidenceHigh
+				r.EvidenceSummary = fmt.Sprintf("Promo code 'WELCOME50' was successfully redeemed 3 consecutive times on %s without single-use enforcement or rate limit throttling.", step.Endpoint)
+				r.EvidenceDetails = map[string]string{
+					"workflow":      wf.Name,
+					"target_action": step.Endpoint,
+					"repetitions":   "3",
+					"defect":        "UNRESTRICTED_REPEATED_DISCOUNT_REDEMPTION",
+				}
+				fnd := createBusinessLogicFinding(actx, r, CategorySensitiveFlowAbuse,
+					"Sensitive Business-Flow Abuse: Unrestricted Repeated Promo Code Redemption",
+					r.EvidenceSummary, report.SeverityMedium, 70,
+					"Enforce single-use per customer or transaction limits; bind promo code redemptions to completed order records atomically on the server.")
+				r.Finding = fnd
+				*findings = append(*findings, *fnd)
+				cov.Verified++
+			}
+		} else {
+			r.VerificationState = StateCandidate
+			r.Severity = report.SeverityMedium
+			r.Confidence = report.ConfidenceMedium
+			r.EvidenceSummary = fmt.Sprintf("Sensitive flow %s returned HTTP 200 on repeated requests, but duplicate benefit was not observable in response.", step.Endpoint)
+			cov.Candidates++
+		}
+	} else if successCount > 0 {
+		r.VerificationState = StateCandidate
+		r.Severity = report.SeverityMedium
+		r.Confidence = report.ConfidenceLow
+		r.EvidenceSummary = fmt.Sprintf("Sensitive flow %s returned partial success (%d/3 requests accepted).", step.Endpoint, successCount)
+		cov.Candidates++
+	} else {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("Sensitive business flow probe at %s completed with status %d.", step.Endpoint, lastStatus)
 		cov.Inconclusive++
 	}
 
@@ -771,37 +1230,180 @@ func (e *Engine) evalReplayIdempotency(ctx context.Context, actx *AssessmentCont
 		CreatedAt:    time.Now().UTC(),
 	}
 
-	if actx.SyntheticFixture {
-		r.VerificationState = StateVerified
-		r.Severity = report.SeverityHigh
+	// Safety gating: Mutating state-changing checks blocked by default
+	if !e.config.AllowStateChanging {
+		r.VerificationState = StateBlockedBySafety
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("Replay testing of state-changing requests blocked by safety policy (read-only mode active)")
+		cov.Blocked++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+
+	step := wf.transitionStep()
+	if step == nil {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("Workflow %s has no state-changing step to evaluate for idempotency", wf.Name)
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+
+	r.Endpoint = step.Endpoint
+	r.Method = "POST"
+	if step.Method != "" {
+		r.Method = step.Method
+	}
+
+	probeURL := buildTargetURL(actx.BaseURL, step.Endpoint)
+	if actx.IsExcluded != nil && actx.IsExcluded(probeURL) {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("Target URL %s is excluded by assessment scope", probeURL)
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+	if actx.IsAllowed != nil && !actx.IsAllowed(probeURL) {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("Target URL %s is out of authorized scope", probeURL)
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+
+	idemKey := fmt.Sprintf("idem-key-%d", time.Now().UnixNano())
+	payload := []byte(fmt.Sprintf(`{"order_id":"ORD-9988","amount":100,"idempotency_key":"%s"}`, idemKey))
+
+	// Request 1
+	req1, err := http.NewRequestWithContext(ctx, r.Method, probeURL, bytes.NewReader(payload))
+	if err != nil {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+	req1.Header.Set("Content-Type", "application/json")
+	req1.Header.Set("Idempotency-Key", idemKey)
+	req1.Header.Set("User-Agent", e.config.UserAgent)
+
+	resp1, err := client.Do(req1)
+	if err != nil {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("Network error on initial idempotency request: %v", err)
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+	b1, _ := io.ReadAll(io.LimitReader(resp1.Body, 65536))
+	resp1.Body.Close()
+
+	if resp1.StatusCode != 200 && resp1.StatusCode != 201 {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.ObservedStatus = resp1.StatusCode
+		r.EvidenceSummary = fmt.Sprintf("Initial request at %s returned status %d; unable to establish baseline for replay", step.Endpoint, resp1.StatusCode)
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+
+	// Request 2: Replay identical request with identical idempotency key
+	req2, err := http.NewRequestWithContext(ctx, r.Method, probeURL, bytes.NewReader(payload))
+	if err != nil {
+		r.VerificationState = StateInconclusive
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("Idempotency-Key", idemKey)
+	req2.Header.Set("User-Agent", e.config.UserAgent)
+
+	resp2, err := client.Do(req2)
+	if err != nil {
+		r.VerificationState = StateInconclusive
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+	r.ObservedStatus = resp2.StatusCode
+	b2, _ := io.ReadAll(io.LimitReader(resp2.Body, 65536))
+	resp2.Body.Close()
+	body2Lower := strings.ToLower(string(b2))
+
+	if resp2.StatusCode == 409 || resp2.StatusCode == 400 {
+		r.VerificationState = StateNotVulnerable
+		r.Severity = report.SeverityInfo
 		r.Confidence = report.ConfidenceHigh
-		r.ObservedStatus = 200
-		r.EvidenceSummary = fmt.Sprintf("Replaying completed order checkout request created duplicate order #ORD-9988 and charged credit balance a second time on workflow %s. Idempotency key was ignored.", wf.Name)
-		r.EvidenceDetails = map[string]string{
-			"workflow":        wf.Name,
-			"action":          "Checkout Order",
-			"replay_result":   "DUPLICATE_ORDER_CREATED",
-			"defect":          "LACK_OF_IDEMPOTENCY_CONTROL",
-		}
-		fnd := createBusinessLogicFinding(actx, r, CategoryReplayIdempotency,
-			"Replay Flaw: Completed Action Replay Produces Duplicate Business Effect",
-			r.EvidenceSummary, report.SeverityHigh, 85,
-			"Implement atomic idempotency keys and server-side duplicate transaction detection; reject repeated requests for completed transactions.")
-		r.Finding = fnd
-		*findings = append(*findings, *fnd)
-		cov.Verified++
-	} else {
-		if !e.config.AllowStateChanging {
-			r.VerificationState = StateBlockedBySafety
+		r.EvidenceSummary = fmt.Sprintf("Replaying request to %s correctly rejected by server with HTTP %d.", step.Endpoint, resp2.StatusCode)
+		cov.NotVulnerable++
+	} else if resp2.StatusCode == 200 || resp2.StatusCode == 201 {
+		hasDuplicateProof := strings.Contains(body2Lower, "duplicate") || strings.Contains(body2Lower, "new_transaction") ||
+			strings.Contains(body2Lower, "charged_again")
+
+		if hasDuplicateProof {
+			if wf.EvidenceSource == SourceInferredHypothesis {
+				r.VerificationState = StateCandidate
+				r.Severity = report.SeverityMedium
+				r.Confidence = report.ConfidenceMedium
+				r.EvidenceSummary = fmt.Sprintf("Replay on inferred workflow %s produced duplicate effect, but workflow is hypothesized.", wf.Name)
+				cov.Candidates++
+				fnd := createBusinessLogicFinding(actx, r, CategoryReplayIdempotency,
+					"Potential Replay & Idempotency Flaw (Candidate)",
+					r.EvidenceSummary, report.SeverityMedium, 60,
+					"Implement server-side idempotency keys to deduplicate transactions.")
+				r.Finding = fnd
+				*findings = append(*findings, *fnd)
+			} else {
+				r.VerificationState = StateVerified
+				r.Severity = report.SeverityHigh
+				r.Confidence = report.ConfidenceHigh
+				r.EvidenceSummary = fmt.Sprintf("Replaying request to %s created duplicate business effect; idempotency key was ignored.", step.Endpoint)
+				r.EvidenceDetails = map[string]string{
+					"workflow":      wf.Name,
+					"endpoint":      step.Endpoint,
+					"replay_result": "DUPLICATE_TRANSACTION_CREATED",
+					"defect":        "LACK_OF_IDEMPOTENCY_CONTROL",
+				}
+				fnd := createBusinessLogicFinding(actx, r, CategoryReplayIdempotency,
+					"Replay Flaw: Completed Action Replay Produces Duplicate Business Effect",
+					r.EvidenceSummary, report.SeverityHigh, 85,
+					"Implement atomic idempotency keys and server-side duplicate transaction detection; reject repeated requests for completed transactions.")
+				r.Finding = fnd
+				*findings = append(*findings, *fnd)
+				cov.Verified++
+			}
+		} else if bytes.Equal(b1, b2) || strings.Contains(body2Lower, "cached") || strings.Contains(body2Lower, "idempotent") {
+			r.VerificationState = StateNotVulnerable
 			r.Severity = report.SeverityInfo
-			r.EvidenceSummary = fmt.Sprintf("Replay testing of state-changing requests blocked by safety policy (read-only mode active)")
-			cov.Blocked++
+			r.Confidence = report.ConfidenceHigh
+			r.EvidenceSummary = fmt.Sprintf("Replay to %s handled idempotently; returned consistent response without duplicate entity creation.", step.Endpoint)
+			cov.NotVulnerable++
 		} else {
-			r.VerificationState = StateInconclusive
-			r.Severity = report.SeverityInfo
-			r.EvidenceSummary = "Live idempotency testing requires isolated staging fixtures to avoid unintended duplicate transactions"
-			cov.Inconclusive++
+			r.VerificationState = StateCandidate
+			r.Severity = report.SeverityMedium
+			r.Confidence = report.ConfidenceMedium
+			r.EvidenceSummary = fmt.Sprintf("Replay to %s returned HTTP %d, but duplicate effect was not confirmed.", step.Endpoint, resp2.StatusCode)
+			cov.Candidates++
 		}
+	} else {
+		r.VerificationState = StateObserved
+		r.Severity = report.SeverityInfo
+		cov.Observations++
 	}
 
 	coverage[catKey] = cov
@@ -826,30 +1428,139 @@ func (e *Engine) evalPrivilegeStateMismatch(ctx context.Context, actx *Assessmen
 		CreatedAt:    time.Now().UTC(),
 	}
 
-	if actx.SyntheticFixture {
-		r.VerificationState = StateVerified
-		r.Severity = report.SeverityHigh
-		r.Confidence = report.ConfidenceHigh
-		r.ObservedStatus = 200
-		r.EvidenceSummary = fmt.Sprintf("User account with status 'SUSPENDED' successfully performed resource publication on workflow %s. Account state was not checked during workflow execution.", wf.Name)
-		r.EvidenceDetails = map[string]string{
-			"workflow":        wf.Name,
-			"account_status":  "SUSPENDED",
-			"executed_action": "Publish Resource",
-			"defect":          "ACCOUNT_STATE_NOT_CHECKED_IN_WORKFLOW",
-		}
-		fnd := createBusinessLogicFinding(actx, r, CategoryPrivilegeStateMismatch,
-			"Privilege & State Inconsistency: Suspended Account Executes Active Workflow Operations",
-			r.EvidenceSummary, report.SeverityHigh, 80,
-			"Verify account status and active privilege bindings in real time during every workflow state transition; immediately block actions from suspended or revoked users.")
-		r.Finding = fnd
-		*findings = append(*findings, *fnd)
-		cov.Verified++
-	} else {
+	if len(actx.Identities) < 2 && !actx.SyntheticFixture {
 		r.VerificationState = StateInconclusive
 		r.Severity = report.SeverityInfo
-		r.EvidenceSummary = "Live privilege/state inconsistency testing requires controlled suspended or downgraded test accounts"
+		r.EvidenceSummary = "Evaluating privilege and state inconsistency requires at least two distinct authorized identity or state contexts; reported inconclusive due to missing test identities."
 		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+
+	step := wf.restrictedStep()
+	if step == nil {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("Workflow %s has no restricted step to evaluate for privilege consistency", wf.Name)
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+
+	r.Endpoint = step.Endpoint
+	r.Method = "POST"
+	if step.Method != "" {
+		r.Method = step.Method
+	}
+
+	probeURL := buildTargetURL(actx.BaseURL, step.Endpoint)
+	if actx.IsExcluded != nil && actx.IsExcluded(probeURL) {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("Target URL %s is excluded by assessment scope", probeURL)
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+	if actx.IsAllowed != nil && !actx.IsAllowed(probeURL) {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("Target URL %s is out of authorized scope", probeURL)
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+
+	payload := []byte(`{"action":"publish","status":"active"}`)
+	req, err := http.NewRequestWithContext(ctx, r.Method, probeURL, bytes.NewReader(payload))
+	if err != nil {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", e.config.UserAgent)
+	req.Header.Set("X-Account-Status", "SUSPENDED")
+	req.Header.Set("X-User-Role", "suspended_user")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("Network error executing suspended account probe: %v", err)
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+	defer resp.Body.Close()
+	r.ObservedStatus = resp.StatusCode
+
+	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 65536))
+	bodyStr := string(bodyBytes)
+	bodyLower := strings.ToLower(bodyStr)
+
+	if resp.StatusCode == 401 || resp.StatusCode == 403 {
+		r.VerificationState = StateNotVulnerable
+		r.Severity = report.SeverityInfo
+		r.Confidence = report.ConfidenceHigh
+		r.EvidenceSummary = fmt.Sprintf("Server correctly denied suspended account access to %s with HTTP %d.", step.Endpoint, resp.StatusCode)
+		cov.NotVulnerable++
+	} else if resp.StatusCode == 200 || resp.StatusCode == 201 {
+		hasSuccess := strings.Contains(bodyLower, "published") || strings.Contains(bodyLower, "success") ||
+			strings.Contains(bodyLower, "active")
+
+		if hasSuccess {
+			if wf.EvidenceSource == SourceInferredHypothesis {
+				r.VerificationState = StateCandidate
+				r.Severity = report.SeverityMedium
+				r.Confidence = report.ConfidenceMedium
+				r.EvidenceSummary = fmt.Sprintf("Suspended account request succeeded on inferred workflow %s, but workflow rules are unconfirmed.", wf.Name)
+				cov.Candidates++
+				fnd := createBusinessLogicFinding(actx, r, CategoryPrivilegeStateMismatch,
+					"Potential Privilege & State Inconsistency (Candidate)",
+					r.EvidenceSummary, report.SeverityMedium, 60,
+					"Verify account status in real-time during state transitions.")
+				r.Finding = fnd
+				*findings = append(*findings, *fnd)
+			} else {
+				r.VerificationState = StateVerified
+				r.Severity = report.SeverityHigh
+				r.Confidence = report.ConfidenceHigh
+				r.EvidenceSummary = fmt.Sprintf("User account with status 'SUSPENDED' successfully performed resource action on %s on workflow %s. Account state was not verified.", step.Endpoint, wf.Name)
+				r.EvidenceDetails = map[string]string{
+					"workflow":        wf.Name,
+					"endpoint":        step.Endpoint,
+					"account_status":  "SUSPENDED",
+					"executed_action": step.Name,
+					"defect":          "ACCOUNT_STATE_NOT_CHECKED_IN_WORKFLOW",
+				}
+				fnd := createBusinessLogicFinding(actx, r, CategoryPrivilegeStateMismatch,
+					"Privilege & State Inconsistency: Suspended Account Executes Active Workflow Operations",
+					r.EvidenceSummary, report.SeverityHigh, 80,
+					"Verify account status and active privilege bindings in real time during every workflow state transition; immediately block actions from suspended or revoked users.")
+				r.Finding = fnd
+				*findings = append(*findings, *fnd)
+				cov.Verified++
+			}
+		} else {
+			r.VerificationState = StateCandidate
+			r.Severity = report.SeverityMedium
+			r.Confidence = report.ConfidenceMedium
+			r.EvidenceSummary = fmt.Sprintf("Suspended account probe returned HTTP %d at %s, but execution outcome was not confirmed.", resp.StatusCode, step.Endpoint)
+			cov.Candidates++
+		}
+	} else {
+		r.VerificationState = StateObserved
+		r.Severity = report.SeverityInfo
+		cov.Observations++
 	}
 
 	coverage[catKey] = cov
@@ -874,29 +1585,127 @@ func (e *Engine) evalDataValidationInvariants(ctx context.Context, actx *Assessm
 		CreatedAt:    time.Now().UTC(),
 	}
 
-	if actx.SyntheticFixture {
-		r.VerificationState = StateVerified
-		r.Severity = report.SeverityHigh
-		r.Confidence = report.ConfidenceHigh
-		r.ObservedStatus = 200
-		r.EvidenceSummary = fmt.Sprintf("Order payload with contradictory items (Quantity: -5, UnitPrice: 100, NetTotal: -500) was accepted and credited to user account on workflow %s.", wf.Name)
-		r.EvidenceDetails = map[string]string{
-			"workflow":        wf.Name,
-			"injected_data":   "Quantity: -5, Total: -500",
-			"defect":          "NEGATIVE_QUANTITY_INVARIANT_VIOLATION",
-		}
-		fnd := createBusinessLogicFinding(actx, r, CategoryDataValidationInvariants,
-			"Business Invariant Violation: Negative Quantity / Reverse Credit Accepted",
-			r.EvidenceSummary, report.SeverityHigh, 85,
-			"Enforce strict business data validation and invariants (Quantity > 0, Total >= Sum(Items)); reject contradictory or negative mathematical values at domain layer.")
-		r.Finding = fnd
-		*findings = append(*findings, *fnd)
-		cov.Verified++
-	} else {
+	step := wf.calculationStep()
+	if step == nil {
 		r.VerificationState = StateInconclusive
 		r.Severity = report.SeverityInfo
-		r.EvidenceSummary = "Live business invariant testing requires dedicated test environments to prevent accounting ledger pollution"
+		r.EvidenceSummary = fmt.Sprintf("Workflow %s has no calculation endpoint to evaluate invariants", wf.Name)
 		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+
+	r.Endpoint = step.Endpoint
+	r.Method = "POST"
+	if step.Method != "" {
+		r.Method = step.Method
+	}
+
+	probeURL := buildTargetURL(actx.BaseURL, step.Endpoint)
+	if actx.IsExcluded != nil && actx.IsExcluded(probeURL) {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("Target URL %s is excluded by assessment scope", probeURL)
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+	if actx.IsAllowed != nil && !actx.IsAllowed(probeURL) {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("Target URL %s is out of authorized scope", probeURL)
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+
+	payload := []byte(`{"quantity":-5,"unit_price":100,"total":-500,"currency":"USD"}`)
+	req, err := http.NewRequestWithContext(ctx, r.Method, probeURL, bytes.NewReader(payload))
+	if err != nil {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", e.config.UserAgent)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.EvidenceSummary = fmt.Sprintf("Network error executing data invariant probe: %v", err)
+		cov.Inconclusive++
+		coverage[catKey] = cov
+		*results = append(*results, r)
+		return
+	}
+	defer resp.Body.Close()
+	r.ObservedStatus = resp.StatusCode
+
+	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 65536))
+	bodyStr := string(bodyBytes)
+	bodyLower := strings.ToLower(bodyStr)
+
+	if resp.StatusCode == 400 || resp.StatusCode == 422 {
+		r.VerificationState = StateNotVulnerable
+		r.Severity = report.SeverityInfo
+		r.Confidence = report.ConfidenceHigh
+		r.EvidenceSummary = fmt.Sprintf("Server correctly rejected negative quantity / invalid invariant at %s with HTTP %d.", step.Endpoint, resp.StatusCode)
+		cov.NotVulnerable++
+	} else if resp.StatusCode == 200 || resp.StatusCode == 201 {
+		hasNegativeCredit := strings.Contains(bodyLower, `"-500"`) || strings.Contains(bodyLower, `"credit_balance"`) ||
+			strings.Contains(bodyLower, `"credited"`) || strings.Contains(bodyLower, `-500`)
+
+		if hasNegativeCredit {
+			if wf.EvidenceSource == SourceInferredHypothesis {
+				r.VerificationState = StateCandidate
+				r.Severity = report.SeverityMedium
+				r.Confidence = report.ConfidenceMedium
+				r.EvidenceSummary = fmt.Sprintf("Negative quantity accepted on inferred workflow %s, but workflow rules are unconfirmed.", wf.Name)
+				cov.Candidates++
+				fnd := createBusinessLogicFinding(actx, r, CategoryDataValidationInvariants,
+					"Potential Business Data Invariant Violation (Candidate)",
+					r.EvidenceSummary, report.SeverityMedium, 60,
+					"Validate numeric quantities and reject negative values at the domain layer.")
+				r.Finding = fnd
+				*findings = append(*findings, *fnd)
+			} else {
+				r.VerificationState = StateVerified
+				r.Severity = report.SeverityHigh
+				r.Confidence = report.ConfidenceHigh
+				r.EvidenceSummary = fmt.Sprintf("Order payload with contradictory items (Quantity: -5, UnitPrice: 100, NetTotal: -500) was accepted and credited on workflow %s.", wf.Name)
+				r.EvidenceDetails = map[string]string{
+					"workflow":      wf.Name,
+					"endpoint":      step.Endpoint,
+					"injected_data": "Quantity: -5, Total: -500",
+					"defect":        "NEGATIVE_QUANTITY_INVARIANT_VIOLATION",
+				}
+				fnd := createBusinessLogicFinding(actx, r, CategoryDataValidationInvariants,
+					"Business Invariant Violation: Negative Quantity / Reverse Credit Accepted",
+					r.EvidenceSummary, report.SeverityHigh, 85,
+					"Enforce strict business data validation and invariants (Quantity > 0, Total >= Sum(Items)); reject contradictory or negative mathematical values at domain layer.")
+				r.Finding = fnd
+				*findings = append(*findings, *fnd)
+				cov.Verified++
+			}
+		} else {
+			// Echoed or accepted 200 without negative credit proof -> CANDIDATE
+			r.VerificationState = StateCandidate
+			r.Severity = report.SeverityMedium
+			r.Confidence = report.ConfidenceMedium
+			r.EvidenceSummary = fmt.Sprintf("Server returned HTTP %d at %s, but negative value was not demonstrated to produce an authoritative credit.", resp.StatusCode, step.Endpoint)
+			cov.Candidates++
+		}
+	} else {
+		r.VerificationState = StateObserved
+		r.Severity = report.SeverityInfo
+		cov.Observations++
 	}
 
 	coverage[catKey] = cov
@@ -915,6 +1724,77 @@ func (wf *Workflow) terminalStep() *WorkflowStep {
 		}
 	}
 	if len(wf.Steps) > 0 {
+		return &wf.Steps[len(wf.Steps)-1]
+	}
+	return nil
+}
+
+func (wf *Workflow) transitionStep() *WorkflowStep {
+	for i := range wf.Steps {
+		step := &wf.Steps[i]
+		lower := strings.ToLower(step.Endpoint + " " + step.Name)
+		if strings.Contains(lower, "status") || strings.Contains(lower, "transition") ||
+			strings.Contains(lower, "complete") || strings.Contains(lower, "ship") ||
+			strings.Contains(lower, "cancel") || strings.Contains(lower, "approve") {
+			return step
+		}
+	}
+	for i := range wf.Steps {
+		if wf.Steps[i].IsStateChanging {
+			return &wf.Steps[i]
+		}
+	}
+	if len(wf.Steps) > 0 {
+		return &wf.Steps[len(wf.Steps)-1]
+	}
+	return nil
+}
+
+func (wf *Workflow) calculationStep() *WorkflowStep {
+	for i := range wf.Steps {
+		step := &wf.Steps[i]
+		lower := strings.ToLower(step.Endpoint + " " + step.Name)
+		if strings.Contains(lower, "cart") || strings.Contains(lower, "item") ||
+			strings.Contains(lower, "pay") || strings.Contains(lower, "checkout") ||
+			strings.Contains(lower, "order") || strings.Contains(lower, "price") {
+			return step
+		}
+	}
+	if len(wf.Steps) > 0 {
+		return &wf.Steps[0]
+	}
+	return nil
+}
+
+func (wf *Workflow) sensitiveStep() *WorkflowStep {
+	for i := range wf.Steps {
+		step := &wf.Steps[i]
+		lower := strings.ToLower(step.Endpoint + " " + step.Name)
+		if strings.Contains(lower, "coupon") || strings.Contains(lower, "promo") ||
+			strings.Contains(lower, "discount") || strings.Contains(lower, "redeem") ||
+			strings.Contains(lower, "transfer") || strings.Contains(lower, "pay") {
+			return step
+		}
+	}
+	if len(wf.Steps) > 0 {
+		return &wf.Steps[0]
+	}
+	return nil
+}
+
+func (wf *Workflow) restrictedStep() *WorkflowStep {
+	for i := range wf.Steps {
+		step := &wf.Steps[i]
+		if step.RequiredRole != "" {
+			return step
+		}
+		lower := strings.ToLower(step.Endpoint + " " + step.Name)
+		if strings.Contains(lower, "approve") || strings.Contains(lower, "publish") ||
+			strings.Contains(lower, "admin") || strings.Contains(lower, "review") {
+			return step
+		}
+	}
+	if len(wf.Steps) > 1 {
 		return &wf.Steps[len(wf.Steps)-1]
 	}
 	return nil
@@ -964,6 +1844,19 @@ func (e *Engine) compileSummary(
 		}
 	}
 
+	for k, cov := range coverage {
+		if cov.Verified > 0 {
+			cov.Status = CoverageVerifiedIssueFound
+		} else if cov.Candidates > 0 {
+			cov.Status = CoverageCandidateIdentified
+		} else if cov.Blocked > 0 && cov.Verified == 0 && cov.Candidates == 0 && cov.NotVulnerable == 0 {
+			cov.Status = CoverageBlockedSafety
+		} else if cov.NotVulnerable > 0 {
+			cov.Status = CoverageActivelyTested
+		}
+		coverage[k] = cov
+	}
+
 	return sum
 }
 
@@ -1006,6 +1899,7 @@ func createBusinessLogicFinding(
 	if actx.SyntheticFixture {
 		details["synthetic_fixture"] = "true"
 		details["evaluation_environment"] = "SYNTHETIC_FIXTURE_SIMULATION"
+		title = fmt.Sprintf("[SYNTHETIC SIMULATION] %s", title)
 	}
 
 	return &report.Finding{

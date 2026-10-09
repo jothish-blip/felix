@@ -1,6 +1,7 @@
 package assessment
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -1480,6 +1481,16 @@ func TestStore_BusinessLogicPersistenceAndMigration(t *testing.T) {
 	store, cleanup := newTestStore(t)
 	defer cleanup()
 
+	// Verify schema migration version 9 applied
+	var maxVersion int
+	err := store.db.QueryRow("SELECT MAX(version) FROM schema_migrations").Scan(&maxVersion)
+	if err != nil {
+		t.Fatalf("failed to query schema version: %v", err)
+	}
+	if maxVersion < 9 {
+		t.Fatalf("expected schema version >= 9, got %d", maxVersion)
+	}
+
 	// 1. Create client and assessment
 	client := &Client{
 		ID:        uuid.New().String(),
@@ -1628,5 +1639,63 @@ func TestStore_BusinessLogicPersistenceAndMigration(t *testing.T) {
 	}
 	if summary.VerifiedCount != 2 {
 		t.Errorf("expected VerifiedCount = 2, got %d", summary.VerifiedCount)
+	}
+}
+
+func TestStore_BusinessLogicMigrationFromV8(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test_v8_to_v9.db")
+
+	// 1. Manually create schema_migrations with versions up to 8
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("failed to open sqlite db: %v", err)
+	}
+	_, err = db.Exec(`
+		CREATE TABLE schema_migrations (
+			version INTEGER PRIMARY KEY,
+			applied_at TIMESTAMP NOT NULL
+		);
+		INSERT INTO schema_migrations (version, applied_at) VALUES (1, CURRENT_TIMESTAMP);
+		INSERT INTO schema_migrations (version, applied_at) VALUES (2, CURRENT_TIMESTAMP);
+		INSERT INTO schema_migrations (version, applied_at) VALUES (3, CURRENT_TIMESTAMP);
+		INSERT INTO schema_migrations (version, applied_at) VALUES (4, CURRENT_TIMESTAMP);
+		INSERT INTO schema_migrations (version, applied_at) VALUES (5, CURRENT_TIMESTAMP);
+		INSERT INTO schema_migrations (version, applied_at) VALUES (6, CURRENT_TIMESTAMP);
+		INSERT INTO schema_migrations (version, applied_at) VALUES (7, CURRENT_TIMESTAMP);
+		INSERT INTO schema_migrations (version, applied_at) VALUES (8, CURRENT_TIMESTAMP);
+	`)
+	if err != nil {
+		db.Close()
+		t.Fatalf("failed to seed v8 schema_migrations: %v", err)
+	}
+	db.Close()
+
+	// 2. Open with NewSQLiteStore which runs migrate()
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore failed to migrate from v8: %v", err)
+	}
+	defer store.Close()
+
+	// 3. Verify max version is 9
+	var currentVersion int
+	err = store.db.QueryRow("SELECT MAX(version) FROM schema_migrations").Scan(&currentVersion)
+	if err != nil {
+		t.Fatalf("failed to query version: %v", err)
+	}
+	if currentVersion != 9 {
+		t.Errorf("expected schema version 9 after upgrade from v8, got %d", currentVersion)
+	}
+
+	// 4. Verify migration v9 tables exist
+	var count int
+	err = store.db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='assessment_businesslogic_runs'").Scan(&count)
+	if err != nil || count != 1 {
+		t.Errorf("expected assessment_businesslogic_runs table to exist, count: %d, err: %v", count, err)
+	}
+	err = store.db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='assessment_businesslogic_results'").Scan(&count)
+	if err != nil || count != 1 {
+		t.Errorf("expected assessment_businesslogic_results table to exist, count: %d, err: %v", count, err)
 	}
 }

@@ -3959,6 +3959,7 @@ func runAssessmentBusinessLogic(args []string) int {
 		categoryFilter string
 		statusFilter   string
 		stateChanging  bool
+		policyPath     string
 		jsonOutput     bool
 		verbose        bool
 	)
@@ -3987,6 +3988,11 @@ func runAssessmentBusinessLogic(args []string) int {
 			}
 		case arg == "--state-changing":
 			stateChanging = true
+		case arg == "--policy" || arg == "--identities":
+			if i+1 < len(args) {
+				policyPath = args[i+1]
+				i++
+			}
 		case arg == "--json":
 			jsonOutput = true
 		case arg == "--verbose" || arg == "-v":
@@ -4055,12 +4061,17 @@ func runAssessmentBusinessLogic(args []string) int {
 			if u, err := url.Parse(path); err == nil && u.Path != "" {
 				path = u.Path
 			}
+			epType := ""
+			if t, ok := a.Metadata["type"].(string); ok && t != "" {
+				epType = t
+			}
 			key := method + " " + path
 			if !seenEndpoints[key] {
 				seenEndpoints[key] = true
 				discoveredEndpoints = append(discoveredEndpoints, businesslogic.DiscoveredEndpoint{
 					Method: method,
 					Path:   path,
+					Type:   epType,
 				})
 			}
 		}
@@ -4076,14 +4087,29 @@ func runAssessmentBusinessLogic(args []string) int {
 			if m, ok := surf.Metadata["method"].(string); ok && m != "" {
 				method = strings.ToUpper(m)
 			}
+			epType := ""
+			if t, ok := surf.Metadata["type"].(string); ok && t != "" {
+				epType = t
+			}
 			key := method + " " + path
 			if !seenEndpoints[key] {
 				seenEndpoints[key] = true
 				discoveredEndpoints = append(discoveredEndpoints, businesslogic.DiscoveredEndpoint{
 					Method: method,
 					Path:   path,
+					Type:   epType,
 				})
 			}
+		}
+	}
+
+	var testIdentities []businesslogic.TestIdentity
+	if policyPath != "" {
+		data, err := os.ReadFile(policyPath)
+		if err == nil {
+			_ = json.Unmarshal(data, &testIdentities)
+		} else {
+			fmt.Fprintf(os.Stderr, "[-] Warning: failed to read policy/identities file '%s': %v\n", policyPath, err)
 		}
 	}
 
@@ -4093,6 +4119,7 @@ func runAssessmentBusinessLogic(args []string) int {
 		AssessmentID:  asm.ID,
 		BaseURL:       targetBase,
 		Endpoints:     discoveredEndpoints,
+		Identities:    testIdentities,
 		IsAllowed:     scopeVal.IsAllowed,
 		IsExcluded:    func(u string) bool { excluded, _ := scopeVal.IsExcluded(u); return excluded },
 		RequestBudget: 50,
