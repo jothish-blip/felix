@@ -2253,11 +2253,18 @@ func (s *SQLiteStore) GetAPISecSummary(assessmentID string, executionID string) 
 	if err == nil && run != nil && run.CoverageJSON != "" {
 		var covMap map[string]apisec.CategoryCoverage
 		if err := json.Unmarshal([]byte(run.CoverageJSON), &covMap); err == nil {
+			obsCount := run.ObservedCount
+			if obsCount == 0 {
+				for _, cov := range covMap {
+					obsCount += cov.Observations
+				}
+			}
 			summary := &apisec.Summary{
 				TotalTests:        run.TotalTests,
 				CategoriesCovered: run.CategoriesAssessed,
 				VerifiedCount:    run.VerifiedCount,
 				CandidateCount:   run.CandidateCount,
+				ObservedCount:    obsCount,
 				CoverageMap:      covMap,
 			}
 			return summary, nil
@@ -2280,6 +2287,8 @@ func (s *SQLiteStore) GetAPISecSummary(assessmentID string, executionID string) 
 			summary.VerifiedCount++
 		case apisec.StateCandidate:
 			summary.CandidateCount++
+		case apisec.StateObserved:
+			summary.ObservedCount++
 		case apisec.StateInconclusive:
 			summary.InconclusiveCount++
 		case apisec.StateNotVulnerable:

@@ -54,6 +54,9 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 		return nil, nil, nil, fmt.Errorf("assessment context is nil")
 	}
 
+	// Deduplicate endpoints across crawler links and discovery assets
+	actx.Endpoints = DeduplicateEndpoints(actx.Endpoints)
+
 	var allResults []Result
 	var allFindings []report.Finding
 	coverageMap := make(map[string]CategoryCoverage)
@@ -174,6 +177,8 @@ func (e *Engine) assessAPI1(actx *AssessmentContext) ([]Result, []report.Finding
 				findings = append(findings, *fnd)
 			} else if ar.VerificationState == authz.StateNotVulnerable {
 				cov.Status = CoverageActivelyTested
+				r.Severity = report.SeverityInfo
+				r.Confidence = report.ConfidenceHigh
 			} else {
 				cov.Candidates++
 				r.Severity = report.SeverityInfo
@@ -200,6 +205,7 @@ func (e *Engine) assessAPI1(actx *AssessmentContext) ([]Result, []report.Finding
 
 	if len(objectEndpoints) > 0 {
 		cov.Status = CoveragePrereqMissing
+		cov.Observations = len(objectEndpoints)
 		cov.Explanation = fmt.Sprintf("Discovered %d object-referencing API endpoints; active BOLA verification requires test identities via --policy", len(objectEndpoints))
 		results = append(results, Result{
 			ID:                uuid.New().String(),
@@ -239,33 +245,76 @@ func (e *Engine) assessAPI2(actx *AssessmentContext) ([]Result, []report.Finding
 		// 1. Inspect Cookies for Session Security Issues
 		for _, ck := range actx.AuthInv.Cookies {
 			if ck.IsSession && ck.HasSecurityIssue {
+				// Evaluate transport security context
+				isPlainHTTP := strings.HasPrefix(strings.ToLower(ck.SourceURL), "http://")
+				if isPlainHTTP && !ck.IsSecure {
+					// Confirmed transport exposure: sensitive session cookie sent over unencrypted HTTP
+					r := Result{
+						ID:                uuid.New().String(),
+						AssessmentID:      actx.AssessmentID,
+						ExecutionID:       actx.ExecutionID,
+						Category:          CategoryAPI2_BrokenAuth,
+						OWASPCode:         "API2:2023",
+						TestName:          "Unencrypted Session Cookie Transport",
+						Endpoint:          ck.SourceURL,
+						Method:            "GET",
+						VerificationState: StateVerified,
+						Severity:          report.SeverityMedium,
+						Confidence:        report.ConfidenceHigh,
+						EvidenceSummary:   fmt.Sprintf("Session cookie %q lacks Secure flag and was transmitted over unencrypted HTTP: %s", ck.Name, strings.Join(ck.SecurityDefects, "; ")),
+						CreatedAt:         time.Now().UTC(),
+					}
+					cov.Verified++
+					cov.Status = CoverageVerifiedIssueFound
+
+					fnd := e.createFinding(actx, r, fmt.Sprintf("API2:2023 Unencrypted Session Cookie Transport (%s)", ck.Name),
+						r.EvidenceSummary, report.SeverityMedium, 40)
+					r.Finding = fnd
+					findings = append(findings, *fnd)
+					results = append(results, r)
+				} else {
+					// HTTPS session cookie missing defense-in-depth attributes: candidate issue, not proven compromise
+					r := Result{
+						ID:                uuid.New().String(),
+						AssessmentID:      actx.AssessmentID,
+						ExecutionID:       actx.ExecutionID,
+						Category:          CategoryAPI2_BrokenAuth,
+						OWASPCode:         "API2:2023",
+						TestName:          "Session Cookie Attribute Hardening",
+						Endpoint:          ck.SourceURL,
+						Method:            "GET",
+						VerificationState: StateCandidate,
+						Severity:          report.SeverityLow,
+						Confidence:        report.ConfidenceMedium,
+						EvidenceSummary:   fmt.Sprintf("Session cookie %q missing recommended defensive attribute(s) (%s); candidate hardening issue (no session compromise demonstrated)", ck.Name, strings.Join(ck.SecurityDefects, "; ")),
+						CreatedAt:         time.Now().UTC(),
+					}
+					cov.Candidates++
+					results = append(results, r)
+				}
+			} else if ck.HasSecurityIssue {
+				// Non-session cookie missing flags: observational only
 				r := Result{
 					ID:                uuid.New().String(),
 					AssessmentID:      actx.AssessmentID,
 					ExecutionID:       actx.ExecutionID,
 					Category:          CategoryAPI2_BrokenAuth,
 					OWASPCode:         "API2:2023",
-					TestName:          "Session Cookie Defensive Flag Audit",
+					TestName:          "Non-Session Cookie Attribute Observation",
 					Endpoint:          ck.SourceURL,
 					Method:            "GET",
-					VerificationState: StateVerified,
-					Severity:          report.SeverityMedium,
-					Confidence:        report.ConfidenceHigh,
-					EvidenceSummary:   fmt.Sprintf("Session cookie %q missing defensive flags: %s", ck.Name, strings.Join(ck.SecurityDefects, "; ")),
+					VerificationState: StateObserved,
+					Severity:          report.SeverityInfo,
+					Confidence:        report.ConfidenceLow,
+					EvidenceSummary:   fmt.Sprintf("Non-session cookie %q missing attributes: %s (informational observation)", ck.Name, strings.Join(ck.SecurityDefects, "; ")),
 					CreatedAt:         time.Now().UTC(),
 				}
-				cov.Verified++
-				cov.Status = CoverageVerifiedIssueFound
-
-				fnd := e.createFinding(actx, r, fmt.Sprintf("API2:2023 Insecure Session Cookie Attributes (%s)", ck.Name),
-					r.EvidenceSummary, report.SeverityMedium, 40)
-				r.Finding = fnd
-				findings = append(findings, *fnd)
+				cov.Observations++
 				results = append(results, r)
 			}
 		}
 
-		// 2. Inspect Token Artifacts (e.g. alg=none JWT or PKCE plain)
+		// 2. Inspect Token Artifacts (e.g. alg=none JWT)
 		for _, tok := range actx.AuthInv.Tokens {
 			if strings.EqualFold(tok.Algorithm, "none") {
 				r := Result{
@@ -274,13 +323,13 @@ func (e *Engine) assessAPI2(actx *AssessmentContext) ([]Result, []report.Finding
 					ExecutionID:       actx.ExecutionID,
 					Category:          CategoryAPI2_BrokenAuth,
 					OWASPCode:         "API2:2023",
-					TestName:          "Unsecured JWT Algorithm Declaration",
+					TestName:          "Unsecured JWT Algorithm Header Indicator",
 					Endpoint:          tok.SourceAsset,
 					Method:            "STATIC",
 					VerificationState: StateCandidate,
-					Severity:          report.SeverityInfo,
+					Severity:          report.SeverityLow,
 					Confidence:        report.ConfidenceMedium,
-					EvidenceSummary:   tok.EvidenceSummary,
+					EvidenceSummary:   "Token structure declares alg=none in header; candidate static indicator (server acceptance not verified without active signature validation test)",
 					CreatedAt:         time.Now().UTC(),
 				}
 				cov.Candidates++
@@ -288,9 +337,9 @@ func (e *Engine) assessAPI2(actx *AssessmentContext) ([]Result, []report.Finding
 			}
 		}
 
-		cov.TestsRun = len(actx.AuthInv.Surfaces) + len(actx.AuthInv.Cookies) + len(actx.AuthInv.Tokens)
-		cov.Explanation = fmt.Sprintf("Analyzed %d authentication surfaces, %d session cookies, and %d token architectures",
-			len(actx.AuthInv.Surfaces), len(actx.AuthInv.Cookies), len(actx.AuthInv.Tokens))
+		cov.TestsRun = len(results)
+		cov.Explanation = fmt.Sprintf("Analyzed %d authentication surfaces, %d session cookies, and %d token architectures (%d verified, %d candidates, %d observations)",
+			len(actx.AuthInv.Surfaces), len(actx.AuthInv.Cookies), len(actx.AuthInv.Tokens), cov.Verified, cov.Candidates, cov.Observations)
 	} else {
 		cov.Explanation = "No authentication intelligence records available"
 	}
@@ -345,6 +394,8 @@ func (e *Engine) assessAPI3(actx *AssessmentContext) ([]Result, []report.Finding
 				findings = append(findings, *fnd)
 			} else if ar.VerificationState == authz.StateNotVulnerable {
 				cov.Status = CoverageActivelyTested
+				r.Severity = report.SeverityInfo
+				r.Confidence = report.ConfidenceHigh
 			} else {
 				cov.Candidates++
 				r.Severity = report.SeverityInfo
@@ -359,7 +410,8 @@ func (e *Engine) assessAPI3(actx *AssessmentContext) ([]Result, []report.Finding
 	if cov.TestsRun > 0 {
 		cov.Explanation = fmt.Sprintf("Evaluated %d property-level exposure/modification tests via Stage 4 engine", cov.TestsRun)
 	} else {
-		cov.Explanation = "No property-level authorization tests executed; policy required via --policy"
+		cov.Status = CoveragePrereqMissing
+		cov.Explanation = "No property-level authorization tests executed; multi-user authorization policy required via --policy"
 	}
 
 	return results, findings, cov
@@ -398,8 +450,9 @@ func (e *Engine) assessAPI4(ctx context.Context, actx *AssessmentContext) ([]Res
 	target := testEndpoints[0]
 	fullURL := actx.BaseURL + target.Path
 
-	// Test 1: Bounded Rate Limiting Audit (Safe 3-request probe)
+	// Bounded Rate Limiting Audit (Safe 3-request probe)
 	hasRateLimitHeader := false
+	got429 := false
 	reqCount := 3
 	for i := 0; i < reqCount; i++ {
 		req, err := http.NewRequestWithContext(ctx, "GET", fullURL, nil)
@@ -409,6 +462,9 @@ func (e *Engine) assessAPI4(ctx context.Context, actx *AssessmentContext) ([]Res
 		resp, err := e.client.Do(req)
 		if err != nil {
 			break
+		}
+		if resp.StatusCode == http.StatusTooManyRequests {
+			got429 = true
 		}
 		for h := range resp.Header {
 			lowerH := strings.ToLower(h)
@@ -421,27 +477,67 @@ func (e *Engine) assessAPI4(ctx context.Context, actx *AssessmentContext) ([]Res
 	}
 
 	cov.TestsRun++
-	if !hasRateLimitHeader {
-		cov.Candidates++
+	if got429 || hasRateLimitHeader {
 		res := Result{
 			ID:                uuid.New().String(),
 			AssessmentID:      actx.AssessmentID,
 			ExecutionID:       actx.ExecutionID,
 			Category:          CategoryAPI4_ResourceConsumption,
 			OWASPCode:         "API4:2023",
-			TestName:          "Rate Limiting Telemetry Header Check",
+			TestName:          "Rate Limiting Defensive Control Verification",
 			Endpoint:          fullURL,
 			Method:            "GET",
-			VerificationState: StateCandidate,
-			Severity:          report.SeverityLow,
+			VerificationState: StateNotVulnerable,
+			Severity:          report.SeverityInfo,
+			Confidence:        report.ConfidenceHigh,
+			EvidenceSummary:   fmt.Sprintf("Endpoint enforced rate limiting or provided telemetry (HTTP 429 observed: %t, telemetry headers: %t)", got429, hasRateLimitHeader),
+			CreatedAt:         time.Now().UTC(),
+		}
+		results = append(results, res)
+	} else {
+		// Missing telemetry headers alone does not demonstrate vulnerability (reverse proxies/WAFs frequently suppress telemetry)
+		cov.Observations++
+		res := Result{
+			ID:                uuid.New().String(),
+			AssessmentID:      actx.AssessmentID,
+			ExecutionID:       actx.ExecutionID,
+			Category:          CategoryAPI4_ResourceConsumption,
+			OWASPCode:         "API4:2023",
+			TestName:          "Rate Limiting Telemetry Header Observation",
+			Endpoint:          fullURL,
+			Method:            "GET",
+			VerificationState: StateObserved,
+			Severity:          report.SeverityInfo,
 			Confidence:        report.ConfidenceMedium,
-			EvidenceSummary:   "API endpoint did not expose standard rate-limiting telemetry headers (RateLimit-Limit, Retry-After)",
+			EvidenceSummary:   "API endpoint did not expose standard rate-limiting telemetry headers (RateLimit-Limit, Retry-After); reverse-proxy or volumetric thresholds may exist unadvertised",
 			CreatedAt:         time.Now().UTC(),
 		}
 		results = append(results, res)
 	}
 
-	cov.Explanation = fmt.Sprintf("Tested rate limiting headers and pagination limits on %s (Rate limit headers present: %t)", target.Path, hasRateLimitHeader)
+	// Record pagination boundary control observations
+	for _, ep := range actx.Endpoints {
+		if ep.HasPagination {
+			cov.Observations++
+			results = append(results, Result{
+				ID:                uuid.New().String(),
+				AssessmentID:      actx.AssessmentID,
+				ExecutionID:       actx.ExecutionID,
+				Category:          CategoryAPI4_ResourceConsumption,
+				OWASPCode:         "API4:2023",
+				TestName:          "Pagination Boundary Control Observation",
+				Endpoint:          actx.BaseURL + ep.Path,
+				Method:            ep.Method,
+				VerificationState: StateObserved,
+				Severity:          report.SeverityInfo,
+				Confidence:        report.ConfidenceHigh,
+				EvidenceSummary:   fmt.Sprintf("Endpoint %s %s accepts pagination parameters; verify server enforces maximum page size limits", ep.Method, ep.Path),
+				CreatedAt:         time.Now().UTC(),
+			})
+		}
+	}
+
+	cov.Explanation = fmt.Sprintf("Tested rate limiting headers and pagination controls on %s (Rate limit enforced/advertised: %t)", target.Path, got429 || hasRateLimitHeader)
 	return results, findings, cov
 }
 
@@ -486,6 +582,8 @@ func (e *Engine) assessAPI5(actx *AssessmentContext) ([]Result, []report.Finding
 				findings = append(findings, *fnd)
 			} else if ar.VerificationState == authz.StateNotVulnerable {
 				cov.Status = CoverageActivelyTested
+				r.Severity = report.SeverityInfo
+				r.Confidence = report.ConfidenceHigh
 			} else {
 				cov.Candidates++
 				r.Severity = report.SeverityInfo
@@ -512,6 +610,7 @@ func (e *Engine) assessAPI5(actx *AssessmentContext) ([]Result, []report.Finding
 
 	if len(adminEndpoints) > 0 {
 		cov.Status = CoveragePrereqMissing
+		cov.Observations = len(adminEndpoints)
 		cov.Explanation = fmt.Sprintf("Discovered %d administrative/privileged API endpoints; active BFLA verification requires role policy via --policy", len(adminEndpoints))
 		results = append(results, Result{
 			ID:                uuid.New().String(),
@@ -556,7 +655,7 @@ func (e *Engine) assessAPI6(actx *AssessmentContext) ([]Result, []report.Finding
 
 	cov.TestsRun = len(flowEndpoints)
 	if len(flowEndpoints) > 0 {
-		cov.Candidates = len(flowEndpoints)
+		cov.Observations = len(flowEndpoints)
 		cov.Explanation = fmt.Sprintf("Identified %d sensitive business workflow endpoints (registration, checkout, password reset)", len(flowEndpoints))
 
 		for _, ep := range flowEndpoints {
@@ -566,13 +665,13 @@ func (e *Engine) assessAPI6(actx *AssessmentContext) ([]Result, []report.Finding
 				ExecutionID:       actx.ExecutionID,
 				Category:          CategoryAPI6_BusinessFlows,
 				OWASPCode:         "API6:2023",
-				TestName:          "Sensitive Business Flow Analysis",
+				TestName:          "Sensitive Business Flow Observation",
 				Endpoint:          ep.Path,
 				Method:            ep.Method,
-				VerificationState: StateCandidate,
+				VerificationState: StateObserved,
 				Severity:          report.SeverityInfo,
 				Confidence:        report.ConfidenceHigh,
-				EvidenceSummary:   fmt.Sprintf("Endpoint %s %s participates in sensitive business flow: %s; verify anti-automation, rate limiting, and CAPTCHA controls", ep.Method, ep.Path, ep.BusinessFlow),
+				EvidenceSummary:   fmt.Sprintf("Endpoint %s %s participates in sensitive business flow: %s; informational observation (recommend auditing rate limits and anti-automation controls)", ep.Method, ep.Path, ep.BusinessFlow),
 				CreatedAt:         time.Now().UTC(),
 			}
 			results = append(results, r)
@@ -606,49 +705,70 @@ func (e *Engine) assessAPI7(ctx context.Context, actx *AssessmentContext) ([]Res
 	cov.TestsRun = len(ssrfCandidates)
 	if len(ssrfCandidates) > 0 {
 		for _, ep := range ssrfCandidates {
-			// Safety validation: If canary callback URL is provided, test safely
+			// If canary callback URL is provided, test safely
+			testedCanary := false
 			if e.cfg.CanaryCallbackURL != "" {
 				// Safety guard: Canary must NOT be localhost or internal IP
-				if isInternalAddress(e.cfg.CanaryCallbackURL) {
-					continue
-				}
+				if !isInternalAddress(e.cfg.CanaryCallbackURL) {
+					testedCanary = true
+					cov.Status = CoverageActivelyTested
+					testURL := actx.BaseURL + ep.Path
+					if strings.Contains(testURL, "?") {
+						testURL += fmt.Sprintf("&%s=%s", ep.URLParamName, url.QueryEscape(e.cfg.CanaryCallbackURL))
+					} else {
+						testURL += fmt.Sprintf("?%s=%s", ep.URLParamName, url.QueryEscape(e.cfg.CanaryCallbackURL))
+					}
 
-				cov.Status = CoverageActivelyTested
-				testURL := actx.BaseURL + ep.Path
-				if strings.Contains(testURL, "?") {
-					testURL += fmt.Sprintf("&%s=%s", ep.URLParamName, url.QueryEscape(e.cfg.CanaryCallbackURL))
-				} else {
-					testURL += fmt.Sprintf("?%s=%s", ep.URLParamName, url.QueryEscape(e.cfg.CanaryCallbackURL))
-				}
-
-				req, err := http.NewRequestWithContext(ctx, "GET", testURL, nil)
-				if err == nil {
-					resp, err := e.client.Do(req)
+					req, err := http.NewRequestWithContext(ctx, "GET", testURL, nil)
 					if err == nil {
-						io.Copy(io.Discard, resp.Body)
-						resp.Body.Close()
+						resp, err := e.client.Do(req)
+						if err == nil {
+							io.Copy(io.Discard, resp.Body)
+							resp.Body.Close()
+						}
 					}
 				}
 			}
 
-			// Record candidate
-			r := Result{
-				ID:                uuid.New().String(),
-				AssessmentID:      actx.AssessmentID,
-				ExecutionID:       actx.ExecutionID,
-				Category:          CategoryAPI7_SSRF,
-				OWASPCode:         "API7:2023",
-				TestName:          "Remote URL Fetching Parameter Analysis",
-				Endpoint:          ep.Path,
-				Method:            ep.Method,
-				VerificationState: StateCandidate,
-				Severity:          report.SeverityLow,
-				Confidence:        report.ConfidenceHigh,
-				EvidenceSummary:   fmt.Sprintf("Endpoint %s %s accepts user-supplied URL parameter %q; potential SSRF fetch surface (requires callback verification)", ep.Method, ep.Path, ep.URLParamName),
-				CreatedAt:         time.Now().UTC(),
+			if testedCanary {
+				// With canary tested but without confirmed out-of-band callback proof, it's a Candidate
+				r := Result{
+					ID:                uuid.New().String(),
+					AssessmentID:      actx.AssessmentID,
+					ExecutionID:       actx.ExecutionID,
+					Category:          CategoryAPI7_SSRF,
+					OWASPCode:         "API7:2023",
+					TestName:          "Remote URL Fetching Parameter Analysis",
+					Endpoint:          ep.Path,
+					Method:            ep.Method,
+					VerificationState: StateCandidate,
+					Severity:          report.SeverityLow,
+					Confidence:        report.ConfidenceMedium,
+					EvidenceSummary:   fmt.Sprintf("Endpoint %s %s accepts URL parameter %q; probed with canary token (requires out-of-band callback verification to confirm SSRF)", ep.Method, ep.Path, ep.URLParamName),
+					CreatedAt:         time.Now().UTC(),
+				}
+				cov.Candidates++
+				results = append(results, r)
+			} else {
+				// Passive parameter observation without active canary testing
+				r := Result{
+					ID:                uuid.New().String(),
+					AssessmentID:      actx.AssessmentID,
+					ExecutionID:       actx.ExecutionID,
+					Category:          CategoryAPI7_SSRF,
+					OWASPCode:         "API7:2023",
+					TestName:          "Remote URL Fetching Parameter Discovery",
+					Endpoint:          ep.Path,
+					Method:            ep.Method,
+					VerificationState: StateObserved,
+					Severity:          report.SeverityInfo,
+					Confidence:        report.ConfidenceHigh,
+					EvidenceSummary:   fmt.Sprintf("Endpoint %s %s accepts user-supplied URL parameter %q; potential SSRF fetch surface (requires callback verification)", ep.Method, ep.Path, ep.URLParamName),
+					CreatedAt:         time.Now().UTC(),
+				}
+				cov.Observations++
+				results = append(results, r)
 			}
-			cov.Candidates++
-			results = append(results, r)
 		}
 		cov.Explanation = fmt.Sprintf("Discovered %d potential SSRF fetch parameters; internal probing prohibited by safety policy", len(ssrfCandidates))
 	} else {
@@ -692,7 +812,15 @@ func (e *Engine) assessAPI8(ctx context.Context, actx *AssessmentContext) ([]Res
 	cov.TestsRun++
 
 	// 1. Check Missing X-Content-Type-Options: nosniff
+	// Defense-in-depth header; missing header alone is an informational observation, never a verified vulnerability
 	if resp.Header.Get("X-Content-Type-Options") != "nosniff" {
+		contentType := resp.Header.Get("Content-Type")
+		isSniffableMIME := strings.Contains(contentType, "text/html") || strings.Contains(contentType, "image/svg+xml")
+		state := StateObserved
+		if isSniffableMIME {
+			state = StateCandidate
+		}
+
 		r := Result{
 			ID:                uuid.New().String(),
 			AssessmentID:      actx.AssessmentID,
@@ -702,46 +830,78 @@ func (e *Engine) assessAPI8(ctx context.Context, actx *AssessmentContext) ([]Res
 			TestName:          "Missing X-Content-Type-Options Header",
 			Endpoint:          testURL,
 			Method:            "GET",
-			VerificationState: StateVerified,
+			VerificationState: state,
 			Severity:          report.SeverityInfo,
 			Confidence:        report.ConfidenceHigh,
-			EvidenceSummary:   "API response missing X-Content-Type-Options: nosniff defense-in-depth header",
+			EvidenceSummary:   "API response missing X-Content-Type-Options: nosniff defense-in-depth header (informational hardening observation)",
 			CreatedAt:         time.Now().UTC(),
 		}
-		cov.Verified++
-		cov.Status = CoverageVerifiedIssueFound
-		fnd := e.createFinding(actx, r, "API8:2023 Missing X-Content-Type-Options: nosniff header", r.EvidenceSummary, report.SeverityInfo, 1)
-		r.Finding = fnd
-		findings = append(findings, *fnd)
+		if state == StateCandidate {
+			cov.Candidates++
+		} else {
+			cov.Observations++
+		}
 		results = append(results, r)
 	}
 
-	// 2. Check Permissive CORS Wildcard on API Endpoint
+	// 2. Check Permissive CORS Configuration
 	corsOrigin := resp.Header.Get("Access-Control-Allow-Origin")
+	corsCredentials := strings.EqualFold(resp.Header.Get("Access-Control-Allow-Credentials"), "true")
+
 	if corsOrigin == "*" {
-		r := Result{
-			ID:                uuid.New().String(),
-			AssessmentID:      actx.AssessmentID,
-			ExecutionID:       actx.ExecutionID,
-			Category:          CategoryAPI8_Misconfiguration,
-			OWASPCode:         "API8:2023",
-			TestName:          "Permissive CORS Wildcard Origin",
-			Endpoint:          testURL,
-			Method:            "GET",
-			VerificationState: StateObserved,
-			Severity:          report.SeverityInfo,
-			Confidence:        report.ConfidenceHigh,
-			EvidenceSummary:   "API endpoint permits wildcard (*) CORS origin",
-			CreatedAt:         time.Now().UTC(),
+		if corsCredentials {
+			// Credentialed wildcard CORS is a genuine security misconfiguration
+			r := Result{
+				ID:                uuid.New().String(),
+				AssessmentID:      actx.AssessmentID,
+				ExecutionID:       actx.ExecutionID,
+				Category:          CategoryAPI8_Misconfiguration,
+				OWASPCode:         "API8:2023",
+				TestName:          "Credentialed CORS Wildcard Configuration",
+				Endpoint:          testURL,
+				Method:            "GET",
+				VerificationState: StateVerified,
+				Severity:          report.SeverityMedium,
+				Confidence:        report.ConfidenceHigh,
+				EvidenceSummary:   "API endpoint permits wildcard (*) CORS origin with Access-Control-Allow-Credentials: true",
+				CreatedAt:         time.Now().UTC(),
+			}
+			cov.Verified++
+			cov.Status = CoverageVerifiedIssueFound
+			fnd := e.createFinding(actx, r, "API8:2023 Insecure Credentialed CORS Wildcard", r.EvidenceSummary, report.SeverityMedium, 55)
+			r.Finding = fnd
+			findings = append(findings, *fnd)
+			results = append(results, r)
+		} else {
+			// Standard public API wildcard CORS: informational observation only
+			r := Result{
+				ID:                uuid.New().String(),
+				AssessmentID:      actx.AssessmentID,
+				ExecutionID:       actx.ExecutionID,
+				Category:          CategoryAPI8_Misconfiguration,
+				OWASPCode:         "API8:2023",
+				TestName:          "Permissive CORS Wildcard Origin",
+				Endpoint:          testURL,
+				Method:            "GET",
+				VerificationState: StateObserved,
+				Severity:          report.SeverityInfo,
+				Confidence:        report.ConfidenceHigh,
+				EvidenceSummary:   "API endpoint permits uncredentialed wildcard (*) CORS origin (standard for public APIs)",
+				CreatedAt:         time.Now().UTC(),
+			}
+			cov.Observations++
+			results = append(results, r)
 		}
-		cov.Candidates++
-		results = append(results, r)
 	}
 
 	// 3. Verbose Error Disclosure Check
 	bodyStr := string(bodyBytes)
-	if strings.Contains(bodyStr, "Traceback (most recent call last)") ||
-		strings.Contains(bodyStr, "Fatal error:") || strings.Contains(bodyStr, "SQL syntax error") {
+	hasStackTrace := strings.Contains(bodyStr, "Traceback (most recent call last)") ||
+		strings.Contains(bodyStr, "Fatal error:")
+	hasSQLErrorHint := strings.Contains(bodyStr, "SQL syntax error") ||
+		strings.Contains(bodyStr, "syntax error at or near")
+
+	if hasStackTrace {
 		r := Result{
 			ID:                uuid.New().String(),
 			AssessmentID:      actx.AssessmentID,
@@ -752,16 +912,34 @@ func (e *Engine) assessAPI8(ctx context.Context, actx *AssessmentContext) ([]Res
 			Endpoint:          testURL,
 			Method:            "GET",
 			VerificationState: StateVerified,
-			Severity:          report.SeverityMedium,
+			Severity:          report.SeverityLow,
 			Confidence:        report.ConfidenceHigh,
-			EvidenceSummary:   "Server response disclosed internal stack trace or SQL syntax error details",
+			EvidenceSummary:   "Server response disclosed internal stack trace or fatal execution error details",
 			CreatedAt:         time.Now().UTC(),
 		}
 		cov.Verified++
 		cov.Status = CoverageVerifiedIssueFound
-		fnd := e.createFinding(actx, r, "API8:2023 Verbose Error Disclosure in API Response", r.EvidenceSummary, report.SeverityMedium, 50)
+		fnd := e.createFinding(actx, r, "API8:2023 Verbose Error Disclosure in API Response", r.EvidenceSummary, report.SeverityLow, 25)
 		r.Finding = fnd
 		findings = append(findings, *fnd)
+		results = append(results, r)
+	} else if hasSQLErrorHint {
+		r := Result{
+			ID:                uuid.New().String(),
+			AssessmentID:      actx.AssessmentID,
+			ExecutionID:       actx.ExecutionID,
+			Category:          CategoryAPI8_Misconfiguration,
+			OWASPCode:         "API8:2023",
+			TestName:          "Database Error Syntax Indicator",
+			Endpoint:          testURL,
+			Method:            "GET",
+			VerificationState: StateCandidate,
+			Severity:          report.SeverityLow,
+			Confidence:        report.ConfidenceMedium,
+			EvidenceSummary:   "Server response revealed raw database error syntax details; candidate disclosure (SQL injection exploitability unverified)",
+			CreatedAt:         time.Now().UTC(),
+		}
+		cov.Candidates++
 		results = append(results, r)
 	}
 
@@ -783,6 +961,7 @@ func (e *Engine) assessAPI9(actx *AssessmentContext) ([]Result, []report.Finding
 
 	// Check 1: Shadow Endpoints (discovered vs declared spec)
 	if actx.DeclaredSpec != nil && len(actx.DeclaredSpec.Endpoints) > 0 {
+		cov.Status = CoverageActivelyTested
 		var shadowEndpoints []APIEndpoint
 		for _, ep := range actx.Endpoints {
 			key := fmt.Sprintf("%s:%s", ep.Method, strings.ToLower(ep.Path))
@@ -792,8 +971,7 @@ func (e *Engine) assessAPI9(actx *AssessmentContext) ([]Result, []report.Finding
 		}
 
 		if len(shadowEndpoints) > 0 {
-			cov.Verified += len(shadowEndpoints)
-			cov.Status = CoverageVerifiedIssueFound
+			cov.Candidates += len(shadowEndpoints)
 			for _, sep := range shadowEndpoints {
 				r := Result{
 					ID:                uuid.New().String(),
@@ -801,19 +979,15 @@ func (e *Engine) assessAPI9(actx *AssessmentContext) ([]Result, []report.Finding
 					ExecutionID:       actx.ExecutionID,
 					Category:          CategoryAPI9_ImproperInventory,
 					OWASPCode:         "API9:2023",
-					TestName:          "Shadow / Undocumented API Endpoint",
+					TestName:          "Undocumented API Endpoint Drift",
 					Endpoint:          sep.Path,
 					Method:            sep.Method,
-					VerificationState: StateVerified,
-					Severity:          report.SeverityLow,
+					VerificationState: StateCandidate,
+					Severity:          report.SeverityInfo,
 					Confidence:        report.ConfidenceHigh,
-					EvidenceSummary:   fmt.Sprintf("Discovered API endpoint %s %s was absent from declared API specification (Shadow API)", sep.Method, sep.Path),
+					EvidenceSummary:   fmt.Sprintf("Discovered API endpoint %s %s was absent from declared API specification (spec drift / undocumented route)", sep.Method, sep.Path),
 					CreatedAt:         time.Now().UTC(),
 				}
-				fnd := e.createFinding(actx, r, fmt.Sprintf("API9:2023 Undocumented Shadow API Endpoint (%s)", sep.Path),
-					r.EvidenceSummary, report.SeverityLow, 20)
-				r.Finding = fnd
-				findings = append(findings, *fnd)
 				results = append(results, r)
 			}
 		}
@@ -832,7 +1006,7 @@ func (e *Engine) assessAPI9(actx *AssessmentContext) ([]Result, []report.Finding
 		for v := range versionsSeen {
 			vList = append(vList, v)
 		}
-		cov.Candidates++
+		cov.Observations++
 		r := Result{
 			ID:                uuid.New().String(),
 			AssessmentID:      actx.AssessmentID,
@@ -852,7 +1026,7 @@ func (e *Engine) assessAPI9(actx *AssessmentContext) ([]Result, []report.Finding
 	}
 
 	cov.TestsRun = len(actx.Endpoints)
-	cov.Explanation = fmt.Sprintf("Analyzed %d discovered endpoints for inventory discrepancies and version coexistence", len(actx.Endpoints))
+	cov.Explanation = fmt.Sprintf("Analyzed %d discovered endpoints for inventory discrepancies and version coexistence (%d candidate drift, %d observations)", len(actx.Endpoints), cov.Candidates, cov.Observations)
 	return results, findings, cov
 }
 
@@ -883,20 +1057,20 @@ func (e *Engine) assessAPI10(ctx context.Context, actx *AssessmentContext) ([]Re
 
 	cov.TestsRun = len(externalIntegrations)
 	if len(externalIntegrations) > 0 {
-		cov.Candidates = len(externalIntegrations)
+		cov.Observations = len(externalIntegrations)
 		r := Result{
 			ID:                uuid.New().String(),
 			AssessmentID:      actx.AssessmentID,
 			ExecutionID:       actx.ExecutionID,
 			Category:          CategoryAPI10_UnsafeConsumption,
 			OWASPCode:         "API10:2023",
-			TestName:          "Third-Party API Integration Audit",
+			TestName:          "Third-Party API Integration Observation",
 			Endpoint:          externalIntegrations[0],
 			Method:            "GET",
-			VerificationState: StateCandidate,
+			VerificationState: StateObserved,
 			Severity:          report.SeverityInfo,
-			Confidence:        report.ConfidenceMedium,
-			EvidenceSummary:   fmt.Sprintf("Identified %d third-party partner integration endpoints; verify input validation on external responses", len(externalIntegrations)),
+			Confidence:        report.ConfidenceHigh,
+			EvidenceSummary:   fmt.Sprintf("Identified %d third-party partner integration endpoints (%s); informational architectural observation", len(externalIntegrations), strings.Join(externalIntegrations, ", ")),
 			CreatedAt:         time.Now().UTC(),
 		}
 		results = append(results, r)
@@ -923,12 +1097,17 @@ func (e *Engine) createFinding(
 	hash := sha256.Sum256([]byte(fpData))
 	fingerprint := fmt.Sprintf("apisec-%x", hash[:8])
 
+	conf := r.Confidence
+	if conf == "" {
+		conf = report.ConfidenceHigh
+	}
+
 	return &report.Finding{
 		ID:          uuid.New().String(),
 		Title:       title,
 		Category:    fmt.Sprintf("OWASP %s / %s", r.OWASPCode, OWASPCategoryMetadata[r.Category].Name),
 		Severity:    severity,
-		Confidence:  report.ConfidenceHigh,
+		Confidence:  conf,
 		Target:      sanitizedTarget,
 		Endpoint:    sanitizedEndpoint,
 		Method:      r.Method,
@@ -970,10 +1149,24 @@ func (e *Engine) compileSummary(results []Result, coverage map[string]CategoryCo
 			sum.VerifiedCount++
 		case StateCandidate:
 			sum.CandidateCount++
+		case StateObserved:
+			sum.ObservedCount++
 		case StateInconclusive:
 			sum.InconclusiveCount++
 		case StateNotVulnerable:
 			sum.NotVulnerableCount++
+		}
+	}
+
+	// Ensure CoverageVerifiedIssueFound is ONLY set when verified findings actually exist
+	for catKey, cov := range coverage {
+		if cov.Status == CoverageVerifiedIssueFound && cov.Verified == 0 {
+			if cov.TestsRun > 0 {
+				cov.Status = CoverageActivelyTested
+			} else {
+				cov.Status = CoveragePassivelyAssessed
+			}
+			coverage[catKey] = cov
 		}
 	}
 

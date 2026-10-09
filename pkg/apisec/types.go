@@ -89,6 +89,15 @@ var OWASPCategoryMetadata = map[OWASPCategory]CategoryInfo{
 }
 
 // VerificationState represents the empirical verification state of an API security test.
+// Rationale & Evidence Criteria:
+// - StateObserved: A condition, endpoint, configuration, or architectural pattern was identified.
+//   No demonstrated security control failure, unauthorized access, or vulnerability exists.
+// - StateCandidate: Evidence suggests a potential security issue or missing defense-in-depth control,
+//   but weakness or exploitability is not established under current testing context.
+// - StateVerified: Empirical evidence directly demonstrates that a security control failed,
+//   unauthorized access occurred, or a vulnerability exists under tested conditions.
+// - StateInconclusive: Available responses or network telemetry are ambiguous or indeterminate.
+// - StateNotVulnerable: The specific tested scenario demonstrated expected defensive enforcement.
 type VerificationState string
 
 const (
@@ -112,14 +121,15 @@ const (
 
 // CategoryCoverage records the coverage and findings count for a specific OWASP category.
 type CategoryCoverage struct {
-	Category    OWASPCategory  `json:"category"`
-	Code        string         `json:"code"`
-	Name        string         `json:"name"`
-	Status      CoverageStatus `json:"status"`
-	TestsRun    int            `json:"tests_run"`
-	Verified    int            `json:"verified_findings"`
-	Candidates  int            `json:"candidate_findings"`
-	Explanation string         `json:"explanation"`
+	Category     OWASPCategory  `json:"category"`
+	Code         string         `json:"code"`
+	Name         string         `json:"name"`
+	Status       CoverageStatus `json:"status"`
+	TestsRun     int            `json:"tests_run"`
+	Verified     int            `json:"verified_findings"`
+	Candidates   int            `json:"candidate_findings"`
+	Observations int            `json:"observed_findings"`
+	Explanation  string         `json:"explanation"`
 }
 
 // Result records an individual test evaluation outcome within the API security engine.
@@ -145,23 +155,24 @@ type Result struct {
 
 // Summary aggregates API security assessment coverage, findings, and metrics.
 type Summary struct {
-	TotalTests       int                         `json:"total_tests"`
-	CategoriesCovered int                        `json:"categories_covered"`
-	VerifiedCount    int                         `json:"verified_count"`
-	CandidateCount   int                         `json:"candidate_count"`
-	InconclusiveCount int                        `json:"inconclusive_count"`
-	NotVulnerableCount int                       `json:"not_vulnerable_count"`
-	CoverageMap      map[string]CategoryCoverage `json:"coverage"`
+	TotalTests         int                         `json:"total_tests"`
+	CategoriesCovered   int                         `json:"categories_covered"`
+	VerifiedCount      int                         `json:"verified_count"`
+	CandidateCount     int                         `json:"candidate_count"`
+	ObservedCount      int                         `json:"observed_count"`
+	InconclusiveCount  int                         `json:"inconclusive_count"`
+	NotVulnerableCount int                         `json:"not_vulnerable_count"`
+	CoverageMap        map[string]CategoryCoverage `json:"coverage"`
 }
 
 // Config specifies runtime parameters for the API security engine.
 type Config struct {
-	Timeout          time.Duration
-	Concurrency      int
+	Timeout            time.Duration
+	Concurrency        int
 	MaxRequestsPerTest int
-	AllowWriteTests  bool
-	SpecPath         string   // Optional path to declared API spec/schema
-	CanaryCallbackURL string  // Approved callback destination for SSRF canary verification
+	AllowWriteTests    bool
+	SpecPath           string // Optional path to declared API spec/schema
+	CanaryCallbackURL  string // Approved callback destination for SSRF canary verification
 }
 
 // DefaultConfig returns safe default configuration for API security testing.
@@ -176,15 +187,16 @@ func DefaultConfig() Config {
 
 // RunRecord represents persistent execution metadata for an API security assessment run.
 type RunRecord struct {
-	ID                 string                      `json:"id"`
-	AssessmentID       string                      `json:"assessment_id"`
-	ExecutionID        string                      `json:"execution_id"`
-	TotalTests         int                         `json:"total_tests"`
-	CategoriesAssessed int                         `json:"categories_assessed"`
-	VerifiedCount      int                         `json:"verified_count"`
-	CandidateCount     int                         `json:"candidate_count"`
-	CoverageJSON       string                      `json:"coverage_json"`
-	CreatedAt          time.Time                   `json:"created_at"`
+	ID                 string    `json:"id"`
+	AssessmentID       string    `json:"assessment_id"`
+	ExecutionID        string    `json:"execution_id"`
+	TotalTests         int       `json:"total_tests"`
+	CategoriesAssessed int       `json:"categories_assessed"`
+	VerifiedCount      int       `json:"verified_count"`
+	CandidateCount     int       `json:"candidate_count"`
+	ObservedCount      int       `json:"observed_count,omitempty"`
+	CoverageJSON       string    `json:"coverage_json"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 // SanitizeHeaders strips sensitive auth tokens and passwords from HTTP headers.

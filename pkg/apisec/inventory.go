@@ -150,7 +150,7 @@ func classifyBusinessFlow(path string) string {
 	switch {
 	case strings.Contains(lower, "register") || strings.Contains(lower, "signup"):
 		return "USER_REGISTRATION"
-	case strings.Contains(lower, "forgot-password") || strings.Contains(lower, "reset-password") || strings.Contains(lower, "recovery"):
+	case strings.Contains(lower, "forgot-password") || strings.Contains(lower, "reset-password") || strings.Contains(lower, "password-reset") || strings.Contains(lower, "recovery"):
 		return "PASSWORD_RESET"
 	case strings.Contains(lower, "invite") || strings.Contains(lower, "referral"):
 		return "INVITATION_REFERRAL"
@@ -168,6 +168,10 @@ func classifyBusinessFlow(path string) string {
 func normalizePath(p string) string {
 	p = strings.TrimSpace(p)
 	p = regexp.MustCompile(`\{[^}]+\}`).ReplaceAllString(p, "{id}")
+	p = strings.TrimRight(p, "/")
+	if p == "" {
+		p = "/"
+	}
 	return strings.ToLower(p)
 }
 
@@ -178,3 +182,18 @@ func normalizeEndpointKey(raw string) string {
 	}
 	return fmt.Sprintf("GET:%s", normalizePath(raw))
 }
+
+// DeduplicateEndpoints removes duplicate endpoints with the same HTTP method and normalized path.
+func DeduplicateEndpoints(endpoints []APIEndpoint) []APIEndpoint {
+	seen := make(map[string]struct{})
+	var unique []APIEndpoint
+	for _, ep := range endpoints {
+		key := fmt.Sprintf("%s:%s", strings.ToUpper(strings.TrimSpace(ep.Method)), normalizePath(ep.Path))
+		if _, ok := seen[key]; !ok {
+			seen[key] = struct{}{}
+			unique = append(unique, ep)
+		}
+	}
+	return unique
+}
+

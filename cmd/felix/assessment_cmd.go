@@ -2272,6 +2272,7 @@ func runAssessmentAPISec(args []string) int {
 			CategoriesAssessed: summary.CategoriesCovered,
 			VerifiedCount:      summary.VerifiedCount,
 			CandidateCount:     summary.CandidateCount,
+			ObservedCount:      summary.ObservedCount,
 			CoverageJSON:       string(covJSON),
 			CreatedAt:          completedAt,
 		}
@@ -2325,12 +2326,14 @@ func runAssessmentAPISec(args []string) int {
 	if summary != nil && len(summary.CoverageMap) > 0 {
 		fmt.Printf("  Total Tests Run:          %d\n", summary.TotalTests)
 		fmt.Printf("  Verified Vulnerabilities: %d\n", summary.VerifiedCount)
-		fmt.Printf("  Candidates / Observations: %d\n", summary.CandidateCount)
+		fmt.Printf("  Candidate Issues:         %d\n", summary.CandidateCount)
+		fmt.Printf("  Observations:             %d\n", summary.ObservedCount)
+		fmt.Printf("  Not Vulnerable / Defended:%d\n", summary.NotVulnerableCount)
 		fmt.Println("-----------------------------------------------------------")
 
 		fmt.Println("\n[+] OWASP API SECURITY TOP 10 COVERAGE MATRIX:")
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "CODE\tCATEGORY\tSTATUS\tTESTS\tVERIFIED\tCANDIDATES\tEXPLANATION")
+		fmt.Fprintln(w, "CODE\tCATEGORY\tSTATUS\tTESTS\tVERIFIED\tCANDIDATES\tOBSERVED\tEXPLANATION")
 
 		// Sort or iterate consistently
 		categories := []apisec.OWASPCategory{
@@ -2357,8 +2360,8 @@ func runAssessmentAPISec(args []string) int {
 					Explanation: "Untested",
 				}
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%d\t%s\n",
-				cov.Code, cov.Name, cov.Status, cov.TestsRun, cov.Verified, cov.Candidates, cov.Explanation)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%d\t%d\t%s\n",
+				cov.Code, cov.Name, cov.Status, cov.TestsRun, cov.Verified, cov.Candidates, cov.Observations, cov.Explanation)
 		}
 		_ = w.Flush()
 	}
