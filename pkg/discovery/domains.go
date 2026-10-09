@@ -14,11 +14,83 @@ import (
 )
 
 var (
-	// Regex matching valid fully qualified domain names and hostnames in content
-	hostnameRegex = regexp.MustCompile(`\b([a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)+)\b`)
+	// Regex matching valid fully qualified domain names and hostnames in content (TLD must be alphabetic 2-24 chars)
+	hostnameRegex = regexp.MustCompile(`\b([a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,24})\b`)
 	// Regex matching full URLs in code/text
-	urlSchemeRegex = regexp.MustCompile(`https?://([a-zA-Z0-9\.\-]+(?::[0-9]+)?)`)
+	urlSchemeRegex = regexp.MustCompile(`(?i)https?://([a-zA-Z0-9\.\-]+(?::[0-9]+)?)`)
+	// Regex matching protocol-relative URLs (e.g. //cdn.example.com/asset.js)
+	protoRelURLRegex = regexp.MustCompile(`(?i)(?:^|[\s"'=])//([a-zA-Z0-9\.\-]+(?::[0-9]+)?)(?:[/\s"'?#]|$)`)
+	// Regex matching email addresses
+	emailRegex = regexp.MustCompile(`(?i)\b[a-zA-Z0-9._%+-]+@([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\b`)
 )
+
+var badDomainSuffixes = []string{
+	// Images & media
+	".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".avif", ".bmp", ".ico", ".tiff",
+	".mp3", ".mp4", ".wav", ".ogg", ".webm", ".flac", ".aac", ".m4a", ".mov", ".avi", ".mkv",
+	// Web assets & fonts
+	".css", ".js", ".mjs", ".map", ".wasm", ".woff", ".woff2", ".ttf", ".otf", ".eot",
+	// Documents & archives
+	".json", ".xml", ".txt", ".html", ".htm", ".pdf", ".zip", ".tar", ".gz", ".7z", ".rar",
+	// Config & data
+	".yaml", ".yml", ".md", ".toml", ".lock", ".csv", ".tsv",
+}
+
+var knownTLDs = map[string]struct{}{
+	// Infrastructure & standard gTLDs
+	"com": {}, "org": {}, "net": {}, "edu": {}, "gov": {}, "mil": {}, "int": {}, "arpa": {},
+	// Popular tech & modern gTLDs
+	"io": {}, "co": {}, "ai": {}, "app": {}, "dev": {}, "me": {}, "tech": {}, "site": {}, "space": {},
+	"online": {}, "store": {}, "xyz": {}, "info": {}, "biz": {}, "cloud": {}, "digital": {},
+	"security": {}, "systems": {}, "network": {}, "agency": {}, "global": {}, "world": {},
+	"live": {}, "pro": {}, "top": {}, "club": {}, "design": {}, "media": {}, "news": {},
+	"press": {}, "link": {}, "click": {}, "vip": {}, "work": {}, "today": {}, "run": {},
+	"page": {}, "zone": {}, "host": {}, "build": {}, "shop": {}, "social": {}, "group": {},
+	"team": {}, "life": {}, "solutions": {}, "services": {}, "expert": {}, "studio": {},
+	"company": {}, "email": {}, "tools": {}, "report": {}, "chat": {}, "bot": {}, "tv": {},
+	"cc": {}, "sh": {}, "ws": {}, "fm": {}, "so": {}, "guru": {}, "center": {}, "community": {},
+	"pub": {}, "plus": {}, "help": {}, "direct": {}, "care": {}, "fund": {}, "exchange": {},
+	"finance": {}, "market": {}, "trading": {}, "capital": {}, "ventures": {}, "holdings": {},
+	"one": {}, "art": {}, "bio": {}, "law": {}, "fit": {}, "vet": {}, "ink": {}, "icu": {},
+	// Common private/internal TLDs
+	"corp": {}, "local": {}, "internal": {}, "lan": {}, "home": {}, "test": {}, "example": {},
+	"invalid": {}, "localhost": {}, "onion": {},
+}
+
+func isValidTLDSyntax(tld string) bool {
+	if strings.HasPrefix(tld, "xn--") && len(tld) > 4 {
+		return true
+	}
+	if len(tld) < 2 || len(tld) > 24 {
+		return false
+	}
+	for _, ch := range tld {
+		if ch < 'a' || ch > 'z' {
+			return false
+		}
+	}
+	return true
+}
+
+func isPlausibleTLD(tld string) bool {
+	tld = strings.ToLower(tld)
+	if strings.HasPrefix(tld, "xn--") {
+		return true
+	}
+	if _, ok := knownTLDs[tld]; ok {
+		return true
+	}
+	// Common two-letter ccTLD (excluding CSS units and JS keywords)
+	if len(tld) == 2 {
+		nonTLDUnits := map[string]struct{}{
+			"em": {}, "px": {}, "pt": {}, "vh": {}, "vw": {}, "rem": {}, "ms": {}, "ch": {},
+		}
+		if _, isUnit := nonTLDUnits[tld]; !isUnit {
+			return true
+		}
+	}
+	return false
+}
 
 // ExtractRootDomain derives the apex/registrable domain from a hostname.
 // Handles common two-level TLDs (e.g. co.uk, com.au) and standard single-level TLDs.
@@ -71,34 +143,47 @@ func ExtractHostnamesFromContent(content string) []string {
 	seen := make(map[string]struct{})
 	var results []string
 
-	// 1. Extract from full URLs first
-	urlMatches := urlSchemeRegex.FindAllStringSubmatch(content, -1)
-	for _, m := range urlMatches {
-		if len(m) > 1 {
-			host := m[1]
-			if idx := strings.Index(host, ":"); idx != -1 {
-				host = host[:idx]
-			}
-			cleanHost := strings.ToLower(strings.TrimSpace(host))
-			if isValidHostname(cleanHost) {
-				if _, exists := seen[cleanHost]; !exists {
-					seen[cleanHost] = struct{}{}
-					results = append(results, cleanHost)
-				}
+	addHost := func(host string) {
+		if idx := strings.Index(host, ":"); idx != -1 {
+			host = host[:idx]
+		}
+		cleanHost := strings.ToLower(strings.TrimSpace(host))
+		if isValidHostname(cleanHost) {
+			if _, exists := seen[cleanHost]; !exists {
+				seen[cleanHost] = struct{}{}
+				results = append(results, cleanHost)
 			}
 		}
 	}
 
-	// 2. Extract from raw hostnames in text
+	// 1. Extract from full URLs first
+	urlMatches := urlSchemeRegex.FindAllStringSubmatch(content, -1)
+	for _, m := range urlMatches {
+		if len(m) > 1 {
+			addHost(m[1])
+		}
+	}
+
+	// 2. Extract from protocol-relative URLs (e.g. //cdn.example.com/...)
+	protoRelMatches := protoRelURLRegex.FindAllStringSubmatch(content, -1)
+	for _, m := range protoRelMatches {
+		if len(m) > 1 {
+			addHost(m[1])
+		}
+	}
+
+	// 3. Extract email hostnames
+	emailMatches := emailRegex.FindAllStringSubmatch(content, -1)
+	for _, m := range emailMatches {
+		if len(m) > 1 {
+			addHost(m[1])
+		}
+	}
+
+	// 4. Extract from raw hostnames in text
 	matches := hostnameRegex.FindAllString(content, -1)
 	for _, raw := range matches {
-		clean := strings.ToLower(strings.TrimSpace(raw))
-		if isValidHostname(clean) {
-			if _, exists := seen[clean]; !exists {
-				seen[clean] = struct{}{}
-				results = append(results, clean)
-			}
-		}
+		addHost(raw)
 	}
 
 	return results
@@ -369,26 +454,46 @@ func (de *DomainExtractor) IngestDiscoveredHost(
 }
 
 func isValidHostname(h string) bool {
-	if len(h) < 3 || len(h) > 253 {
+	h = strings.ToLower(strings.TrimSpace(h))
+	if len(h) < 4 || len(h) > 253 {
 		return false
 	}
-	if strings.HasPrefix(h, ".") || strings.HasSuffix(h, ".") {
+	if strings.HasPrefix(h, ".") || strings.HasSuffix(h, ".") || strings.Contains(h, "..") {
 		return false
 	}
+
 	// Exclude obvious file extensions falsely matched as domains
-	badSuffixes := []string{
-		".png", ".jpg", ".jpeg", ".gif", ".svg", ".css", ".js", ".mjs", ".map",
-		".woff", ".woff2", ".ttf", ".eot", ".ico", ".json", ".xml", ".txt",
-		".html", ".htm", ".pdf", ".zip", ".tar", ".gz",
-	}
-	for _, s := range badSuffixes {
+	for _, s := range badDomainSuffixes {
 		if strings.HasSuffix(h, s) {
 			return false
 		}
 	}
+
 	// Must contain at least one dot
-	if !strings.Contains(h, ".") {
+	parts := strings.Split(h, ".")
+	if len(parts) < 2 {
 		return false
 	}
-	return true
+
+	// Validate each label per RFC 1035 / RFC 1123
+	for _, part := range parts {
+		if len(part) == 0 || len(part) > 63 {
+			return false
+		}
+		if strings.HasPrefix(part, "-") || strings.HasSuffix(part, "-") {
+			return false
+		}
+		for _, ch := range part {
+			if !(ch >= 'a' && ch <= 'z') && !(ch >= '0' && ch <= '9') && ch != '-' {
+				return false
+			}
+		}
+	}
+
+	tld := parts[len(parts)-1]
+	if !isValidTLDSyntax(tld) {
+		return false
+	}
+
+	return isPlausibleTLD(tld)
 }

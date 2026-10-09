@@ -35,7 +35,14 @@ func TestExtractHostnamesFromContent(t *testing.T) {
 	content := `
 		Check out https://api.example.com/v1 and https://cdn.assets.net/script.js.
 		Also internal host staging.internal.corp is mentioned here.
+		Contact us at admin@corporate.org or visit //assets.global.net/app.
 		Ignore images like test.png or fake.map.
+		Ignore media files: intro-cinematic.mp4 and soundtrack.mp3.
+		Ignore CSS utilities: gap-1.5 py-2.5 translate-x-0.5 1.5rem 0.18em.
+		Ignore SVG coordinates: m13.832 9.2-11.5 85.5 0.08.
+		Ignore JavaScript DOM accesses: document.documentElement.classList.toggle('dark'),
+		localStorage.getItem('token'), window.matchMedia('(prefers-color-scheme)'),
+		React.Fragment, next.metadata.
 	`
 	hosts := ExtractHostnamesFromContent(content)
 	found := make(map[string]bool)
@@ -43,6 +50,7 @@ func TestExtractHostnamesFromContent(t *testing.T) {
 		found[h] = true
 	}
 
+	// Legitimate targets must be discovered
 	if !found["api.example.com"] {
 		t.Errorf("expected api.example.com to be discovered, got: %v", hosts)
 	}
@@ -52,8 +60,24 @@ func TestExtractHostnamesFromContent(t *testing.T) {
 	if !found["staging.internal.corp"] {
 		t.Errorf("expected staging.internal.corp to be discovered, got: %v", hosts)
 	}
-	if found["test.png"] {
-		t.Errorf("test.png should be ignored as an asset suffix, got: %v", hosts)
+	if !found["corporate.org"] {
+		t.Errorf("expected corporate.org from email to be discovered, got: %v", hosts)
+	}
+	if !found["assets.global.net"] {
+		t.Errorf("expected assets.global.net from protocol-relative URL to be discovered, got: %v", hosts)
+	}
+
+	// False positives from real-world sites must be strictly rejected
+	falsePositives := []string{
+		"test.png", "fake.map", "intro-cinematic.mp4", "soundtrack.mp3",
+		"0.08", "85.5", "1.5rem", "0.18em", "gap-1.5", "py-2.5", "translate-x-0.5",
+		"document.documentelement.classlist.toggle", "localstorage.getitem",
+		"window.matchmedia", "react.fragment", "next.metadata",
+	}
+	for _, fp := range falsePositives {
+		if found[fp] {
+			t.Errorf("false positive hostname %q should NOT be discovered; all found: %v", fp, hosts)
+		}
 	}
 }
 
