@@ -104,11 +104,12 @@ func (a *AzureAdapter) auditBlob(ctx context.Context, actx *AssessmentContext, c
 		*findings = append(*findings, *fnd)
 		cov.Verified++
 	} else {
-		rBlob.VerificationState = StateNotVulnerable
+		rBlob.VerificationState = StateInconclusive
 		rBlob.Severity = report.SeverityInfo
-		rBlob.Confidence = report.ConfidenceHigh
-		rBlob.EvidenceSummary = "Storage account disables public blob access (allowBlobPublicAccess: false) and enforces HTTPS"
-		cov.NotVulnerable++
+		rBlob.Confidence = report.ConfidenceLow
+		rBlob.EvidenceSummary = "Live Azure Blob inspection requires active ARM connection with Microsoft.Storage/storageAccounts/read permissions; not executed in offline mode"
+		cov.Inconclusive++
+		cov.Status = CoverageBlockedPermissions
 	}
 
 	cov.ChecksRun++
@@ -135,25 +136,28 @@ func (a *AzureAdapter) auditAppService(ctx context.Context, actx *AssessmentCont
 	}
 
 	if actx.SyntheticFixture {
-		rApp.VerificationState = StateVerified
-		rApp.Severity = report.SeverityMedium
+		// CANDIDATE: Insecure HTTP allowed (httpsOnly: false). Transport encryption configuration candidate.
+		rApp.VerificationState = StateCandidate
+		rApp.Severity = report.SeverityLow
 		rApp.Confidence = report.ConfidenceHigh
 		rApp.EvidenceSummary = "App Service 'app-frontend-prod' does not enforce HTTPS redirection (httpsOnly: false)"
 		rApp.EvidenceDetails = map[string]string{
-			"siteName":  "app-frontend-prod",
-			"httpsOnly": "false",
+			"siteName":       "app-frontend-prod",
+			"httpsOnly":      "false",
+			"classification": "INSECURE_HTTP_ALLOWED_CANDIDATE",
 		}
-		fnd := createCloudFinding(actx, rApp, "Azure App Service Insecure HTTP Traffic Permitted (httpsOnly: false)",
-			rApp.EvidenceSummary, report.SeverityMedium, 60)
+		fnd := createCloudFinding(actx, rApp, "Azure App Service Insecure HTTP Traffic Permitted (Candidate)",
+			rApp.EvidenceSummary, report.SeverityLow, 50)
 		rApp.Finding = fnd
 		*findings = append(*findings, *fnd)
-		cov.Verified++
+		cov.Candidates++
 	} else {
-		rApp.VerificationState = StateNotVulnerable
+		rApp.VerificationState = StateInconclusive
 		rApp.Severity = report.SeverityInfo
-		rApp.Confidence = report.ConfidenceHigh
-		rApp.EvidenceSummary = "App Service strictly enforces HTTPS-only traffic and minimum TLS 1.2"
-		cov.NotVulnerable++
+		rApp.Confidence = report.ConfidenceLow
+		rApp.EvidenceSummary = "Live App Service inspection requires active ARM connection with Microsoft.Web/sites/read permissions; not executed in offline mode"
+		cov.Inconclusive++
+		cov.Status = CoverageBlockedPermissions
 	}
 
 	cov.ChecksRun++
@@ -180,25 +184,29 @@ func (a *AzureAdapter) auditFunctions(ctx context.Context, actx *AssessmentConte
 	}
 
 	if actx.SyntheticFixture {
-		rFunc.VerificationState = StateVerified
-		rFunc.Severity = report.SeverityHigh
-		rFunc.Confidence = report.ConfidenceHigh
-		rFunc.EvidenceSummary = "Azure Function 'processOrder' declares authLevel: 'anonymous', allowing unauthenticated public execution"
+		// CANDIDATE: authLevel: anonymous permits unauthenticated invocations at runtime. Downstream
+		// application authentication (e.g. webhook HMAC, JWT) must be corroborated.
+		rFunc.VerificationState = StateCandidate
+		rFunc.Severity = report.SeverityMedium
+		rFunc.Confidence = report.ConfidenceMedium
+		rFunc.EvidenceSummary = "Azure Function 'processOrder' declares authLevel: 'anonymous'. Application-level authentication must be corroborated."
 		rFunc.EvidenceDetails = map[string]string{
-			"function":  "processOrder",
-			"authLevel": "anonymous",
+			"function":       "processOrder",
+			"authLevel":      "anonymous",
+			"classification": "ANONYMOUS_HTTP_TRIGGER_CANDIDATE",
 		}
-		fnd := createCloudFinding(actx, rFunc, "Unauthenticated Anonymous Azure Function HTTP Trigger",
-			rFunc.EvidenceSummary, report.SeverityHigh, 75)
+		fnd := createCloudFinding(actx, rFunc, "Azure Function Anonymous HTTP Trigger (Candidate)",
+			rFunc.EvidenceSummary, report.SeverityMedium, 65)
 		rFunc.Finding = fnd
 		*findings = append(*findings, *fnd)
-		cov.Verified++
+		cov.Candidates++
 	} else {
-		rFunc.VerificationState = StateNotVulnerable
+		rFunc.VerificationState = StateInconclusive
 		rFunc.Severity = report.SeverityInfo
-		rFunc.Confidence = report.ConfidenceHigh
-		rFunc.EvidenceSummary = "Azure Function HTTP triggers require valid function or master keys (authLevel: function/admin)"
-		cov.NotVulnerable++
+		rFunc.Confidence = report.ConfidenceLow
+		rFunc.EvidenceSummary = "Live Azure Functions inspection requires active ARM connection with Microsoft.Web/sites/functions/read permissions; not executed in offline mode"
+		cov.Inconclusive++
+		cov.Status = CoverageBlockedPermissions
 	}
 
 	cov.ChecksRun++
@@ -225,26 +233,30 @@ func (a *AzureAdapter) auditKeyVault(ctx context.Context, actx *AssessmentContex
 	}
 
 	if actx.SyntheticFixture {
-		rKV.VerificationState = StateVerified
-		rKV.Severity = report.SeverityHigh
+		// CANDIDATE: Network rule set allows public traffic. Azure AD identity authentication and RBAC are still
+		// enforced on all operations; secret values were NOT read or compromised.
+		rKV.VerificationState = StateCandidate
+		rKV.Severity = report.SeverityMedium
 		rKV.Confidence = report.ConfidenceHigh
-		rKV.EvidenceSummary = "Key Vault 'kv-secrets-prod' network rule set defaultAction is 'Allow' with no IP or VNet restrictions. Secret values were NOT read."
+		rKV.EvidenceSummary = "Key Vault 'kv-secrets-prod' network rule set defaultAction is 'Allow'. Azure AD identity authentication remains enforced; secret values were NOT read or compromised."
 		rKV.EvidenceDetails = map[string]string{
 			"vaultName":           "kv-secrets-prod",
 			"publicNetworkAccess": "Enabled",
 			"defaultAction":       "Allow",
+			"classification":      "UNRESTRICTED_FIREWALL_CANDIDATE",
 		}
-		fnd := createCloudFinding(actx, rKV, "Azure Key Vault Public Network Access Unrestricted",
-			rKV.EvidenceSummary, report.SeverityHigh, 85)
+		fnd := createCloudFinding(actx, rKV, "Azure Key Vault Public Network Access Unrestricted (Candidate)",
+			rKV.EvidenceSummary, report.SeverityMedium, 70)
 		rKV.Finding = fnd
 		*findings = append(*findings, *fnd)
-		cov.Verified++
+		cov.Candidates++
 	} else {
-		rKV.VerificationState = StateNotVulnerable
+		rKV.VerificationState = StateInconclusive
 		rKV.Severity = report.SeverityInfo
-		rKV.Confidence = report.ConfidenceHigh
-		rKV.EvidenceSummary = "Key Vault enforces private endpoints or restricted IP firewall rules (defaultAction: Deny)"
-		cov.NotVulnerable++
+		rKV.Confidence = report.ConfidenceLow
+		rKV.EvidenceSummary = "Live Azure Key Vault inspection requires active ARM connection with Microsoft.KeyVault/vaults/read permissions; not executed in offline mode"
+		cov.Inconclusive++
+		cov.Status = CoverageBlockedPermissions
 	}
 
 	cov.ChecksRun++
@@ -265,32 +277,32 @@ func (a *AzureAdapter) auditIdentity(ctx context.Context, actx *AssessmentContex
 		Mode:         ModeCredentialed,
 		Service:      "identity",
 		CheckID:      "AZURE-IAM-BROAD-SUBSCRIPTION-OWNER",
-		CheckName:    "Broad Subscription-Scope Owner Role Assignment to Service Principal",
+		CheckName:    "Subscription-Scope Owner Role Assignment Observation",
 		ResourceID:   "/subscriptions/sub-123/providers/Microsoft.Authorization/roleAssignments/ra-98765",
 		CreatedAt:    time.Now().UTC(),
 	}
 
 	if actx.SyntheticFixture {
-		rRole.VerificationState = StateVerified
-		rRole.Severity = report.SeverityHigh
+		// OBSERVED: Subscription Owner role is standard for cloud administration. Not a vulnerability
+		// without evidence of rogue principal or missing governance.
+		rRole.VerificationState = StateObserved
+		rRole.Severity = report.SeverityInfo
 		rRole.Confidence = report.ConfidenceHigh
-		rRole.EvidenceSummary = "Service Principal 'sp-ci-cd-runner' is granted 'Owner' role at full subscription scope (/subscriptions/sub-123)"
+		rRole.EvidenceSummary = "Service Principal 'sp-ci-cd-runner' is granted 'Owner' role at subscription scope (/subscriptions/sub-123). Administrative ownership is an operational requirement; excessive privilege review recommended."
 		rRole.EvidenceDetails = map[string]string{
 			"principalType":  "ServicePrincipal",
 			"roleDefinition": "Owner",
 			"scope":          "/subscriptions/sub-123",
+			"classification": "SUBSCRIPTION_OWNER_ROLE_OBSERVED",
 		}
-		fnd := createCloudFinding(actx, rRole, "Excessive Subscription-Level Owner Role Assignment",
-			rRole.EvidenceSummary, report.SeverityHigh, 85)
-		rRole.Finding = fnd
-		*findings = append(*findings, *fnd)
-		cov.Verified++
+		cov.Observations++
 	} else {
-		rRole.VerificationState = StateNotVulnerable
+		rRole.VerificationState = StateInconclusive
 		rRole.Severity = report.SeverityInfo
-		rRole.Confidence = report.ConfidenceHigh
-		rRole.EvidenceSummary = "Subscription role assignments follow least privilege; Owner role restricted to authorized administrators"
-		cov.NotVulnerable++
+		rRole.Confidence = report.ConfidenceLow
+		rRole.EvidenceSummary = "Live Azure RBAC inspection requires active ARM connection with Microsoft.Authorization/roleAssignments/read permissions; not executed in offline mode"
+		cov.Inconclusive++
+		cov.Status = CoverageBlockedPermissions
 	}
 
 	cov.ChecksRun++

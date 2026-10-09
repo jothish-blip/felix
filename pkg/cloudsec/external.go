@@ -126,8 +126,19 @@ func (ee *ExternalEvaluator) evalAWSS3(ctx context.Context, actx *AssessmentCont
 		CreatedAt:    time.Now().UTC(),
 	}
 
-	// Safe bounded probe to check for anonymous bucket read exposure
-	req, _ := http.NewRequestWithContext(ctx, "GET", target.URL, nil)
+	// Build a safe, non-enumerating probe URL:
+	// S3 supports max-keys=0 on bucket listing to return the root ListBucketResult element
+	// with ZERO object keys or customer contents.
+	probeURL := target.URL
+	pu, parseErr := url.Parse(probeURL)
+	if parseErr == nil {
+		q := pu.Query()
+		q.Set("max-keys", "0")
+		pu.RawQuery = q.Encode()
+		probeURL = pu.String()
+	}
+
+	req, _ := http.NewRequestWithContext(ctx, "GET", probeURL, nil)
 	req.Header.Set("User-Agent", ee.config.UserAgent)
 	resp, err := client.Do(req)
 
@@ -139,19 +150,23 @@ func (ee *ExternalEvaluator) evalAWSS3(ctx context.Context, actx *AssessmentCont
 		cov.Inconclusive++
 	} else {
 		defer resp.Body.Close()
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		bodyStr := string(body)
+		// Bounded read strictly limited to 256 bytes to inspect only the opening root element.
+		// Discard the stream immediately without buffering or storing object listings.
+		headerBuf := make([]byte, 256)
+		n, _ := io.ReadFull(resp.Body, headerBuf)
+		bodyStr := string(headerBuf[:n])
 
-		if resp.StatusCode == 200 && (strings.Contains(bodyStr, "<ListBucketResult") || strings.Contains(bodyStr, "<ListAllMyBucketsResult")) {
-			// VERIFIED: Bucket is publicly readable without credentials
+		if resp.StatusCode == 200 && strings.Contains(bodyStr, "<ListBucketResult") {
+			// VERIFIED: Bucket permits unauthenticated object listing
 			r.VerificationState = StateVerified
 			r.Severity = report.SeverityHigh
 			r.Confidence = report.ConfidenceHigh
-			r.EvidenceSummary = fmt.Sprintf("Target %s exposes anonymous object listing (<ListBucketResult> returned on unauthenticated GET). Account-level configuration was not inspected.", target.URL)
+			r.EvidenceSummary = fmt.Sprintf("Target %s permits anonymous bucket listing (<ListBucketResult> confirmed via safe max-keys=0 probe; zero object keys retrieved). Account-level bucket policy not inspected.", target.URL)
 			r.EvidenceDetails = map[string]string{
 				"endpoint": target.URL,
 				"status":   fmt.Sprintf("%d", resp.StatusCode),
 				"defect":   "ANONYMOUS_S3_BUCKET_LISTING",
+				"safety":   "SAFE_PROBE_ZERO_OBJECT_KEYS_RETRIEVED",
 			}
 			fnd := createCloudFinding(actx, r, "Publicly Accessible AWS S3 Bucket Listing",
 				r.EvidenceSummary, report.SeverityHigh, 85)
@@ -159,11 +174,12 @@ func (ee *ExternalEvaluator) evalAWSS3(ctx context.Context, actx *AssessmentCont
 			*findings = append(*findings, *fnd)
 			cov.Verified++
 		} else {
-			// OBSERVED: S3 hosted, but anonymous listing is not exposed
+			// OBSERVED: S3 hosted, but anonymous listing is rejected (403, 404, or non-listing)
+			// Crucial: bucket existence (e.g. 403 Forbidden) is NEVER treated as proof of public data access!
 			r.VerificationState = StateObserved
 			r.Severity = report.SeverityInfo
 			r.Confidence = report.ConfidenceHigh
-			r.EvidenceSummary = fmt.Sprintf("Target %s is identified as AWS S3 storage infrastructure (HTTP %d). Anonymous listing was not permitted; account-level bucket policy not inspected.", target.URL, resp.StatusCode)
+			r.EvidenceSummary = fmt.Sprintf("Target %s is identified as AWS S3 storage infrastructure (HTTP %d). Anonymous listing was rejected; account-level bucket policy not inspected.", target.URL, resp.StatusCode)
 			cov.Observations++
 		}
 	}
@@ -311,7 +327,61 @@ func (ee *ExternalEvaluator) evalAzureBlob(ctx context.Context, actx *Assessment
 		CreatedAt:    time.Now().UTC(),
 	}
 
-	req, _ := http.NewRequestWithContext(ctx, "GET", target.URL, nil)
+	// 1. First probe with a zero-body HEAD request to test container public access headers directly
+	probeURL := target.URL
+	pu, parseErr := url.Parse(probeURL)
+	if parseErr == nil && pu.Path != "" && pu.Path != "/" {
+		q := pu.Query()
+		q.Set("restype", "container")
+		pu.RawQuery = q.Encode()
+		probeURL = pu.String()
+	}
+
+	headReq, _ := http.NewRequestWithContext(ctx, "HEAD", probeURL, nil)
+	headReq.Header.Set("User-Agent", ee.config.UserAgent)
+	headResp, headErr := client.Do(headReq)
+
+	if headErr == nil && headResp.StatusCode == 200 {
+		headResp.Body.Close()
+		publicAccess := headResp.Header.Get("x-ms-blob-public-access")
+		if strings.EqualFold(publicAccess, "container") {
+			// VERIFIED: Official Azure response header confirms container public access with ZERO body retrieved
+			r.VerificationState = StateVerified
+			r.Severity = report.SeverityHigh
+			r.Confidence = report.ConfidenceHigh
+			r.EvidenceSummary = fmt.Sprintf("Target %s exposes anonymous container enumeration (confirmed via x-ms-blob-public-access: container header on HEAD request; zero blob bodies retrieved).", target.URL)
+			r.EvidenceDetails = map[string]string{
+				"endpoint": target.URL,
+				"status":   "200",
+				"defect":   "ANONYMOUS_BLOB_CONTAINER_ENUMERATION",
+				"safety":   "HEAD_PROBE_ZERO_BYTES_RETRIEVED",
+			}
+			fnd := createCloudFinding(actx, r, "Publicly Accessible Azure Blob Container Listing",
+				r.EvidenceSummary, report.SeverityHigh, 85)
+			r.Finding = fnd
+			*findings = append(*findings, *fnd)
+			cov.Verified++
+			cov.ChecksRun++
+			coverage[key] = cov
+			*results = append(*results, r)
+			return
+		}
+	} else if headResp != nil {
+		headResp.Body.Close()
+	}
+
+	// 2. If HEAD does not return header, perform a bounded probe with restype=container&comp=list&maxresults=1
+	getURL := target.URL
+	if parseErr == nil && pu.Path != "" && pu.Path != "/" {
+		q := pu.Query()
+		q.Set("restype", "container")
+		q.Set("comp", "list")
+		q.Set("maxresults", "1")
+		pu.RawQuery = q.Encode()
+		getURL = pu.String()
+	}
+
+	req, _ := http.NewRequestWithContext(ctx, "GET", getURL, nil)
 	req.Header.Set("User-Agent", ee.config.UserAgent)
 	resp, err := client.Do(req)
 
@@ -323,18 +393,22 @@ func (ee *ExternalEvaluator) evalAzureBlob(ctx context.Context, actx *Assessment
 		cov.Inconclusive++
 	} else {
 		defer resp.Body.Close()
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		bodyStr := string(body)
+		// Bounded read strictly limited to 256 bytes to inspect only the opening root element.
+		// Discard the stream immediately without buffering or storing blob listings.
+		headerBuf := make([]byte, 256)
+		n, _ := io.ReadFull(resp.Body, headerBuf)
+		bodyStr := string(headerBuf[:n])
 
 		if resp.StatusCode == 200 && strings.Contains(bodyStr, "<EnumerationResults") {
 			r.VerificationState = StateVerified
 			r.Severity = report.SeverityHigh
 			r.Confidence = report.ConfidenceHigh
-			r.EvidenceSummary = fmt.Sprintf("Target %s exposes anonymous container enumeration (<EnumerationResults> returned on unauthenticated GET). Storage account configuration was not inspected.", target.URL)
+			r.EvidenceSummary = fmt.Sprintf("Target %s exposes anonymous container enumeration (<EnumerationResults> confirmed via safe bounded probe; zero blob contents retrieved). Storage account settings not inspected.", target.URL)
 			r.EvidenceDetails = map[string]string{
 				"endpoint": target.URL,
 				"status":   fmt.Sprintf("%d", resp.StatusCode),
 				"defect":   "ANONYMOUS_BLOB_CONTAINER_ENUMERATION",
+				"safety":   "BOUNDED_PROBE_NO_BLOBS_RETRIEVED",
 			}
 			fnd := createCloudFinding(actx, r, "Publicly Accessible Azure Blob Container Listing",
 				r.EvidenceSummary, report.SeverityHigh, 85)
@@ -342,6 +416,8 @@ func (ee *ExternalEvaluator) evalAzureBlob(ctx context.Context, actx *Assessment
 			*findings = append(*findings, *fnd)
 			cov.Verified++
 		} else {
+			// OBSERVED: Azure Blob infrastructure, but anonymous listing was rejected (403, 404, or non-listing)
+			// Crucial: container existence or 403 Forbidden is NEVER treated as proof of public data access!
 			r.VerificationState = StateObserved
 			r.Severity = report.SeverityInfo
 			r.Confidence = report.ConfidenceHigh
@@ -457,7 +533,19 @@ func (ee *ExternalEvaluator) evalGCPStorage(ctx context.Context, actx *Assessmen
 		CreatedAt:    time.Now().UTC(),
 	}
 
-	req, _ := http.NewRequestWithContext(ctx, "GET", target.URL, nil)
+	// Build a safe, non-enumerating probe URL:
+	// Google Cloud Storage XML API supports max-keys=0 on bucket listing to return the root ListBucketResult
+	// with ZERO object keys or customer contents.
+	probeURL := target.URL
+	pu, parseErr := url.Parse(probeURL)
+	if parseErr == nil {
+		q := pu.Query()
+		q.Set("max-keys", "0")
+		pu.RawQuery = q.Encode()
+		probeURL = pu.String()
+	}
+
+	req, _ := http.NewRequestWithContext(ctx, "GET", probeURL, nil)
 	req.Header.Set("User-Agent", ee.config.UserAgent)
 	resp, err := client.Do(req)
 
@@ -469,18 +557,22 @@ func (ee *ExternalEvaluator) evalGCPStorage(ctx context.Context, actx *Assessmen
 		cov.Inconclusive++
 	} else {
 		defer resp.Body.Close()
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		bodyStr := string(body)
+		// Bounded read strictly limited to 256 bytes to inspect only the opening root element.
+		// Discard the stream immediately without buffering or storing object listings.
+		headerBuf := make([]byte, 256)
+		n, _ := io.ReadFull(resp.Body, headerBuf)
+		bodyStr := string(headerBuf[:n])
 
 		if resp.StatusCode == 200 && strings.Contains(bodyStr, "<ListBucketResult") {
 			r.VerificationState = StateVerified
 			r.Severity = report.SeverityHigh
 			r.Confidence = report.ConfidenceHigh
-			r.EvidenceSummary = fmt.Sprintf("Target %s exposes anonymous GCS object listing (<ListBucketResult> returned on unauthenticated GET). Project IAM bindings were not inspected.", target.URL)
+			r.EvidenceSummary = fmt.Sprintf("Target %s permits anonymous GCS object listing (<ListBucketResult> confirmed via safe max-keys=0 probe; zero object keys retrieved). Project IAM bindings were not inspected.", target.URL)
 			r.EvidenceDetails = map[string]string{
 				"endpoint": target.URL,
 				"status":   fmt.Sprintf("%d", resp.StatusCode),
 				"defect":   "ANONYMOUS_GCS_BUCKET_LISTING",
+				"safety":   "SAFE_PROBE_ZERO_OBJECT_KEYS_RETRIEVED",
 			}
 			fnd := createCloudFinding(actx, r, "Publicly Accessible Google Cloud Storage Bucket Listing",
 				r.EvidenceSummary, report.SeverityHigh, 85)
@@ -488,6 +580,8 @@ func (ee *ExternalEvaluator) evalGCPStorage(ctx context.Context, actx *Assessmen
 			*findings = append(*findings, *fnd)
 			cov.Verified++
 		} else {
+			// OBSERVED: GCS hosted, but anonymous listing is rejected (403, 404, or non-listing)
+			// Crucial: bucket existence (e.g. 403 Forbidden) is NEVER treated as proof of public data access!
 			r.VerificationState = StateObserved
 			r.Severity = report.SeverityInfo
 			r.Confidence = report.ConfidenceHigh

@@ -118,12 +118,12 @@ func (a *AWSAdapter) auditS3(ctx context.Context, actx *AssessmentContext, clien
 		*findings = append(*findings, *fnd)
 		cov.Verified++
 	} else {
-		// Default negative / safe state
-		rBlock.VerificationState = StateNotVulnerable
+		rBlock.VerificationState = StateInconclusive
 		rBlock.Severity = report.SeverityInfo
-		rBlock.Confidence = report.ConfidenceHigh
-		rBlock.EvidenceSummary = "S3 bucket public access block is fully enabled (BlockPublicAcls, IgnorePublicAcls, BlockPublicPolicy, RestrictPublicBuckets = true)"
-		cov.NotVulnerable++
+		rBlock.Confidence = report.ConfidenceLow
+		rBlock.EvidenceSummary = "Live S3 inspection requires active AWS SigV4 connection with s3:GetBucketPublicAccessBlock permissions; not executed in offline mode"
+		cov.Inconclusive++
+		cov.Status = CoverageBlockedPermissions
 	}
 
 	cov.ChecksRun++
@@ -166,11 +166,12 @@ func (a *AWSAdapter) auditIAM(ctx context.Context, actx *AssessmentContext, clie
 		*findings = append(*findings, *fnd)
 		cov.Verified++
 	} else {
-		rIAM.VerificationState = StateNotVulnerable
+		rIAM.VerificationState = StateInconclusive
 		rIAM.Severity = report.SeverityInfo
-		rIAM.Confidence = report.ConfidenceHigh
-		rIAM.EvidenceSummary = "All inspected IAM policies enforce principle of least privilege with specific Actions and Resources"
-		cov.NotVulnerable++
+		rIAM.Confidence = report.ConfidenceLow
+		rIAM.EvidenceSummary = "Live IAM inspection requires active AWS SigV4 connection with iam:GetPolicy permissions; not executed in offline mode"
+		cov.Inconclusive++
+		cov.Status = CoverageBlockedPermissions
 	}
 
 	cov.ChecksRun++
@@ -213,11 +214,12 @@ func (a *AWSAdapter) auditEC2(ctx context.Context, actx *AssessmentContext, clie
 		*findings = append(*findings, *fnd)
 		cov.Verified++
 	} else {
-		rSG.VerificationState = StateNotVulnerable
+		rSG.VerificationState = StateInconclusive
 		rSG.Severity = report.SeverityInfo
-		rSG.Confidence = report.ConfidenceHigh
-		rSG.EvidenceSummary = "Security group inbound rules restrict administrative and management ports to authorized CIDRs"
-		cov.NotVulnerable++
+		rSG.Confidence = report.ConfidenceLow
+		rSG.EvidenceSummary = "Live EC2 inspection requires active AWS SigV4 connection with ec2:DescribeSecurityGroups permissions; not executed in offline mode"
+		cov.Inconclusive++
+		cov.Status = CoverageBlockedPermissions
 	}
 
 	cov.ChecksRun++
@@ -245,26 +247,30 @@ func (a *AWSAdapter) auditAPIGateway(ctx context.Context, actx *AssessmentContex
 	}
 
 	if actx.SyntheticFixture {
-		rAPI.VerificationState = StateVerified
+		// CANDIDATE: Route lacks gateway-layer authorizer. Does not establish vulnerability because
+		// backend code may authenticate requests or the route may be intentionally public.
+		rAPI.VerificationState = StateCandidate
 		rAPI.Severity = report.SeverityMedium
-		rAPI.Confidence = report.ConfidenceHigh
-		rAPI.EvidenceSummary = "API Gateway REST API 'api-id-abcdef123' stage 'prod' contains public routes with AuthorizationType 'NONE'"
+		rAPI.Confidence = report.ConfidenceMedium
+		rAPI.EvidenceSummary = "API Gateway route 'POST /api/internal/batch' lacks edge authorizer (AuthorizationType: NONE). Downstream application authentication or intentional public access must be corroborated."
 		rAPI.EvidenceDetails = map[string]string{
 			"route":             "POST /api/internal/batch",
 			"authorizationType": "NONE",
 			"apiKeyRequired":    "false",
+			"classification":    "EDGE_AUTHORIZER_ABSENT_CANDIDATE",
 		}
-		fnd := createCloudFinding(actx, rAPI, "API Gateway Route Without Authentication Authorizer",
+		fnd := createCloudFinding(actx, rAPI, "API Gateway Route Without Authentication Authorizer (Candidate)",
 			rAPI.EvidenceSummary, report.SeverityMedium, 60)
 		rAPI.Finding = fnd
 		*findings = append(*findings, *fnd)
-		cov.Verified++
+		cov.Candidates++
 	} else {
-		rAPI.VerificationState = StateNotVulnerable
+		rAPI.VerificationState = StateInconclusive
 		rAPI.Severity = report.SeverityInfo
-		rAPI.Confidence = report.ConfidenceHigh
-		rAPI.EvidenceSummary = "All non-public API Gateway routes enforce Cognito or IAM authorizers"
-		cov.NotVulnerable++
+		rAPI.Confidence = report.ConfidenceLow
+		rAPI.EvidenceSummary = "Live API Gateway inspection requires active AWS SigV4 connection with apigateway:GetRestApis permissions; not executed in offline mode"
+		cov.Inconclusive++
+		cov.Status = CoverageBlockedPermissions
 	}
 
 	cov.ChecksRun++
@@ -292,25 +298,29 @@ func (a *AWSAdapter) auditLambda(ctx context.Context, actx *AssessmentContext, c
 	}
 
 	if actx.SyntheticFixture {
-		rLambda.VerificationState = StateVerified
-		rLambda.Severity = report.SeverityHigh
-		rLambda.Confidence = report.ConfidenceHigh
-		rLambda.EvidenceSummary = "Lambda function 'DataExportWorker' declares a Function URL with AuthType: 'NONE' allowing anonymous invocations"
+		// CANDIDATE: Function URL permits anonymous invocations at IAM layer. Function code may enforce
+		// its own auth (e.g. webhook HMAC).
+		rLambda.VerificationState = StateCandidate
+		rLambda.Severity = report.SeverityMedium
+		rLambda.Confidence = report.ConfidenceMedium
+		rLambda.EvidenceSummary = "Lambda function 'DataExportWorker' declares a Function URL with AuthType: 'NONE' allowing invocations without IAM auth. Function-level authentication must be corroborated."
 		rLambda.EvidenceDetails = map[string]string{
-			"functionName": "DataExportWorker",
-			"authType":     "NONE",
+			"functionName":   "DataExportWorker",
+			"authType":       "NONE",
+			"classification": "IAM_AUTH_NONE_CANDIDATE",
 		}
-		fnd := createCloudFinding(actx, rLambda, "Unauthenticated Public Lambda Function URL",
-			rLambda.EvidenceSummary, report.SeverityHigh, 75)
+		fnd := createCloudFinding(actx, rLambda, "Unauthenticated Public Lambda Function URL (Candidate)",
+			rLambda.EvidenceSummary, report.SeverityMedium, 65)
 		rLambda.Finding = fnd
 		*findings = append(*findings, *fnd)
-		cov.Verified++
+		cov.Candidates++
 	} else {
-		rLambda.VerificationState = StateNotVulnerable
+		rLambda.VerificationState = StateInconclusive
 		rLambda.Severity = report.SeverityInfo
-		rLambda.Confidence = report.ConfidenceHigh
-		rLambda.EvidenceSummary = "Inspected Lambda functions require IAM authentication (AuthType: AWS_IAM) on Function URLs"
-		cov.NotVulnerable++
+		rLambda.Confidence = report.ConfidenceLow
+		rLambda.EvidenceSummary = "Live Lambda inspection requires active AWS SigV4 connection with lambda:GetFunctionUrlConfig permissions; not executed in offline mode"
+		cov.Inconclusive++
+		cov.Status = CoverageBlockedPermissions
 	}
 
 	cov.ChecksRun++
@@ -338,25 +348,29 @@ func (a *AWSAdapter) auditCognito(ctx context.Context, actx *AssessmentContext, 
 	}
 
 	if actx.SyntheticFixture {
-		rCog.VerificationState = StateVerified
-		rCog.Severity = report.SeverityMedium
-		rCog.Confidence = report.ConfidenceHigh
-		rCog.EvidenceSummary = "Cognito Identity Pool permits guest unauthenticated access (AllowUnauthenticatedIdentities: true)"
+		// CANDIDATE: Unauthenticated identities enabled. Guest access is common for onboarding;
+		// guest IAM role permissions must be evaluated.
+		rCog.VerificationState = StateCandidate
+		rCog.Severity = report.SeverityLow
+		rCog.Confidence = report.ConfidenceMedium
+		rCog.EvidenceSummary = "Cognito Identity Pool permits guest unauthenticated access (AllowUnauthenticatedIdentities: true). Unauthenticated role permissions must be evaluated."
 		rCog.EvidenceDetails = map[string]string{
 			"identityPoolId":                 "us-east-1:1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
 			"allowUnauthenticatedIdentities": "true",
+			"classification":                 "GUEST_IDENTITY_ALLOWED_CANDIDATE",
 		}
-		fnd := createCloudFinding(actx, rCog, "Cognito Identity Pool Unauthenticated Access Permitted",
-			rCog.EvidenceSummary, report.SeverityMedium, 55)
+		fnd := createCloudFinding(actx, rCog, "Cognito Identity Pool Unauthenticated Access Permitted (Candidate)",
+			rCog.EvidenceSummary, report.SeverityLow, 45)
 		rCog.Finding = fnd
 		*findings = append(*findings, *fnd)
-		cov.Verified++
+		cov.Candidates++
 	} else {
-		rCog.VerificationState = StateNotVulnerable
+		rCog.VerificationState = StateInconclusive
 		rCog.Severity = report.SeverityInfo
-		rCog.Confidence = report.ConfidenceHigh
-		rCog.EvidenceSummary = "Cognito Identity Pools strictly require authenticated credentials"
-		cov.NotVulnerable++
+		rCog.Confidence = report.ConfidenceLow
+		rCog.EvidenceSummary = "Live Cognito inspection requires active AWS SigV4 connection with cognito-identity:DescribeIdentityPool permissions; not executed in offline mode"
+		cov.Inconclusive++
+		cov.Status = CoverageBlockedPermissions
 	}
 
 	cov.ChecksRun++
@@ -384,26 +398,29 @@ func (a *AWSAdapter) auditRDS(ctx context.Context, actx *AssessmentContext, clie
 	}
 
 	if actx.SyntheticFixture {
-		rRDS.VerificationState = StateVerified
-		rRDS.Severity = report.SeverityHigh
+		// CANDIDATE: Database has PubliclyAccessible flag set to true. Network perimeter depends on security groups.
+		rRDS.VerificationState = StateCandidate
+		rRDS.Severity = report.SeverityMedium
 		rRDS.Confidence = report.ConfidenceHigh
-		rRDS.EvidenceSummary = "RDS database instance 'db-instance-primary-mysql' has PubliclyAccessible set to true"
+		rRDS.EvidenceSummary = "RDS database instance 'db-instance-primary-mysql' has PubliclyAccessible set to true. Inbound access is governed by assigned security groups."
 		rRDS.EvidenceDetails = map[string]string{
 			"dbInstanceIdentifier": "db-instance-primary-mysql",
 			"publiclyAccessible":   "true",
 			"engine":               "mysql",
+			"classification":       "PUBLIC_ACCESSIBILITY_FLAG_CANDIDATE",
 		}
-		fnd := createCloudFinding(actx, rRDS, "Publicly Accessible RDS Database Instance",
-			rRDS.EvidenceSummary, report.SeverityHigh, 80)
+		fnd := createCloudFinding(actx, rRDS, "Publicly Accessible RDS Database Instance (Candidate)",
+			rRDS.EvidenceSummary, report.SeverityMedium, 70)
 		rRDS.Finding = fnd
 		*findings = append(*findings, *fnd)
-		cov.Verified++
+		cov.Candidates++
 	} else {
-		rRDS.VerificationState = StateNotVulnerable
+		rRDS.VerificationState = StateInconclusive
 		rRDS.Severity = report.SeverityInfo
-		rRDS.Confidence = report.ConfidenceHigh
-		rRDS.EvidenceSummary = "All RDS instances are deployed in private subnets with PubliclyAccessible = false"
-		cov.NotVulnerable++
+		rRDS.Confidence = report.ConfidenceLow
+		rRDS.EvidenceSummary = "Live RDS inspection requires active AWS SigV4 connection with rds:DescribeDBInstances permissions; not executed in offline mode"
+		cov.Inconclusive++
+		cov.Status = CoverageBlockedPermissions
 	}
 
 	cov.ChecksRun++
@@ -430,25 +447,28 @@ func (a *AWSAdapter) auditCloudFront(ctx context.Context, actx *AssessmentContex
 	}
 
 	if actx.SyntheticFixture {
-		rCF.VerificationState = StateVerified
-		rCF.Severity = report.SeverityMedium
+		// CANDIDATE: ViewerProtocolPolicy allows unencrypted HTTP. Insecure transport posture observation.
+		rCF.VerificationState = StateCandidate
+		rCF.Severity = report.SeverityLow
 		rCF.Confidence = report.ConfidenceHigh
 		rCF.EvidenceSummary = "CloudFront distribution 'EDFDVBD632BHDS5' default cache behavior allows unencrypted HTTP (ViewerProtocolPolicy: 'allow-all')"
 		rCF.EvidenceDetails = map[string]string{
 			"distributionId":       "EDFDVBD632BHDS5",
 			"viewerProtocolPolicy": "allow-all",
+			"classification":       "INSECURE_VIEWER_PROTOCOL_CANDIDATE",
 		}
-		fnd := createCloudFinding(actx, rCF, "CloudFront Insecure Viewer Protocol Policy (allow-all)",
-			rCF.EvidenceSummary, report.SeverityMedium, 60)
+		fnd := createCloudFinding(actx, rCF, "CloudFront Insecure Viewer Protocol Policy (Candidate)",
+			rCF.EvidenceSummary, report.SeverityLow, 50)
 		rCF.Finding = fnd
 		*findings = append(*findings, *fnd)
-		cov.Verified++
+		cov.Candidates++
 	} else {
-		rCF.VerificationState = StateNotVulnerable
+		rCF.VerificationState = StateInconclusive
 		rCF.Severity = report.SeverityInfo
-		rCF.Confidence = report.ConfidenceHigh
-		rCF.EvidenceSummary = "CloudFront distributions enforce HTTPS redirection (redirect-to-https or https-only)"
-		cov.NotVulnerable++
+		rCF.Confidence = report.ConfidenceLow
+		rCF.EvidenceSummary = "Live CloudFront inspection requires active AWS SigV4 connection with cloudfront:GetDistribution permissions; not executed in offline mode"
+		cov.Inconclusive++
+		cov.Status = CoverageBlockedPermissions
 	}
 
 	cov.ChecksRun++

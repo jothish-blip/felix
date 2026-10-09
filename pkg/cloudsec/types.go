@@ -133,7 +133,13 @@ func (c Credentials) RedactedCopy() Credentials {
 	return redacted
 }
 
-// Scrub wipes secret fields in-place.
+// Scrub drops secret string references from the Credentials struct.
+//
+// Memory Limitation Note: In Go, string contents are immutable byte arrays allocated
+// on the heap/GC memory. Zeroing struct fields drops pointer references so the runtime
+// garbage collector can reclaim memory, but Go does not provide guaranteed immediate zeroing
+// of string heap bytes. Callers in high-assurance environments should execute Felix in
+// ephemeral, isolated process containers.
 func (c *Credentials) Scrub() {
 	c.AWSSecretAccessKey = ""
 	c.AWSSessionToken = ""

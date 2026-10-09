@@ -104,11 +104,12 @@ func (a *GCPAdapter) auditStorage(ctx context.Context, actx *AssessmentContext, 
 		*findings = append(*findings, *fnd)
 		cov.Verified++
 	} else {
-		rGCS.VerificationState = StateNotVulnerable
+		rGCS.VerificationState = StateInconclusive
 		rGCS.Severity = report.SeverityInfo
-		rGCS.Confidence = report.ConfidenceHigh
-		rGCS.EvidenceSummary = "Cloud Storage buckets enforce uniform bucket-level access with public access prevention enabled"
-		cov.NotVulnerable++
+		rGCS.Confidence = report.ConfidenceLow
+		rGCS.EvidenceSummary = "Live GCS inspection requires active GCP connection with storage.buckets.getIamPolicy permissions; not executed in offline mode"
+		cov.Inconclusive++
+		cov.Status = CoverageBlockedPermissions
 	}
 
 	cov.ChecksRun++
@@ -136,27 +137,31 @@ func (a *GCPAdapter) auditCloudRun(ctx context.Context, actx *AssessmentContext,
 	}
 
 	if actx.SyntheticFixture {
-		rRun.VerificationState = StateVerified
-		rRun.Severity = report.SeverityHigh
-		rRun.Confidence = report.ConfidenceHigh
-		rRun.EvidenceSummary = "Cloud Run service 'internal-billing-api' grants 'roles/run.invoker' to 'allUsers'"
+		// CANDIDATE: Service binds roles/run.invoker to allUsers. Invocations permitted at IAM layer;
+		// container application authentication or intentional public access must be corroborated.
+		rRun.VerificationState = StateCandidate
+		rRun.Severity = report.SeverityMedium
+		rRun.Confidence = report.ConfidenceMedium
+		rRun.EvidenceSummary = "Cloud Run service 'internal-billing-api' grants 'roles/run.invoker' to 'allUsers'. Invocations permitted at IAM layer; container application authentication must be corroborated."
 		rRun.EvidenceDetails = map[string]string{
-			"service": "internal-billing-api",
-			"role":    "roles/run.invoker",
-			"member":  "allUsers",
-			"ingress": "all",
+			"service":        "internal-billing-api",
+			"role":           "roles/run.invoker",
+			"member":         "allUsers",
+			"ingress":        "all",
+			"classification": "PUBLIC_INVOKER_ROLE_CANDIDATE",
 		}
-		fnd := createCloudFinding(actx, rRun, "Unauthenticated Public Cloud Run Service Invocation",
-			rRun.EvidenceSummary, report.SeverityHigh, 80)
+		fnd := createCloudFinding(actx, rRun, "Public Cloud Run Service Invocation (Candidate)",
+			rRun.EvidenceSummary, report.SeverityMedium, 65)
 		rRun.Finding = fnd
 		*findings = append(*findings, *fnd)
-		cov.Verified++
+		cov.Candidates++
 	} else {
-		rRun.VerificationState = StateNotVulnerable
+		rRun.VerificationState = StateInconclusive
 		rRun.Severity = report.SeverityInfo
-		rRun.Confidence = report.ConfidenceHigh
-		rRun.EvidenceSummary = "Cloud Run services require authenticated IAM credentials (run.invoker restricted)"
-		cov.NotVulnerable++
+		rRun.Confidence = report.ConfidenceLow
+		rRun.EvidenceSummary = "Live Cloud Run inspection requires active GCP connection with run.services.getIamPolicy permissions; not executed in offline mode"
+		cov.Inconclusive++
+		cov.Status = CoverageBlockedPermissions
 	}
 
 	cov.ChecksRun++
@@ -199,11 +204,12 @@ func (a *GCPAdapter) auditCompute(ctx context.Context, actx *AssessmentContext, 
 		*findings = append(*findings, *fnd)
 		cov.Verified++
 	} else {
-		rCompute.VerificationState = StateNotVulnerable
+		rCompute.VerificationState = StateInconclusive
 		rCompute.Severity = report.SeverityInfo
-		rCompute.Confidence = report.ConfidenceHigh
-		rCompute.EvidenceSummary = "VPC firewall rules restrict management ingress to corporate CIDRs or IAP proxies"
-		cov.NotVulnerable++
+		rCompute.Confidence = report.ConfidenceLow
+		rCompute.EvidenceSummary = "Live VPC Firewall inspection requires active GCP connection with compute.firewalls.list permissions; not executed in offline mode"
+		cov.Inconclusive++
+		cov.Status = CoverageBlockedPermissions
 	}
 
 	cov.ChecksRun++
@@ -224,31 +230,31 @@ func (a *GCPAdapter) auditIAM(ctx context.Context, actx *AssessmentContext, clie
 		Mode:         ModeCredentialed,
 		Service:      "iam",
 		CheckID:      "GCP-IAM-PRIMITIVE-ROLE-OWNER",
-		CheckName:    "Broad Primitive Owner Role Granted to Service Account",
+		CheckName:    "Project-Level Primitive Owner Role Observation",
 		ResourceID:   "projects/test-proj-123",
 		CreatedAt:    time.Now().UTC(),
 	}
 
 	if actx.SyntheticFixture {
-		rIAM.VerificationState = StateVerified
-		rIAM.Severity = report.SeverityCritical
-		rIAM.Confidence = report.ConfidenceHigh
-		rIAM.EvidenceSummary = "Service account 'deployer-sa@test-proj-123.iam.gserviceaccount.com' is granted primitive role 'roles/owner' at project scope"
-		rIAM.EvidenceDetails = map[string]string{
-			"role":   "roles/owner",
-			"member": "serviceAccount:deployer-sa@test-proj-123.iam.gserviceaccount.com",
-		}
-		fnd := createCloudFinding(actx, rIAM, "Excessive Project-Level Primitive Owner Role Binding",
-			rIAM.EvidenceSummary, report.SeverityCritical, 95)
-		rIAM.Finding = fnd
-		*findings = append(*findings, *fnd)
-		cov.Verified++
-	} else {
-		rIAM.VerificationState = StateNotVulnerable
+		// OBSERVED: Primitive Owner role is standard for root project administration. Not an exploit or vulnerability
+		// without context showing unmanaged or unauthorized assignment.
+		rIAM.VerificationState = StateObserved
 		rIAM.Severity = report.SeverityInfo
 		rIAM.Confidence = report.ConfidenceHigh
-		rIAM.EvidenceSummary = "Project IAM policy adheres to predefined fine-grained roles; no primitive owner bindings found"
-		cov.NotVulnerable++
+		rIAM.EvidenceSummary = "Service account 'deployer-sa@test-proj-123.iam.gserviceaccount.com' is granted primitive role 'roles/owner' at project scope. Project ownership is an administrative baseline; migration to least-privilege predefined roles recommended."
+		rIAM.EvidenceDetails = map[string]string{
+			"role":           "roles/owner",
+			"member":         "serviceAccount:deployer-sa@test-proj-123.iam.gserviceaccount.com",
+			"classification": "PRIMITIVE_OWNER_ROLE_OBSERVED",
+		}
+		cov.Observations++
+	} else {
+		rIAM.VerificationState = StateInconclusive
+		rIAM.Severity = report.SeverityInfo
+		rIAM.Confidence = report.ConfidenceLow
+		rIAM.EvidenceSummary = "Live GCP IAM inspection requires active GCP connection with resourcemanager.projects.getIamPolicy permissions; not executed in offline mode"
+		cov.Inconclusive++
+		cov.Status = CoverageBlockedPermissions
 	}
 
 	cov.ChecksRun++
@@ -291,11 +297,12 @@ func (a *GCPAdapter) auditCloudSQL(ctx context.Context, actx *AssessmentContext,
 		*findings = append(*findings, *fnd)
 		cov.Verified++
 	} else {
-		rSQL.VerificationState = StateNotVulnerable
+		rSQL.VerificationState = StateInconclusive
 		rSQL.Severity = report.SeverityInfo
-		rSQL.Confidence = report.ConfidenceHigh
-		rSQL.EvidenceSummary = "Cloud SQL instances use private IP configuration and require SSL for connections"
-		cov.NotVulnerable++
+		rSQL.Confidence = report.ConfidenceLow
+		rSQL.EvidenceSummary = "Live Cloud SQL inspection requires active GCP connection with sqladmin.instances.get permissions; not executed in offline mode"
+		cov.Inconclusive++
+		cov.Status = CoverageBlockedPermissions
 	}
 
 	cov.ChecksRun++
