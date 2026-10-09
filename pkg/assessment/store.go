@@ -15,6 +15,7 @@ import (
 	"felix/pkg/config"
 	"felix/pkg/discovery"
 	"felix/pkg/report"
+	"felix/pkg/sessionsec"
 	"felix/pkg/webvuln"
 	_ "modernc.org/sqlite"
 )
@@ -92,6 +93,13 @@ type Store interface {
 	SaveWebVulnResults(results []webvuln.Result) error
 	GetWebVulnResults(assessmentID string, executionID string, category string, state string) ([]webvuln.Result, error)
 	GetWebVulnSummary(assessmentID string, executionID string) (*webvuln.Summary, error)
+
+	// Session & Identity Security Engine (Stage 7)
+	SaveSessionSecRun(record *sessionsec.RunRecord) error
+	GetSessionSecRun(assessmentID string, executionID string) (*sessionsec.RunRecord, error)
+	SaveSessionSecResults(results []sessionsec.Result) error
+	GetSessionSecResults(assessmentID string, executionID string, category string, state string) ([]sessionsec.Result, error)
+	GetSessionSecSummary(assessmentID string, executionID string) (*sessionsec.Summary, error)
 
 	// Report Records
 	SaveReport(r *ReportRecord) error
@@ -665,6 +673,73 @@ func (s *SQLiteStore) migrate() error {
 
 		if _, err := tx.Exec(schemaV6); err != nil {
 			return fmt.Errorf("migration v6 failed: %w", err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+
+	// Migration 7: Session & Identity Security Engine (Stage 7)
+	if currentVersion < 7 {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		schemaV7 := `
+		CREATE TABLE IF NOT EXISTS assessment_sessionsec_runs (
+			id TEXT PRIMARY KEY,
+			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+			execution_id TEXT NOT NULL REFERENCES assessment_executions(id) ON DELETE CASCADE,
+			total_tests INTEGER NOT NULL DEFAULT 0,
+			categories_assessed INTEGER NOT NULL DEFAULT 0,
+			verified_count INTEGER NOT NULL DEFAULT 0,
+			candidate_count INTEGER NOT NULL DEFAULT 0,
+			observed_count INTEGER NOT NULL DEFAULT 0,
+			inconclusive_count INTEGER NOT NULL DEFAULT 0,
+			blocked_count INTEGER NOT NULL DEFAULT 0,
+			coverage_json TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_sessionsec_runs_asm_id ON assessment_sessionsec_runs(assessment_id);
+		CREATE INDEX IF NOT EXISTS idx_sessionsec_runs_exec_id ON assessment_sessionsec_runs(execution_id);
+
+		CREATE TABLE IF NOT EXISTS assessment_sessionsec_results (
+			id TEXT PRIMARY KEY,
+			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+			execution_id TEXT NOT NULL REFERENCES assessment_executions(id) ON DELETE CASCADE,
+			category TEXT NOT NULL,
+			vuln_code TEXT NOT NULL,
+			test_id TEXT NOT NULL,
+			test_name TEXT NOT NULL,
+			wstg_ref TEXT NOT NULL,
+			endpoint TEXT NOT NULL,
+			method TEXT NOT NULL,
+			verification_state TEXT NOT NULL,
+			severity TEXT NOT NULL,
+			confidence TEXT NOT NULL,
+			observed_status INTEGER,
+			state_before TEXT,
+			state_after TEXT,
+			evidence_summary TEXT NOT NULL,
+			evidence_details_json TEXT,
+			finding_id TEXT,
+			created_at TIMESTAMP NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_sessionsec_res_asm_id ON assessment_sessionsec_results(assessment_id);
+		CREATE INDEX IF NOT EXISTS idx_sessionsec_res_exec_id ON assessment_sessionsec_results(execution_id);
+		CREATE INDEX IF NOT EXISTS idx_sessionsec_res_cat ON assessment_sessionsec_results(category);
+		CREATE INDEX IF NOT EXISTS idx_sessionsec_res_state ON assessment_sessionsec_results(verification_state);
+
+		INSERT INTO schema_migrations (version, applied_at) VALUES (7, CURRENT_TIMESTAMP);
+		`
+
+		if _, err := tx.Exec(schemaV7); err != nil {
+			return fmt.Errorf("migration v7 failed: %w", err)
 		}
 
 		if err := tx.Commit(); err != nil {
@@ -2575,6 +2650,251 @@ func (s *SQLiteStore) GetWebVulnSummary(assessmentID string, executionID string)
 		case webvuln.StateInconclusive:
 			summary.InconclusiveCount++
 		case webvuln.StateNotVulnerable:
+			summary.NotVulnerableCount++
+		}
+	}
+	summary.CategoriesCovered = len(summary.CoverageMap)
+	return summary, nil
+}
+
+// -------------------------------------------------------------------------
+// Stage 7: Session & Identity Security Engine Persistence
+// -------------------------------------------------------------------------
+
+func (s *SQLiteStore) SaveSessionSecRun(record *sessionsec.RunRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	query := `
+		INSERT INTO assessment_sessionsec_runs (
+			id, assessment_id, execution_id, total_tests, categories_assessed,
+			verified_count, candidate_count, observed_count, inconclusive_count, blocked_count,
+			coverage_json, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			total_tests = excluded.total_tests,
+			categories_assessed = excluded.categories_assessed,
+			verified_count = excluded.verified_count,
+			candidate_count = excluded.candidate_count,
+			observed_count = excluded.observed_count,
+			inconclusive_count = excluded.inconclusive_count,
+			blocked_count = excluded.blocked_count,
+			coverage_json = excluded.coverage_json;
+	`
+	now := record.CreatedAt
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+
+	_, err := s.db.Exec(
+		query,
+		record.ID, record.AssessmentID, record.ExecutionID,
+		record.TotalTests, record.CategoriesAssessed,
+		record.VerifiedCount, record.CandidateCount, record.ObservedCount,
+		record.InconclusiveCount, record.BlockedCount,
+		record.CoverageJSON, now,
+	)
+	return err
+}
+
+func (s *SQLiteStore) GetSessionSecRun(assessmentID string, executionID string) (*sessionsec.RunRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := `
+		SELECT id, assessment_id, execution_id, total_tests, categories_assessed,
+		       verified_count, candidate_count, observed_count, inconclusive_count, blocked_count,
+		       coverage_json, created_at
+		FROM assessment_sessionsec_runs
+		WHERE assessment_id = ?
+	`
+	args := []interface{}{assessmentID}
+	if executionID != "" {
+		query += " AND execution_id = ?"
+		args = append(args, executionID)
+	}
+	query += " ORDER BY created_at DESC LIMIT 1"
+
+	var rec sessionsec.RunRecord
+	err := s.db.QueryRow(query, args...).Scan(
+		&rec.ID, &rec.AssessmentID, &rec.ExecutionID,
+		&rec.TotalTests, &rec.CategoriesAssessed,
+		&rec.VerifiedCount, &rec.CandidateCount, &rec.ObservedCount,
+		&rec.InconclusiveCount, &rec.BlockedCount,
+		&rec.CoverageJSON, &rec.CreatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &rec, nil
+}
+
+func (s *SQLiteStore) SaveSessionSecResults(results []sessionsec.Result) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO assessment_sessionsec_results (
+			id, assessment_id, execution_id, category, vuln_code, test_id, test_name, wstg_ref,
+			endpoint, method, verification_state, severity, confidence,
+			observed_status, state_before, state_after, evidence_summary, evidence_details_json, finding_id, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, r := range results {
+		var detailsJSON string
+		if len(r.EvidenceDetails) > 0 {
+			b, _ := json.Marshal(r.EvidenceDetails)
+			detailsJSON = string(b)
+		}
+
+		findingID := ""
+		if r.Finding != nil {
+			findingID = r.Finding.ID
+		}
+
+		now := r.CreatedAt
+		if now.IsZero() {
+			now = time.Now().UTC()
+		}
+
+		_, err := stmt.Exec(
+			r.ID, r.AssessmentID, r.ExecutionID, string(r.Category), r.VulnCode, r.TestID, r.TestName, r.WSTGRef,
+			r.Endpoint, r.Method, string(r.VerificationState), r.Severity, r.Confidence,
+			r.ObservedStatus, string(r.StateBefore), string(r.StateAfter), r.EvidenceSummary, detailsJSON, findingID, now,
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+func (s *SQLiteStore) GetSessionSecResults(assessmentID string, executionID string, category string, state string) ([]sessionsec.Result, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := `
+		SELECT id, assessment_id, execution_id, category, vuln_code, test_id, test_name, wstg_ref,
+		       endpoint, method, verification_state, severity, confidence,
+		       observed_status, state_before, state_after, evidence_summary, evidence_details_json, finding_id, created_at
+		FROM assessment_sessionsec_results
+		WHERE assessment_id = ?
+	`
+	args := []interface{}{assessmentID}
+
+	if executionID != "" {
+		query += " AND execution_id = ?"
+		args = append(args, executionID)
+	}
+	if category != "" {
+		query += " AND category = ?"
+		args = append(args, category)
+	}
+	if state != "" {
+		query += " AND verification_state = ?"
+		args = append(args, state)
+	}
+
+	query += " ORDER BY created_at ASC"
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []sessionsec.Result
+	for rows.Next() {
+		var r sessionsec.Result
+		var catStr, stateStr, beforeStr, afterStr, detailsJSON, findingID sql.NullString
+		var obsStatus sql.NullInt64
+
+		err := rows.Scan(
+			&r.ID, &r.AssessmentID, &r.ExecutionID, &catStr, &r.VulnCode, &r.TestID, &r.TestName, &r.WSTGRef,
+			&r.Endpoint, &r.Method, &stateStr, &r.Severity, &r.Confidence,
+			&obsStatus, &beforeStr, &afterStr, &r.EvidenceSummary, &detailsJSON, &findingID, &r.CreatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		if catStr.Valid {
+			r.Category = sessionsec.SessionCategory(catStr.String)
+		}
+		if stateStr.Valid {
+			r.VerificationState = sessionsec.VerificationState(stateStr.String)
+		}
+		if beforeStr.Valid {
+			r.StateBefore = sessionsec.SessionState(beforeStr.String)
+		}
+		if afterStr.Valid {
+			r.StateAfter = sessionsec.SessionState(afterStr.String)
+		}
+		if obsStatus.Valid {
+			r.ObservedStatus = int(obsStatus.Int64)
+		}
+		if detailsJSON.Valid && detailsJSON.String != "" {
+			_ = json.Unmarshal([]byte(detailsJSON.String), &r.EvidenceDetails)
+		}
+
+		results = append(results, r)
+	}
+	return results, nil
+}
+
+func (s *SQLiteStore) GetSessionSecSummary(assessmentID string, executionID string) (*sessionsec.Summary, error) {
+	// 1. Try to load saved RunRecord
+	run, err := s.GetSessionSecRun(assessmentID, executionID)
+	if err == nil && run != nil && run.CoverageJSON != "" {
+		var covMap map[string]sessionsec.CategoryCoverage
+		if err := json.Unmarshal([]byte(run.CoverageJSON), &covMap); err == nil {
+			summary := &sessionsec.Summary{
+				TotalTests:        run.TotalTests,
+				CategoriesCovered: run.CategoriesAssessed,
+				VerifiedCount:     run.VerifiedCount,
+				CandidateCount:    run.CandidateCount,
+				ObservedCount:     run.ObservedCount,
+				InconclusiveCount: run.InconclusiveCount,
+				BlockedCount:      run.BlockedCount,
+				CoverageMap:       covMap,
+			}
+			return summary, nil
+		}
+	}
+
+	// 2. Fallback to computing from raw results
+	results, err := s.GetSessionSecResults(assessmentID, executionID, "", "")
+	if err != nil {
+		return nil, err
+	}
+
+	summary := &sessionsec.Summary{
+		TotalTests:  len(results),
+		CoverageMap: make(map[string]sessionsec.CategoryCoverage),
+	}
+	for _, r := range results {
+		switch r.VerificationState {
+		case sessionsec.StateVerified:
+			summary.VerifiedCount++
+		case sessionsec.StateCandidate:
+			summary.CandidateCount++
+		case sessionsec.StateObserved:
+			summary.ObservedCount++
+		case sessionsec.StateInconclusive:
+			summary.InconclusiveCount++
+		case sessionsec.StateNotVulnerable:
 			summary.NotVulnerableCount++
 		}
 	}

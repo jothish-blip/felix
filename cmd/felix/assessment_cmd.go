@@ -18,6 +18,7 @@ import (
 	"felix/pkg/assessment"
 	"felix/pkg/auth"
 	"felix/pkg/authz"
+	"felix/pkg/sessionsec"
 	"felix/pkg/webvuln"
 	"github.com/google/uuid"
 )
@@ -69,6 +70,8 @@ func runAssessment(args []string) int {
 		return runAssessmentAPISec(subArgs)
 	case "webvuln", "vuln":
 		return runAssessmentWebVuln(subArgs)
+	case "sessionsec", "session", "identity":
+		return runAssessmentSessionSec(subArgs)
 	case "reports":
 		return runAssessmentReports(subArgs)
 	case "cancel":
@@ -97,6 +100,7 @@ func printAssessmentHelp() {
 	fmt.Println("  authz        Test and inspect API authorization, BOLA/IDOR, BFLA, BOPLA, and privilege escalation")
 	fmt.Println("  apisec       Assess OWASP API Security Top 10 (2023) categories and API inventory")
 	fmt.Println("  webvuln      Assess and verify web application vulnerabilities (XSS, SQLi, SSTI, SSRF, etc.)")
+	fmt.Println("  sessionsec   Assess session lifecycle, token handling, and identity boundaries (WSTG-SESS/ATHN)")
 	fmt.Println("  reports      List generated report files for an assessment")
 	fmt.Println("  cancel       Cancel an active or pending assessment")
 	fmt.Println("\nExamples:")
@@ -109,6 +113,7 @@ func printAssessmentHelp() {
 	fmt.Println("  felix assessment authz <asm-ref> --policy policy.json --run")
 	fmt.Println("  felix assessment apisec <asm-ref> --run --spec openapi.json")
 	fmt.Println("  felix assessment webvuln <asm-ref> --run")
+	fmt.Println("  felix assessment sessionsec <asm-ref> --run")
 	fmt.Println("  felix assessment reports <asm-ref>")
 }
 
@@ -2844,6 +2849,543 @@ func runAssessmentWebVuln(args []string) int {
 	} else if summary == nil || summary.TotalTests == 0 {
 		fmt.Println("\nNo web vulnerability test results recorded.")
 		fmt.Printf("To run a web vulnerability assessment:\n  felix assessment webvuln %s --run\n", asm.Ref)
+	}
+
+	fmt.Println()
+	return 0
+}
+
+// -------------------------------------------------------------------------
+// Stage 7: Session & Identity Security CLI Implementation
+// -------------------------------------------------------------------------
+
+func printSessionSecHelp() {
+	fmt.Println("Usage: felix assessment sessionsec <assessment-ref> [flags]")
+	fmt.Println("\nFlags:")
+	fmt.Println("  --run                    Execute active session & identity security assessment")
+	fmt.Println("  --dry-run                Plan tests, analyze state transitions, and verify preconditions")
+	fmt.Println("  --policy <path>          Path to authorization policy file (JSON) with test identities")
+	fmt.Println("  --category, -c <cat>     Filter by session category (FIXATION, COOKIE, INVALIDATION, etc.)")
+	fmt.Println("  --status, -s <state>     Filter by verification state (VERIFIED, CANDIDATE, OBSERVED, NOT_VULNERABLE)")
+	fmt.Println("  --json                   Output full JSON format")
+	fmt.Println("  --verbose, -v            Show detailed evidence, state transitions, and boundaries")
+	fmt.Println("  --help, -h               Show this help message")
+	fmt.Println("\nExamples:")
+	fmt.Println("  felix assessment sessionsec <asm-ref> --dry-run")
+	fmt.Println("  felix assessment sessionsec <asm-ref> --run")
+	fmt.Println("  felix assessment sessionsec <asm-ref> --run --policy policy.json")
+	fmt.Println("  felix assessment sessionsec <asm-ref> --status VERIFIED")
+	fmt.Println("  felix assessment sessionsec <asm-ref> --category SESSION_FIXATION --json")
+}
+
+func runAssessmentSessionSec(args []string) int {
+	var (
+		assessmentRef  string
+		runExecution   bool
+		dryRun         bool
+		policyPath     string
+		categoryFilter string
+		statusFilter   string
+		jsonOutput     bool
+		verbose        bool
+	)
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--run":
+			runExecution = true
+		case arg == "--dry-run":
+			dryRun = true
+		case arg == "--policy":
+			if i+1 < len(args) {
+				policyPath = args[i+1]
+				i++
+			}
+		case arg == "--category" || arg == "-c":
+			if i+1 < len(args) {
+				categoryFilter = strings.ToUpper(args[i+1])
+				i++
+			}
+		case arg == "--status" || arg == "-s":
+			if i+1 < len(args) {
+				statusFilter = strings.ToUpper(args[i+1])
+				i++
+			}
+		case arg == "--json":
+			jsonOutput = true
+		case arg == "--verbose" || arg == "-v":
+			verbose = true
+		case arg == "--help" || arg == "-h":
+			printSessionSecHelp()
+			return 0
+		default:
+			if !strings.HasPrefix(arg, "-") && assessmentRef == "" {
+				assessmentRef = arg
+			}
+		}
+	}
+
+	if assessmentRef == "" {
+		fmt.Fprintf(os.Stderr, "[-] Error: assessment ID or Ref is required\n\n")
+		printSessionSecHelp()
+		return 2
+	}
+
+	store, err := getAssessmentStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Database error: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+
+	asm, err := store.GetAssessment(assessmentRef)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Error finding assessment '%s': %v\n", assessmentRef, err)
+		return 1
+	}
+	asm.Targets, _ = store.GetTargets(asm.ID)
+	asm.Authorization, _ = store.GetAuthorization(asm.ID)
+	asm.Exclusions, _ = store.GetExclusions(asm.ID)
+	asm.ScopeRules, _ = store.GetScopeRules(asm.ID)
+
+	targetBase := "http://localhost"
+	if len(asm.Targets) > 0 {
+		targetBase = strings.TrimRight(asm.Targets[0].TargetURL, "/")
+	}
+
+	// Load inventory endpoints and auth surfaces
+	assets, _, _ := store.GetInventory(asm.ID, "", "", true)
+	authInv, _ := store.GetAuthInventory(asm.ID, "", "")
+
+	var targetEndpoints []sessionsec.TargetEndpoint
+	seenEndpoints := make(map[string]bool)
+
+	// Add endpoints from attack-surface inventory
+	for _, a := range assets {
+		if a.Type == "ENDPOINT" || a.Type == "endpoint" {
+			method := "GET"
+			if m, ok := a.Metadata["method"].(string); ok && m != "" {
+				method = strings.ToUpper(m)
+			}
+			path := a.DisplayName
+			if p, ok := a.Metadata["path"].(string); ok && p != "" {
+				path = p
+			} else if a.CanonicalID != "" {
+				path = a.CanonicalID
+			}
+			if strings.Contains(path, " ") {
+				parts := strings.SplitN(path, " ", 2)
+				if len(parts) == 2 {
+					if method == "GET" || method == "UNKNOWN" {
+						method = strings.ToUpper(parts[0])
+					}
+					path = parts[1]
+				}
+			}
+			if method == "UNKNOWN" {
+				method = "GET"
+			}
+			if u, err := url.Parse(path); err == nil && u.Path != "" {
+				path = u.Path
+			}
+
+			key := method + " " + path
+			if !seenEndpoints[key] {
+				seenEndpoints[key] = true
+				epType := "public"
+				lower := strings.ToLower(path)
+				switch {
+				case strings.Contains(lower, "login") || strings.Contains(lower, "signin"):
+					epType = "login"
+				case strings.Contains(lower, "logout") || strings.Contains(lower, "signout"):
+					epType = "logout"
+				case strings.Contains(lower, "reset") || strings.Contains(lower, "recover") || strings.Contains(lower, "forgot"):
+					epType = "recovery"
+				case strings.Contains(lower, "refresh") || strings.Contains(lower, "token"):
+					epType = "refresh"
+				case strings.Contains(lower, "step") || strings.Contains(lower, "verify") || strings.Contains(lower, "onboard"):
+					epType = "multistep"
+				case strings.Contains(lower, "profile") || strings.Contains(lower, "account") || strings.Contains(lower, "dashboard") || strings.Contains(lower, "admin") || strings.Contains(lower, "user"):
+					epType = "protected"
+				}
+
+				targetEndpoints = append(targetEndpoints, sessionsec.TargetEndpoint{
+					Method: method,
+					Path:   path,
+					Type:   epType,
+					Source: "inventory",
+				})
+			}
+		}
+	}
+
+	// Add endpoints from auth inventory surfaces
+	if authInv != nil {
+		for _, surf := range authInv.Surfaces {
+			path := surf.Identifier
+			if path != "" {
+				if u, err := url.Parse(path); err == nil && u.Path != "" {
+					path = u.Path
+				}
+				method := "GET"
+				if m, ok := surf.Metadata["method"].(string); ok && m != "" {
+					method = strings.ToUpper(m)
+				}
+				key := method + " " + path
+				if !seenEndpoints[key] {
+					seenEndpoints[key] = true
+					epType := "public"
+					switch surf.Category {
+					case auth.CategoryLogin:
+						epType = "login"
+					case auth.CategoryPasswordReset:
+						epType = "recovery"
+					case auth.CategorySession:
+						if strings.Contains(strings.ToLower(path), "logout") {
+							epType = "logout"
+						} else {
+							epType = "protected"
+						}
+					case auth.CategoryOAuthSSO:
+						epType = "refresh"
+					case auth.CategoryProtectedEndpoint:
+						epType = "protected"
+					}
+					targetEndpoints = append(targetEndpoints, sessionsec.TargetEndpoint{
+						Method: method,
+						Path:   path,
+						Type:   epType,
+						Source: "auth_surface",
+					})
+				}
+			}
+		}
+	}
+
+	// Fallback sensible endpoints if inventory has none
+	if len(targetEndpoints) == 0 {
+		targetEndpoints = append(targetEndpoints,
+			sessionsec.TargetEndpoint{Method: "GET", Path: "/", Type: "public", Source: "default"},
+			sessionsec.TargetEndpoint{Method: "POST", Path: "/login", Type: "login", Source: "default"},
+			sessionsec.TargetEndpoint{Method: "POST", Path: "/logout", Type: "logout", Source: "default"},
+			sessionsec.TargetEndpoint{Method: "GET", Path: "/profile", Type: "protected", Source: "default"},
+		)
+	}
+
+	// Load identities from policy
+	var policy *authz.AuthzPolicy
+	if policyPath != "" {
+		p, err := authz.LoadPolicyFromFile(policyPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Failed to load policy from %s: %v\n", policyPath, err)
+			return 1
+		}
+		policy = p
+		_ = store.SaveAuthzPolicy(asm.ID, policy)
+	} else {
+		policy, _ = store.GetAuthzPolicy(asm.ID)
+	}
+
+	var identities []sessionsec.TestIdentity
+	if policy != nil {
+		for _, id := range policy.Identities {
+			priv := id.PrivilegeLevel
+			if priv == 0 {
+				priv = 1
+				if strings.EqualFold(id.Role, "admin") {
+					priv = 10
+				}
+			}
+			identities = append(identities, sessionsec.TestIdentity{
+				Alias:          id.Alias,
+				Role:           id.Role,
+				TenantID:       id.TenantID,
+				PrivilegeLevel: priv,
+				Headers:        id.Headers,
+				Cookies:        id.Cookies,
+			})
+		}
+	}
+
+	// Check if existing results exist
+	existingResults, _ := store.GetSessionSecResults(asm.ID, "", "", "")
+	if !runExecution && !dryRun && len(existingResults) == 0 {
+		dryRun = true
+	}
+
+	// 1. Dry Run Mode
+	if dryRun {
+		engine := sessionsec.NewEngine(nil, sessionsec.DefaultConfig())
+		actx := &sessionsec.AssessmentContext{
+			AssessmentID: asm.ID,
+			BaseURL:      targetBase,
+			Endpoints:    targetEndpoints,
+			Identities:   identities,
+		}
+		plan, _ := engine.Plan(context.Background(), actx)
+
+		if jsonOutput {
+			b, _ := json.MarshalIndent(plan, "", "  ")
+			fmt.Println(string(b))
+			return 0
+		}
+
+		fmt.Println("================================================================================")
+		fmt.Printf("  FELIX :: SESSION & IDENTITY SECURITY ENGINE PLAN (DRY-RUN): %s\n", asm.Ref)
+		fmt.Printf("  Assessment: %s | Target Base: %s\n", asm.Name, targetBase)
+		fmt.Printf("  Endpoints Loaded: %d | Test Identities: %d | Planned Tests: %d\n", len(targetEndpoints), len(identities), len(plan.Tests))
+		fmt.Println("================================================================================")
+
+		fmt.Println("\n[+] SAFETY & ZERO-PERSISTENCE GUARANTEES:")
+		fmt.Println("  - Zero Credential Persistence:  Passwords, session IDs, and tokens are NEVER stored in plaintext.")
+		fmt.Println("  - Token Rotation Verification:  State changes computed via one-way SHA-256 fingerprints in-memory.")
+		fmt.Println("  - State Precondition Checks:   Tests requiring elevated or distinct roles fail-closed if unconfigured.")
+		fmt.Println("  - Non-Destructive Testing:     Password reset lifecycle uses non-destructive token replay checks.")
+		fmt.Println("  - Strict Scope Enforcement:    All requests and redirect destinations validated against approved scope.")
+
+		fmt.Println("\n[+] PLANNED SESSION & IDENTITY TESTS (11 WSTG CATEGORIES):")
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "TEST ID\tCATEGORY\tWSTG REF\tSTATUS\tREQUIRED STATE\tBLOCK REASON")
+		for _, t := range plan.Tests {
+			reason := t.BlockedReason
+			if reason == "" {
+				reason = "-"
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+				t.ID, t.Category, t.WSTGRef, t.Status, t.RequiredState, reason)
+		}
+		_ = w.Flush()
+
+		fmt.Println("\n[+] TARGET ENDPOINTS DETECTED:")
+		w = tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "METHOD\tPATH\tROLE/TYPE\tSOURCE")
+		for _, ep := range targetEndpoints {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", ep.Method, ep.Path, ep.Type, ep.Source)
+		}
+		_ = w.Flush()
+
+		fmt.Printf("\nTo execute active testing:\n  felix assessment sessionsec %s --run\n\n", asm.Ref)
+		return 0
+	}
+
+	// 2. Execution Mode
+	if runExecution {
+		if asm.Authorization == nil {
+			fmt.Fprintf(os.Stderr, "[-] Security refusal: no authorization record found for assessment %s\n", asm.Ref)
+			return 1
+		}
+		valid, reason := asm.Authorization.IsCurrentlyValid(time.Now().UTC())
+		if !valid {
+			fmt.Fprintf(os.Stderr, "[-] Security refusal: authorization invalid: %s\n", reason)
+			return 1
+		}
+
+		if len(asm.Targets) == 0 {
+			fmt.Fprintf(os.Stderr, "[-] Error: assessment %s has no targets configured\n", asm.Ref)
+			return 1
+		}
+
+		targetID := asm.Targets[0].ID
+		execID := "exec-" + uuid.New().String()
+		now := time.Now().UTC()
+		execRecord := &assessment.AssessmentExecution{
+			ID:           execID,
+			AssessmentID: asm.ID,
+			Status:       assessment.StatusRunning,
+			StartedAt:    now,
+			ConfigSnapshot: assessment.ScanConfigSnapshot{
+				TimeoutSeconds: 15,
+				Concurrency:    5,
+				ScopeMode:      asm.ScopeMode,
+				FelixVersion:   "2.0",
+			},
+		}
+		if err := store.CreateExecution(execRecord); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Failed to create execution record: %v\n", err)
+			return 1
+		}
+
+		var targetURLs []string
+		for _, t := range asm.Targets {
+			targetURLs = append(targetURLs, t.TargetURL)
+		}
+		scopeVal := assessment.NewScopeValidator(asm.ScopeMode, targetURLs, asm.ScopeRules, asm.Exclusions)
+
+		cfg := sessionsec.DefaultConfig()
+		sessionHTTPClient := &http.Client{
+			Timeout: cfg.Timeout,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 10 {
+					return fmt.Errorf("stopped after 10 redirects")
+				}
+				lastURL := ""
+				if len(via) > 0 {
+					lastURL = via[len(via)-1].URL.String()
+				}
+				return scopeVal.ValidateRedirect(lastURL, req.URL.String())
+			},
+		}
+
+		engine := sessionsec.NewEngine(sessionHTTPClient, cfg)
+		actx := &sessionsec.AssessmentContext{
+			AssessmentID: asm.ID,
+			ExecutionID:  execID,
+			BaseURL:      targetBase,
+			Endpoints:    targetEndpoints,
+			Identities:   identities,
+			IsAllowed:    scopeVal.IsAllowed,
+			IsExcluded:   func(u string) bool { excluded, _ := scopeVal.IsExcluded(u); return excluded },
+		}
+
+		fmt.Println("================================================================================")
+		fmt.Printf("  EXECUTING SESSION & IDENTITY SECURITY AUDIT: %s (%s)\n", asm.Ref, asm.Name)
+		fmt.Printf("  Target: %s | Endpoints: %d | Identities: %d\n", targetBase, len(targetEndpoints), len(identities))
+		fmt.Println("================================================================================")
+
+		startTime := time.Now()
+		results, findings, summary, err := engine.Assess(context.Background(), actx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Execution error: %v\n", err)
+			execRecord.Status = assessment.StatusFailed
+			execRecord.ErrorMessage = err.Error()
+			_ = store.UpdateExecution(execRecord)
+			return 1
+		}
+
+		duration := time.Since(startTime)
+		completedAt := time.Now().UTC()
+		execRecord.Status = assessment.StatusCompleted
+		execRecord.CompletedAt = &completedAt
+		execRecord.DurationMs = duration.Milliseconds()
+		execRecord.RequestCount = len(results)
+		execRecord.FindingCount = len(findings)
+
+		// Save results
+		if err := store.SaveSessionSecResults(results); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Warning: failed to save sessionsec results: %v\n", err)
+		}
+
+		// Save RunRecord
+		covJSON, _ := json.Marshal(summary.CoverageMap)
+		runRec := &sessionsec.RunRecord{
+			ID:                 uuid.New().String(),
+			AssessmentID:       asm.ID,
+			ExecutionID:        execID,
+			TotalTests:         summary.TotalTests,
+			CategoriesAssessed: summary.CategoriesCovered,
+			VerifiedCount:      summary.VerifiedCount,
+			CandidateCount:     summary.CandidateCount,
+			ObservedCount:      summary.ObservedCount,
+			InconclusiveCount:  summary.InconclusiveCount,
+			BlockedCount:       summary.BlockedCount,
+			CoverageJSON:       string(covJSON),
+			CreatedAt:          completedAt,
+		}
+		if err := store.SaveSessionSecRun(runRec); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Warning: failed to save sessionsec run record: %v\n", err)
+		}
+
+		// Save findings
+		var asmFindings []assessment.AssessmentFinding
+		for _, f := range findings {
+			asmFindings = append(asmFindings, assessment.ToAssessmentFinding(asm.ID, execID, targetID, f))
+		}
+		if len(asmFindings) > 0 {
+			if err := store.SaveFindings(asmFindings); err != nil {
+				fmt.Fprintf(os.Stderr, "[-] Warning: failed to save findings: %v\n", err)
+			}
+		}
+
+		_ = store.UpdateExecution(execRecord)
+
+		fmt.Printf("\n[+] Assessment Complete in %v\n", duration.Round(time.Millisecond))
+		fmt.Printf("    Total Tests: %d | Categories Assessed: %d\n", summary.TotalTests, summary.CategoriesCovered)
+		fmt.Printf("    Verified Issues: %d | Candidates: %d | Observations: %d\n",
+			summary.VerifiedCount, summary.CandidateCount, summary.ObservedCount)
+	}
+
+	// 3. Reporting / Inspection Mode
+	results, err := store.GetSessionSecResults(asm.ID, "", categoryFilter, statusFilter)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Failed to fetch sessionsec results: %v\n", err)
+		return 1
+	}
+
+	summary, _ := store.GetSessionSecSummary(asm.ID, "")
+
+	if jsonOutput {
+		out := map[string]interface{}{
+			"assessment_ref": asm.Ref,
+			"target_base":    targetBase,
+			"summary":        summary,
+			"results":        results,
+		}
+		b, _ := json.MarshalIndent(out, "", "  ")
+		fmt.Println(string(b))
+		return 0
+	}
+
+	fmt.Println("\n================================================================================")
+	fmt.Printf("  FELIX :: SESSION & IDENTITY SECURITY FINDINGS: %s\n", asm.Ref)
+	fmt.Printf("  Target Base: %s\n", targetBase)
+	fmt.Println("================================================================================")
+
+	allCats := []sessionsec.SessionCategory{
+		sessionsec.CategorySessionFixation,
+		sessionsec.CategoryCookieSecurity,
+		sessionsec.CategorySessionInvalidation,
+		sessionsec.CategoryAuthStateInconsistency,
+		sessionsec.CategoryTokenHandling,
+		sessionsec.CategoryPrivilegeTransitions,
+		sessionsec.CategoryLogoutBehavior,
+		sessionsec.CategoryPasswordRecovery,
+		sessionsec.CategoryAccountEnumeration,
+		sessionsec.CategorySessionPuzzling,
+		sessionsec.CategorySessionIsolation,
+	}
+
+	if summary != nil && len(summary.CoverageMap) > 0 {
+		fmt.Println("\n[+] CATEGORY COVERAGE SUMMARY:")
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "CODE\tCATEGORY\tWSTG REF\tSTATUS\tTESTS\tVERIFIED\tCANDIDATES")
+		for _, cat := range allCats {
+			cov, ok := summary.CoverageMap[string(cat)]
+			if !ok {
+				meta := sessionsec.CategoryMetadata[cat]
+				cov = sessionsec.CategoryCoverage{
+					Code:    meta.Code,
+					Name:    meta.Name,
+					WSTGRef: meta.WSTG,
+					Status:  sessionsec.CoverageUntested,
+				}
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%d\t%d\n",
+				cov.Code, cov.Name, cov.WSTGRef, cov.Status, cov.TestsRun, cov.Verified, cov.Candidates)
+		}
+		_ = w.Flush()
+	}
+
+	if len(results) > 0 {
+		fmt.Println("\n[+] DETAILED TEST RESULTS:")
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		if verbose {
+			fmt.Fprintln(w, "CODE\tWSTG\tSTATE\tSEVERITY\tMETHOD\tENDPOINT\tEVIDENCE & DETAILS")
+			for _, r := range results {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					r.VulnCode, r.WSTGRef, r.VerificationState, r.Severity, r.Method, r.Endpoint, r.EvidenceSummary)
+			}
+		} else {
+			fmt.Fprintln(w, "CODE\tSTATE\tSEVERITY\tMETHOD\tENDPOINT\tEVIDENCE SUMMARY")
+			for _, r := range results {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+					r.VulnCode, r.VerificationState, r.Severity, r.Method, r.Endpoint, r.EvidenceSummary)
+			}
+		}
+		_ = w.Flush()
+	} else if summary == nil || summary.TotalTests == 0 {
+		fmt.Println("\nNo session security test results recorded.")
+		fmt.Printf("To run a session & identity security assessment:\n  felix assessment sessionsec %s --run\n", asm.Ref)
 	}
 
 	fmt.Println()

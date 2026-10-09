@@ -11,6 +11,7 @@ import (
 	"felix/pkg/authz"
 	"felix/pkg/discovery"
 	"felix/pkg/report"
+	"felix/pkg/sessionsec"
 	"felix/pkg/webvuln"
 	"github.com/google/uuid"
 )
@@ -1155,5 +1156,167 @@ func TestStore_WebVulnPersistenceAndMigration(t *testing.T) {
 	}
 	if summary.VerifiedCount != 3 {
 		t.Errorf("expected VerifiedCount = 3, got %d", summary.VerifiedCount)
+	}
+}
+
+func TestStore_SessionSecPersistenceAndMigration(t *testing.T) {
+	store, cleanup := newTestStore(t)
+	defer cleanup()
+
+	// 1. Verify schema migration version 7 applied
+	var maxVersion int
+	err := store.db.QueryRow("SELECT MAX(version) FROM schema_migrations").Scan(&maxVersion)
+	if err != nil {
+		t.Fatalf("failed to query schema version: %v", err)
+	}
+	if maxVersion < 7 {
+		t.Fatalf("expected schema version >= 7, got %d", maxVersion)
+	}
+
+	// 2. Setup client, assessment, and execution
+	c := &Client{
+		ID:        uuid.New().String(),
+		Name:      "SessionSec Test Org",
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	if err := store.CreateClient(c); err != nil {
+		t.Fatalf("CreateClient failed: %v", err)
+	}
+
+	asm := &Assessment{
+		ID:             uuid.New().String(),
+		Ref:            "ASM-SESSIONSEC-01",
+		ClientID:       c.ID,
+		Name:           "Session Security Assessment",
+		AssessmentType: "SESSION_SECURITY",
+		Status:         StatusRunning,
+		CreatedAt:      time.Now().UTC(),
+		UpdatedAt:      time.Now().UTC(),
+	}
+	if err := store.CreateAssessment(asm); err != nil {
+		t.Fatalf("CreateAssessment failed: %v", err)
+	}
+
+	exec := &AssessmentExecution{
+		ID:           uuid.New().String(),
+		AssessmentID: asm.ID,
+		Status:       StatusRunning,
+		StartedAt:    time.Now().UTC(),
+	}
+	if err := store.CreateExecution(exec); err != nil {
+		t.Fatalf("CreateExecution failed: %v", err)
+	}
+
+	// 3. Test SaveSessionSecRun and GetSessionSecRun
+	runRec := &sessionsec.RunRecord{
+		ID:                 uuid.New().String(),
+		AssessmentID:       asm.ID,
+		ExecutionID:        exec.ID,
+		TotalTests:         11,
+		CategoriesAssessed: 11,
+		VerifiedCount:      2,
+		CandidateCount:     1,
+		ObservedCount:      1,
+		InconclusiveCount:  1,
+		BlockedCount:       0,
+		CoverageJSON:       `{"SESSION_FIXATION":{"category":"SESSION_FIXATION","code":"SS-FIXATION","name":"Session Fixation","status":"VERIFIED_ISSUE_FOUND","tests_run":1,"verified":1}}`,
+		CreatedAt:          time.Now().UTC(),
+	}
+	if err := store.SaveSessionSecRun(runRec); err != nil {
+		t.Fatalf("SaveSessionSecRun failed: %v", err)
+	}
+
+	fetchedRun, err := store.GetSessionSecRun(asm.ID, exec.ID)
+	if err != nil {
+		t.Fatalf("GetSessionSecRun failed: %v", err)
+	}
+	if fetchedRun.ID != runRec.ID {
+		t.Errorf("expected run ID %s, got %s", runRec.ID, fetchedRun.ID)
+	}
+	if fetchedRun.VerifiedCount != 2 {
+		t.Errorf("expected VerifiedCount 2, got %d", fetchedRun.VerifiedCount)
+	}
+
+	// 4. Test SaveSessionSecResults and GetSessionSecResults
+	res1 := sessionsec.Result{
+		ID:                uuid.New().String(),
+		AssessmentID:      asm.ID,
+		ExecutionID:       exec.ID,
+		Category:          sessionsec.CategorySessionFixation,
+		VulnCode:          "SS-FIXATION",
+		TestID:            "SS-FIXATION-ROTATION",
+		TestName:          "Session ID Rotation on Login",
+		WSTGRef:           "WSTG-SESS-03",
+		Endpoint:          "https://target.local/login",
+		Method:            "POST",
+		VerificationState: sessionsec.StateVerified,
+		Severity:          report.SeverityHigh,
+		Confidence:        report.ConfidenceHigh,
+		ObservedStatus:    200,
+		StateBefore:       sessionsec.StatePreAuth,
+		StateAfter:        sessionsec.StateAuthenticated,
+		EvidenceSummary:   "Pre-auth cookie was adopted without rotation",
+		CreatedAt:         time.Now().UTC(),
+	}
+	res2 := sessionsec.Result{
+		ID:                uuid.New().String(),
+		AssessmentID:      asm.ID,
+		ExecutionID:       exec.ID,
+		Category:          sessionsec.CategoryCookieSecurity,
+		VulnCode:          "SS-COOKIE",
+		TestID:            "SS-COOKIE-FLAGS",
+		TestName:          "Cookie Security Flags",
+		WSTGRef:           "WSTG-SESS-02",
+		Endpoint:          "https://target.local/api/user",
+		Method:            "GET",
+		VerificationState: sessionsec.StateNotVulnerable,
+		Severity:          report.SeverityInfo,
+		Confidence:        report.ConfidenceHigh,
+		ObservedStatus:    200,
+		EvidenceSummary:   "All cookies declare Secure and HttpOnly flags",
+		CreatedAt:         time.Now().UTC(),
+	}
+
+	if err := store.SaveSessionSecResults([]sessionsec.Result{res1, res2}); err != nil {
+		t.Fatalf("SaveSessionSecResults failed: %v", err)
+	}
+
+	allResults, err := store.GetSessionSecResults(asm.ID, exec.ID, "", "")
+	if err != nil {
+		t.Fatalf("GetSessionSecResults failed: %v", err)
+	}
+	if len(allResults) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(allResults))
+	}
+
+	// Filter by category
+	catFiltered, err := store.GetSessionSecResults(asm.ID, exec.ID, string(sessionsec.CategorySessionFixation), "")
+	if err != nil {
+		t.Fatalf("GetSessionSecResults by category failed: %v", err)
+	}
+	if len(catFiltered) != 1 || catFiltered[0].VulnCode != "SS-FIXATION" {
+		t.Errorf("expected 1 fixation result, got %d", len(catFiltered))
+	}
+
+	// Filter by state
+	stateFiltered, err := store.GetSessionSecResults(asm.ID, exec.ID, "", string(sessionsec.StateVerified))
+	if err != nil {
+		t.Fatalf("GetSessionSecResults by state failed: %v", err)
+	}
+	if len(stateFiltered) != 1 {
+		t.Errorf("expected 1 verified result, got %d", len(stateFiltered))
+	}
+
+	// 5. Test GetSessionSecSummary
+	summary, err := store.GetSessionSecSummary(asm.ID, exec.ID)
+	if err != nil {
+		t.Fatalf("GetSessionSecSummary failed: %v", err)
+	}
+	if summary.TotalTests != 11 {
+		t.Errorf("expected TotalTests = 11 from RunRecord, got %d", summary.TotalTests)
+	}
+	if summary.VerifiedCount != 2 {
+		t.Errorf("expected VerifiedCount = 2, got %d", summary.VerifiedCount)
 	}
 }
