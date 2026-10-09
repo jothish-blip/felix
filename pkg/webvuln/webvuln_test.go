@@ -11,17 +11,35 @@ import (
 	"felix/pkg/report"
 )
 
-// 1. Test XSS: Positive and Negative controls
+// 1. Test XSS: Dangerous Script Context vs Synthetic Fixture vs Inert Custom Tag vs Encoded vs JSON
 func TestWebVuln_XSS(t *testing.T) {
-	// Vulnerable server reflecting raw unescaped input into HTML
-	vulnServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Server 1: Genuinely unsafe script context reflection
+	scriptServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("q")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprintf(w, "<html><head><script>var query = \"%s\";</script></head><body>Search</body></html>", q)
+	}))
+	defer scriptServer.Close()
+
+	// Server 2: Inert custom tag reflection in HTML body
+	inertServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("q")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprintf(w, "<html><body>Search results for: %s</body></html>", q)
 	}))
-	defer vulnServer.Close()
+	defer inertServer.Close()
 
-	// Safe server HTML entity encoding input
+	// Server 3: Harmless literal text reflection (server strips HTML markup tags)
+	textServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("q")
+		// Strip angle brackets
+		stripped := strings.ReplaceAll(strings.ReplaceAll(q, "<", ""), ">", "")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprintf(w, "<html><body>Search results for: %s</body></html>", stripped)
+	}))
+	defer textServer.Close()
+
+	// Server 4: Safe server HTML entity encoding input
 	safeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("q")
 		escaped := strings.ReplaceAll(q, "<", "&lt;")
@@ -31,7 +49,7 @@ func TestWebVuln_XSS(t *testing.T) {
 	}))
 	defer safeServer.Close()
 
-	// JSON server reflecting input inside JSON data
+	// Server 5: JSON server reflecting input inside JSON data
 	jsonServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("q")
 		w.Header().Set("Content-Type", "application/json")
@@ -39,29 +57,90 @@ func TestWebVuln_XSS(t *testing.T) {
 	}))
 	defer jsonServer.Close()
 
-	engine := NewEngine(vulnServer.Client(), DefaultConfig())
+	engine := NewEngine(safeServer.Client(), DefaultConfig())
 
-	// Positive Control: Unescaped HTML Reflection -> VERIFIED
-	actxVuln := &AssessmentContext{
-		AssessmentID: "asm-xss-test",
-		ExecutionID:  "exec-xss-test",
-		BaseURL:      vulnServer.URL,
+	// Test 1: Unsafe Context: Script context breakout -> VERIFIED
+	actxScript := &AssessmentContext{
+		AssessmentID:     "asm-xss-script",
+		ExecutionID:      "exec-xss-script",
+		BaseURL:          scriptServer.URL,
+		SyntheticFixture: false,
 		Endpoints: []TargetEndpoint{
 			{Method: "GET", Path: "/search", Parameters: []string{"q"}},
 		},
 	}
-	resultsVuln, findingsVuln, covVuln := engine.assessXSS(context.Background(), actxVuln, vulnServer.Client())
-	if covVuln.Verified != 1 {
-		t.Fatalf("expected 1 verified XSS finding, got %d", covVuln.Verified)
+	resultsScript, findingsScript, covScript := engine.assessXSS(context.Background(), actxScript, scriptServer.Client())
+	if covScript.Verified != 1 {
+		t.Fatalf("expected 1 verified XSS finding in script context, got %d", covScript.Verified)
 	}
-	if len(resultsVuln) == 0 || resultsVuln[0].VerificationState != StateVerified {
-		t.Fatalf("expected result state VERIFIED, got %+v", resultsVuln)
+	if len(resultsScript) == 0 || resultsScript[0].VerificationState != StateVerified {
+		t.Fatalf("expected StateVerified for script context reflection, got %+v", resultsScript)
 	}
-	if len(findingsVuln) != 1 || findingsVuln[0].Severity != report.SeverityHigh {
-		t.Fatalf("expected 1 HIGH severity finding, got %+v", findingsVuln)
+	if len(findingsScript) != 1 || findingsScript[0].Severity != report.SeverityHigh {
+		t.Fatalf("expected 1 HIGH severity finding, got %+v", findingsScript)
 	}
 
-	// Negative Control: Encoded Reflection -> NOT_VULNERABLE
+	// Test 2: Synthetic Fixture Mode -> VERIFIED
+	actxSynth := &AssessmentContext{
+		AssessmentID:     "asm-xss-synth",
+		ExecutionID:      "exec-xss-synth",
+		BaseURL:          inertServer.URL,
+		SyntheticFixture: true,
+		Endpoints: []TargetEndpoint{
+			{Method: "GET", Path: "/search", Parameters: []string{"q"}},
+		},
+	}
+	resultsSynth, findingsSynth, covSynth := engine.assessXSS(context.Background(), actxSynth, inertServer.Client())
+	if covSynth.Verified != 1 || len(findingsSynth) != 1 {
+		t.Fatalf("expected 1 verified XSS in synthetic fixture mode, got %d (findings: %d)", covSynth.Verified, len(findingsSynth))
+	}
+	if len(resultsSynth) == 0 || resultsSynth[0].VerificationState != StateVerified {
+		t.Fatalf("expected StateVerified in synthetic fixture mode, got %+v", resultsSynth)
+	}
+
+	// Test 3: Inert custom HTML tag on LIVE target -> CANDIDATE (never verified without execution proof)
+	actxInert := &AssessmentContext{
+		AssessmentID:     "asm-xss-inert",
+		ExecutionID:      "exec-xss-inert",
+		BaseURL:          inertServer.URL,
+		SyntheticFixture: false,
+		Endpoints: []TargetEndpoint{
+			{Method: "GET", Path: "/search", Parameters: []string{"q"}},
+		},
+	}
+	resultsInert, findingsInert, covInert := engine.assessXSS(context.Background(), actxInert, inertServer.Client())
+	if covInert.Verified != 0 {
+		t.Errorf("inert custom tag reflection must NOT be marked verified, got %d verified", covInert.Verified)
+	}
+	if covInert.Candidates != 1 || len(resultsInert) == 0 || resultsInert[0].VerificationState != StateCandidate {
+		t.Errorf("expected StateCandidate for inert tag reflection, got %+v", resultsInert)
+	}
+	if len(findingsInert) != 0 {
+		t.Errorf("inert custom tag candidate should not produce verified finding, got %d", len(findingsInert))
+	}
+	if resultsInert[0].EvidenceDetails["limitation"] != "browser_dom_execution_not_invoked" {
+		t.Errorf("expected limitation noted in EvidenceDetails, got %+v", resultsInert[0].EvidenceDetails)
+	}
+
+	// Test 4: Harmless literal text reflection -> OBSERVED
+	actxText := &AssessmentContext{
+		AssessmentID:     "asm-xss-text",
+		ExecutionID:      "exec-xss-text",
+		BaseURL:          textServer.URL,
+		SyntheticFixture: false,
+		Endpoints: []TargetEndpoint{
+			{Method: "GET", Path: "/search", Parameters: []string{"q"}},
+		},
+	}
+	resultsText, _, covText := engine.assessXSS(context.Background(), actxText, textServer.Client())
+	if covText.Verified != 0 || covText.Observations != 1 {
+		t.Errorf("expected 0 verified, 1 observation for literal text, got verified=%d, obs=%d", covText.Verified, covText.Observations)
+	}
+	if len(resultsText) == 0 || resultsText[0].VerificationState != StateObserved {
+		t.Errorf("expected StateObserved for literal text, got %+v", resultsText)
+	}
+
+	// Test 5: Negative Control: Encoded Reflection -> NOT_VULNERABLE
 	actxSafe := &AssessmentContext{
 		AssessmentID: "asm-xss-safe",
 		ExecutionID:  "exec-xss-safe",
@@ -78,7 +157,7 @@ func TestWebVuln_XSS(t *testing.T) {
 		t.Errorf("expected NOT_VULNERABLE state for entity encoded response, got %+v", resultsSafe)
 	}
 
-	// JSON Control: Reflection in JSON -> OBSERVED (not verified reflected XSS)
+	// Test 6: JSON Control: Reflection in JSON -> OBSERVED (not verified reflected XSS)
 	actxJSON := &AssessmentContext{
 		AssessmentID: "asm-xss-json",
 		ExecutionID:  "exec-xss-json",
@@ -291,14 +370,24 @@ func TestWebVuln_SSTI(t *testing.T) {
 	}
 }
 
-// 5. Test Open Redirect: External Location vs Internal/Sanitized
+// 5. Test Open Redirect: Dynamic Input-Controlled vs Static External vs Internal/Sanitized
 func TestWebVuln_OpenRedirect(t *testing.T) {
-	// Vulnerable redirect server reflecting untrusted destination in Location header
+	// Vulnerable redirect server dynamically reflecting untrusted destination in Location header
 	vulnServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		next := r.URL.Query().Get("next")
+		if next == "" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		http.Redirect(w, r, next, http.StatusFound)
 	}))
 	defer vulnServer.Close()
+
+	// Static external redirect server (e.g. SSO login always goes to fixed external provider)
+	staticServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://auth.company.example.com/sso", http.StatusFound)
+	}))
+	defer staticServer.Close()
 
 	// Safe redirect server restricting to local paths
 	safeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -308,7 +397,7 @@ func TestWebVuln_OpenRedirect(t *testing.T) {
 
 	engine := NewEngine(vulnServer.Client(), DefaultConfig())
 
-	// Positive Control: 302 to external canary domain -> VERIFIED
+	// Test 1: Dynamic input-controlled redirect across paired differential canaries -> VERIFIED
 	actxVuln := &AssessmentContext{
 		AssessmentID: "asm-redir-vuln",
 		ExecutionID:  "exec-redir-vuln",
@@ -328,7 +417,27 @@ func TestWebVuln_OpenRedirect(t *testing.T) {
 		t.Fatalf("expected 1 finding, got %d", len(findingsVuln))
 	}
 
-	// Negative Control: Relative path redirect -> NOT_VULNERABLE
+	// Test 2: Static external redirect -> OBSERVED (never verified)
+	actxStatic := &AssessmentContext{
+		AssessmentID: "asm-redir-static",
+		ExecutionID:  "exec-redir-static",
+		BaseURL:      staticServer.URL,
+		Endpoints: []TargetEndpoint{
+			{Method: "GET", Path: "/login", Parameters: []string{"next"}},
+		},
+	}
+	resultsStatic, findingsStatic, covStatic := engine.assessOpenRedirect(context.Background(), actxStatic, staticServer.Client())
+	if covStatic.Verified != 0 {
+		t.Errorf("static external redirect must NOT be marked verified, got %d verified", covStatic.Verified)
+	}
+	if covStatic.Observations != 1 || len(resultsStatic) == 0 || resultsStatic[0].VerificationState != StateObserved {
+		t.Errorf("expected StateObserved for static external redirect, got %+v", resultsStatic)
+	}
+	if len(findingsStatic) != 0 {
+		t.Errorf("static redirect must not produce findings, got %d", len(findingsStatic))
+	}
+
+	// Test 3: Relative path redirect -> NOT_VULNERABLE
 	actxSafe := &AssessmentContext{
 		AssessmentID: "asm-redir-safe",
 		ExecutionID:  "exec-redir-safe",
@@ -337,21 +446,35 @@ func TestWebVuln_OpenRedirect(t *testing.T) {
 			{Method: "GET", Path: "/login", Parameters: []string{"next"}},
 		},
 	}
-	resultsSafe, _, covSafe := engine.assessOpenRedirect(context.Background(), actxSafe, safeServer.Client())
+	resultsSafe, findingsSafe, covSafe := engine.assessOpenRedirect(context.Background(), actxSafe, safeServer.Client())
 	if covSafe.Verified != 0 {
 		t.Errorf("expected 0 verified on safe server, got %d", covSafe.Verified)
 	}
 	if len(resultsSafe) == 0 || resultsSafe[0].VerificationState != StateNotVulnerable {
 		t.Errorf("expected StateNotVulnerable, got %+v", resultsSafe)
 	}
+	if len(findingsSafe) != 0 {
+		t.Errorf("safe server must not produce findings, got %d", len(findingsSafe))
+	}
 }
 
-// 6. Test Information Disclosure: Exposed .env file and Stack Trace with Redaction
+// 6. Test Information Disclosure: Live metadata-only HEAD vs Synthetic Fixture Redaction vs Stack Traces
 func TestWebVuln_InfoDisclosure_And_Redaction(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/.env" {
+			if r.Method == "HEAD" {
+				w.Header().Set("Content-Type", "text/plain")
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			w.Header().Set("Content-Type", "text/plain")
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprint(w, "DB_PASSWORD=super_secret_db_pass_1234\nSECRET_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.do_not_leak_me\n")
+			return
+		}
+		if r.URL.Path == "/server-status" {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, "Apache Server Status for example.com")
 			return
 		}
 		if r.URL.Query().Get("debug_probe") != "" {
@@ -364,22 +487,74 @@ func TestWebVuln_InfoDisclosure_And_Redaction(t *testing.T) {
 	defer server.Close()
 
 	engine := NewEngine(server.Client(), DefaultConfig())
-	actx := &AssessmentContext{
-		AssessmentID: "asm-infodisc",
-		ExecutionID:  "exec-infodisc",
-		BaseURL:      server.URL,
+
+	// Control A: Live Target Check (SyntheticFixture = false)
+	// Safety enforcement: Must NOT download or retain live /.env content; reports StateCandidate
+	actxLive := &AssessmentContext{
+		AssessmentID:     "asm-infodisc-live",
+		ExecutionID:      "exec-infodisc-live",
+		BaseURL:          server.URL,
+		SyntheticFixture: false,
 		Endpoints: []TargetEndpoint{
 			{Method: "GET", Path: "/api/test"},
 		},
 	}
-
-	results, findings, cov := engine.assessInfoDisclosure(context.Background(), actx, server.Client())
-	if cov.Verified < 1 {
-		t.Fatalf("expected at least 1 verified info disclosure finding, got %d", cov.Verified)
+	resultsLive, _, covLive := engine.assessInfoDisclosure(context.Background(), actxLive, server.Client())
+	var envLiveResult *Result
+	for i := range resultsLive {
+		if strings.Contains(resultsLive[i].Endpoint, "/.env") {
+			envLiveResult = &resultsLive[i]
+			break
+		}
+	}
+	if envLiveResult == nil {
+		t.Fatalf("expected /.env result in live mode")
+	}
+	if envLiveResult.VerificationState != StateCandidate {
+		t.Errorf("expected /.env on live target to be StateCandidate, got %v", envLiveResult.VerificationState)
+	}
+	if envLiveResult.EvidenceDetails["safety_policy"] != "metadata_only_check_zero_content_retained" {
+		t.Errorf("expected metadata_only_check_zero_content_retained safety policy, got %v", envLiveResult.EvidenceDetails)
+	}
+	if strings.Contains(envLiveResult.EvidenceSummary, "super_secret_db_pass_1234") {
+		t.Errorf("live target leaked secret in summary: %s", envLiveResult.EvidenceSummary)
+	}
+	if strings.Contains(fmt.Sprint(envLiveResult.EvidenceDetails), "super_secret_db_pass_1234") {
+		t.Errorf("live target leaked secret in details: %+v", envLiveResult.EvidenceDetails)
+	}
+	if covLive.Candidates < 1 {
+		t.Errorf("expected candidate count >= 1 in live mode, got %d", covLive.Candidates)
 	}
 
-	// Verify that secrets in results and findings are redacted
-	for _, r := range results {
+	// Control B: Synthetic Fixture Check (SyntheticFixture = true)
+	// Demonstrates detection and strict redaction
+	actxSynth := &AssessmentContext{
+		AssessmentID:     "asm-infodisc-synth",
+		ExecutionID:      "exec-infodisc-synth",
+		BaseURL:          server.URL,
+		SyntheticFixture: true,
+		Endpoints: []TargetEndpoint{
+			{Method: "GET", Path: "/api/test"},
+		},
+	}
+	resultsSynth, findingsSynth, covSynth := engine.assessInfoDisclosure(context.Background(), actxSynth, server.Client())
+	if covSynth.Verified < 1 {
+		t.Fatalf("expected verified findings in synthetic mode, got %d", covSynth.Verified)
+	}
+
+	var envSynthResult *Result
+	for i := range resultsSynth {
+		if strings.Contains(resultsSynth[i].Endpoint, "/.env") {
+			envSynthResult = &resultsSynth[i]
+			break
+		}
+	}
+	if envSynthResult == nil || envSynthResult.VerificationState != StateVerified {
+		t.Fatalf("expected verified state for /.env in synthetic fixture mode, got %+v", envSynthResult)
+	}
+
+	// Assert that fixture secrets never leak into findings or evidence and are replaced by [REDACTED]
+	for _, r := range resultsSynth {
 		if strings.Contains(r.EvidenceSummary, "super_secret_db_pass_1234") {
 			t.Errorf("raw password leaked in evidence summary: %s", r.EvidenceSummary)
 		}
@@ -389,10 +564,13 @@ func TestWebVuln_InfoDisclosure_And_Redaction(t *testing.T) {
 			}
 		}
 	}
-	for _, f := range findings {
+	for _, f := range findingsSynth {
 		if strings.Contains(f.Evidence, "super_secret_db_pass_1234") {
 			t.Errorf("raw password leaked in report finding evidence: %s", f.Evidence)
 		}
+	}
+	if !strings.Contains(envSynthResult.EvidenceDetails["snippet"], "[REDACTED]") {
+		t.Errorf("expected [REDACTED] in snippet, got: %s", envSynthResult.EvidenceDetails["snippet"])
 	}
 }
 

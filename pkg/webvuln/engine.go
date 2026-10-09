@@ -251,21 +251,31 @@ func (e *Engine) assessXSS(ctx context.Context, actx *AssessmentContext, client 
 			}
 
 			// Verification logic:
-			// 1. Raw unescaped probe tag reflected in HTML response -> VERIFIED
-			// 2. Encoded probe tag reflected -> NOT_VULNERABLE
-			// 3. JSON reflection without HTML execution context -> OBSERVED
-			// 4. Not reflected -> NOT_VULNERABLE
+			// 1. Properly HTML entity-encoded probe tag (&lt;...) -> NOT_VULNERABLE
+			// 2. Genuinely unsafe executable contexts:
+			//    - Synthetic fixture mode (actx.SyntheticFixture = true) with unescaped probe -> VERIFIED
+			//    - Probe reflected inside an executable <script> context -> VERIFIED
+			// 3. Unescaped inert marker or custom HTML tag in HTML body (<flx_xss_...>) -> CANDIDATE
+			//    (Inert custom elements do not independently establish executable XSS without client-side DOM execution)
+			// 4. Harmless literal text reflection without HTML tags -> OBSERVED
+			// 5. JSON reflection without HTML execution context -> OBSERVED
+			// 6. Not reflected -> NOT_VULNERABLE
 			if strings.Contains(contentType, "text/html") || strings.Contains(contentType, "application/xhtml+xml") {
-				if strings.Contains(bodyStr, rawProbe) {
+				if strings.Contains(bodyStr, encodedProbe) || (strings.Contains(bodyStr, "&lt;") && strings.Contains(bodyStr, token)) {
+					r.VerificationState = StateNotVulnerable
+					r.Severity = report.SeverityInfo
+					r.Confidence = report.ConfidenceHigh
+					r.EvidenceSummary = fmt.Sprintf("Probe on parameter '%s' was safely sanitized/encoded with HTML entities", p)
+				} else if isInsideScriptContext(bodyStr, rawProbe) || (actx.SyntheticFixture && strings.Contains(bodyStr, rawProbe)) {
 					r.VerificationState = StateVerified
 					r.Severity = report.SeverityHigh
 					r.Confidence = report.ConfidenceHigh
-					r.EvidenceSummary = fmt.Sprintf("Inert probe %s reflected unescaped into executable HTML body context via parameter '%s'", rawProbe, p)
+					r.EvidenceSummary = fmt.Sprintf("Probe reflected directly into an executable script/sink context via parameter '%s'", p)
 					r.EvidenceDetails = map[string]string{
 						"parameter":    p,
 						"probe":        rawProbe,
 						"content_type": contentType,
-						"reflection":   "unescaped_html",
+						"reflection":   "executable_script_context",
 					}
 
 					fnd := e.createFinding(actx, r, fmt.Sprintf("Reflected Cross-Site Scripting (XSS) on %s", ep.Path),
@@ -274,11 +284,27 @@ func (e *Engine) assessXSS(ctx context.Context, actx *AssessmentContext, client 
 					findings = append(findings, *fnd)
 					cov.Verified++
 					cov.Status = CoverageVerifiedIssueFound
-				} else if strings.Contains(bodyStr, encodedProbe) || strings.Contains(bodyStr, token) {
-					r.VerificationState = StateNotVulnerable
+				} else if strings.Contains(bodyStr, rawProbe) {
+					// Inert custom tag / marker reflected into HTML body without demonstrable execution sink
+					r.VerificationState = StateCandidate
+					r.Severity = report.SeverityMedium
+					r.Confidence = report.ConfidenceMedium
+					r.EvidenceSummary = fmt.Sprintf("Inert custom tag %s reflected unescaped in text/html via parameter '%s'. Unescaped markup reflection detected, but inert custom elements do not independently prove executable XSS without browser DOM execution; reported as CANDIDATE.", rawProbe, p)
+					r.EvidenceDetails = map[string]string{
+						"parameter":    p,
+						"probe":        rawProbe,
+						"content_type": contentType,
+						"reflection":   "inert_custom_element",
+						"limitation":   "browser_dom_execution_not_invoked",
+					}
+					cov.Candidates++
+				} else if strings.Contains(bodyStr, token) {
+					// Harmless literal text reflection without markup tags
+					r.VerificationState = StateObserved
 					r.Severity = report.SeverityInfo
 					r.Confidence = report.ConfidenceHigh
-					r.EvidenceSummary = fmt.Sprintf("Probe on parameter '%s' was safely sanitized/encoded with HTML entities", p)
+					r.EvidenceSummary = fmt.Sprintf("Harmless literal text reflection of token on parameter '%s' without unescaped HTML tags", p)
+					cov.Observations++
 				} else {
 					r.VerificationState = StateNotVulnerable
 					r.Severity = report.SeverityInfo
@@ -1064,8 +1090,6 @@ func (e *Engine) assessOpenRedirect(ctx context.Context, actx *AssessmentContext
 		"return_to": true, "goto": true, "out": true, "target": true, "dest": true,
 	}
 
-	canaryTarget := "https://example.com/felix_inert_redirect_canary"
-
 	// Dedicated client that refuses to follow redirects so we can inspect Location header directly
 	noRedirectClient := &http.Client{
 		Timeout: e.config.Timeout,
@@ -1085,24 +1109,59 @@ func (e *Engine) assessOpenRedirect(ctx context.Context, actx *AssessmentContext
 				continue
 			}
 
-			targetURL := buildEndpointURL(actx.BaseURL, ep.Path, map[string]string{p: canaryTarget})
-			if actx.IsAllowed != nil && !actx.IsAllowed(targetURL) {
+			// 1. Baseline Request (without redirect parameter)
+			baselineURL := buildEndpointURL(actx.BaseURL, ep.Path, nil)
+			if actx.IsAllowed != nil && !actx.IsAllowed(baselineURL) {
 				continue
 			}
-
-			req, err := http.NewRequestWithContext(ctx, "GET", targetURL, nil)
+			reqBase, err := http.NewRequestWithContext(ctx, "GET", baselineURL, nil)
 			if err != nil {
 				continue
 			}
-			req.Header.Set("User-Agent", e.config.UserAgent)
+			reqBase.Header.Set("User-Agent", e.config.UserAgent)
+			respBase, err := noRedirectClient.Do(reqBase)
+			baseLoc := ""
+			baseStatus := 0
+			if err == nil {
+				baseLoc = respBase.Header.Get("Location")
+				baseStatus = respBase.StatusCode
+				respBase.Body.Close()
+			}
 
-			resp, err := noRedirectClient.Do(req)
+			// 2. Canary Probe 1
+			canaryToken1 := fmt.Sprintf("%x_1", time.Now().UnixNano()%1000000)
+			canary1 := fmt.Sprintf("https://canary1-%s.felix-canary.example.com/dest1", canaryToken1)
+			probeURL1 := buildEndpointURL(actx.BaseURL, ep.Path, map[string]string{p: canary1})
+			req1, err := http.NewRequestWithContext(ctx, "GET", probeURL1, nil)
 			if err != nil {
 				continue
 			}
-			resp.Body.Close()
+			req1.Header.Set("User-Agent", e.config.UserAgent)
+			resp1, err := noRedirectClient.Do(req1)
+			if err != nil {
+				continue
+			}
+			loc1 := resp1.Header.Get("Location")
+			status1 := resp1.StatusCode
+			resp1.Body.Close()
 
-			location := resp.Header.Get("Location")
+			// 3. Canary Probe 2 (differential testing to confirm destination derives from input)
+			canaryToken2 := fmt.Sprintf("%x_2", (time.Now().UnixNano()+7)%1000000)
+			canary2 := fmt.Sprintf("https://canary2-%s.felix-canary.example.com/dest2", canaryToken2)
+			probeURL2 := buildEndpointURL(actx.BaseURL, ep.Path, map[string]string{p: canary2})
+			req2, err := http.NewRequestWithContext(ctx, "GET", probeURL2, nil)
+			loc2 := ""
+			status2 := 0
+			if err == nil {
+				req2.Header.Set("User-Agent", e.config.UserAgent)
+				resp2, err2 := noRedirectClient.Do(req2)
+				if err2 == nil {
+					loc2 = resp2.Header.Get("Location")
+					status2 = resp2.StatusCode
+					resp2.Body.Close()
+				}
+			}
+
 			r := Result{
 				ID:             uuid.New().String(),
 				AssessmentID:   actx.AssessmentID,
@@ -1110,24 +1169,34 @@ func (e *Engine) assessOpenRedirect(ctx context.Context, actx *AssessmentContext
 				Category:       CategoryOpenRedirect,
 				VulnCode:       meta.Code,
 				TestName:       fmt.Sprintf("Open Redirect Validation (%s)", p),
-				Endpoint:       targetURL,
+				Endpoint:       probeURL1,
 				Method:         "GET",
-				ObservedStatus: resp.StatusCode,
+				ObservedStatus: status1,
 				CreatedAt:      time.Now().UTC(),
 			}
 
-			// Verification logic:
-			// If 3xx and Location matches external canary target -> VERIFIED!
-			// If sanitized or relative -> NOT_VULNERABLE.
-			if (resp.StatusCode >= 300 && resp.StatusCode < 400) && (strings.HasPrefix(location, canaryTarget) || strings.Contains(location, "example.com/felix_inert_redirect_canary")) {
+			matchesCanary1 := strings.Contains(loc1, fmt.Sprintf("canary1-%s.felix-canary.example.com", canaryToken1)) || strings.HasPrefix(loc1, canary1)
+			matchesCanary2 := strings.Contains(loc2, fmt.Sprintf("canary2-%s.felix-canary.example.com", canaryToken2)) || strings.HasPrefix(loc2, canary2)
+
+			// Verification criteria:
+			// 1. Both probe 1 and probe 2 returned 3xx status codes.
+			// 2. Both Location headers dynamically matched their respective unique canary inputs.
+			// 3. loc1 != loc2: confirms destination is dynamically derived from user input.
+			// 4. loc1 != baseLoc: confirms destination is not a fixed/static redirect.
+			if (status1 >= 300 && status1 < 400) && (status2 >= 300 && status2 < 400) &&
+				matchesCanary1 && matchesCanary2 && (loc1 != loc2) && (loc1 != baseLoc) {
 				r.VerificationState = StateVerified
 				r.Severity = report.SeverityMedium
 				r.Confidence = report.ConfidenceHigh
-				r.EvidenceSummary = fmt.Sprintf("Server returned %d redirect with Location targeting untrusted external URI: %s", resp.StatusCode, location)
+				r.EvidenceSummary = fmt.Sprintf("Open redirect verified: Parameter '%s' directly derives and controls external redirection destination across distinct canary probes (%d -> %s). Destination restrictions not enforced.", p, status1, loc1)
 				r.EvidenceDetails = map[string]string{
-					"parameter": p,
-					"status":    fmt.Sprintf("%d", resp.StatusCode),
-					"location":  location,
+					"parameter":         p,
+					"canary_1_target":   canary1,
+					"canary_1_result":   loc1,
+					"canary_2_target":   canary2,
+					"canary_2_result":   loc2,
+					"baseline_status":   fmt.Sprintf("%d", baseStatus),
+					"baseline_location": baseLoc,
 				}
 
 				fnd := e.createFinding(actx, r, fmt.Sprintf("Open Redirect via Parameter '%s' on %s", p, ep.Path),
@@ -1136,11 +1205,26 @@ func (e *Engine) assessOpenRedirect(ctx context.Context, actx *AssessmentContext
 				findings = append(findings, *fnd)
 				cov.Verified++
 				cov.Status = CoverageVerifiedIssueFound
+			} else if (status1 >= 300 && status1 < 400) && loc1 != "" && !strings.HasPrefix(loc1, "/") {
+				// Static or fixed external redirect that does not derive from user input
+				if loc1 == baseLoc || loc1 == loc2 {
+					r.VerificationState = StateObserved
+					r.Severity = report.SeverityInfo
+					r.Confidence = report.ConfidenceHigh
+					r.EvidenceSummary = fmt.Sprintf("Static external redirect (%d -> %s) observed; destination is fixed and not dynamically derived from user-controlled parameter '%s'.", status1, loc1, p)
+					cov.Observations++
+				} else {
+					r.VerificationState = StateCandidate
+					r.Severity = report.SeverityMedium
+					r.Confidence = report.ConfidenceMedium
+					r.EvidenceSummary = fmt.Sprintf("Ambiguous redirect on parameter '%s' (%d -> %s); external destination controllability was not consistently established across differential probes.", p, status1, loc1)
+					cov.Candidates++
+				}
 			} else {
 				r.VerificationState = StateNotVulnerable
 				r.Severity = report.SeverityInfo
 				r.Confidence = report.ConfidenceHigh
-				r.EvidenceSummary = fmt.Sprintf("Redirect parameter '%s' was safely validated or rejected (status: %d)", p, resp.StatusCode)
+				r.EvidenceSummary = fmt.Sprintf("Redirect parameter '%s' was safely validated, restricted to local paths, or rejected (status: %d)", p, status1)
 			}
 
 			results = append(results, r)
@@ -1233,7 +1317,7 @@ func (e *Engine) assessInfoDisclosure(ctx context.Context, actx *AssessmentConte
 	var results []Result
 	var findings []report.Finding
 
-	// 1. Sensitive file endpoints check (.env, .git/config)
+	// 1. Sensitive file endpoints check (.env, .git/config, /server-status)
 	sensitivePaths := []string{"/.env", "/.git/config", "/server-status"}
 	for _, p := range sensitivePaths {
 		targetURL := buildEndpointURL(actx.BaseURL, p, nil)
@@ -1241,7 +1325,14 @@ func (e *Engine) assessInfoDisclosure(ctx context.Context, actx *AssessmentConte
 			continue
 		}
 
-		req, err := http.NewRequestWithContext(ctx, "GET", targetURL, nil)
+		isSecretFile := (p == "/.env" || p == "/.git/config")
+		method := "GET"
+		if isSecretFile && !actx.SyntheticFixture {
+			// Live targets: metadata-only HEAD request to prevent downloading sensitive file contents
+			method = "HEAD"
+		}
+
+		req, err := http.NewRequestWithContext(ctx, method, targetURL, nil)
 		if err != nil {
 			continue
 		}
@@ -1250,9 +1341,24 @@ func (e *Engine) assessInfoDisclosure(ctx context.Context, actx *AssessmentConte
 		if err != nil {
 			continue
 		}
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+
+		// Fallback to GET if HEAD is not supported, but do NOT retain body on live targets
+		if isSecretFile && !actx.SyntheticFixture && resp.StatusCode == http.StatusMethodNotAllowed {
+			resp.Body.Close()
+			reqGet, _ := http.NewRequestWithContext(ctx, "GET", targetURL, nil)
+			reqGet.Header.Set("User-Agent", e.config.UserAgent)
+			respGet, errGet := client.Do(reqGet)
+			if errGet == nil {
+				resp = respGet
+			}
+		}
+
+		var bodyStr string
+		if actx.SyntheticFixture || !isSecretFile {
+			b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			bodyStr = string(b)
+		}
 		resp.Body.Close()
-		bodyStr := string(b)
 
 		r := Result{
 			ID:             uuid.New().String(),
@@ -1262,27 +1368,71 @@ func (e *Engine) assessInfoDisclosure(ctx context.Context, actx *AssessmentConte
 			VulnCode:       meta.Code,
 			TestName:       fmt.Sprintf("Sensitive Configuration File Check (%s)", p),
 			Endpoint:       targetURL,
-			Method:         "GET",
+			Method:         method,
 			ObservedStatus: resp.StatusCode,
 			CreatedAt:      time.Now().UTC(),
 		}
 
-		if resp.StatusCode == 200 && (strings.Contains(bodyStr, "DB_PASSWORD=") || strings.Contains(bodyStr, "[core]") || strings.Contains(bodyStr, "Apache Server Status")) {
-			r.VerificationState = StateVerified
-			r.Severity = report.SeverityHigh
-			r.Confidence = report.ConfidenceHigh
-			r.EvidenceSummary = fmt.Sprintf("Exposed sensitive configuration file retrieved: %s (secrets redacted)", p)
-			r.EvidenceDetails = map[string]string{
-				"path":    p,
-				"snippet": RedactText(bodyStr[:min(len(bodyStr), 200)]),
+		if resp.StatusCode == 200 {
+			if isSecretFile && !actx.SyntheticFixture {
+				// LIVE TARGET: Metadata-only check; DO NOT download or retain live file content
+				r.VerificationState = StateCandidate
+				r.Severity = report.SeverityHigh
+				r.Confidence = report.ConfidenceMedium
+				r.EvidenceSummary = fmt.Sprintf("Potential sensitive configuration path %s returned HTTP 200 OK (Content-Type: %s). File contents were not downloaded or retained in accordance with Felix safety policy; reported as CANDIDATE for authorized operator remediation.", p, resp.Header.Get("Content-Type"))
+				r.EvidenceDetails = map[string]string{
+					"path":           p,
+					"status":         "200",
+					"content_type":   resp.Header.Get("Content-Type"),
+					"content_length": resp.Header.Get("Content-Length"),
+					"safety_policy":  "metadata_only_check_zero_content_retained",
+				}
+				cov.Candidates++
+			} else if actx.SyntheticFixture && isSecretFile {
+				// SYNTHETIC FIXTURE: Demonstrates detection, with mandatory bounded read and redaction
+				if strings.Contains(bodyStr, "DB_PASSWORD=") || strings.Contains(bodyStr, "[core]") {
+					r.VerificationState = StateVerified
+					r.Severity = report.SeverityHigh
+					r.Confidence = report.ConfidenceHigh
+					r.EvidenceSummary = fmt.Sprintf("Synthetic test fixture verified exposed configuration file signature on %s (all secrets redacted)", p)
+					r.EvidenceDetails = map[string]string{
+						"path":    p,
+						"snippet": RedactText(bodyStr[:min(len(bodyStr), 150)]),
+					}
+					fnd := e.createFinding(actx, r, fmt.Sprintf("Sensitive Configuration Disclosure (Synthetic Fixture: %s)", p),
+						r.EvidenceSummary, report.SeverityHigh, 80)
+					r.Finding = fnd
+					findings = append(findings, *fnd)
+					cov.Verified++
+					cov.Status = CoverageVerifiedIssueFound
+				} else {
+					r.VerificationState = StateNotVulnerable
+					r.Severity = report.SeverityInfo
+					r.Confidence = report.ConfidenceMedium
+					r.EvidenceSummary = fmt.Sprintf("Synthetic fixture path %s did not reveal signature", p)
+				}
+			} else if !isSecretFile && strings.Contains(bodyStr, "Apache Server Status") {
+				// Non-credential public status page
+				r.VerificationState = StateVerified
+				r.Severity = report.SeverityMedium
+				r.Confidence = report.ConfidenceHigh
+				r.EvidenceSummary = fmt.Sprintf("Publicly accessible Apache status monitor detected on %s", p)
+				r.EvidenceDetails = map[string]string{
+					"path":   p,
+					"status": "200",
+				}
+				fnd := e.createFinding(actx, r, fmt.Sprintf("Exposed Server Status Monitor (%s)", p),
+					r.EvidenceSummary, report.SeverityMedium, 40)
+				r.Finding = fnd
+				findings = append(findings, *fnd)
+				cov.Verified++
+				cov.Status = CoverageVerifiedIssueFound
+			} else {
+				r.VerificationState = StateNotVulnerable
+				r.Severity = report.SeverityInfo
+				r.Confidence = report.ConfidenceHigh
+				r.EvidenceSummary = fmt.Sprintf("Path %s did not reveal sensitive configuration indicators", p)
 			}
-
-			fnd := e.createFinding(actx, r, fmt.Sprintf("Sensitive Configuration Disclosure (%s)", p),
-				r.EvidenceSummary, report.SeverityHigh, 80)
-			r.Finding = fnd
-			findings = append(findings, *fnd)
-			cov.Verified++
-			cov.Status = CoverageVerifiedIssueFound
 		} else {
 			r.VerificationState = StateNotVulnerable
 			r.Severity = report.SeverityInfo
@@ -1683,4 +1833,28 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func isInsideScriptContext(body, probe string) bool {
+	lowerBody := strings.ToLower(body)
+	lowerProbe := strings.ToLower(probe)
+	offset := 0
+	for {
+		idx := strings.Index(lowerBody[offset:], lowerProbe)
+		if idx == -1 {
+			return false
+		}
+		actualIdx := offset + idx
+		scriptStart := strings.LastIndex(lowerBody[:actualIdx], "<script")
+		if scriptStart != -1 {
+			scriptEnd := strings.LastIndex(lowerBody[:actualIdx], "</script>")
+			if scriptEnd == -1 || scriptEnd < scriptStart {
+				nextScriptEnd := strings.Index(lowerBody[actualIdx:], "</script>")
+				if nextScriptEnd != -1 {
+					return true
+				}
+			}
+		}
+		offset = actualIdx + len(lowerProbe)
+	}
 }

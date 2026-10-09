@@ -46,7 +46,7 @@ var CategoryMetadata = map[VulnCategory]CategoryInfo{
 		Name:                 "Cross-Site Scripting (XSS)",
 		CWE:                  "CWE-79",
 		Description:          "Untrusted input is reflected or included in web output without appropriate context-aware encoding or sanitization.",
-		VerificationBoundary: "Verified only when inert probe reflects unescaped into executable browser context (HTML document markup). Encoded or JSON-only reflections remain NOT_VULNERABLE or OBSERVED.",
+		VerificationBoundary: "Verified exclusively via synthetic test fixtures or demonstrable executable script context breakout. Inert markers and custom tags do not independently prove XSS and are reported as CANDIDATE. Encoded output is NOT_VULNERABLE.",
 	},
 	CategorySQLi: {
 		Code:                 "WV-SQLI",
@@ -102,7 +102,7 @@ var CategoryMetadata = map[VulnCategory]CategoryInfo{
 		Name:                 "Open Redirect",
 		CWE:                  "CWE-601",
 		Description:          "Application redirects users to an arbitrary external URL without destination validation.",
-		VerificationBoundary: "Verified when 3xx response Location header targets the external inert canary domain. Sanitized or relative paths are NOT_VULNERABLE.",
+		VerificationBoundary: "Verified only when differential testing proves redirect destination is derived from user input and targets external canary. Static redirects remain OBSERVED or NOT_VULNERABLE.",
 	},
 	CategoryRequestIssues: {
 		Code:                 "WV-REQISSUE",
@@ -116,7 +116,7 @@ var CategoryMetadata = map[VulnCategory]CategoryInfo{
 		Name:                 "Information Disclosure",
 		CWE:                  "CWE-200",
 		Description:          "Unintended exposure of sensitive debug information, stack traces, system paths, or environment secrets.",
-		VerificationBoundary: "Verified when unhandled stack traces with server file paths or exposed configuration/environment dumps are retrieved. All secrets redacted.",
+		VerificationBoundary: "Zero live file content downloading for sensitive files (/.env, /.git/config); verified via synthetic fixtures or non-sensitive status pages. All secrets redacted.",
 	},
 	CategoryDeserialization: {
 		Code:                 "WV-DESERIAL",
