@@ -74,9 +74,10 @@ The codebase is organized into modular packages under `pkg/` and a thin CLI laye
 | **`pkg/secrets`** | Pattern detection, Shannon entropy evaluation, placeholder filtering, and secret redaction. | `detector.go`, `patterns.go`, `entropy.go`, `filters.go`, `finding.go` |
 | **`pkg/cloud`** | Cloud provider discovery and non-destructive exposure verification (Supabase, Firebase, S3, GCP). | `detector.go`, `provider.go`, `supabase.go`, `firebase.go`, `storage.go`, `client.go`, `finding.go` |
 | **`pkg/api`** | Client route extraction, endpoint classification, authentication reasoning, CORS, and header checks. | `detector.go`, `endpoints.go`, `cors.go`, `graphql.go`, `headers.go`, `client.go`, `finding.go` |
+| **`pkg/assessment`** | Assessment lifecycle, authorization verification, scope/exclusion engine, embedded SQLite store, and finding traceability. | `models.go`, `scope.go`, `store.go`, `controller.go` |
 | **`pkg/report`** | Finding normalization, deduplication, multi-signal correlation, risk scoring, HTML/JSON generation. | `model.go`, `normalize.go`, `dedup.go`, `correlate.go`, `risk.go`, `summary.go`, `html.go`, `json.go` |
 | **`pkg/config`** | Persistent operational configuration storage (`~/.felix/config.json`). | `config.go` |
-| **`test`** | Integration testing, regression corpus, and end-to-end CLI validation. | `regression_test.go`, `cli_test.go` |
+| **`test`** | Integration testing, regression corpus, CLI end-to-end validation, and assessment lifecycle tests. | `regression_test.go`, `cli_test.go`, `assessment_cli_test.go` |
 
 ---
 
@@ -171,6 +172,71 @@ felix report scan.json --html report.html
 
 1. **Scan Execution:** `felix scan` performs the audit once, outputs terminal milestones, and writes the canonical `report.Report` struct to disk.
 2. **Report Generation:** `felix report` consumes the existing JSON scan result and renders HTML or JSON without initiating network connections, target requests, or external DNS lookups.
+
+---
+
+## Felix 2.0 Assessment Platform Architecture (`pkg/assessment`)
+
+Felix 2.0 transforms Felix from a standalone CLI scanner into a client-aware security assessment platform with persistent end-to-end traceability:
+
+```text
+┌──────────────┐     ┌──────────────────────┐     ┌──────────────────────┐
+│    Client    ├────►│    Authorization     ├────►│    Approved Scope    │
+└──────────────┘     └──────────────────────┘     └──────────┬───────────┘
+                                                             │
+                                                             ▼
+┌──────────────┐     ┌──────────────────────┐     ┌──────────────────────┐
+│    Report    │◄────┤       Finding        │◄────┤ Assessment Execution │
+│   Records    │     │   (Linked UUIDs)     │     │      Run Record      │
+└──────────────┘     └──────────────────────┘     └──────────────────────┘
+```
+
+### 1. Persistence Layer & Storage Design
+- **Engine:** Pure-Go embedded SQLite via `modernc.org/sqlite`. Zero external C/C++ dependencies (`CGO_ENABLED=0` cross-compilation across all 5 target operating systems and architectures).
+- **Location:** `~/.felix/assessments.db` (overrideable with `FELIX_DIR` environment variable for integration tests).
+- **Security:** Directory created with `0700` permissions; database file created with `0600` permissions.
+- **Reliability:** Enforces Write-Ahead Logging (`PRAGMA journal_mode = WAL;`), strict foreign key cascade constraints (`PRAGMA foreign_keys = ON;`), and busy timeouts (`5000ms`).
+- **Migrations:** Managed versioned schema table (`schema_migrations`) with idempotent DDL migrations.
+
+### 2. Core Relational Schema
+- `clients`: ID, Name, Organization, ContactName, ContactEmail, Notes, Timestamps, Archived flag.
+- `assessments`: ID, Ref (`ASM-YYYY-XXXX`), ClientID, Name, Description, AssessmentType, Status, ScopeMode, Timestamps, FindingCount.
+- `assessment_targets`: ID, AssessmentID, TargetURL, TargetType, ScopeStatus, Label, Timestamps.
+- `authorizations`: ID, AssessmentID, AuthorizingParty, AuthorizationMethod, DateReceived, ValidFrom, ValidUntil, ScopeDocRef, InternalNotes, Status.
+- `scope_rules`: ID, AssessmentID, RuleType, Pattern, Timestamps.
+- `exclusions`: ID, AssessmentID, ExclusionType (`HOSTNAME`, `PATH_PREFIX`, `EXACT_URL`), Pattern, Reason, Timestamps.
+- `assessment_executions`: ID, AssessmentID, Status, StartedAt, CompletedAt, DurationMs, RequestCount, ErrorMessage, ConfigSnapshot.
+- `assessment_findings`: ID, AssessmentID, ExecutionID, TargetID, OriginalFindingID, Title, Category, Severity, Confidence, VerificationStatus, TargetURL, Endpoint, Method, Fingerprint, Score, EvidenceJSON, VerificationJSON, Remediation, Timestamps.
+- `assessment_reports`: ID, AssessmentID, ExecutionID, Format, FilePath, FelixVersion, Status, Timestamps.
+
+### 3. Assessment Lifecycle State Machine
+Assessments move through strictly governed transitions:
+```text
+           ┌──────────┐
+           │  DRAFT   │◄────────────────┐
+           └────┬─────┘                 │
+                │ (authorized)          │ (de-authorize)
+                ▼                       │
+           ┌──────────┐                 │
+           │  READY   ├─────────────────┘
+           └────┬─────┘
+                │ (felix assessment run)
+                ▼
+           ┌──────────┐
+           │ RUNNING  ├─────────────────────────┐
+           └────┬─────┘                         │
+                │ (clean completion)            │ (fatal error / crash)
+                ▼                               ▼
+       ┌─────────────────┐             ┌─────────────────┐
+       │    COMPLETED    │             │ FAILED / CANCEL │
+       │ (w/ or w/o err) │             └─────────────────┘
+       └─────────────────┘
+```
+
+### 4. Exclusion Precedence & Redirect Defense
+- Exclusions are evaluated **before** checking whether a target or asset is in-scope.
+- If a target URL or discovered asset matches an active exclusion (`HOSTNAME`, wildcard `*.subdomain`, `PATH_PREFIX`, or `EXACT_URL`), it is discarded immediately.
+- Redirects that escape the approved scope or enter an excluded path are blocked with an immediate security refusal.
 
 ---
 

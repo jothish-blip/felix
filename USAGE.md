@@ -252,6 +252,74 @@ felix report scan-result.json
 
 ---
 
+## Security Assessment Platform (`felix client` & `felix assessment`)
+
+Felix 2.0 provides an enterprise-ready, client-authorized security auditing architecture with end-to-end relational traceability stored locally in an embedded SQLite database (`~/.felix/assessments.db`).
+
+### 1. Client Management (`felix client`)
+
+Manage client profiles and organizations:
+
+```bash
+# Add a client organization
+felix client add --name "Acme Corp" --org "Acme Corporation Ltd" --contact-name "Alice Smith" --contact-email "alice@acme.example" --notes "Tier-1 Production Audit"
+
+# List active clients (or include archived with --all)
+felix client list [--all] [--json]
+
+# Show detailed client dossier and associated assessments
+felix client show <client-id-or-name>
+
+# Archive a client
+felix client archive <client-id-or-name>
+```
+
+### 2. Assessment Project Lifecycle (`felix assessment`)
+
+The complete workflow enforces the principle:
+`Client -> Authorization -> Approved Scope -> Assessment -> Execution -> Finding -> Evidence -> Report`
+
+```bash
+# Create assessment project (starts in DRAFT status)
+felix assessment create --client "Acme Corp" --name "Q1 Web Security Audit" --target https://app.acme.example --scope-mode same-origin
+
+# Show assessment dossier
+felix assessment show <assessment-ref-or-id>
+
+# Add secondary approved targets
+felix assessment target add <assessment-ref> --url https://api.acme.example --notes "REST API Base"
+
+# Add custom scope rules
+felix assessment scope add <assessment-ref> --rule "subdomains:acme.example"
+
+# Add strict exclusions (Exclusions strictly override any broader scope rule)
+felix assessment exclude add <assessment-ref> --type HOSTNAME --pattern "billing.acme.example" --reason "PCI boundary"
+felix assessment exclude add <assessment-ref> --type PATH_PREFIX --pattern "/admin" --reason "Out of test boundary"
+felix assessment exclude add <assessment-ref> --type EXACT_URL --pattern "https://app.acme.example/logout" --reason "Session invalidation"
+
+# Record explicit authorization (Transitions assessment from DRAFT to READY)
+felix assessment authorize <assessment-ref> --authorizer "Jane Doe" --role "Head of Security" --reference "SEC-AUTH-2026-001" --valid-days 30
+
+# Execute authorized assessment (Fails closed if unauthorized or expired)
+felix assessment run <assessment-ref> [--concurrency 5] [--timeout 15s] [--max-assets 100] [--quiet] [--verbose]
+
+# Inspect recorded findings with optional severity or verification filters
+felix assessment findings <assessment-ref> [--severity HIGH] [--verification VERIFIED] [--json]
+
+# List generated HTML and JSON report files
+felix assessment reports <assessment-ref>
+
+# Cancel an assessment project
+felix assessment cancel <assessment-ref>
+```
+
+### 3. Fail-Closed Security Guarantees
+- **No Authorization, No Audit:** If an assessment has no authorization record or its status is `PENDING`, `EXPIRED`, or `REVOKED`, `felix assessment run` exits immediately with a **security refusal** and performs **zero network requests**.
+- **Exclusion Precedence:** Exclusions (`HOSTNAME`, `PATH_PREFIX`, `EXACT_URL`) are evaluated before any scope rule. Any target or URL matching an exclusion is strictly skipped.
+- **Interrupted Run Recovery:** If a scan process crashes or is terminated abruptly, the store automatically recovers abandoned `RUNNING` executions on the next invocation, marking them `FAILED` and preserving partial findings.
+
+---
+
 ## Scan Control Flags Reference
 
 All scan control flags follow strict validation:

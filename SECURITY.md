@@ -119,6 +119,35 @@ For local development, building, and testing without requiring cloud subscriptio
 
 ---
 
+## 9. Assessment Authorization & Scope Enforcement Architecture
+
+Felix 2.0 embeds formal security governance directly into the execution pipeline:
+
+### Fail-Closed Authorization Enforcement
+Felix strictly refuses to execute an assessment unless all authorization criteria are verified:
+1. **Record Existence:** An explicit `authorizations` record must exist linked to the assessment.
+2. **Status Approval:** Authorization status must be explicitly `APPROVED`. Records in `PENDING`, `EXPIRED`, `REVOKED`, or `NOT_RECORDED` states trigger an immediate **security refusal**.
+3. **Temporal Validity Window:** If `valid_from` is defined, current time must be on or after `valid_from`. If `valid_until` is defined, current time must be on or before `valid_until`. Expired authorizations fail closed with zero network packets transmitted.
+
+### Absolute Exclusion Precedence
+Exclusion rules strictly override any broader scope allowances or approved targets:
+- **Hostname Exclusions:** Exact hostnames (`internal.example.com`) or wildcards (`*.corp.example.com`) block matching assets, even when the parent domain is in-scope.
+- **Path Prefix Exclusions:** Path boundaries (e.g. `/admin`, `/auth`, `/billing`) block endpoint analysis regardless of host origin.
+- **Exact URL Exclusions:** Specific endpoints (e.g. destructive actions like `/logout` or session resets) are completely bypassed.
+- **Pre-Execution Target Check:** If all approved targets are covered by active exclusion rules, execution fails closed before initiating connections.
+
+### Redirect Sandbox Defense
+When web targets return HTTP 301, 302, 307, or 308 redirects:
+- Redirect destinations are validated dynamically against scope rules and exclusions.
+- Redirects that escape the approved domain boundary are strictly halted.
+- Redirects that navigate into excluded path prefixes are blocked immediately.
+
+### Local Database Protection & Security
+- **File Permissions:** The assessment database (`~/.felix/assessments.db`) and its directory are initialized with restricted permissions (`0700` directory / `0600` file) accessible only to the local operating user.
+- **Zero Remote Telemetry:** Database records never leave the local environment; all assessments, targets, clients, and findings remain entirely offline.
+
+---
+
 ## Navigation & Cross-References
 
 - **[README](README.md)** — Project overview and quick start.

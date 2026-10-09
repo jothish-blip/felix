@@ -18,8 +18,8 @@ func runCompletion(args []string) int {
 # PowerShell completion for Felix
 Register-ArgumentCompleter -Native -CommandName felix -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
-    $commands = @('scan', 'report', 'config', 'doctor', 'version', 'update', 'install', 'uninstall', 'completion', 'help')
-    $flags = @('--export', '--json', '--timeout', '-t', '--concurrency', '-c', '--scope', '--max-assets', '--max-response-size', '--quiet', '-q', '--verbose', '-v', '-l', '--user-agent', '--check', '--force', '--dry-run')
+    $commands = @('scan', 'report', 'client', 'assessment', 'config', 'doctor', 'version', 'update', 'install', 'uninstall', 'completion', 'help')
+    $flags = @('--export', '--json', '--timeout', '-t', '--concurrency', '-c', '--scope', '--max-assets', '--max-response-size', '--quiet', '-q', '--verbose', '-v', '-l', '--user-agent', '--check', '--force', '--dry-run', '--client', '--name', '--target', '--authorizer', '--role', '--reference', '--valid-days')
     
     if ($commandAst.ToString() -notmatch ' ') {
         $commands | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
@@ -42,8 +42,8 @@ _felix_completions() {
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
-    commands="scan report config doctor version update install uninstall completion help"
-    flags="--export --json --timeout -t --concurrency -c --scope --max-assets --max-response-size --quiet -q --verbose -v -l --user-agent --check --force --dry-run"
+    commands="scan report client assessment config doctor version update install uninstall completion help"
+    flags="--export --json --timeout -t --concurrency -c --scope --max-assets --max-response-size --quiet -q --verbose -v -l --user-agent --check --force --dry-run --client --name --target --authorizer --role --reference --valid-days"
 
     if [[ ${COMP_CWORD} -eq 1 ]]; then
         COMPREPLY=( $(compgen -W "${commands}" -- ${cur}) )
@@ -69,6 +69,8 @@ _felix() {
     commands=(
         'scan:Perform a web security audit against target'
         'report:Generate reports from an existing scan result without rescanning'
+        'client:Manage clients and organizations for structured assessments'
+        'assessment:Manage authorized security assessment projects and runs'
         'config:Manage Felix operational settings'
         'doctor:Diagnose Felix runtime and installation health'
         'version:Show Felix version and build details'
@@ -100,7 +102,9 @@ _felix() {
                 '--verbose[Detailed output]' \
                 '-v[Detailed output]' \
                 '--check[Check for updates only]' \
-                '--force[Force installation]'
+                '--force[Force installation]' \
+                '--client[Client reference or ID]' \
+                '--name[Assessment or client name]'
             ;;
     esac
 }
@@ -114,6 +118,8 @@ _felix "$@"
 complete -c felix -f
 complete -c felix -n "__fish_use_subcommand" -a "scan" -d "Perform web security audit"
 complete -c felix -n "__fish_use_subcommand" -a "report" -d "Generate report from existing scan result"
+complete -c felix -n "__fish_use_subcommand" -a "client" -d "Manage clients and organizations"
+complete -c felix -n "__fish_use_subcommand" -a "assessment" -d "Manage authorized assessments"
 complete -c felix -n "__fish_use_subcommand" -a "config" -d "Manage operational settings"
 complete -c felix -n "__fish_use_subcommand" -a "doctor" -d "Diagnose runtime health"
 complete -c felix -n "__fish_use_subcommand" -a "version" -d "Show version information"

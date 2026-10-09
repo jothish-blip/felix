@@ -29,6 +29,10 @@ func main() {
 		os.Exit(runScan(os.Args[2:]))
 	case "report":
 		os.Exit(runReport(os.Args[2:]))
+	case "client":
+		os.Exit(runClient(os.Args[2:]))
+	case "assessment":
+		os.Exit(runAssessment(os.Args[2:]))
 	case "config":
 		os.Exit(runConfig(os.Args[2:]))
 	case "doctor":
@@ -51,6 +55,10 @@ func main() {
 				os.Exit(runScan([]string{"--help"}))
 			case "report":
 				os.Exit(runReport([]string{"--help"}))
+			case "client":
+				os.Exit(runClient([]string{"--help"}))
+			case "assessment":
+				os.Exit(runAssessment([]string{"--help"}))
 			case "config":
 				os.Exit(runConfig([]string{"--help"}))
 			case "doctor":
@@ -84,6 +92,8 @@ func printRootHelp() {
 	fmt.Println("\nCommands:")
 	fmt.Println("  scan        Audit target web applications for security exposures")
 	fmt.Println("  report      Generate assessment reports from existing scan results (zero network)")
+	fmt.Println("  client      Manage clients and organizations for structured assessments")
+	fmt.Println("  assessment  Manage authorized security assessment projects and runs")
 	fmt.Println("  config      Manage persistent CLI configuration settings")
 	fmt.Println("  doctor      Diagnose environment, network stack, and permissions")
 	fmt.Println("  version     Display Felix version and build environment")
@@ -94,6 +104,10 @@ func printRootHelp() {
 	fmt.Println("  help        Show help for Felix or a specific command")
 	fmt.Println("\nQuick Start:")
 	fmt.Println("  felix scan https://example.com --export report.html --json scan.json")
+	fmt.Println("  felix client add --name \"Acme Corp\"")
+	fmt.Println("  felix assessment create --client \"Acme Corp\" --name \"Q1 Audit\" --target https://example.com")
+	fmt.Println("  felix assessment authorize <asm-ref> --authorizer \"Jane Doe\" --role \"CISO\"")
+	fmt.Println("  felix assessment run <asm-ref>")
 	fmt.Println("  felix report scan.json --html new_report.html")
 	fmt.Println("  felix update --check")
 	fmt.Println("  felix doctor")

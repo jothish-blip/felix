@@ -1,0 +1,1343 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/signal"
+	"strconv"
+	"strings"
+	"syscall"
+	"text/tabwriter"
+	"time"
+
+	"felix/pkg/assessment"
+	"github.com/google/uuid"
+)
+
+func runAssessment(args []string) int {
+	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" || args[0] == "help" {
+		printAssessmentHelp()
+		return 0
+	}
+
+	sub := args[0]
+	subArgs := args[1:]
+
+	switch sub {
+	case "create":
+		return runAssessmentCreate(subArgs)
+	case "list":
+		return runAssessmentList(subArgs)
+	case "show":
+		return runAssessmentShow(subArgs)
+	case "target":
+		if len(subArgs) > 0 && subArgs[0] == "add" {
+			return runAssessmentTargetAdd(subArgs[1:])
+		}
+		return runAssessmentTargetAdd(subArgs)
+	case "scope":
+		if len(subArgs) > 0 && subArgs[0] == "add" {
+			return runAssessmentScopeAdd(subArgs[1:])
+		}
+		return runAssessmentScopeAdd(subArgs)
+	case "exclude":
+		if len(subArgs) > 0 && subArgs[0] == "add" {
+			return runAssessmentExcludeAdd(subArgs[1:])
+		}
+		return runAssessmentExcludeAdd(subArgs)
+	case "authorize":
+		return runAssessmentAuthorize(subArgs)
+	case "run":
+		return runAssessmentRun(subArgs)
+	case "findings":
+		return runAssessmentFindings(subArgs)
+	case "reports":
+		return runAssessmentReports(subArgs)
+	case "cancel":
+		return runAssessmentCancel(subArgs)
+	default:
+		fmt.Fprintf(os.Stderr, "[-] Unknown assessment subcommand: %s\n\n", sub)
+		printAssessmentHelp()
+		return 2
+	}
+}
+
+func printAssessmentHelp() {
+	fmt.Println("Usage: felix assessment <subcommand> [flags]")
+	fmt.Println("\nSubcommands:")
+	fmt.Println("  create       Create a new security assessment project")
+	fmt.Println("  list         List security assessments")
+	fmt.Println("  show         Display comprehensive assessment dossier")
+	fmt.Println("  target add   Add target URL to assessment")
+	fmt.Println("  scope add    Add scope rule to assessment")
+	fmt.Println("  exclude add  Add exclusion rule (hostname, path, URL)")
+	fmt.Println("  authorize    Record client authorization and approve assessment")
+	fmt.Println("  run          Execute authorized assessment against approved targets")
+	fmt.Println("  findings     Inspect findings recorded for an assessment")
+	fmt.Println("  reports      List generated report files for an assessment")
+	fmt.Println("  cancel       Cancel an active or pending assessment")
+	fmt.Println("\nExamples:")
+	fmt.Println("  felix assessment create --client \"Acme Corp\" --name \"Q1 Web Audit\" --target https://example.com")
+	fmt.Println("  felix assessment authorize <asm-ref> --authorizer \"Jane Doe\" --role \"CISO\" --reference \"AUTH-001\" --valid-days 30")
+	fmt.Println("  felix assessment run <asm-ref> --concurrency 5")
+	fmt.Println("  felix assessment findings <asm-ref>")
+	fmt.Println("  felix assessment reports <asm-ref>")
+}
+
+func runAssessmentCreate(args []string) int {
+	var (
+		clientRef   string
+		name        string
+		notes       string
+		scopeMode   string
+		targets     []string
+		scopeRules  []string
+		jsonOutput  bool
+	)
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--client", "-c":
+			if i+1 < len(args) {
+				clientRef = args[i+1]
+				i++
+			}
+		case "--name", "-n":
+			if i+1 < len(args) {
+				name = args[i+1]
+				i++
+			}
+		case "--notes", "--desc", "--description":
+			if i+1 < len(args) {
+				notes = args[i+1]
+				i++
+			}
+		case "--scope-mode":
+			if i+1 < len(args) {
+				scopeMode = args[i+1]
+				i++
+			}
+		case "--target", "-t":
+			if i+1 < len(args) {
+				targets = append(targets, args[i+1])
+				i++
+			}
+		case "--scope-rule":
+			if i+1 < len(args) {
+				scopeRules = append(scopeRules, args[i+1])
+				i++
+			}
+		case "--json":
+			jsonOutput = true
+		case "--help", "-h":
+			printAssessmentHelp()
+			return 0
+		}
+	}
+
+	clientRef = strings.TrimSpace(clientRef)
+	if clientRef == "" {
+		fmt.Fprintf(os.Stderr, "[-] Error: --client is required. Specify client ID or Name.\n")
+		return 2
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		fmt.Fprintf(os.Stderr, "[-] Error: --name is required for assessment.\n")
+		return 2
+	}
+
+	if scopeMode == "" {
+		scopeMode = "same-origin"
+	}
+	switch scopeMode {
+	case "same-origin", "subdomains", "explicit":
+	default:
+		fmt.Fprintf(os.Stderr, "[-] Error: invalid --scope-mode %q (allowed: same-origin, subdomains, explicit)\n", scopeMode)
+		return 2
+	}
+
+	store, err := getAssessmentStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Database error: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+
+	// Verify client exists
+	client, err := store.GetClient(clientRef)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Client %q not found: %v\n", clientRef, err)
+		return 1
+	}
+
+	// Validate target URLs upfront
+	for _, t := range targets {
+		if _, err := assessment.ValidateTargetURL(t); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Target URL validation error: %v\n", err)
+			return 2
+		}
+	}
+
+	asmID := uuid.New().String()
+	asmRef := assessment.GenerateAssessmentRef()
+	now := time.Now().UTC()
+
+	asm := &assessment.Assessment{
+		ID:             asmID,
+		Ref:            asmRef,
+		ClientID:       client.ID,
+		Name:           name,
+		Description:    notes,
+		AssessmentType: "WEB_SECURITY",
+		Status:         assessment.StatusDraft,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		ScopeMode:      scopeMode,
+	}
+
+	if err := store.CreateAssessment(asm); err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Failed to create assessment: %v\n", err)
+		return 1
+	}
+
+	// Add targets
+	for _, tURL := range targets {
+		normURL, _ := assessment.NormalizeTargetURL(tURL)
+		tRecord := &assessment.AssessmentTarget{
+			ID:           uuid.New().String(),
+			AssessmentID: asmID,
+			TargetURL:    normURL,
+			TargetType:   assessment.TargetWebsite,
+			ScopeStatus:  "APPROVED",
+			CreatedAt:    now,
+		}
+		if err := store.AddTarget(tRecord); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Warning: Failed to add target %s: %v\n", tURL, err)
+		}
+	}
+
+	// Add scope rules
+	for _, sr := range scopeRules {
+		parts := strings.SplitN(sr, ":", 2)
+		rType := "subdomains"
+		rPattern := sr
+		if len(parts) == 2 {
+			rType = parts[0]
+			rPattern = parts[1]
+		}
+		ruleRecord := &assessment.ScopeRule{
+			ID:           uuid.New().String(),
+			AssessmentID: asmID,
+			RuleType:     rType,
+			Pattern:      rPattern,
+			CreatedAt:    now,
+		}
+		if err := store.AddScopeRule(ruleRecord); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Warning: Failed to add scope rule %s: %v\n", sr, err)
+		}
+	}
+
+	if jsonOutput {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(asm)
+		return 0
+	}
+
+	fmt.Printf("[+] Assessment created successfully\n")
+	fmt.Printf("    Reference:  %s\n", asm.Ref)
+	fmt.Printf("    ID:         %s\n", asm.ID)
+	fmt.Printf("    Client:     %s (%s)\n", client.Name, client.ID)
+	fmt.Printf("    Name:       %s\n", asm.Name)
+	fmt.Printf("    Status:     %s\n", asm.Status)
+	fmt.Printf("    Scope Mode: %s\n", asm.ScopeMode)
+	fmt.Printf("    Targets:    %d configured\n", len(targets))
+	fmt.Printf("\nNext step: record authorization before execution:\n")
+	fmt.Printf("  felix assessment authorize %s --authorizer <name> --role <role> --reference <doc-ref>\n", asm.Ref)
+	return 0
+}
+
+func runAssessmentList(args []string) int {
+	var (
+		clientRef  string
+		statusFil  string
+		jsonOutput bool
+	)
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--client", "-c":
+			if i+1 < len(args) {
+				clientRef = args[i+1]
+				i++
+			}
+		case "--status", "-s":
+			if i+1 < len(args) {
+				statusFil = strings.ToUpper(args[i+1])
+				i++
+			}
+		case "--json":
+			jsonOutput = true
+		case "--help", "-h":
+			printAssessmentHelp()
+			return 0
+		}
+	}
+
+	store, err := getAssessmentStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Database error: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+
+	assessments, err := store.ListAssessments(clientRef)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Failed to list assessments: %v\n", err)
+		return 1
+	}
+
+	if statusFil != "" {
+		var filtered []assessment.Assessment
+		for _, a := range assessments {
+			if string(a.Status) == statusFil {
+				filtered = append(filtered, a)
+			}
+		}
+		assessments = filtered
+	}
+
+	if jsonOutput {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if assessments == nil {
+			assessments = []assessment.Assessment{}
+		}
+		_ = enc.Encode(assessments)
+		return 0
+	}
+
+	if len(assessments) == 0 {
+		fmt.Println("No assessments found.")
+		return 0
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+	fmt.Fprintln(w, "REF\tNAME\tSTATUS\tMODE\tFINDINGS\tCREATED")
+	for _, a := range assessments {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%s\n",
+			a.Ref, a.Name, a.Status, a.ScopeMode, a.FindingCount, a.CreatedAt.Format("2006-01-02 15:04"))
+	}
+	_ = w.Flush()
+	return 0
+}
+
+func runAssessmentShow(args []string) int {
+	var (
+		assessmentRef string
+		jsonOutput    bool
+	)
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--assessment", "--id", "--ref":
+			if i+1 < len(args) {
+				assessmentRef = args[i+1]
+				i++
+			}
+		case "--json":
+			jsonOutput = true
+		case "--help", "-h":
+			printAssessmentHelp()
+			return 0
+		default:
+			if !strings.HasPrefix(arg, "-") && assessmentRef == "" {
+				assessmentRef = arg
+			}
+		}
+	}
+
+	if assessmentRef == "" {
+		fmt.Fprintf(os.Stderr, "[-] Error: assessment ID or Ref required. Usage: felix assessment show <asm-ref>\n")
+		return 2
+	}
+
+	store, err := getAssessmentStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Database error: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+
+	asm, err := store.GetAssessment(assessmentRef)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Assessment %q not found: %v\n", assessmentRef, err)
+		return 1
+	}
+
+	client, _ := store.GetClient(asm.ClientID)
+	targets, _ := store.GetTargets(asm.ID)
+	scopeRules, _ := store.GetScopeRules(asm.ID)
+	exclusions, _ := store.GetExclusions(asm.ID)
+	auth, _ := store.GetAuthorization(asm.ID)
+	executions, _ := store.ListExecutions(asm.ID)
+	reports, _ := store.GetReports(asm.ID)
+
+	if jsonOutput {
+		out := map[string]any{
+			"assessment":  asm,
+			"client":      client,
+			"targets":     targets,
+			"scope_rules": scopeRules,
+			"exclusions":  exclusions,
+			"auth":        auth,
+			"executions":  executions,
+			"reports":     reports,
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(out)
+		return 0
+	}
+
+	clientName := asm.ClientID
+	if client != nil {
+		clientName = fmt.Sprintf("%s (%s)", client.Name, client.ID)
+	}
+
+	fmt.Printf("===========================================================\n")
+	fmt.Printf("ASSESSMENT DOSSIER: %s\n", asm.Ref)
+	fmt.Printf("===========================================================\n")
+	fmt.Printf("  ID:           %s\n", asm.ID)
+	fmt.Printf("  Name:         %s\n", asm.Name)
+	fmt.Printf("  Client:       %s\n", clientName)
+	fmt.Printf("  Status:       %s\n", asm.Status)
+	fmt.Printf("  Scope Mode:   %s\n", asm.ScopeMode)
+	if asm.Description != "" {
+		fmt.Printf("  Notes:        %s\n", asm.Description)
+	}
+	fmt.Printf("  Created:      %s\n", asm.CreatedAt.Format(time.RFC3339))
+	if asm.StartedAt != nil {
+		fmt.Printf("  Started:      %s\n", asm.StartedAt.Format(time.RFC3339))
+	}
+	if asm.CompletedAt != nil {
+		fmt.Printf("  Completed:    %s\n", asm.CompletedAt.Format(time.RFC3339))
+	}
+
+	// Authorization
+	fmt.Printf("\nAuthorization:\n")
+	if auth == nil {
+		fmt.Printf("  [!] Status: PENDING (Assessment not yet authorized)\n")
+	} else {
+		valid, reason := auth.IsCurrentlyValid(time.Now().UTC())
+		validStr := "[+] VALID"
+		if !valid {
+			validStr = fmt.Sprintf("[-] INVALID: %s", reason)
+		}
+		fmt.Printf("  Status:       %s (%s)\n", auth.Status, validStr)
+		fmt.Printf("  Authorizer:   %s\n", auth.AuthorizingParty)
+		if auth.AuthorizationMethod != "" {
+			fmt.Printf("  Role/Method:  %s\n", auth.AuthorizationMethod)
+		}
+		if auth.ScopeDocRef != "" {
+			fmt.Printf("  Reference:    %s\n", auth.ScopeDocRef)
+		}
+		if auth.ValidFrom != nil {
+			fmt.Printf("  Valid From:   %s\n", auth.ValidFrom.Format(time.RFC3339))
+		}
+		if auth.ValidUntil != nil {
+			fmt.Printf("  Valid Until:  %s\n", auth.ValidUntil.Format(time.RFC3339))
+		}
+	}
+
+	// Targets
+	fmt.Printf("\nTargets (%d):\n", len(targets))
+	if len(targets) == 0 {
+		fmt.Println("  (Zero targets configured)")
+	} else {
+		for _, t := range targets {
+			fmt.Printf("  - [%s] %s\n", t.ScopeStatus, t.TargetURL)
+		}
+	}
+
+	// Scope Rules
+	if len(scopeRules) > 0 {
+		fmt.Printf("\nScope Rules (%d):\n", len(scopeRules))
+		for _, r := range scopeRules {
+			fmt.Printf("  - %s: %s\n", r.RuleType, r.Pattern)
+		}
+	}
+
+	// Exclusions
+	if len(exclusions) > 0 {
+		fmt.Printf("\nExclusions (%d):\n", len(exclusions))
+		for _, e := range exclusions {
+			reason := ""
+			if e.Reason != "" {
+				reason = fmt.Sprintf(" (%s)", e.Reason)
+			}
+			fmt.Printf("  - [%s] %s%s\n", e.ExclusionType, e.Pattern, reason)
+		}
+	}
+
+	// Executions
+	if len(executions) > 0 {
+		fmt.Printf("\nExecution Runs (%d):\n", len(executions))
+		for _, ex := range executions {
+			fmt.Printf("  - Run %s: %s | Started: %s | Duration: %d ms | Requests: %d\n",
+				ex.ID[:8], ex.Status, ex.StartedAt.Format("2006-01-02 15:04:05"), ex.DurationMs, ex.RequestCount)
+		}
+	}
+
+	// Reports
+	if len(reports) > 0 {
+		fmt.Printf("\nGenerated Reports (%d):\n", len(reports))
+		for _, rep := range reports {
+			fmt.Printf("  - [%s] %s (%s)\n", rep.Format, rep.FilePath, rep.CreatedAt.Format("2006-01-02 15:04"))
+		}
+	}
+
+	return 0
+}
+
+func runAssessmentTargetAdd(args []string) int {
+	var (
+		assessmentRef string
+		targetURL     string
+		targetType    string
+		label         string
+	)
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--assessment", "--id", "--ref":
+			if i+1 < len(args) {
+				assessmentRef = args[i+1]
+				i++
+			}
+		case "--url", "-u":
+			if i+1 < len(args) {
+				targetURL = args[i+1]
+				i++
+			}
+		case "--type":
+			if i+1 < len(args) {
+				targetType = args[i+1]
+				i++
+			}
+		case "--label", "--notes":
+			if i+1 < len(args) {
+				label = args[i+1]
+				i++
+			}
+		case "--help", "-h":
+			fmt.Println("Usage: felix assessment target add <assessment-id> --url <url> [--notes \"...\"]")
+			return 0
+		default:
+			if !strings.HasPrefix(arg, "-") && assessmentRef == "" {
+				assessmentRef = arg
+			}
+		}
+	}
+
+	if assessmentRef == "" {
+		fmt.Fprintf(os.Stderr, "[-] Error: assessment ID or Ref is required\n")
+		return 2
+	}
+	if targetURL == "" {
+		fmt.Fprintf(os.Stderr, "[-] Error: --url is required\n")
+		return 2
+	}
+
+	if _, err := assessment.ValidateTargetURL(targetURL); err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Target URL validation error: %v\n", err)
+		return 2
+	}
+
+	normURL, _ := assessment.NormalizeTargetURL(targetURL)
+
+	store, err := getAssessmentStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Database error: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+
+	asm, err := store.GetAssessment(assessmentRef)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Assessment %q not found: %v\n", assessmentRef, err)
+		return 1
+	}
+
+	if targetType == "" {
+		targetType = string(assessment.TargetWebsite)
+	}
+
+	t := &assessment.AssessmentTarget{
+		ID:           uuid.New().String(),
+		AssessmentID: asm.ID,
+		TargetURL:    normURL,
+		TargetType:   assessment.TargetType(targetType),
+		ScopeStatus:  "APPROVED",
+		Label:        label,
+		CreatedAt:    time.Now().UTC(),
+	}
+
+	if err := store.AddTarget(t); err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Failed to add target: %v\n", err)
+		return 1
+	}
+
+	fmt.Printf("[+] Added approved target %s to assessment %s\n", normURL, asm.Ref)
+	return 0
+}
+
+func runAssessmentScopeAdd(args []string) int {
+	var (
+		assessmentRef string
+		rule          string
+	)
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--assessment", "--id", "--ref":
+			if i+1 < len(args) {
+				assessmentRef = args[i+1]
+				i++
+			}
+		case "--rule", "-r":
+			if i+1 < len(args) {
+				rule = args[i+1]
+				i++
+			}
+		case "--help", "-h":
+			fmt.Println("Usage: felix assessment scope add <assessment-id> --rule \"subdomains:example.com\"")
+			return 0
+		default:
+			if !strings.HasPrefix(arg, "-") && assessmentRef == "" {
+				assessmentRef = arg
+			}
+		}
+	}
+
+	if assessmentRef == "" {
+		fmt.Fprintf(os.Stderr, "[-] Error: assessment ID or Ref is required\n")
+		return 2
+	}
+	if rule == "" {
+		fmt.Fprintf(os.Stderr, "[-] Error: --rule is required\n")
+		return 2
+	}
+
+	parts := strings.SplitN(rule, ":", 2)
+	rType := "subdomains"
+	rPattern := rule
+	if len(parts) == 2 {
+		rType = parts[0]
+		rPattern = parts[1]
+	}
+
+	store, err := getAssessmentStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Database error: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+
+	asm, err := store.GetAssessment(assessmentRef)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Assessment %q not found: %v\n", assessmentRef, err)
+		return 1
+	}
+
+	sr := &assessment.ScopeRule{
+		ID:           uuid.New().String(),
+		AssessmentID: asm.ID,
+		RuleType:     rType,
+		Pattern:      rPattern,
+		CreatedAt:    time.Now().UTC(),
+	}
+
+	if err := store.AddScopeRule(sr); err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Failed to add scope rule: %v\n", err)
+		return 1
+	}
+
+	fmt.Printf("[+] Added scope rule (%s: %s) to assessment %s\n", rType, rPattern, asm.Ref)
+	return 0
+}
+
+func runAssessmentExcludeAdd(args []string) int {
+	var (
+		assessmentRef string
+		exType        string
+		pattern       string
+		reason        string
+	)
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--assessment", "--id", "--ref":
+			if i+1 < len(args) {
+				assessmentRef = args[i+1]
+				i++
+			}
+		case "--type", "-t":
+			if i+1 < len(args) {
+				exType = strings.ToUpper(args[i+1])
+				i++
+			}
+		case "--pattern", "-p":
+			if i+1 < len(args) {
+				pattern = args[i+1]
+				i++
+			}
+		case "--reason", "-r":
+			if i+1 < len(args) {
+				reason = args[i+1]
+				i++
+			}
+		case "--help", "-h":
+			fmt.Println("Usage: felix assessment exclude add <assessment-id> --type <HOSTNAME|PATH_PREFIX|EXACT_URL> --pattern <pattern> [--reason \"...\"]")
+			return 0
+		default:
+			if !strings.HasPrefix(arg, "-") && assessmentRef == "" {
+				assessmentRef = arg
+			}
+		}
+	}
+
+	if assessmentRef == "" {
+		fmt.Fprintf(os.Stderr, "[-] Error: assessment ID or Ref is required\n")
+		return 2
+	}
+	if pattern == "" {
+		fmt.Fprintf(os.Stderr, "[-] Error: --pattern is required\n")
+		return 2
+	}
+
+	switch exType {
+	case assessment.ExclusionHostname, assessment.ExclusionPathPrefix, assessment.ExclusionExactURL:
+	default:
+		fmt.Fprintf(os.Stderr, "[-] Error: invalid --type %q (allowed: HOSTNAME, PATH_PREFIX, EXACT_URL)\n", exType)
+		return 2
+	}
+
+	store, err := getAssessmentStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Database error: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+
+	asm, err := store.GetAssessment(assessmentRef)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Assessment %q not found: %v\n", assessmentRef, err)
+		return 1
+	}
+
+	ex := &assessment.Exclusion{
+		ID:            uuid.New().String(),
+		AssessmentID:  asm.ID,
+		ExclusionType: exType,
+		Pattern:       pattern,
+		Reason:        reason,
+		CreatedAt:     time.Now().UTC(),
+	}
+
+	if err := store.AddExclusion(ex); err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Failed to add exclusion: %v\n", err)
+		return 1
+	}
+
+	fmt.Printf("[+] Added exclusion [%s: %s] to assessment %s\n", exType, pattern, asm.Ref)
+	return 0
+}
+
+func runAssessmentAuthorize(args []string) int {
+	var (
+		assessmentRef string
+		authorizer    string
+		role          string
+		reference     string
+		validDays     int
+		validUntilStr string
+		validFromStr  string
+		notes         string
+	)
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--assessment", "--id", "--ref":
+			if i+1 < len(args) {
+				assessmentRef = args[i+1]
+				i++
+			}
+		case "--authorizer", "-a":
+			if i+1 < len(args) {
+				authorizer = args[i+1]
+				i++
+			}
+		case "--role", "-r":
+			if i+1 < len(args) {
+				role = args[i+1]
+				i++
+			}
+		case "--reference", "--ref-doc":
+			if i+1 < len(args) {
+				reference = args[i+1]
+				i++
+			}
+		case "--valid-days":
+			if i+1 < len(args) {
+				validDays, _ = strconv.Atoi(args[i+1])
+				i++
+			}
+		case "--valid-until":
+			if i+1 < len(args) {
+				validUntilStr = args[i+1]
+				i++
+			}
+		case "--valid-from":
+			if i+1 < len(args) {
+				validFromStr = args[i+1]
+				i++
+			}
+		case "--notes":
+			if i+1 < len(args) {
+				notes = args[i+1]
+				i++
+			}
+		case "--help", "-h":
+			fmt.Println("Usage: felix assessment authorize <assessment-id> --authorizer \"Jane Doe\" --role \"CISO\" --reference \"SEC-AUTH-001\" [--valid-days 30]")
+			return 0
+		default:
+			if !strings.HasPrefix(arg, "-") && assessmentRef == "" {
+				assessmentRef = arg
+			}
+		}
+	}
+
+	if assessmentRef == "" {
+		fmt.Fprintf(os.Stderr, "[-] Error: assessment ID or Ref is required\n")
+		return 2
+	}
+	authorizer = strings.TrimSpace(authorizer)
+	if authorizer == "" {
+		fmt.Fprintf(os.Stderr, "[-] Error: --authorizer is required\n")
+		return 2
+	}
+
+	now := time.Now().UTC()
+	var validFrom *time.Time
+	var validUntil *time.Time
+
+	if validFromStr != "" {
+		t, err := time.Parse(time.RFC3339, validFromStr)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Invalid --valid-from timestamp format (must be RFC3339): %v\n", err)
+			return 2
+		}
+		validFrom = &t
+	}
+
+	if validUntilStr != "" {
+		t, err := time.Parse(time.RFC3339, validUntilStr)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Invalid --valid-until timestamp format (must be RFC3339): %v\n", err)
+			return 2
+		}
+		validUntil = &t
+	} else if validDays > 0 {
+		t := now.Add(time.Duration(validDays) * 24 * time.Hour)
+		validUntil = &t
+	}
+
+	store, err := getAssessmentStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Database error: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+
+	asm, err := store.GetAssessment(assessmentRef)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Assessment %q not found: %v\n", assessmentRef, err)
+		return 1
+	}
+
+	auth := &assessment.AuthorizationRecord{
+		ID:                  uuid.New().String(),
+		AssessmentID:        asm.ID,
+		AuthorizingParty:    authorizer,
+		AuthorizationMethod: role,
+		DateReceived:        now,
+		ValidFrom:           validFrom,
+		ValidUntil:          validUntil,
+		ScopeDocRef:         reference,
+		InternalNotes:       notes,
+		Status:              assessment.AuthApproved,
+		CreatedAt:           now,
+		UpdatedAt:           now,
+	}
+
+	if err := store.SetAuthorization(auth); err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Failed to set authorization: %v\n", err)
+		return 1
+	}
+
+	// Transition assessment state from DRAFT to READY
+	if asm.Status == assessment.StatusDraft {
+		if err := store.UpdateAssessmentStatus(asm.ID, assessment.StatusReady); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Warning: Failed to transition assessment status to READY: %v\n", err)
+		} else {
+			asm.Status = assessment.StatusReady
+		}
+	}
+
+	fmt.Printf("[+] Authorization recorded successfully\n")
+	fmt.Printf("    Assessment:   %s (%s)\n", asm.Ref, asm.Name)
+	fmt.Printf("    Authorizer:   %s\n", auth.AuthorizingParty)
+	if auth.AuthorizationMethod != "" {
+		fmt.Printf("    Role:         %s\n", auth.AuthorizationMethod)
+	}
+	if auth.ScopeDocRef != "" {
+		fmt.Printf("    Reference:    %s\n", auth.ScopeDocRef)
+	}
+	if auth.ValidUntil != nil {
+		fmt.Printf("    Valid Until:  %s\n", auth.ValidUntil.Format(time.RFC3339))
+	}
+	fmt.Printf("    Status:       APPROVED (Assessment is now READY for execution)\n")
+	return 0
+}
+
+func runAssessmentRun(args []string) int {
+	var (
+		assessmentRef  string
+		concurrency    int
+		timeoutStr     string
+		maxAssets      int
+		maxSizeMB      int
+		quiet          bool
+		verbose        bool
+		exportHTMLPath string
+		exportJSONPath string
+	)
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--assessment", "--id", "--ref":
+			if i+1 < len(args) {
+				assessmentRef = args[i+1]
+				i++
+			}
+		case "--concurrency", "-c":
+			if i+1 < len(args) {
+				concurrency, _ = strconv.Atoi(args[i+1])
+				i++
+			}
+		case "--timeout", "-t":
+			if i+1 < len(args) {
+				timeoutStr = args[i+1]
+				i++
+			}
+		case "--max-assets":
+			if i+1 < len(args) {
+				maxAssets, _ = strconv.Atoi(args[i+1])
+				i++
+			}
+		case "--max-response-size", "--max-size":
+			if i+1 < len(args) {
+				maxSizeMB, _ = strconv.Atoi(args[i+1])
+				i++
+			}
+		case "--quiet", "-q":
+			quiet = true
+		case "--verbose", "-v":
+			verbose = true
+		case "--html":
+			if i+1 < len(args) {
+				exportHTMLPath = args[i+1]
+				i++
+			}
+		case "--json":
+			if i+1 < len(args) {
+				exportJSONPath = args[i+1]
+				i++
+			}
+		case "--help", "-h":
+			fmt.Println("Usage: felix assessment run <assessment-id> [flags]")
+			fmt.Println("\nFlags:")
+			fmt.Println("  --concurrency <n>        Concurrent worker threads (default: 5)")
+			fmt.Println("  --timeout <duration>     Per-request HTTP timeout, e.g. 15s (default: 30s)")
+			fmt.Println("  --max-assets <n>         Maximum assets to discover per target (default: 200)")
+			fmt.Println("  --max-response-size <mb> Maximum response body size in MB (default: 5)")
+			fmt.Println("  --html <path>            Custom destination path for assessment HTML report")
+			fmt.Println("  --json <path>            Custom destination path for assessment JSON report")
+			fmt.Println("  --quiet, -q              Suppress live progress output")
+			fmt.Println("  --verbose, -v            Enable verbose execution logs")
+			return 0
+		default:
+			if !strings.HasPrefix(arg, "-") && assessmentRef == "" {
+				assessmentRef = arg
+			}
+		}
+	}
+
+	if assessmentRef == "" {
+		fmt.Fprintf(os.Stderr, "[-] Error: assessment ID or Ref is required\n")
+		return 2
+	}
+
+	store, err := getAssessmentStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Database error: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+
+	// Check interrupted runs first
+	if recovered, err := store.DetectAndRecoverInterruptedRuns(); err == nil && recovered > 0 {
+		if !quiet {
+			fmt.Printf("[!] Recovered %d previously interrupted assessment run(s)\n", recovered)
+		}
+	}
+
+	// Verify assessment exists
+	asm, err := store.GetAssessment(assessmentRef)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Assessment %q not found: %v\n", assessmentRef, err)
+		return 1
+	}
+
+	// Setup context with interrupt handler
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		if !quiet {
+			fmt.Printf("\n[!] Interrupt signal received. Gracefully finishing current tasks and saving partial findings...\n")
+		}
+		cancel()
+	}()
+
+	var timeoutDur time.Duration
+	if timeoutStr != "" {
+		t, err := time.ParseDuration(timeoutStr)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Invalid --timeout duration %q: %v\n", timeoutStr, err)
+			return 2
+		}
+		timeoutDur = t
+	}
+
+	controller := assessment.NewController(store)
+
+	var maxSizeBytes int64
+	if maxSizeMB > 0 {
+		maxSizeBytes = int64(maxSizeMB) * 1024 * 1024
+	}
+
+	opts := assessment.ExecutionOptions{
+		TimeoutDuration: timeoutDur,
+		Concurrency:     concurrency,
+		MaxAssets:       maxAssets,
+		MaxSizeBytes:    maxSizeBytes,
+		FelixVersion:    Version,
+		BuildID:         GitCommit,
+		ExportHTMLPath:  exportHTMLPath,
+		ExportJSONPath:  exportJSONPath,
+		Verbose:         verbose,
+		ProgressFunc: func(msg string) {
+			if !quiet {
+				fmt.Println(msg)
+			}
+		},
+	}
+
+	if !quiet {
+		fmt.Printf("===========================================================\n")
+		fmt.Printf("  EXECUTING ASSESSMENT: %s (%s)\n", asm.Ref, asm.Name)
+		fmt.Printf("===========================================================\n")
+	}
+
+	res, err := controller.RunAssessment(ctx, asm.ID, opts)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "\n[-] Assessment execution failed / refused:\n    %v\n", err)
+		return 1
+	}
+
+	if !quiet {
+		fmt.Printf("\n===========================================================\n")
+		fmt.Printf("  ASSESSMENT RUN COMPLETE: %s\n", res.Execution.ID)
+		fmt.Printf("===========================================================\n")
+		fmt.Printf("  Status:          %s\n", res.Execution.Status)
+		if res.Execution.DurationMs > 0 {
+			fmt.Printf("  Duration:        %d ms\n", res.Execution.DurationMs)
+		}
+		fmt.Printf("  Requests:        %d audited\n", res.Execution.RequestCount)
+		totalFindings := 0
+		if res.Report != nil {
+			totalFindings = len(res.Report.Findings)
+		}
+		fmt.Printf("  Findings:        %d total\n", totalFindings)
+		if res.Report != nil {
+			fmt.Printf("    Critical:      %d\n", res.Report.Summary.CriticalCount)
+			fmt.Printf("    High:          %d\n", res.Report.Summary.HighCount)
+			fmt.Printf("    Medium:        %d\n", res.Report.Summary.MediumCount)
+			fmt.Printf("    Low:           %d\n", res.Report.Summary.LowCount)
+			fmt.Printf("    Info:          %d\n", res.Report.Summary.InfoCount)
+		}
+		if res.HTMLPath != "" {
+			fmt.Printf("  HTML Report:     %s\n", res.HTMLPath)
+		}
+		if res.JSONPath != "" {
+			fmt.Printf("  JSON Report:     %s\n", res.JSONPath)
+		}
+		fmt.Println()
+	}
+
+	return 0
+}
+
+func runAssessmentFindings(args []string) int {
+	var (
+		assessmentRef string
+		severityFil   string
+		verFil        string
+		execIDFil     string
+		jsonOutput    bool
+	)
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--assessment", "--id", "--ref":
+			if i+1 < len(args) {
+				assessmentRef = args[i+1]
+				i++
+			}
+		case "--severity", "-s":
+			if i+1 < len(args) {
+				severityFil = strings.ToUpper(args[i+1])
+				i++
+			}
+		case "--verification", "-v":
+			if i+1 < len(args) {
+				verFil = strings.ToUpper(args[i+1])
+				i++
+			}
+		case "--execution", "-e":
+			if i+1 < len(args) {
+				execIDFil = args[i+1]
+				i++
+			}
+		case "--json":
+			jsonOutput = true
+		case "--help", "-h":
+			fmt.Println("Usage: felix assessment findings <assessment-id> [--severity HIGH] [--verification VERIFIED] [--json]")
+			return 0
+		default:
+			if !strings.HasPrefix(arg, "-") && assessmentRef == "" {
+				assessmentRef = arg
+			}
+		}
+	}
+
+	if assessmentRef == "" {
+		fmt.Fprintf(os.Stderr, "[-] Error: assessment ID or Ref is required\n")
+		return 2
+	}
+
+	store, err := getAssessmentStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Database error: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+
+	asm, err := store.GetAssessment(assessmentRef)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Assessment %q not found: %v\n", assessmentRef, err)
+		return 1
+	}
+
+	findings, err := store.GetFindings(asm.ID, execIDFil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Failed to fetch findings: %v\n", err)
+		return 1
+	}
+
+	// Filter findings
+	var filtered []assessment.AssessmentFinding
+	for _, f := range findings {
+		if severityFil != "" && strings.ToUpper(f.Severity) != severityFil {
+			continue
+		}
+		if verFil != "" && strings.ToUpper(string(f.VerificationStatus)) != verFil {
+			continue
+		}
+		filtered = append(filtered, f)
+	}
+	findings = filtered
+
+	if jsonOutput {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if findings == nil {
+			findings = []assessment.AssessmentFinding{}
+		}
+		_ = enc.Encode(findings)
+		return 0
+	}
+
+	if len(findings) == 0 {
+		fmt.Printf("No findings recorded for assessment %s matching criteria.\n", asm.Ref)
+		return 0
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+	fmt.Fprintln(w, "SEVERITY\tSTATUS\tSCORE\tTITLE\tTARGET")
+	for _, f := range findings {
+		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\n",
+			f.Severity, f.VerificationStatus, f.Score, f.Title, f.TargetURL)
+	}
+	_ = w.Flush()
+	return 0
+}
+
+func runAssessmentReports(args []string) int {
+	var (
+		assessmentRef string
+		jsonOutput    bool
+	)
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--assessment", "--id", "--ref":
+			if i+1 < len(args) {
+				assessmentRef = args[i+1]
+				i++
+			}
+		case "--json":
+			jsonOutput = true
+		case "--help", "-h":
+			fmt.Println("Usage: felix assessment reports <assessment-id> [--json]")
+			return 0
+		default:
+			if !strings.HasPrefix(arg, "-") && assessmentRef == "" {
+				assessmentRef = arg
+			}
+		}
+	}
+
+	if assessmentRef == "" {
+		fmt.Fprintf(os.Stderr, "[-] Error: assessment ID or Ref is required\n")
+		return 2
+	}
+
+	store, err := getAssessmentStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Database error: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+
+	asm, err := store.GetAssessment(assessmentRef)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Assessment %q not found: %v\n", assessmentRef, err)
+		return 1
+	}
+
+	reports, err := store.GetReports(asm.ID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Failed to fetch reports: %v\n", err)
+		return 1
+	}
+
+	if jsonOutput {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if reports == nil {
+			reports = []assessment.ReportRecord{}
+		}
+		_ = enc.Encode(reports)
+		return 0
+	}
+
+	if len(reports) == 0 {
+		fmt.Printf("No reports generated yet for assessment %s.\n", asm.Ref)
+		return 0
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+	fmt.Fprintln(w, "FORMAT\tPATH\tVERSION\tCREATED")
+	for _, r := range reports {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
+			r.Format, r.FilePath, r.FelixVersion, r.CreatedAt.Format("2006-01-02 15:04:05"))
+	}
+	_ = w.Flush()
+	return 0
+}
+
+func runAssessmentCancel(args []string) int {
+	var assessmentRef string
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--assessment", "--id", "--ref":
+			if i+1 < len(args) {
+				assessmentRef = args[i+1]
+				i++
+			}
+		case "--help", "-h":
+			fmt.Println("Usage: felix assessment cancel <assessment-id>")
+			return 0
+		default:
+			if !strings.HasPrefix(arg, "-") && assessmentRef == "" {
+				assessmentRef = arg
+			}
+		}
+	}
+
+	if assessmentRef == "" {
+		fmt.Fprintf(os.Stderr, "[-] Error: assessment ID or Ref is required\n")
+		return 2
+	}
+
+	store, err := getAssessmentStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Database error: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+
+	asm, err := store.GetAssessment(assessmentRef)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Assessment %q not found: %v\n", assessmentRef, err)
+		return 1
+	}
+
+	if err := store.UpdateAssessmentStatus(asm.ID, assessment.StatusCancelled); err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Failed to cancel assessment: %v\n", err)
+		return 1
+	}
+
+	fmt.Printf("[+] Assessment %s marked as CANCELLED\n", asm.Ref)
+	return 0
+}

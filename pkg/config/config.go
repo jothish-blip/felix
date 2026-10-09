@@ -51,6 +51,9 @@ func Default() Config {
 
 // Dir returns the path to the Felix configuration directory (~/.felix).
 func Dir() (string, error) {
+	if d := os.Getenv("FELIX_DIR"); d != "" {
+		return d, nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err

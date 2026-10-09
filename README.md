@@ -230,6 +230,48 @@ felix report scan-result.json --html offline-report.html
 
 ---
 
+## Felix 2.0 — Assessment Platform & Traceability Core
+
+Felix 2.0 introduces a structured, client-aware security assessment engine with complete relational traceability:
+
+```text
+Client ──► Authorization ──► Approved Scope ──► Assessment ──► Execution ──► Findings ──► Report
+```
+
+### Complete Assessment Lifecycle
+
+```bash
+# 1. Register a client organization
+felix client add --name "Acme Corporation" --org "Acme Corp Ltd" --contact-email "security@acme.example"
+
+# 2. Create an assessment project
+felix assessment create --client "Acme Corporation" --name "Q1 Web Security Audit" --target https://app.acme.example --scope-mode same-origin
+
+# 3. Add secondary targets, scope rules, or exclusions
+felix assessment target add ASM-2026-0001 --url https://api.acme.example
+felix assessment scope add ASM-2026-0001 --rule "subdomains:acme.example"
+felix assessment exclude add ASM-2026-0001 --type PATH_PREFIX --pattern /admin --reason "Out of test boundary"
+
+# 4. Record explicit client authorization (Assessment transitions from DRAFT to READY)
+felix assessment authorize ASM-2026-0001 --authorizer "Jane Doe" --role "Head of Security" --reference "SEC-AUTH-2026-01" --valid-days 30
+
+# 5. Execute authorized assessment (Fails closed if unauthorized or expired)
+felix assessment run ASM-2026-0001 --concurrency 5 --timeout 15s
+
+# 6. Review recorded findings and generated reports
+felix assessment findings ASM-2026-0001
+felix assessment reports ASM-2026-0001
+```
+
+### Core Assessment Architectural Guarantees
+- **Fail-Closed Execution Refusal:** Unrecorded, pending, expired, or revoked authorizations strictly block scan execution.
+- **Strict Exclusion Precedence:** Exclusions (`HOSTNAME`, `PATH_PREFIX`, `EXACT_URL`) strictly override any broader scope rule or target allowance.
+- **Relational Finding Traceability:** Every finding in `~/.felix/assessments.db` is immutably linked to `AssessmentID`, `ExecutionID`, `TargetID`, with full evidence and verification records intact.
+- **Embedded Pure-Go SQLite:** Uses a pure-Go driver (`modernc.org/sqlite`) with WAL mode, foreign keys, and automatic schema migrations—maintaining `CGO_ENABLED=0` cross-compilation across all 5 platforms.
+
+
+---
+
 ## Example Terminal Output
 
 ```text
@@ -307,6 +349,8 @@ Top Priorities:
 | :--- | :--- |
 | `felix scan <target> [flags]` | Conduct an automated security audit against a target web application. |
 | `felix report <result.json> [flags]` | Generate HTML or JSON reports from saved results (**zero network requests**). |
+| `felix client <subcommand> [flags]` | Manage clients and organizations for structured security auditing. |
+| `felix assessment <subcommand> [flags]` | Manage client-authorized security assessment projects, scopes, runs, and findings. |
 | `felix config [subcommand]` | View and manage persistent defaults in `~/.felix/config.json`. |
 | `felix doctor` | Validate binary integrity, Go runtime, network stack, and permissions. |
 | `felix version` | Display Felix version, platform architecture, and compiler details. |
