@@ -144,6 +144,8 @@ func (e *Engine) Execute(
 		resEval.CreatedAt = time.Now().UTC()
 
 		// Redacted structural evidence
+		identity := policy.Identities[tc.PrimaryIdentity]
+		resEval.RedactedRequest = RedactRequestSummary(tc.Method, tc.Endpoint, identity.ScrubbedHeaders(), tc.Payload)
 		resEval.RedactedResponse = RedactBody(resp.Body, 512)
 
 		// If verified vulnerability found, generate finding
@@ -199,7 +201,8 @@ func (e *Engine) executeRequest(
 		}
 	}
 
-	resp, err := e.client.Do(req)
+	client := e.scopedClient(isAllowed, isExcluded)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -222,6 +225,43 @@ func (e *Engine) executeRequest(
 		Body:       bodyBytes,
 		Headers:    headers,
 	}, nil
+}
+
+func (e *Engine) scopedClient(isAllowed func(string) bool, isExcluded func(string) bool) *http.Client {
+	base := e.client
+	origCheck := base.CheckRedirect
+
+	return &http.Client{
+		Transport: base.Transport,
+		Timeout:   base.Timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("stopped after 10 redirects")
+			}
+			if origCheck != nil {
+				if err := origCheck(req, via); err != nil {
+					return err
+				}
+			}
+			nextURL := req.URL.String()
+			if isExcluded != nil && isExcluded(nextURL) {
+				return fmt.Errorf("redirect to %s blocked: matches exclusion rule", nextURL)
+			}
+			if isAllowed != nil && !isAllowed(nextURL) {
+				return fmt.Errorf("redirect to %s blocked: out of approved scope", nextURL)
+			}
+			if len(via) > 0 {
+				lastHost := strings.ToLower(via[len(via)-1].URL.Hostname())
+				nextHost := strings.ToLower(req.URL.Hostname())
+				if lastHost != "" && nextHost != "" && lastHost != nextHost {
+					if isAllowed != nil && !isAllowed(nextURL) {
+						return fmt.Errorf("cross-host redirect from %s to %s blocked", lastHost, nextHost)
+					}
+				}
+			}
+			return nil
+		},
+	}
 }
 
 func (e *Engine) generateFinding(

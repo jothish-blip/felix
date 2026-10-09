@@ -5,8 +5,10 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,6 +36,48 @@ func NewEngine(client *http.Client, cfg Config) *Engine {
 	}
 }
 
+func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
+	base := e.client
+	if base == nil {
+		base = &http.Client{Timeout: e.cfg.Timeout}
+	}
+	origCheck := base.CheckRedirect
+
+	return &http.Client{
+		Transport: base.Transport,
+		Timeout:   base.Timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("stopped after 10 redirects")
+			}
+			if origCheck != nil {
+				if err := origCheck(req, via); err != nil {
+					return err
+				}
+			}
+			nextURL := req.URL.String()
+			if actx != nil {
+				if actx.IsExcluded != nil && actx.IsExcluded(nextURL) {
+					return fmt.Errorf("redirect to %s blocked: matches exclusion rule", nextURL)
+				}
+				if actx.IsAllowed != nil && !actx.IsAllowed(nextURL) {
+					return fmt.Errorf("redirect to %s blocked: out of approved scope", nextURL)
+				}
+			}
+			if len(via) > 0 {
+				lastHost := strings.ToLower(via[len(via)-1].URL.Hostname())
+				nextHost := strings.ToLower(req.URL.Hostname())
+				if lastHost != "" && nextHost != "" && lastHost != nextHost {
+					if actx != nil && actx.IsAllowed != nil && !actx.IsAllowed(nextURL) {
+						return fmt.Errorf("cross-host redirect from %s to %s blocked", lastHost, nextHost)
+					}
+				}
+			}
+			return nil
+		},
+	}
+}
+
 // AssessmentContext contains all available asset inventory, discovery data, and policies.
 type AssessmentContext struct {
 	AssessmentID string
@@ -56,6 +100,8 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 
 	// Deduplicate endpoints across crawler links and discovery assets
 	actx.Endpoints = DeduplicateEndpoints(actx.Endpoints)
+
+	client := e.scopedClient(actx)
 
 	var allResults []Result
 	var allFindings []report.Finding
@@ -90,7 +136,7 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 	coverageMap[string(CategoryAPI3_BOPLA)] = cov3
 
 	// 4. API4: Unrestricted Resource Consumption
-	res4, fnd4, cov4 := e.assessAPI4(ctx, actx)
+	res4, fnd4, cov4 := e.assessAPI4(ctx, actx, client)
 	allResults = append(allResults, res4...)
 	allFindings = append(allFindings, fnd4...)
 	coverageMap[string(CategoryAPI4_ResourceConsumption)] = cov4
@@ -108,13 +154,13 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 	coverageMap[string(CategoryAPI6_BusinessFlows)] = cov6
 
 	// 7. API7: Server-Side Request Forgery (SSRF)
-	res7, fnd7, cov7 := e.assessAPI7(ctx, actx)
+	res7, fnd7, cov7 := e.assessAPI7(ctx, actx, client)
 	allResults = append(allResults, res7...)
 	allFindings = append(allFindings, fnd7...)
 	coverageMap[string(CategoryAPI7_SSRF)] = cov7
 
 	// 8. API8: Security Misconfiguration
-	res8, fnd8, cov8 := e.assessAPI8(ctx, actx)
+	res8, fnd8, cov8 := e.assessAPI8(ctx, actx, client)
 	allResults = append(allResults, res8...)
 	allFindings = append(allFindings, fnd8...)
 	coverageMap[string(CategoryAPI8_Misconfiguration)] = cov8
@@ -418,7 +464,7 @@ func (e *Engine) assessAPI3(actx *AssessmentContext) ([]Result, []report.Finding
 }
 
 // --- Category 4: API4 (Resource Consumption) ---
-func (e *Engine) assessAPI4(ctx context.Context, actx *AssessmentContext) ([]Result, []report.Finding, CategoryCoverage) {
+func (e *Engine) assessAPI4(ctx context.Context, actx *AssessmentContext, client *http.Client) ([]Result, []report.Finding, CategoryCoverage) {
 	cov := CategoryCoverage{
 		Category: CategoryAPI4_ResourceConsumption,
 		Code:     OWASPCategoryMetadata[CategoryAPI4_ResourceConsumption].Code,
@@ -450,6 +496,17 @@ func (e *Engine) assessAPI4(ctx context.Context, actx *AssessmentContext) ([]Res
 	target := testEndpoints[0]
 	fullURL := actx.BaseURL + target.Path
 
+	if actx.IsExcluded != nil && actx.IsExcluded(fullURL) {
+		cov.Status = CoveragePassivelyAssessed
+		cov.Explanation = fmt.Sprintf("Target URL %s matches assessment exclusion rule; active tests skipped", fullURL)
+		return results, findings, cov
+	}
+	if actx.IsAllowed != nil && !actx.IsAllowed(fullURL) {
+		cov.Status = CoveragePassivelyAssessed
+		cov.Explanation = fmt.Sprintf("Target URL %s is outside approved scope; active tests skipped", fullURL)
+		return results, findings, cov
+	}
+
 	// Bounded Rate Limiting Audit (Safe 3-request probe)
 	hasRateLimitHeader := false
 	got429 := false
@@ -459,7 +516,7 @@ func (e *Engine) assessAPI4(ctx context.Context, actx *AssessmentContext) ([]Res
 		if err != nil {
 			break
 		}
-		resp, err := e.client.Do(req)
+		resp, err := client.Do(req)
 		if err != nil {
 			break
 		}
@@ -684,7 +741,7 @@ func (e *Engine) assessAPI6(actx *AssessmentContext) ([]Result, []report.Finding
 }
 
 // --- Category 7: API7 (SSRF) ---
-func (e *Engine) assessAPI7(ctx context.Context, actx *AssessmentContext) ([]Result, []report.Finding, CategoryCoverage) {
+func (e *Engine) assessAPI7(ctx context.Context, actx *AssessmentContext, client *http.Client) ([]Result, []report.Finding, CategoryCoverage) {
 	cov := CategoryCoverage{
 		Category: CategoryAPI7_SSRF,
 		Code:     OWASPCategoryMetadata[CategoryAPI7_SSRF].Code,
@@ -708,10 +765,8 @@ func (e *Engine) assessAPI7(ctx context.Context, actx *AssessmentContext) ([]Res
 			// If canary callback URL is provided, test safely
 			testedCanary := false
 			if e.cfg.CanaryCallbackURL != "" {
-				// Safety guard: Canary must NOT be localhost or internal IP
-				if !isInternalAddress(e.cfg.CanaryCallbackURL) {
-					testedCanary = true
-					cov.Status = CoverageActivelyTested
+				// Safety guard: Canary must NOT be internal, loopback, private, or unsafe address
+				if !IsInternalOrUnsafeAddress(e.cfg.CanaryCallbackURL) {
 					testURL := actx.BaseURL + ep.Path
 					if strings.Contains(testURL, "?") {
 						testURL += fmt.Sprintf("&%s=%s", ep.URLParamName, url.QueryEscape(e.cfg.CanaryCallbackURL))
@@ -719,12 +774,25 @@ func (e *Engine) assessAPI7(ctx context.Context, actx *AssessmentContext) ([]Res
 						testURL += fmt.Sprintf("?%s=%s", ep.URLParamName, url.QueryEscape(e.cfg.CanaryCallbackURL))
 					}
 
-					req, err := http.NewRequestWithContext(ctx, "GET", testURL, nil)
-					if err == nil {
-						resp, err := e.client.Do(req)
+					// Verify testURL itself respects scope and exclusion rules before sending probe
+					inScope := true
+					if actx.IsExcluded != nil && actx.IsExcluded(testURL) {
+						inScope = false
+					}
+					if actx.IsAllowed != nil && !actx.IsAllowed(testURL) {
+						inScope = false
+					}
+
+					if inScope {
+						testedCanary = true
+						cov.Status = CoverageActivelyTested
+						req, err := http.NewRequestWithContext(ctx, "GET", testURL, nil)
 						if err == nil {
-							io.Copy(io.Discard, resp.Body)
-							resp.Body.Close()
+							resp, err := client.Do(req)
+							if err == nil {
+								io.Copy(io.Discard, resp.Body)
+								resp.Body.Close()
+							}
 						}
 					}
 				}
@@ -779,7 +847,7 @@ func (e *Engine) assessAPI7(ctx context.Context, actx *AssessmentContext) ([]Res
 }
 
 // --- Category 8: API8 (Security Misconfiguration) ---
-func (e *Engine) assessAPI8(ctx context.Context, actx *AssessmentContext) ([]Result, []report.Finding, CategoryCoverage) {
+func (e *Engine) assessAPI8(ctx context.Context, actx *AssessmentContext, client *http.Client) ([]Result, []report.Finding, CategoryCoverage) {
 	cov := CategoryCoverage{
 		Category: CategoryAPI8_Misconfiguration,
 		Code:     OWASPCategoryMetadata[CategoryAPI8_Misconfiguration].Code,
@@ -795,13 +863,22 @@ func (e *Engine) assessAPI8(ctx context.Context, actx *AssessmentContext) ([]Res
 		testURL = actx.BaseURL + actx.Endpoints[0].Path
 	}
 
+	if actx.IsExcluded != nil && actx.IsExcluded(testURL) {
+		cov.Explanation = fmt.Sprintf("Target URL %s matches assessment exclusion rule; active tests skipped", testURL)
+		return results, findings, cov
+	}
+	if actx.IsAllowed != nil && !actx.IsAllowed(testURL) {
+		cov.Explanation = fmt.Sprintf("Target URL %s is outside approved scope; active tests skipped", testURL)
+		return results, findings, cov
+	}
+
 	req, err := http.NewRequestWithContext(ctx, "GET", testURL, nil)
 	if err != nil {
 		cov.Explanation = "Failed to construct baseline request"
 		return results, findings, cov
 	}
 
-	resp, err := e.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		cov.Explanation = fmt.Sprintf("Baseline request failed: %v", err)
 		return results, findings, cov
@@ -1173,16 +1250,161 @@ func (e *Engine) compileSummary(results []Result, coverage map[string]CategoryCo
 	return sum
 }
 
+var dnsLookupIPHook = func(host string) ([]net.IP, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return net.DefaultResolver.LookupIP(ctx, "ip", host)
+}
+
+var nonGlobalCIDRs []*net.IPNet
+
+func init() {
+	cidrs := []string{
+		// IPv4
+		"0.0.0.0/8",          // Current network ("this" network)
+		"10.0.0.0/8",         // Private-use (RFC 1918)
+		"100.64.0.0/10",      // Shared address space (CGNAT, RFC 6598)
+		"127.0.0.0/8",        // Loopback (RFC 1122)
+		"169.254.0.0/16",     // Link-local (RFC 3927)
+		"172.16.0.0/12",      // Private-use (RFC 1918)
+		"192.0.0.0/24",       // IETF Protocol Assignments (RFC 6890)
+		"192.0.2.0/24",       // Documentation TEST-NET-1 (RFC 5737)
+		"192.88.99.0/24",     // 6to4 Relay Anycast (RFC 7526)
+		"192.168.0.0/16",     // Private-use (RFC 1918)
+		"198.18.0.0/15",      // Benchmarking (RFC 2544)
+		"198.51.100.0/24",    // Documentation TEST-NET-2 (RFC 5737)
+		"203.0.113.0/24",     // Documentation TEST-NET-3 (RFC 5737)
+		"224.0.0.0/4",        // Multicast (RFC 5771)
+		"240.0.0.0/4",        // Reserved (RFC 1112)
+		"255.255.255.255/32", // Limited Broadcast (RFC 8190)
+
+		// IPv6
+		"::/128",        // Unspecified
+		"::1/128",       // Loopback
+		"64:ff9b::/96",  // IPv4-IPv6 translation
+		"100::/64",      // Discard-only
+		"2001::/23",     // IETF protocol assignments
+		"2001:db8::/32", // Documentation
+		"fc00::/7",      // Unique Local Address (ULA, RFC 4193)
+		"fe80::/10",     // Link-Local Unicast (RFC 4291)
+		"ff00::/8",      // Multicast (RFC 4291)
+	}
+	for _, c := range cidrs {
+		_, block, err := net.ParseCIDR(c)
+		if err == nil {
+			nonGlobalCIDRs = append(nonGlobalCIDRs, block)
+		}
+	}
+}
+
+func isPrivateOrNonGlobalIP(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() || ip.IsPrivate() {
+		return true
+	}
+	if ip4 := ip.To4(); ip4 != nil {
+		for _, block := range nonGlobalCIDRs {
+			if block.IP.To4() != nil && block.Contains(ip4) {
+				return true
+			}
+		}
+		return false
+	}
+	// Native IPv6
+	for _, block := range nonGlobalCIDRs {
+		if block.IP.To4() == nil && block.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
 func isInternalAddress(rawURL string) bool {
+	return IsInternalOrUnsafeAddress(rawURL)
+}
+
+// IsInternalOrUnsafeAddress evaluates whether rawURL targets a private, loopback, link-local,
+// reserved, or unsafe internal destination. It returns true if the address is internal or unsafe.
+func IsInternalOrUnsafeAddress(rawURL string) bool {
+	if rawURL == "" {
+		return true
+	}
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return true
 	}
-	host := strings.ToLower(u.Hostname())
-	if host == "localhost" || host == "127.0.0.1" || host == "169.254.169.254" ||
-		strings.HasPrefix(host, "10.") || strings.HasPrefix(host, "192.168.") ||
-		strings.HasPrefix(host, "172.16.") || strings.HasSuffix(host, ".local") {
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
 		return true
 	}
+	host := strings.ToLower(u.Hostname())
+	if host == "" {
+		return true
+	}
+	host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
+
+	// Hostname safety blacklist
+	if host == "localhost" ||
+		strings.HasSuffix(host, ".localhost") ||
+		strings.HasSuffix(host, ".local") ||
+		strings.HasSuffix(host, ".internal") ||
+		strings.HasSuffix(host, ".lan") ||
+		strings.HasSuffix(host, ".corp") ||
+		strings.HasSuffix(host, ".home") ||
+		strings.HasSuffix(host, ".intranet") ||
+		host == "metadata.google.internal" ||
+		host == "instance-data" ||
+		host == "metadata" {
+		return true
+	}
+
+	// Dword/integer IPv4 parsing (e.g. 2130706433 or 0x7f000001 or 017700000001)
+	if val, err := strconv.ParseUint(host, 0, 64); err == nil && val <= 0xFFFFFFFF {
+		ip := net.IPv4(byte(val>>24), byte(val>>16), byte(val>>8), byte(val))
+		if isPrivateOrNonGlobalIP(ip) {
+			return true
+		}
+	}
+
+	// Dotted numeric parsing (e.g. 0177.0.0.1)
+	parts := strings.Split(host, ".")
+	if len(parts) == 4 {
+		var octets [4]byte
+		parsedAll := true
+		for i, part := range parts {
+			val, err := strconv.ParseUint(part, 0, 8)
+			if err != nil {
+				parsedAll = false
+				break
+			}
+			octets[i] = byte(val)
+		}
+		if parsedAll {
+			ip := net.IPv4(octets[0], octets[1], octets[2], octets[3])
+			if isPrivateOrNonGlobalIP(ip) {
+				return true
+			}
+		}
+	}
+
+	// Direct IP address check
+	if ip := net.ParseIP(host); ip != nil {
+		return isPrivateOrNonGlobalIP(ip)
+	}
+
+	// Hostname DNS resolution
+	if dnsLookupIPHook != nil {
+		if ips, err := dnsLookupIPHook(host); err == nil && len(ips) > 0 {
+			for _, ip := range ips {
+				if isPrivateOrNonGlobalIP(ip) {
+					return true
+				}
+			}
+		}
+	}
+
 	return false
 }

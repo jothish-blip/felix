@@ -153,3 +153,31 @@ func TestScopeValidator_RedirectValidation(t *testing.T) {
 		t.Errorf("expected redirect into excluded path /restricted/area to be blocked")
 	}
 }
+
+func TestScopeValidator_CrossHostRedirectBlocked(t *testing.T) {
+	approvedTargets := []string{
+		"https://target1.example.com",
+		"https://target2.example.com",
+	}
+	validator := NewScopeValidator("same-origin", approvedTargets, nil, nil)
+
+	// Even though target2.example.com is an approved target in this multi-target assessment,
+	// a redirect from target1 to target2 crosses host boundary and must be blocked in same-origin mode
+	if err := validator.ValidateRedirect("https://target1.example.com/login", "https://target2.example.com/profile"); err == nil {
+		t.Errorf("expected cross-host redirect between targets to be blocked in same-origin mode")
+	}
+
+	// Redirect within target1 is allowed
+	if err := validator.ValidateRedirect("https://target1.example.com/login", "https://target1.example.com/home"); err != nil {
+		t.Errorf("expected same-host redirect to be allowed, got: %v", err)
+	}
+
+	// Subdomains mode validator
+	subValidator := NewScopeValidator("subdomains", []string{"https://example.com"}, []ScopeRule{{RuleType: "subdomains", Pattern: "example.com"}}, nil)
+	if err := subValidator.ValidateRedirect("https://example.com/app", "https://api.example.com/v1"); err != nil {
+		t.Errorf("expected subdomain redirect to be allowed in subdomains mode, got: %v", err)
+	}
+	if err := subValidator.ValidateRedirect("https://example.com/app", "https://attacker.com/v1"); err == nil {
+		t.Errorf("expected third-party redirect to be blocked in subdomains mode")
+	}
+}

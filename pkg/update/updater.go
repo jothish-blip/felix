@@ -122,22 +122,38 @@ func (u *Updater) Update(ctx context.Context, opts UpdateOptions) (*UpdateResult
 
 	archivePath := filepath.Join(tempDir, expectedArchive)
 
-	// Step 5: Download and verify checksum manifest
-	var expectedSHA256 string
-	if checksumAsset != nil {
-		notify("CHECKSUM", "Downloading SHA256SUMS verification manifest...")
-		sumsPath := filepath.Join(tempDir, "SHA256SUMS")
-		_, err := u.Downloader.DownloadFile(ctx, checksumAsset.BrowserDownloadURL, sumsPath)
-		if err == nil {
-			f, err := os.Open(sumsPath)
-			if err == nil {
-				sumsMap, err := ParseChecksums(f)
-				f.Close()
-				if err == nil {
-					expectedSHA256 = sumsMap[expectedArchive]
-				}
-			}
-		}
+	// Step 5: Download and verify checksum manifest (fail-closed integrity verification)
+	if checksumAsset == nil {
+		return nil, fmt.Errorf("cryptographic verification failed: SHA256SUMS manifest missing from release %s assets", targetVersion)
+	}
+
+	notify("CHECKSUM", "Downloading SHA256SUMS verification manifest...")
+	sumsPath := filepath.Join(tempDir, "SHA256SUMS")
+	if _, err := u.Downloader.DownloadFile(ctx, checksumAsset.BrowserDownloadURL, sumsPath); err != nil {
+		return nil, fmt.Errorf("failed downloading SHA256SUMS manifest: %w", err)
+	}
+
+	f, err := os.Open(sumsPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed reading SHA256SUMS manifest: %w", err)
+	}
+	sumsMap, err := ParseChecksums(f)
+	f.Close()
+	if err != nil {
+		return nil, fmt.Errorf("failed parsing SHA256SUMS manifest: %w", err)
+	}
+
+	if len(sumsMap) == 0 {
+		return nil, fmt.Errorf("cryptographic verification failed: SHA256SUMS manifest contains no valid checksum entries")
+	}
+
+	expectedSHA256, found := sumsMap[expectedArchive]
+	if !found || expectedSHA256 == "" {
+		return nil, fmt.Errorf("cryptographic verification failed: target archive %q not found in SHA256SUMS manifest", expectedArchive)
+	}
+
+	if len(expectedSHA256) != 64 || !isHex(expectedSHA256) {
+		return nil, fmt.Errorf("cryptographic verification failed: malformed SHA256 digest %q for %q in manifest", expectedSHA256, expectedArchive)
 	}
 
 	// Step 6: Download release archive
@@ -148,11 +164,9 @@ func (u *Updater) Update(ctx context.Context, opts UpdateOptions) (*UpdateResult
 	}
 
 	// Step 7: Cryptographic integrity check
-	if expectedSHA256 != "" {
-		notify("VERIFY", "Verifying SHA256 cryptographic digest...")
-		if !strings.EqualFold(computedHash, expectedSHA256) {
-			return nil, fmt.Errorf("CRITICAL: SHA256 mismatch for %s (expected %s, got %s)", expectedArchive, expectedSHA256, computedHash)
-		}
+	notify("VERIFY", "Verifying SHA256 cryptographic digest...")
+	if !strings.EqualFold(computedHash, expectedSHA256) {
+		return nil, fmt.Errorf("CRITICAL: SHA256 mismatch for %s (expected %s, got %s)", expectedArchive, expectedSHA256, computedHash)
 	}
 
 	if opts.DryRun {
@@ -212,4 +226,13 @@ func formatBytes(b int64) string {
 		return fmt.Sprintf("%.2f KB", float64(b)/1024)
 	}
 	return fmt.Sprintf("%d B", b)
+}
+
+func isHex(s string) bool {
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
 }

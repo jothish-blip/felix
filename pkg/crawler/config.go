@@ -20,9 +20,11 @@ type Config struct {
 	MaxAssets    int           `json:"max_assets,omitempty"`
 	UserAgent    string        `json:"user_agent"`
 	ScopeMode          ScopeMode     `json:"scope_mode"`
-	AllowedHosts       []string      `json:"allowed_hosts"`
-	InsecureSkipVerify bool          `json:"insecure_skip_verify"`
-	Client             *http.Client  `json:"-"`
+	AllowedHosts       []string          `json:"allowed_hosts"`
+	InsecureSkipVerify bool              `json:"insecure_skip_verify"`
+	Client             *http.Client      `json:"-"`
+	IsAllowed          func(string) bool `json:"-"`
+	IsExcluded         func(string) bool `json:"-"`
 }
 
 // DefaultConfig provides sensible defaults for web auditing.

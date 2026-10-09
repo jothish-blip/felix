@@ -114,7 +114,10 @@ func (c *Crawler) ExtractScripts(ctx context.Context, rawURL string) ([]string, 
 	req.Header.Set("User-Agent", c.config.UserAgent)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 
-	resp, err := c.client.Do(req)
+	scope, _ := NewScope(rawURL, c.config.ScopeMode, c.config.AllowedHosts...)
+	targetClient := c.scopedClientForTarget(scope)
+
+	resp, err := targetClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
@@ -125,6 +128,47 @@ func (c *Crawler) ExtractScripts(ctx context.Context, rawURL string) ([]string, 
 	}
 
 	return parseScriptTags(resp.Body, parsedBase)
+}
+
+// scopedClientForTarget returns an HTTP client that validates every redirect against
+// the active target's approved scope and exclusions before the redirected request is sent.
+func (c *Crawler) scopedClientForTarget(scope *Scope) *http.Client {
+	base := c.client
+	origCheck := base.CheckRedirect
+
+	return &http.Client{
+		Transport: base.Transport,
+		Timeout:   base.Timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("stopped after 10 redirects")
+			}
+			if origCheck != nil {
+				if err := origCheck(req, via); err != nil {
+					return err
+				}
+			}
+			nextURL := req.URL.String()
+			if c.config.IsExcluded != nil && c.config.IsExcluded(nextURL) {
+				return fmt.Errorf("redirect to %s blocked: matches exclusion rule", nextURL)
+			}
+			if c.config.IsAllowed != nil {
+				if !c.config.IsAllowed(nextURL) {
+					return fmt.Errorf("redirect to %s blocked: out of approved scope", nextURL)
+				}
+			} else if scope != nil && !scope.IsAllowed(nextURL) {
+				return fmt.Errorf("redirect to %s blocked: out of crawler scope", nextURL)
+			}
+			if len(via) > 0 {
+				lastHost := strings.ToLower(via[len(via)-1].URL.Hostname())
+				nextHost := strings.ToLower(req.URL.Hostname())
+				if (c.config.ScopeMode == ScopeSameOrigin || c.config.ScopeMode == "") && lastHost != "" && nextHost != "" && lastHost != nextHost {
+					return fmt.Errorf("cross-host redirect from %s to %s blocked in same-origin mode", lastHost, nextHost)
+				}
+			}
+			return nil
+		},
+	}
 }
 
 // Crawl executes the full Engine 1 pipeline against a single target URL:
@@ -142,6 +186,8 @@ func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
 		return res
 	}
 
+	targetClient := c.scopedClientForTarget(scope)
+
 	parsedBase, err := url.Parse(rawTarget)
 	if err != nil {
 		res.Err = fmt.Errorf("invalid target URL: %w", err)
@@ -156,7 +202,7 @@ func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
 	req.Header.Set("User-Agent", c.config.UserAgent)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 
-	resp, err := c.client.Do(req)
+	resp, err := targetClient.Do(req)
 	if err != nil {
 		res.Err = fmt.Errorf("request failed: %w", err)
 		return res
@@ -241,7 +287,7 @@ func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			downloaded := c.downloadAsset(ctx, item.URL, item.Type)
+			downloaded := c.downloadAsset(ctx, targetClient, item.URL, item.Type)
 			assetsMu.Lock()
 			assets = append(assets, downloaded)
 			assetsMu.Unlock()
@@ -297,7 +343,7 @@ func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			smAsset := c.downloadAsset(ctx, targetURL, AssetSourceMap)
+			smAsset := c.downloadAsset(ctx, targetClient, targetURL, AssetSourceMap)
 			smAsset.Type = AssetSourceMap
 			smAsset.IsSourceMap = true
 			assetsMu.Lock()
@@ -322,7 +368,10 @@ func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
 }
 
 // downloadAsset fetches an individual asset subject to size limits and error handling.
-func (c *Crawler) downloadAsset(ctx context.Context, assetURL string, defaultType AssetType) Asset {
+func (c *Crawler) downloadAsset(ctx context.Context, client *http.Client, assetURL string, defaultType AssetType) Asset {
+	if client == nil {
+		client = c.client
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, assetURL, nil)
 	if err != nil {
 		return Asset{
@@ -335,7 +384,7 @@ func (c *Crawler) downloadAsset(ctx context.Context, assetURL string, defaultTyp
 	req.Header.Set("User-Agent", c.config.UserAgent)
 	req.Header.Set("Accept", "*/*")
 
-	resp, err := c.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return Asset{
 			URL:     assetURL,

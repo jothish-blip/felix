@@ -250,5 +250,24 @@ func (v *ScopeValidator) ValidateRedirect(currentURL, nextURL string) error {
 		return fmt.Errorf("redirect to %s blocked: target is outside approved assessment scope", nextURL)
 	}
 
+	// Enforce origin and host boundaries relative to currentURL
+	if currentURL != "" {
+		currParsed, err1 := url.Parse(currentURL)
+		nextParsed, err2 := url.Parse(nextURL)
+		if err1 == nil && err2 == nil && currParsed.Hostname() != "" && nextParsed.Hostname() != "" {
+			currHost := strings.ToLower(currParsed.Hostname())
+			nextHost := strings.ToLower(nextParsed.Hostname())
+			if v.ScopeMode == "same-origin" || v.ScopeMode == "" {
+				if currHost != nextHost || currParsed.Port() != nextParsed.Port() {
+					return fmt.Errorf("cross-host redirect from %s to %s blocked in same-origin mode", currHost, nextHost)
+				}
+			} else if v.ScopeMode == "subdomains" {
+				if currHost != nextHost && !strings.HasSuffix(nextHost, "."+currHost) && !strings.HasSuffix(currHost, "."+nextHost) {
+					return fmt.Errorf("cross-domain redirect from %s to %s blocked in subdomains mode", currHost, nextHost)
+				}
+			}
+		}
+	}
+
 	return nil
 }

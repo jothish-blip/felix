@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -1837,7 +1838,20 @@ func runAssessmentAuthz(args []string) int {
 			targetURLs = append(targetURLs, t.TargetURL)
 		}
 		scopeVal := assessment.NewScopeValidator(asm.ScopeMode, targetURLs, asm.ScopeRules, asm.Exclusions)
-		engine := authz.NewEngine(nil)
+		authzHTTPClient := &http.Client{
+			Timeout: 15 * time.Second,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 10 {
+					return fmt.Errorf("stopped after 10 redirects")
+				}
+				lastURL := ""
+				if len(via) > 0 {
+					lastURL = via[len(via)-1].URL.String()
+				}
+				return scopeVal.ValidateRedirect(lastURL, req.URL.String())
+			},
+		}
+		engine := authz.NewEngine(authzHTTPClient)
 
 		fmt.Println("===========================================================")
 		fmt.Printf("  EXECUTING AUTHORIZATION AUDIT: %s (%s)\n", asm.Ref, asm.Name)
@@ -2219,8 +2233,20 @@ func runAssessmentAPISec(args []string) int {
 		if policy != nil && policy.AllowWriteTests {
 			cfg.AllowWriteTests = true
 		}
-
-		engine := apisec.NewEngine(nil, cfg)
+		apisecHTTPClient := &http.Client{
+			Timeout: cfg.Timeout,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 10 {
+					return fmt.Errorf("stopped after 10 redirects")
+				}
+				lastURL := ""
+				if len(via) > 0 {
+					lastURL = via[len(via)-1].URL.String()
+				}
+				return scopeVal.ValidateRedirect(lastURL, req.URL.String())
+			},
+		}
+		engine := apisec.NewEngine(apisecHTTPClient, cfg)
 		actx := &apisec.AssessmentContext{
 			AssessmentID: asm.ID,
 			ExecutionID:  execID,

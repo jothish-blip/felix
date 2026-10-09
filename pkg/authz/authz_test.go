@@ -652,3 +652,133 @@ func TestPolicyValidation_RejectsInvalidPolicy(t *testing.T) {
 	}
 }
 
+func TestAuthz_ComprehensiveRedaction(t *testing.T) {
+	// 1. Plain-text key-value pairs (form-urlencoded or plain text)
+	plainText := "access_token=super_secret_token_123&client_secret=topsecret_password&api_key=sk_live_99999&username=alice"
+	redactedText := RedactBody([]byte(plainText), 0)
+	if strings.Contains(redactedText, "super_secret_token_123") {
+		t.Errorf("plain text access_token leaked: %s", redactedText)
+	}
+	if strings.Contains(redactedText, "topsecret_password") {
+		t.Errorf("plain text client_secret leaked: %s", redactedText)
+	}
+	if strings.Contains(redactedText, "sk_live_99999") {
+		t.Errorf("plain text api_key leaked: %s", redactedText)
+	}
+	if !strings.Contains(redactedText, "username=alice") {
+		t.Errorf("expected non-sensitive field preserved: %s", redactedText)
+	}
+
+	// 2. Bearer token in text
+	bearerText := "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+	redactedBearer := RedactBody([]byte(bearerText), 0)
+	if strings.Contains(redactedBearer, "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c") {
+		t.Errorf("bearer token signature leaked: %s", redactedBearer)
+	}
+
+	// 3. Session cookies in headers / body
+	cookieText := "Set-Cookie: connect.sid=s%3Aabc123xyz456; Path=/; HttpOnly\nSet-Cookie: PHPSESSID=session98765; Path=/"
+	redactedCookie := RedactBody([]byte(cookieText), 0)
+	if strings.Contains(redactedCookie, "s%3Aabc123xyz456") {
+		t.Errorf("connect.sid cookie value leaked: %s", redactedCookie)
+	}
+	if strings.Contains(redactedCookie, "session98765") {
+		t.Errorf("PHPSESSID cookie value leaked: %s", redactedCookie)
+	}
+
+	// 4. Standalone JWT anywhere in response
+	jwtText := "Embedded JWT token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyIjoiYWRtaW4ifQ.abc123xyz456def789 in response"
+	redactedJWT := RedactBody([]byte(jwtText), 0)
+	if strings.Contains(redactedJWT, "abc123xyz456def789") {
+		t.Errorf("standalone JWT leaked: %s", redactedJWT)
+	}
+	if !strings.Contains(redactedJWT, "[REDACTED_JWT]") {
+		t.Errorf("expected [REDACTED_JWT] tag, got: %s", redactedJWT)
+	}
+
+	// 5. Query parameters in embedded URLs
+	urlText := "Redirect URL: https://example.com/oauth/callback?token=secret_query_tok&user=bob"
+	redactedURL := RedactBody([]byte(urlText), 0)
+	if strings.Contains(redactedURL, "secret_query_tok") {
+		t.Errorf("query token leaked: %s", redactedURL)
+	}
+	if !strings.Contains(redactedURL, "token=[REDACTED]") {
+		t.Errorf("expected token=[REDACTED] in url: %s", redactedURL)
+	}
+
+	// 6. HTML password inputs
+	htmlText := `<html><form><input type="password" name="passwd" value="superSecretPassword123"><input type="hidden" name="csrf_token" value="csrfSecretToken456"></form></html>`
+	redactedHTML := RedactBody([]byte(htmlText), 0)
+	if strings.Contains(redactedHTML, "superSecretPassword123") {
+		t.Errorf("HTML password leaked: %s", redactedHTML)
+	}
+	if strings.Contains(redactedHTML, "csrfSecretToken456") {
+		t.Errorf("HTML csrf token leaked: %s", redactedHTML)
+	}
+
+	// 7. PEM Private Key
+	pemText := "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAzFakePrivateKeyBlockHere\n-----END RSA PRIVATE KEY-----"
+	redactedPEM := RedactBody([]byte(pemText), 0)
+	if strings.Contains(redactedPEM, "FakePrivateKeyBlockHere") {
+		t.Errorf("PEM private key leaked: %s", redactedPEM)
+	}
+	if !strings.Contains(redactedPEM, "[REDACTED_PRIVATE_KEY]") {
+		t.Errorf("expected [REDACTED_PRIVATE_KEY] tag, got: %s", redactedPEM)
+	}
+
+	// 8. Request summary redaction
+	reqSummary := RedactRequestSummary("POST", "https://example.com/api/login?token=sensitive_query", map[string]string{
+		"Authorization": "Bearer superSecret",
+		"X-Custom":      "regular-value",
+	}, `{"password": "secretPassword"}`)
+	if strings.Contains(reqSummary, "sensitive_query") {
+		t.Errorf("query secret leaked in request summary: %s", reqSummary)
+	}
+	if strings.Contains(reqSummary, "superSecret") {
+		t.Errorf("authorization header leaked in request summary: %s", reqSummary)
+	}
+	if strings.Contains(reqSummary, "secretPassword") {
+		t.Errorf("password leaked in request summary payload: %s", reqSummary)
+	}
+}
+
+func TestAuthz_ScopedRedirectEnforcement(t *testing.T) {
+	thirdParty := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"leak": "data"}`))
+	}))
+	defer thirdParty.Close()
+
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/out-of-scope-redirect":
+			http.Redirect(w, r, thirdParty.URL+"/leak", http.StatusFound)
+		case "/excluded-redirect":
+			http.Redirect(w, r, "/excluded-path", http.StatusFound)
+		case "/excluded-path":
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer primary.Close()
+
+	engine := NewEngine(nil)
+	scopedClient := engine.scopedClient(
+		func(u string) bool { return strings.HasPrefix(u, primary.URL) },
+		func(u string) bool { return strings.Contains(u, "/excluded-path") },
+	)
+
+	// 1. Out of scope redirect blocked
+	_, err := scopedClient.Get(primary.URL + "/out-of-scope-redirect")
+	if err == nil {
+		t.Errorf("expected redirect to third-party to be blocked")
+	}
+
+	// 2. Redirect into excluded path blocked
+	_, err = scopedClient.Get(primary.URL + "/excluded-redirect")
+	if err == nil {
+		t.Errorf("expected redirect into excluded path to be blocked")
+	}
+}
+

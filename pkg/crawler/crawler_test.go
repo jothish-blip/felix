@@ -778,3 +778,61 @@ func TestScopeRules(t *testing.T) {
 	}
 }
 
+func TestCrawler_ScopedRedirectEnforcement(t *testing.T) {
+	thirdParty := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "third-party content")
+	}))
+	defer thirdParty.Close()
+
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/out-of-scope":
+			http.Redirect(w, r, thirdParty.URL+"/secret", http.StatusFound)
+		case "/excluded":
+			http.Redirect(w, r, "/blocked-path", http.StatusFound)
+		case "/blocked-path":
+			w.WriteHeader(http.StatusOK)
+		case "/allowed-redirect":
+			http.Redirect(w, r, "/in-scope-dest", http.StatusFound)
+		case "/in-scope-dest":
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, `<html><script src="/main.js"></script></html>`)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer primary.Close()
+
+	cfg := DefaultConfig()
+	cfg.ScopeMode = ScopeSameOrigin
+	cfg.IsExcluded = func(u string) bool {
+		return strings.Contains(u, "/blocked-path")
+	}
+	c := New(cfg)
+	scope, err := NewScope(primary.URL, ScopeSameOrigin)
+	if err != nil {
+		t.Fatalf("failed to create scope: %v", err)
+	}
+	client := c.scopedClientForTarget(scope)
+
+	// 1. In-scope redirect succeeds
+	resp, err := client.Get(primary.URL + "/allowed-redirect")
+	if err != nil {
+		t.Fatalf("expected in-scope redirect to succeed, got: %v", err)
+	}
+	resp.Body.Close()
+
+	// 2. Redirect to third-party server is blocked
+	_, err = client.Get(primary.URL + "/out-of-scope")
+	if err == nil {
+		t.Errorf("expected out-of-scope redirect to third-party to be blocked")
+	}
+
+	// 3. Redirect to excluded path is blocked
+	_, err = client.Get(primary.URL + "/excluded")
+	if err == nil {
+		t.Errorf("expected redirect to excluded path to be blocked")
+	}
+}
+

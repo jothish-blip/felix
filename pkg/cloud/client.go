@@ -86,6 +86,13 @@ func NewClient(opts ...ClientOptions) *Client {
 				if len(via) >= 5 {
 					return fmt.Errorf("stopped after 5 redirects")
 				}
+				// Prevent cross-origin redirect following to enforce cloud boundary
+				if len(via) > 0 {
+					origHost := via[0].URL.Host
+					if req.URL.Host != origHost {
+						return http.ErrUseLastResponse
+					}
+				}
 				return nil
 			},
 		}

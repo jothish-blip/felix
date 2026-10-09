@@ -3,6 +3,8 @@ package apisec
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1228,6 +1230,151 @@ func TestDeduplicateEndpoints(t *testing.T) {
 	}
 	if len(deduped) != len(expectedKeys) {
 		t.Fatalf("expected %d unique endpoints, got %d", len(expectedKeys), len(deduped))
+	}
+}
+
+func TestHardenedSSRFCanaryValidation(t *testing.T) {
+	dangerousTargets := []struct {
+		url    string
+		reason string
+	}{
+		// IPv4 Loopback & This-Host
+		{"http://127.0.0.1/test", "IPv4 loopback"},
+		{"http://127.1.2.3:8080/test", "IPv4 loopback range"},
+		{"http://0.0.0.0/test", "this-host 0.0.0.0"},
+
+		// RFC 1918 Private ranges
+		{"http://10.0.0.1/", "RFC1918 10.0.0.0/8"},
+		{"http://10.255.255.254/", "RFC1918 10.0.0.0/8 max"},
+		{"http://172.16.0.1/", "RFC1918 172.16.0.0/12 min"},
+		{"http://172.31.255.254/", "RFC1918 172.16.0.0/12 max"},
+		{"http://192.168.0.1/", "RFC1918 192.168.0.0/16"},
+		{"http://192.168.254.254/", "RFC1918 192.168.0.0/16"},
+
+		// Link-Local and CGNAT
+		{"http://169.254.169.254/latest/meta-data/", "AWS/GCP metadata link-local"},
+		{"http://100.64.0.1/", "CGNAT RFC 6598"},
+		{"http://100.127.255.254/", "CGNAT RFC 6598 max"},
+
+		// Multicast & Broadcast
+		{"http://224.0.0.1/", "multicast"},
+		{"http://255.255.255.255/", "broadcast"},
+
+		// Dword / Integer / Hex / Octal representations
+		{"http://2130706433/test", "dword 127.0.0.1"},
+		{"http://0x7f000001/test", "hex 127.0.0.1"},
+		{"http://0177.0.0.1/test", "octal 127.0.0.1"},
+
+		// IPv6 Loopback, ULA, Link-Local, and IPv4-mapped
+		{"http://[::1]/", "IPv6 loopback"},
+		{"http://[fe80::1]/", "IPv6 link-local"},
+		{"http://[fc00::1]/", "IPv6 ULA"},
+		{"http://[fd00::1]/", "IPv6 ULA"},
+		{"http://[::ffff:127.0.0.1]/", "IPv4-mapped IPv6 loopback"},
+		{"http://[::ffff:10.0.0.1]/", "IPv4-mapped IPv6 private"},
+
+		// Hostname safety blacklist
+		{"http://localhost:8080/", "localhost"},
+		{"http://sub.localhost/", "*.localhost"},
+		{"http://printer.local/", "*.local"},
+		{"http://vault.internal/", "*.internal"},
+		{"http://service.lan/", "*.lan"},
+		{"http://dc.corp/", "*.corp"},
+		{"http://router.home/", "*.home"},
+		{"http://metadata.google.internal/computeMetadata/v1/", "GCP internal metadata"},
+		{"http://instance-data/latest/meta-data/", "AWS instance-data"},
+		{"http://metadata/", "short metadata hostname"},
+
+		// Non-HTTP schemes
+		{"file:///etc/passwd", "file scheme"},
+		{"gopher://127.0.0.1:70/", "gopher scheme"},
+		{"ftp://127.0.0.1/", "ftp scheme"},
+	}
+
+	for _, tc := range dangerousTargets {
+		if !IsInternalOrUnsafeAddress(tc.url) {
+			t.Errorf("expected %s (%s) to be rejected as internal/unsafe", tc.url, tc.reason)
+		}
+	}
+
+	// DNS lookup hook test: hostname resolving to private IP must be rejected
+	origHook := dnsLookupIPHook
+	defer func() { dnsLookupIPHook = origHook }()
+
+	dnsLookupIPHook = func(host string) ([]net.IP, error) {
+		if host == "rebind.attacker.com" {
+			return []net.IP{net.ParseIP("192.168.1.100")}, nil
+		}
+		if host == "safe.canaryservice.com" {
+			return []net.IP{net.ParseIP("93.184.216.34")}, nil
+		}
+		return nil, fmt.Errorf("no such host")
+	}
+
+	if !IsInternalOrUnsafeAddress("https://rebind.attacker.com/webhook") {
+		t.Errorf("expected hostname resolving to private IP to be rejected")
+	}
+	if IsInternalOrUnsafeAddress("https://safe.canaryservice.com/webhook") {
+		t.Errorf("expected hostname resolving to public IP to be allowed")
+	}
+}
+
+func TestAPISec_NonJSONRedaction(t *testing.T) {
+	rawText := "access_token=secret123&password=myPass&Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyIjoiYWRtaW4ifQ.abc123xyz\nconnect.sid=s%3AsessionSecret"
+	redacted := RedactText(rawText)
+
+	if strings.Contains(redacted, "secret123") {
+		t.Errorf("access_token leaked: %s", redacted)
+	}
+	if strings.Contains(redacted, "myPass") {
+		t.Errorf("password leaked: %s", redacted)
+	}
+	if strings.Contains(redacted, "sessionSecret") {
+		t.Errorf("connect.sid leaked: %s", redacted)
+	}
+	if strings.Contains(redacted, "abc123xyz") {
+		t.Errorf("JWT signature leaked: %s", redacted)
+	}
+}
+
+func TestAPISec_ScopedRedirectEnforcement(t *testing.T) {
+	thirdParty := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"leak": "data"}`))
+	}))
+	defer thirdParty.Close()
+
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/out-of-scope-redirect":
+			http.Redirect(w, r, thirdParty.URL+"/leak", http.StatusFound)
+		case "/excluded-redirect":
+			http.Redirect(w, r, "/excluded-path", http.StatusFound)
+		case "/excluded-path":
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer primary.Close()
+
+	engine := NewEngine(nil, DefaultConfig())
+	actx := &AssessmentContext{
+		IsAllowed:  func(u string) bool { return strings.HasPrefix(u, primary.URL) },
+		IsExcluded: func(u string) bool { return strings.Contains(u, "/excluded-path") },
+	}
+	client := engine.scopedClient(actx)
+
+	// 1. Redirect to third-party server is blocked
+	_, err := client.Get(primary.URL + "/out-of-scope-redirect")
+	if err == nil {
+		t.Errorf("expected redirect to third-party to be blocked")
+	}
+
+	// 2. Redirect into excluded path is blocked
+	_, err = client.Get(primary.URL + "/excluded-redirect")
+	if err == nil {
+		t.Errorf("expected redirect into excluded path to be blocked")
 	}
 }
 
