@@ -9,6 +9,7 @@ import (
 	"felix/pkg/apisec"
 	"felix/pkg/auth"
 	"felix/pkg/authz"
+	"felix/pkg/cloudsec"
 	"felix/pkg/discovery"
 	"felix/pkg/report"
 	"felix/pkg/sessionsec"
@@ -1318,5 +1319,158 @@ func TestStore_SessionSecPersistenceAndMigration(t *testing.T) {
 	}
 	if summary.VerifiedCount != 2 {
 		t.Errorf("expected VerifiedCount = 2, got %d", summary.VerifiedCount)
+	}
+}
+
+func TestStore_CloudSecPersistenceAndMigration(t *testing.T) {
+	store, cleanup := newTestStore(t)
+	defer cleanup()
+
+	// 1. Create client and assessment
+	client := &Client{
+		ID:        uuid.New().String(),
+		Name:      "CloudSec Test Corp",
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	if err := store.CreateClient(client); err != nil {
+		t.Fatalf("CreateClient failed: %v", err)
+	}
+
+	asm := &Assessment{
+		ID:             uuid.New().String(),
+		Ref:            "ASM-CLOUD-001",
+		ClientID:       client.ID,
+		Name:           "CloudSec Assessment",
+		AssessmentType: "CLOUD_SECURITY",
+		Status:         StatusRunning,
+		CreatedAt:      time.Now().UTC(),
+		UpdatedAt:      time.Now().UTC(),
+	}
+	if err := store.CreateAssessment(asm); err != nil {
+		t.Fatalf("CreateAssessment failed: %v", err)
+	}
+
+	exec := &AssessmentExecution{
+		ID:           uuid.New().String(),
+		AssessmentID: asm.ID,
+		Status:       StatusRunning,
+		StartedAt:    time.Now().UTC(),
+	}
+	if err := store.CreateExecution(exec); err != nil {
+		t.Fatalf("CreateExecution failed: %v", err)
+	}
+
+	// 2. Test SaveCloudSecRun and GetCloudSecRun
+	runRec := &cloudsec.RunRecord{
+		ID:                uuid.New().String(),
+		AssessmentID:      asm.ID,
+		ExecutionID:       exec.ID,
+		Mode:              cloudsec.ModeCredentialed,
+		Provider:          cloudsec.ProviderAWS,
+		ScopeIdentifier:   "123456789012",
+		VerifiedPrincipal: "arn:aws:iam::123456789012:user/felix-auditor",
+		TotalChecks:       8,
+		ServicesAssessed:  8,
+		VerifiedCount:     1,
+		CandidateCount:    1,
+		ObservedCount:     2,
+		CoverageJSON:      `{"s3":{"provider":"AWS","service":"s3","status":"ASSESSED","checks_run":1,"verified":1}}`,
+		CreatedAt:         time.Now().UTC(),
+	}
+	if err := store.SaveCloudSecRun(runRec); err != nil {
+		t.Fatalf("SaveCloudSecRun failed: %v", err)
+	}
+
+	fetchedRun, err := store.GetCloudSecRun(asm.ID, exec.ID)
+	if err != nil {
+		t.Fatalf("GetCloudSecRun failed: %v", err)
+	}
+	if fetchedRun.ID != runRec.ID {
+		t.Errorf("expected run ID %s, got %s", runRec.ID, fetchedRun.ID)
+	}
+	if fetchedRun.VerifiedCount != 1 {
+		t.Errorf("expected VerifiedCount 1, got %d", fetchedRun.VerifiedCount)
+	}
+	if fetchedRun.VerifiedPrincipal != runRec.VerifiedPrincipal {
+		t.Errorf("expected principal %s, got %s", runRec.VerifiedPrincipal, fetchedRun.VerifiedPrincipal)
+	}
+
+	// 3. Test SaveCloudSecResults and GetCloudSecResults
+	res1 := cloudsec.Result{
+		ID:                uuid.New().String(),
+		AssessmentID:      asm.ID,
+		ExecutionID:       exec.ID,
+		Provider:          cloudsec.ProviderAWS,
+		Mode:              cloudsec.ModeCredentialed,
+		Service:           "s3",
+		CheckID:           "AWS-S3-PUBLIC-BUCKET",
+		CheckName:         "S3 Public Bucket Access",
+		ResourceID:        "my-open-bucket",
+		Region:            "us-east-1",
+		VerificationState: cloudsec.StateVerified,
+		Severity:          report.SeverityHigh,
+		Confidence:        report.ConfidenceHigh,
+		EvidenceSummary:   "Bucket policy grants unauthenticated Principal * Allow",
+		CreatedAt:         time.Now().UTC(),
+	}
+	res2 := cloudsec.Result{
+		ID:                uuid.New().String(),
+		AssessmentID:      asm.ID,
+		ExecutionID:       exec.ID,
+		Provider:          cloudsec.ProviderAWS,
+		Mode:              cloudsec.ModeCredentialed,
+		Service:           "iam",
+		CheckID:           "AWS-IAM-ADMIN-WILDCARD",
+		CheckName:         "IAM Admin Policy Wildcards",
+		ResourceID:        "admin-policy",
+		Region:            "global",
+		VerificationState: cloudsec.StateNotVulnerable,
+		Severity:          report.SeverityInfo,
+		Confidence:        report.ConfidenceHigh,
+		EvidenceSummary:   "No unrestricted admin policies detected",
+		CreatedAt:         time.Now().UTC(),
+	}
+
+	if err := store.SaveCloudSecResults([]cloudsec.Result{res1, res2}); err != nil {
+		t.Fatalf("SaveCloudSecResults failed: %v", err)
+	}
+
+	allResults, err := store.GetCloudSecResults(asm.ID, exec.ID, "", "", "")
+	if err != nil {
+		t.Fatalf("GetCloudSecResults failed: %v", err)
+	}
+	if len(allResults) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(allResults))
+	}
+
+	// Filter by service
+	svcFiltered, err := store.GetCloudSecResults(asm.ID, exec.ID, "", "s3", "")
+	if err != nil {
+		t.Fatalf("GetCloudSecResults by service failed: %v", err)
+	}
+	if len(svcFiltered) != 1 || svcFiltered[0].CheckID != "AWS-S3-PUBLIC-BUCKET" {
+		t.Errorf("expected 1 S3 result, got %d", len(svcFiltered))
+	}
+
+	// Filter by state
+	stateFiltered, err := store.GetCloudSecResults(asm.ID, exec.ID, "", "", string(cloudsec.StateVerified))
+	if err != nil {
+		t.Fatalf("GetCloudSecResults by state failed: %v", err)
+	}
+	if len(stateFiltered) != 1 {
+		t.Errorf("expected 1 verified result, got %d", len(stateFiltered))
+	}
+
+	// 4. Test GetCloudSecSummary
+	summary, err := store.GetCloudSecSummary(asm.ID, exec.ID)
+	if err != nil {
+		t.Fatalf("GetCloudSecSummary failed: %v", err)
+	}
+	if summary.TotalChecks != 8 {
+		t.Errorf("expected TotalChecks = 8 from RunRecord, got %d", summary.TotalChecks)
+	}
+	if summary.VerifiedCount != 1 {
+		t.Errorf("expected VerifiedCount = 1, got %d", summary.VerifiedCount)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"felix/pkg/apisec"
 	"felix/pkg/auth"
 	"felix/pkg/authz"
+	"felix/pkg/cloudsec"
 	"felix/pkg/config"
 	"felix/pkg/discovery"
 	"felix/pkg/report"
@@ -100,6 +101,13 @@ type Store interface {
 	SaveSessionSecResults(results []sessionsec.Result) error
 	GetSessionSecResults(assessmentID string, executionID string, category string, state string) ([]sessionsec.Result, error)
 	GetSessionSecSummary(assessmentID string, executionID string) (*sessionsec.Summary, error)
+
+	// Cloud Security Engine (Stage 8)
+	SaveCloudSecRun(record *cloudsec.RunRecord) error
+	GetCloudSecRun(assessmentID string, executionID string) (*cloudsec.RunRecord, error)
+	SaveCloudSecResults(results []cloudsec.Result) error
+	GetCloudSecResults(assessmentID string, executionID string, provider string, service string, state string) ([]cloudsec.Result, error)
+	GetCloudSecSummary(assessmentID string, executionID string) (*cloudsec.Summary, error)
 
 	// Report Records
 	SaveReport(r *ReportRecord) error
@@ -740,6 +748,74 @@ func (s *SQLiteStore) migrate() error {
 
 		if _, err := tx.Exec(schemaV7); err != nil {
 			return fmt.Errorf("migration v7 failed: %w", err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+
+	// Migration 8: Real Cloud Security Engine (Stage 8)
+	if currentVersion < 8 {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		schemaV8 := `
+		CREATE TABLE IF NOT EXISTS assessment_cloudsec_runs (
+			id TEXT PRIMARY KEY,
+			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+			execution_id TEXT NOT NULL REFERENCES assessment_executions(id) ON DELETE CASCADE,
+			mode TEXT NOT NULL,
+			provider TEXT NOT NULL,
+			scope_identifier TEXT NOT NULL,
+			verified_principal TEXT,
+			total_checks INTEGER NOT NULL DEFAULT 0,
+			services_assessed INTEGER NOT NULL DEFAULT 0,
+			verified_count INTEGER NOT NULL DEFAULT 0,
+			candidate_count INTEGER NOT NULL DEFAULT 0,
+			observed_count INTEGER NOT NULL DEFAULT 0,
+			coverage_json TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_cloudsec_runs_asm_id ON assessment_cloudsec_runs(assessment_id);
+		CREATE INDEX IF NOT EXISTS idx_cloudsec_runs_exec_id ON assessment_cloudsec_runs(execution_id);
+		CREATE INDEX IF NOT EXISTS idx_cloudsec_runs_provider ON assessment_cloudsec_runs(provider);
+
+		CREATE TABLE IF NOT EXISTS assessment_cloudsec_results (
+			id TEXT PRIMARY KEY,
+			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+			execution_id TEXT NOT NULL REFERENCES assessment_executions(id) ON DELETE CASCADE,
+			provider TEXT NOT NULL,
+			mode TEXT NOT NULL,
+			service TEXT NOT NULL,
+			check_id TEXT NOT NULL,
+			check_name TEXT NOT NULL,
+			resource_id TEXT NOT NULL,
+			region TEXT,
+			verification_state TEXT NOT NULL,
+			severity TEXT NOT NULL,
+			confidence TEXT NOT NULL,
+			evidence_summary TEXT NOT NULL,
+			evidence_details_json TEXT,
+			finding_id TEXT,
+			created_at TIMESTAMP NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_cloudsec_res_asm_id ON assessment_cloudsec_results(assessment_id);
+		CREATE INDEX IF NOT EXISTS idx_cloudsec_res_exec_id ON assessment_cloudsec_results(execution_id);
+		CREATE INDEX IF NOT EXISTS idx_cloudsec_res_prov ON assessment_cloudsec_results(provider);
+		CREATE INDEX IF NOT EXISTS idx_cloudsec_res_svc ON assessment_cloudsec_results(service);
+		CREATE INDEX IF NOT EXISTS idx_cloudsec_res_state ON assessment_cloudsec_results(verification_state);
+
+		INSERT INTO schema_migrations (version, applied_at) VALUES (8, CURRENT_TIMESTAMP);
+		`
+
+		if _, err := tx.Exec(schemaV8); err != nil {
+			return fmt.Errorf("migration v8 failed: %w", err)
 		}
 
 		if err := tx.Commit(); err != nil {
@@ -2899,5 +2975,276 @@ func (s *SQLiteStore) GetSessionSecSummary(assessmentID string, executionID stri
 		}
 	}
 	summary.CategoriesCovered = len(summary.CoverageMap)
+	return summary, nil
+}
+
+// ============================================================================
+// Cloud Security Engine (Stage 8)
+// ============================================================================
+
+func (s *SQLiteStore) SaveCloudSecRun(record *cloudsec.RunRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	query := `
+		INSERT INTO assessment_cloudsec_runs (
+			id, assessment_id, execution_id, mode, provider,
+			scope_identifier, verified_principal,
+			total_checks, services_assessed,
+			verified_count, candidate_count, observed_count,
+			coverage_json, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			total_checks = excluded.total_checks,
+			services_assessed = excluded.services_assessed,
+			verified_count = excluded.verified_count,
+			candidate_count = excluded.candidate_count,
+			observed_count = excluded.observed_count,
+			coverage_json = excluded.coverage_json;
+	`
+	now := record.CreatedAt
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+
+	_, err := s.db.Exec(
+		query,
+		record.ID, record.AssessmentID, record.ExecutionID,
+		string(record.Mode), string(record.Provider),
+		record.ScopeIdentifier, record.VerifiedPrincipal,
+		record.TotalChecks, record.ServicesAssessed,
+		record.VerifiedCount, record.CandidateCount, record.ObservedCount,
+		record.CoverageJSON, now,
+	)
+	return err
+}
+
+func (s *SQLiteStore) GetCloudSecRun(assessmentID string, executionID string) (*cloudsec.RunRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := `
+		SELECT id, assessment_id, execution_id, mode, provider,
+		       scope_identifier, verified_principal,
+		       total_checks, services_assessed,
+		       verified_count, candidate_count, observed_count,
+		       coverage_json, created_at
+		FROM assessment_cloudsec_runs
+		WHERE assessment_id = ?
+	`
+	args := []interface{}{assessmentID}
+	if executionID != "" {
+		query += " AND execution_id = ?"
+		args = append(args, executionID)
+	}
+	query += " ORDER BY created_at DESC LIMIT 1"
+
+	var rec cloudsec.RunRecord
+	var modeStr, provStr string
+	var princ sql.NullString
+	err := s.db.QueryRow(query, args...).Scan(
+		&rec.ID, &rec.AssessmentID, &rec.ExecutionID, &modeStr, &provStr,
+		&rec.ScopeIdentifier, &princ,
+		&rec.TotalChecks, &rec.ServicesAssessed,
+		&rec.VerifiedCount, &rec.CandidateCount, &rec.ObservedCount,
+		&rec.CoverageJSON, &rec.CreatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	rec.Mode = cloudsec.AssessmentMode(modeStr)
+	rec.Provider = cloudsec.Provider(provStr)
+	if princ.Valid {
+		rec.VerifiedPrincipal = princ.String
+	}
+	return &rec, nil
+}
+
+func (s *SQLiteStore) SaveCloudSecResults(results []cloudsec.Result) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO assessment_cloudsec_results (
+			id, assessment_id, execution_id, provider, mode, service, check_id, check_name,
+			resource_id, region, verification_state, severity, confidence,
+			evidence_summary, evidence_details_json, finding_id, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, r := range results {
+		var detailsJSON string
+		if len(r.EvidenceDetails) > 0 {
+			b, _ := json.Marshal(r.EvidenceDetails)
+			detailsJSON = string(b)
+		}
+
+		findingID := ""
+		if r.Finding != nil {
+			findingID = r.Finding.ID
+		}
+
+		now := r.CreatedAt
+		if now.IsZero() {
+			now = time.Now().UTC()
+		}
+
+		_, err := stmt.Exec(
+			r.ID, r.AssessmentID, r.ExecutionID, string(r.Provider), string(r.Mode), r.Service, r.CheckID, r.CheckName,
+			r.ResourceID, r.Region, string(r.VerificationState), r.Severity, r.Confidence,
+			r.EvidenceSummary, detailsJSON, findingID, now,
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+func (s *SQLiteStore) GetCloudSecResults(assessmentID string, executionID string, provider string, service string, state string) ([]cloudsec.Result, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := `
+		SELECT id, assessment_id, execution_id, provider, mode, service, check_id, check_name,
+		       resource_id, region, verification_state, severity, confidence,
+		       evidence_summary, evidence_details_json, finding_id, created_at
+		FROM assessment_cloudsec_results
+		WHERE assessment_id = ?
+	`
+	args := []interface{}{assessmentID}
+
+	if executionID != "" {
+		query += " AND execution_id = ?"
+		args = append(args, executionID)
+	}
+	if provider != "" {
+		query += " AND provider = ?"
+		args = append(args, provider)
+	}
+	if service != "" {
+		query += " AND service = ?"
+		args = append(args, service)
+	}
+	if state != "" {
+		query += " AND verification_state = ?"
+		args = append(args, state)
+	}
+
+	query += " ORDER BY created_at ASC"
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []cloudsec.Result
+	for rows.Next() {
+		var r cloudsec.Result
+		var provStr, modeStr, stateStr, regionStr, detailsJSON, findingID sql.NullString
+
+		err := rows.Scan(
+			&r.ID, &r.AssessmentID, &r.ExecutionID, &provStr, &modeStr, &r.Service, &r.CheckID, &r.CheckName,
+			&r.ResourceID, &regionStr, &stateStr, &r.Severity, &r.Confidence,
+			&r.EvidenceSummary, &detailsJSON, &findingID, &r.CreatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		if provStr.Valid {
+			r.Provider = cloudsec.Provider(provStr.String)
+		}
+		if modeStr.Valid {
+			r.Mode = cloudsec.AssessmentMode(modeStr.String)
+		}
+		if regionStr.Valid {
+			r.Region = regionStr.String
+		}
+		if stateStr.Valid {
+			r.VerificationState = cloudsec.VerificationState(stateStr.String)
+		}
+		if detailsJSON.Valid && detailsJSON.String != "" {
+			_ = json.Unmarshal([]byte(detailsJSON.String), &r.EvidenceDetails)
+		}
+
+		results = append(results, r)
+	}
+	return results, nil
+}
+
+func (s *SQLiteStore) GetCloudSecSummary(assessmentID string, executionID string) (*cloudsec.Summary, error) {
+	// 1. Try to load saved RunRecord
+	run, err := s.GetCloudSecRun(assessmentID, executionID)
+	if err == nil && run != nil && run.CoverageJSON != "" {
+		var covMap map[string]cloudsec.ServiceCoverage
+		if err := json.Unmarshal([]byte(run.CoverageJSON), &covMap); err == nil {
+			summary := &cloudsec.Summary{
+				Mode:               run.Mode,
+				Provider:           run.Provider,
+				TargetScope:        run.ScopeIdentifier,
+				VerifiedPrincipal:  run.VerifiedPrincipal,
+				TotalChecks:        run.TotalChecks,
+				ServicesAssessed:   run.ServicesAssessed,
+				VerifiedCount:      run.VerifiedCount,
+				CandidateCount:     run.CandidateCount,
+				ObservedCount:      run.ObservedCount,
+				ServiceCoverageMap: covMap,
+			}
+			return summary, nil
+		}
+	}
+
+	// 2. Fallback to computing from raw results
+	results, err := s.GetCloudSecResults(assessmentID, executionID, "", "", "")
+	if err != nil {
+		return nil, err
+	}
+
+	summary := &cloudsec.Summary{
+		TotalChecks:        len(results),
+		ServiceCoverageMap: make(map[string]cloudsec.ServiceCoverage),
+	}
+	for _, r := range results {
+		summary.Mode = r.Mode
+		summary.Provider = r.Provider
+
+		cov := summary.ServiceCoverageMap[r.Service]
+		cov.Provider = r.Provider
+		cov.Service = r.Service
+		cov.ChecksRun++
+
+		switch r.VerificationState {
+		case cloudsec.StateVerified:
+			summary.VerifiedCount++
+			cov.Verified++
+		case cloudsec.StateCandidate:
+			summary.CandidateCount++
+			cov.Candidates++
+		case cloudsec.StateObserved:
+			summary.ObservedCount++
+			cov.Observations++
+		case cloudsec.StateInconclusive:
+			summary.InconclusiveCount++
+			cov.Inconclusive++
+		case cloudsec.StateNotVulnerable:
+			summary.NotVulnerableCount++
+			cov.NotVulnerable++
+		}
+		summary.ServiceCoverageMap[r.Service] = cov
+	}
+	summary.ServicesAssessed = len(summary.ServiceCoverageMap)
 	return summary, nil
 }

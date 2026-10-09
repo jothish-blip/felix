@@ -18,6 +18,7 @@ import (
 	"felix/pkg/assessment"
 	"felix/pkg/auth"
 	"felix/pkg/authz"
+	"felix/pkg/cloudsec"
 	"felix/pkg/sessionsec"
 	"felix/pkg/webvuln"
 	"github.com/google/uuid"
@@ -72,6 +73,8 @@ func runAssessment(args []string) int {
 		return runAssessmentWebVuln(subArgs)
 	case "sessionsec", "session", "identity":
 		return runAssessmentSessionSec(subArgs)
+	case "cloudsec", "cloud":
+		return runAssessmentCloudSec(subArgs)
 	case "reports":
 		return runAssessmentReports(subArgs)
 	case "cancel":
@@ -101,6 +104,7 @@ func printAssessmentHelp() {
 	fmt.Println("  apisec       Assess OWASP API Security Top 10 (2023) categories and API inventory")
 	fmt.Println("  webvuln      Assess and verify web application vulnerabilities (XSS, SQLi, SSTI, SSRF, etc.)")
 	fmt.Println("  sessionsec   Assess session lifecycle, token handling, and identity boundaries (WSTG-SESS/ATHN)")
+	fmt.Println("  cloudsec     Assess cloud security across AWS, Azure, and GCP (External & Credentialed Modes)")
 	fmt.Println("  reports      List generated report files for an assessment")
 	fmt.Println("  cancel       Cancel an active or pending assessment")
 	fmt.Println("\nExamples:")
@@ -114,6 +118,8 @@ func printAssessmentHelp() {
 	fmt.Println("  felix assessment apisec <asm-ref> --run --spec openapi.json")
 	fmt.Println("  felix assessment webvuln <asm-ref> --run")
 	fmt.Println("  felix assessment sessionsec <asm-ref> --run")
+	fmt.Println("  felix assessment cloudsec <asm-ref> --mode external")
+	fmt.Println("  felix assessment cloudsec <asm-ref> --mode credentialed --provider aws --credentials aws_creds.json --run")
 	fmt.Println("  felix assessment reports <asm-ref>")
 }
 
@@ -3386,6 +3392,518 @@ func runAssessmentSessionSec(args []string) int {
 	} else if summary == nil || summary.TotalTests == 0 {
 		fmt.Println("\nNo session security test results recorded.")
 		fmt.Printf("To run a session & identity security assessment:\n  felix assessment sessionsec %s --run\n", asm.Ref)
+	}
+
+	fmt.Println()
+	return 0
+}
+
+func printCloudSecHelp() {
+	fmt.Println("Usage: felix assessment cloudsec <asm-ref> [flags]")
+	fmt.Println("\nReal Cloud Security Engine — AWS, Microsoft Azure & Google Cloud Platform")
+	fmt.Println("External Assessment (Mode A) + Credentialed Cloud Assessment (Mode B)")
+	fmt.Println("\nFlags:")
+	fmt.Println("  --mode <mode>          Assessment mode: external (default) or credentialed")
+	fmt.Println("  --provider <provider>  Target cloud provider: aws, azure, or gcp")
+	fmt.Println("  --credentials <path>   Path to scoped credentials JSON file (never persisted or logged)")
+	fmt.Println("  --scope <target-id>    Declared target scope (AWS Account ID, Azure Subscription ID, GCP Project ID)")
+	fmt.Println("  --service <service>    Limit assessment or filtering to a specific service")
+	fmt.Println("  --region <region>      Target cloud region (e.g. us-east-1, eastus, us-central1)")
+	fmt.Println("  --dry-run              Generate and display planned checks without executing network requests")
+	fmt.Println("  --run                  Execute active assessment against authorized cloud targets")
+	fmt.Println("  --status <state>       Filter results by state: VERIFIED, CANDIDATE, OBSERVED, NOT_VULNERABLE")
+	fmt.Println("  --json                 Output results as JSON")
+	fmt.Println("  --verbose, -v          Show detailed evidence")
+	fmt.Println("  --help, -h             Display this help message")
+	fmt.Println("\nExternal Mode (Mode A):")
+	fmt.Println("  Assesses external observable storage buckets, CDN origins, and API/function endpoints.")
+	fmt.Println("  felix assessment cloudsec <asm-ref> --mode external --dry-run")
+	fmt.Println("  felix assessment cloudsec <asm-ref> --mode external --run")
+	fmt.Println("\nCredentialed Mode (Mode B):")
+	fmt.Println("  Assesses configuration posture via authenticated read-only provider APIs.")
+	fmt.Println("  felix assessment cloudsec <asm-ref> --mode credentialed --provider aws --credentials creds.json --scope 123456789012 --dry-run")
+	fmt.Println("  felix assessment cloudsec <asm-ref> --mode credentialed --provider aws --credentials creds.json --scope 123456789012 --run")
+}
+
+func runAssessmentCloudSec(args []string) int {
+	var (
+		assessmentRef   string
+		runExecution    bool
+		dryRun          bool
+		modeStr         string
+		providerStr     string
+		credentialsPath string
+		scopeStr        string
+		serviceFilter   string
+		regionFilter    string
+		statusFilter    string
+		jsonOutput      bool
+		verbose         bool
+	)
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--run":
+			runExecution = true
+		case arg == "--dry-run":
+			dryRun = true
+		case arg == "--mode":
+			if i+1 < len(args) {
+				modeStr = strings.ToLower(args[i+1])
+				i++
+			}
+		case arg == "--provider":
+			if i+1 < len(args) {
+				providerStr = strings.ToLower(args[i+1])
+				i++
+			}
+		case arg == "--credentials" || arg == "--creds":
+			if i+1 < len(args) {
+				credentialsPath = args[i+1]
+				i++
+			}
+		case arg == "--scope":
+			if i+1 < len(args) {
+				scopeStr = args[i+1]
+				i++
+			}
+		case arg == "--service":
+			if i+1 < len(args) {
+				serviceFilter = strings.ToLower(args[i+1])
+				i++
+			}
+		case arg == "--region":
+			if i+1 < len(args) {
+				regionFilter = strings.ToLower(args[i+1])
+				i++
+			}
+		case arg == "--status" || arg == "-s":
+			if i+1 < len(args) {
+				statusFilter = strings.ToUpper(args[i+1])
+				i++
+			}
+		case arg == "--json":
+			jsonOutput = true
+		case arg == "--verbose" || arg == "-v":
+			verbose = true
+		case arg == "--help" || arg == "-h":
+			printCloudSecHelp()
+			return 0
+		default:
+			if !strings.HasPrefix(arg, "-") && assessmentRef == "" {
+				assessmentRef = arg
+			}
+		}
+	}
+
+	if assessmentRef == "" {
+		fmt.Fprintf(os.Stderr, "[-] Error: assessment ID or Ref is required\n\n")
+		printCloudSecHelp()
+		return 2
+	}
+
+	store, err := getAssessmentStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Database error: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+
+	asm, err := store.GetAssessment(assessmentRef)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Error finding assessment '%s': %v\n", assessmentRef, err)
+		return 1
+	}
+	asm.Targets, _ = store.GetTargets(asm.ID)
+	asm.Authorization, _ = store.GetAuthorization(asm.ID)
+	asm.Exclusions, _ = store.GetExclusions(asm.ID)
+	asm.ScopeRules, _ = store.GetScopeRules(asm.ID)
+
+	// Load credentials if provided (in-memory only, never persisted)
+	var creds cloudsec.Credentials
+	if credentialsPath != "" {
+		data, err := os.ReadFile(credentialsPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Failed to read credentials file: %v\n", err)
+			return 1
+		}
+		if err := json.Unmarshal(data, &creds); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Failed to parse credentials JSON: %v\n", err)
+			return 1
+		}
+		defer creds.Scrub()
+		if modeStr == "" {
+			modeStr = "credentialed"
+		}
+	}
+
+	// Determine assessment mode
+	mode := cloudsec.ModeExternal
+	if strings.EqualFold(modeStr, "credentialed") {
+		mode = cloudsec.ModeCredentialed
+	}
+
+	if mode == cloudsec.ModeCredentialed && credentialsPath == "" {
+		fmt.Fprintf(os.Stderr, "[-] Error: Credentialed mode requires --credentials <path> pointing to scoped credentials JSON file\n")
+		return 1
+	}
+
+	// Infer / Determine Provider
+	var provider cloudsec.Provider
+	switch strings.ToLower(providerStr) {
+	case "aws":
+		provider = cloudsec.ProviderAWS
+	case "azure":
+		provider = cloudsec.ProviderAzure
+	case "gcp":
+		provider = cloudsec.ProviderGCP
+	default:
+		if mode == cloudsec.ModeExternal {
+			provider = cloudsec.ProviderMulti
+		} else {
+			if creds.AWSAccessKeyID != "" {
+				provider = cloudsec.ProviderAWS
+			} else if creds.AzureClientID != "" || creds.AzureTenantID != "" {
+				provider = cloudsec.ProviderAzure
+			} else if creds.GCPClientEmail != "" || creds.GCPProjectID != "" {
+				provider = cloudsec.ProviderGCP
+			} else if creds.Provider != "" {
+				provider = creds.Provider
+			} else {
+				provider = cloudsec.ProviderAWS
+			}
+		}
+	}
+	creds.Provider = provider
+
+	// Build DeclaredScope
+	declaredScope := cloudsec.DeclaredScope{
+		Provider: provider,
+	}
+	switch provider {
+	case cloudsec.ProviderAWS:
+		declaredScope.TargetAccountID = scopeStr
+		if declaredScope.TargetAccountID == "" {
+			declaredScope.TargetAccountID = creds.AWSAccountID
+		}
+	case cloudsec.ProviderAzure:
+		declaredScope.TargetSubscription = scopeStr
+		if declaredScope.TargetSubscription == "" {
+			declaredScope.TargetSubscription = creds.AzureSubscriptionID
+		}
+	case cloudsec.ProviderGCP:
+		declaredScope.TargetProjectID = scopeStr
+		if declaredScope.TargetProjectID == "" {
+			declaredScope.TargetProjectID = creds.GCPProjectID
+		}
+	}
+	if serviceFilter != "" {
+		declaredScope.Services = []string{serviceFilter}
+	}
+	if regionFilter != "" {
+		declaredScope.Regions = []string{regionFilter}
+	}
+
+	// Build external targets
+	var extTargets []cloudsec.ExternalTarget
+	for _, t := range asm.Targets {
+		u, err := url.Parse(t.TargetURL)
+		if err == nil && u.Host != "" {
+			host := u.Host
+			if strings.Contains(host, ":") {
+				host = strings.Split(host, ":")[0]
+			}
+			scheme := u.Scheme
+			if scheme == "" {
+				scheme = "https"
+			}
+			extTargets = append(extTargets, cloudsec.ExternalTarget{
+				Hostname: host,
+				URL:      t.TargetURL,
+				Scheme:   scheme,
+				Source:   "assessment_target",
+			})
+		}
+	}
+
+	var targetURLs []string
+	for _, t := range asm.Targets {
+		targetURLs = append(targetURLs, t.TargetURL)
+	}
+	scopeVal := assessment.NewScopeValidator(asm.ScopeMode, targetURLs, asm.ScopeRules, asm.Exclusions)
+
+	actx := &cloudsec.AssessmentContext{
+		AssessmentID:    asm.ID,
+		Mode:            mode,
+		Provider:        provider,
+		Scope:           declaredScope,
+		Credentials:     creds,
+		ExternalTargets: extTargets,
+		IsAllowed:       scopeVal.IsAllowed,
+		IsExcluded:      func(u string) bool { excluded, _ := scopeVal.IsExcluded(u); return excluded },
+	}
+
+	// Check if existing results exist in database
+	existingResults, _ := store.GetCloudSecResults(asm.ID, "", string(provider), serviceFilter, statusFilter)
+	if !runExecution && !dryRun && len(existingResults) == 0 {
+		dryRun = true
+	}
+
+	// 1. Dry Run Mode
+	if dryRun {
+		engine := cloudsec.NewEngine(cloudsec.DefaultConfig())
+		plan, err := engine.Plan(context.Background(), actx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Plan error: %v\n", err)
+			return 1
+		}
+
+		if jsonOutput {
+			b, _ := json.MarshalIndent(plan, "", "  ")
+			fmt.Println(string(b))
+			return 0
+		}
+
+		fmt.Println("================================================================================")
+		fmt.Printf("  FELIX :: REAL CLOUD SECURITY ASSESSMENT PLAN (DRY-RUN): %s\n", asm.Ref)
+		fmt.Printf("  Assessment: %s | Mode: %s | Provider: %s\n", asm.Name, mode, provider)
+		fmt.Printf("  Target Scope: %s\n", plan.TargetScope)
+		if plan.VerifiedPrincipal != "" {
+			fmt.Printf("  Verified Principal: %s\n", plan.VerifiedPrincipal)
+		}
+		fmt.Printf("  Planned Checks: %d | Ready: %d | Blocked: %d\n",
+			len(plan.PlannedChecks), plan.ReadyChecks, plan.BlockedChecks)
+		fmt.Println("================================================================================")
+
+		fmt.Println("\n[+] SAFETY & ZERO-PERSISTENCE GUARANTEES:")
+		fmt.Println("  - Zero Credential Persistence:  API keys, service account keys, and tokens are NEVER stored in DB or reports.")
+		fmt.Println("  - Read-Only Assessment:         Auditing operations perform non-destructive inspect/read calls only.")
+		fmt.Println("  - Fail-Closed Scope Validation: Authenticated principal must strictly match declared target scope.")
+		fmt.Println("  - Centralized Scope Control:    All outbound calls and redirect targets are checked against approved targets.")
+		fmt.Println("  - Evidence-First Verification:  Every finding is corroborated with observed facts and reproduction details.")
+
+		fmt.Println("\n[+] PLANNED CLOUD SECURITY CHECKS:")
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "CHECK ID\tPROVIDER\tSERVICE\tREAD-ONLY\tREQUIRED API / PERMISSION\tSTATUS")
+		for _, c := range plan.PlannedChecks {
+			reqAPI := c.RequiredAPI
+			if reqAPI == "" {
+				reqAPI = "-"
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%v\t%s\t%s\n",
+				c.ID, c.Provider, c.Service, c.ReadOnly, reqAPI, c.Status)
+		}
+		_ = w.Flush()
+
+		if mode == cloudsec.ModeExternal && len(extTargets) > 0 {
+			fmt.Println("\n[+] EXTERNAL TARGETS IDENTIFIED:")
+			w = tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "HOSTNAME\tSCHEME\tBASE URL\tSOURCE")
+			for _, t := range extTargets {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", t.Hostname, t.Scheme, t.URL, t.Source)
+			}
+			_ = w.Flush()
+		}
+
+		fmt.Printf("\nTo execute active testing:\n  felix assessment cloudsec %s --run\n\n", asm.Ref)
+		return 0
+	}
+
+	// 2. Execution Mode
+	if runExecution {
+		if asm.Authorization == nil {
+			fmt.Fprintf(os.Stderr, "[-] Security refusal: no authorization record found for assessment %s\n", asm.Ref)
+			return 1
+		}
+		valid, reason := asm.Authorization.IsCurrentlyValid(time.Now().UTC())
+		if !valid {
+			fmt.Fprintf(os.Stderr, "[-] Security refusal: authorization invalid: %s\n", reason)
+			return 1
+		}
+
+		if mode == cloudsec.ModeExternal && len(asm.Targets) == 0 {
+			fmt.Fprintf(os.Stderr, "[-] Error: external mode requires at least one target URL in assessment %s\n", asm.Ref)
+			return 1
+		}
+
+		execID := "exec-" + uuid.New().String()
+		now := time.Now().UTC()
+		execRecord := &assessment.AssessmentExecution{
+			ID:           execID,
+			AssessmentID: asm.ID,
+			Status:       assessment.StatusRunning,
+			StartedAt:    now,
+			ConfigSnapshot: assessment.ScanConfigSnapshot{
+				TimeoutSeconds: 15,
+				Concurrency:    5,
+				ScopeMode:      asm.ScopeMode,
+				FelixVersion:   "2.0",
+			},
+		}
+		if err := store.CreateExecution(execRecord); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Failed to create execution record: %v\n", err)
+			return 1
+		}
+
+		actx.ExecutionID = execID
+		engine := cloudsec.NewEngine(cloudsec.DefaultConfig())
+
+		fmt.Println("================================================================================")
+		fmt.Printf("  EXECUTING CLOUD SECURITY AUDIT: %s (%s)\n", asm.Ref, asm.Name)
+		fmt.Printf("  Mode: %s | Provider: %s\n", mode, provider)
+		if declaredScope.TargetAccountID != "" {
+			fmt.Printf("  Target Account ID: %s\n", declaredScope.TargetAccountID)
+		} else if declaredScope.TargetSubscription != "" {
+			fmt.Printf("  Target Subscription: %s\n", declaredScope.TargetSubscription)
+		} else if declaredScope.TargetProjectID != "" {
+			fmt.Printf("  Target Project ID: %s\n", declaredScope.TargetProjectID)
+		}
+		fmt.Println("================================================================================")
+
+		startTime := time.Now()
+		results, findings, summary, err := engine.Assess(context.Background(), actx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Execution error: %v\n", err)
+			execRecord.Status = assessment.StatusFailed
+			execRecord.ErrorMessage = err.Error()
+			_ = store.UpdateExecution(execRecord)
+			return 1
+		}
+
+		duration := time.Since(startTime)
+		completedAt := time.Now().UTC()
+		execRecord.Status = assessment.StatusCompleted
+		execRecord.CompletedAt = &completedAt
+		execRecord.DurationMs = duration.Milliseconds()
+
+		// Save results
+		for i := range results {
+			results[i].AssessmentID = asm.ID
+			results[i].ExecutionID = execID
+		}
+		if err := store.SaveCloudSecResults(results); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Warning: failed to save cloudsec results: %v\n", err)
+		}
+
+		// Save run record
+		covJSON, _ := json.Marshal(summary.ServiceCoverageMap)
+		runRec := &cloudsec.RunRecord{
+			ID:                uuid.New().String(),
+			AssessmentID:      asm.ID,
+			ExecutionID:       execID,
+			Mode:              mode,
+			Provider:          provider,
+			ScopeIdentifier:   summary.TargetScope,
+			VerifiedPrincipal: summary.VerifiedPrincipal,
+			TotalChecks:       summary.TotalChecks,
+			ServicesAssessed:  summary.ServicesAssessed,
+			VerifiedCount:     summary.VerifiedCount,
+			CandidateCount:    summary.CandidateCount,
+			ObservedCount:     summary.ObservedCount,
+			CoverageJSON:      string(covJSON),
+			CreatedAt:         completedAt,
+		}
+		if err := store.SaveCloudSecRun(runRec); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Warning: failed to save cloudsec run record: %v\n", err)
+		}
+
+		// Save findings
+		targetID := ""
+		if len(asm.Targets) > 0 {
+			targetID = asm.Targets[0].ID
+		}
+		var asmFindings []assessment.AssessmentFinding
+		for _, f := range findings {
+			asmFindings = append(asmFindings, assessment.ToAssessmentFinding(asm.ID, execID, targetID, f))
+		}
+		if len(asmFindings) > 0 {
+			if err := store.SaveFindings(asmFindings); err != nil {
+				fmt.Fprintf(os.Stderr, "[-] Warning: failed to save findings: %v\n", err)
+			}
+		}
+
+		_ = store.UpdateExecution(execRecord)
+
+		fmt.Printf("\n[+] Assessment Complete in %v\n", duration.Round(time.Millisecond))
+		fmt.Printf("    Total Checks: %d | Services Assessed: %d\n", summary.TotalChecks, summary.ServicesAssessed)
+		fmt.Printf("    Verified Issues: %d | Candidates: %d | Observations: %d | Not Vulnerable: %d\n",
+			summary.VerifiedCount, summary.CandidateCount, summary.ObservedCount, summary.NotVulnerableCount)
+	}
+
+	// 3. Reporting / Inspection Mode
+	results, err := store.GetCloudSecResults(asm.ID, "", string(provider), serviceFilter, statusFilter)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Failed to fetch cloudsec results: %v\n", err)
+		return 1
+	}
+
+	summary, _ := store.GetCloudSecSummary(asm.ID, "")
+
+	if jsonOutput {
+		out := map[string]interface{}{
+			"assessment_ref": asm.Ref,
+			"mode":           mode,
+			"provider":       provider,
+			"summary":        summary,
+			"results":        results,
+		}
+		b, _ := json.MarshalIndent(out, "", "  ")
+		fmt.Println(string(b))
+		return 0
+	}
+
+	if summary != nil {
+		fmt.Println("\n================================================================================")
+		fmt.Printf("  FELIX :: REAL CLOUD SECURITY REPORT: %s\n", asm.Ref)
+		fmt.Printf("  Assessment: %s | Mode: %s | Provider: %s\n", asm.Name, summary.Mode, summary.Provider)
+		fmt.Printf("  Target Scope: %s\n", summary.TargetScope)
+		if summary.VerifiedPrincipal != "" {
+			fmt.Printf("  Verified Principal: %s\n", summary.VerifiedPrincipal)
+		}
+		fmt.Printf("  Total Checks: %d | Services Assessed: %d\n", summary.TotalChecks, summary.ServicesAssessed)
+		fmt.Printf("  Verified Issues: %d | Candidates: %d | Observations: %d | Not Vulnerable: %d\n",
+			summary.VerifiedCount, summary.CandidateCount, summary.ObservedCount, summary.NotVulnerableCount)
+		fmt.Println("================================================================================")
+
+		if len(summary.ServiceCoverageMap) > 0 {
+			fmt.Println("\n[+] SERVICE COVERAGE:")
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "PROVIDER\tSERVICE\tSTATUS\tCHECKS\tVERIFIED\tCANDIDATES\tOBSERVED\tNOT VULN")
+			for svc, cov := range summary.ServiceCoverageMap {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\n",
+					cov.Provider, svc, cov.Status, cov.ChecksRun,
+					cov.Verified, cov.Candidates, cov.Observations, cov.NotVulnerable)
+			}
+			_ = w.Flush()
+		}
+	}
+
+	if len(results) > 0 {
+		fmt.Println("\n[+] CLOUD SECURITY FINDINGS & RESULTS:")
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		if verbose {
+			fmt.Fprintln(w, "CHECK ID\tSERVICE\tRESOURCE\tSTATE\tSEVERITY\tCONFIDENCE\tEVIDENCE & DETAILS")
+			for _, r := range results {
+				detailsStr := r.EvidenceSummary
+				if len(r.EvidenceDetails) > 0 {
+					b, _ := json.Marshal(r.EvidenceDetails)
+					detailsStr += " | Details: " + string(b)
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					r.CheckID, r.Service, r.ResourceID, r.VerificationState, r.Severity, r.Confidence, detailsStr)
+			}
+		} else {
+			fmt.Fprintln(w, "CHECK ID\tSERVICE\tRESOURCE\tSTATE\tSEVERITY\tEVIDENCE SUMMARY")
+			for _, r := range results {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+					r.CheckID, r.Service, r.ResourceID, r.VerificationState, r.Severity, r.EvidenceSummary)
+			}
+		}
+		_ = w.Flush()
+	} else if summary == nil || summary.TotalChecks == 0 {
+		fmt.Println("\nNo cloud security results recorded.")
+		fmt.Printf("To run a cloud security assessment:\n  felix assessment cloudsec %s --run\n", asm.Ref)
 	}
 
 	fmt.Println()
