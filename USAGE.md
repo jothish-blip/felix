@@ -407,8 +407,108 @@ GET     /api/v1/profile  403     CONFIRMED_PROTECTED  -
 GET     /public/docs     200     ANONYMOUS_ACCESSIBLE -
 ```
 
-### 5. Fail-Closed Security Guarantees
-- **No Authorization, No Audit:** If an assessment has no authorization record or its status is `PENDING`, `EXPIRED`, or `REVOKED`, `felix assessment run` exits immediately with a **security refusal** and performs **zero network requests**.
+### 5. Authorization & Access Control Testing (`felix assessment authz`)
+
+The `authz` subcommand performs automated, policy-driven API authorization security testing to detect Broken Object Level Authorization (BOLA/IDOR), Broken Function Level Authorization (BFLA), Broken Object Property Level Authorization (BOPLA), and horizontal/vertical privilege escalation:
+
+```bash
+# Dry-run: plan and preview test cases from an authorization policy (0 network requests)
+felix assessment authz <assessment-ref> --policy policy.json --dry-run
+
+# Execute authorized tests against approved assessment targets
+felix assessment authz <assessment-ref> --policy policy.json --run
+
+# View recorded authorization test results with extended evidence
+felix assessment authz <assessment-ref> --verbose
+
+# Filter recorded results by verification state
+felix assessment authz <assessment-ref> --status VERIFIED
+
+# Output structured JSON report
+felix assessment authz <assessment-ref> --json
+```
+
+**Supported Flags:**
+- `--policy <path>`: Path to assessment authorization policy file (`JSON`).
+- `--run`: Execute planned authorization test cases against target endpoints.
+- `--dry-run`: Display planned test cases without executing any network requests.
+- `--category`, `-c <string>`: Filter by vulnerability category (`BOLA`, `BFLA`, `BOPLA`, `HORIZONTAL`, `VERTICAL`).
+- `--status`, `-s <string>`: Filter by verification state (`VERIFIED`, `CANDIDATE`, `INCONCLUSIVE`, `NOT_VULNERABLE`).
+- `--verbose`, `-v`: Display extended evidence details, observed status codes, and payload diffs.
+- `--json`: Output authorization intelligence as structured JSON.
+
+**Policy JSON Structure:**
+```json
+{
+  "assessment_ref": "ASM-2026-0001",
+  "authorization_doc": "DOC-AUTHZ-2026-Q1",
+  "allow_write_tests": false,
+  "identities": {
+    "user_alice": {
+      "alias": "user_alice",
+      "role": "user",
+      "tenant_id": "tenant_1",
+      "privilege_level": 1,
+      "headers": { "Authorization": "Bearer <alice-token>" }
+    },
+    "user_bob": {
+      "alias": "user_bob",
+      "role": "user",
+      "tenant_id": "tenant_2",
+      "privilege_level": 1,
+      "headers": { "Authorization": "Bearer <bob-token>" }
+    },
+    "admin_charlie": {
+      "alias": "admin_charlie",
+      "role": "admin",
+      "tenant_id": "tenant_1",
+      "privilege_level": 5,
+      "headers": { "Authorization": "Bearer <admin-token>" }
+    }
+  },
+  "resources": {
+    "order_101": {
+      "id": "order_101",
+      "type": "order",
+      "owner_alias": "user_alice",
+      "tenant_id": "tenant_1",
+      "sensitive_properties": ["amount", "credit_card"]
+    }
+  },
+  "endpoints": [
+    {
+      "pattern": "/api/admin/users",
+      "method": "GET",
+      "allowed_roles": ["admin"],
+      "admin_only": true
+    }
+  ]
+}
+```
+
+**Example Output:**
+```text
+===========================================================
+  FELIX :: AUTHORIZATION INTELLIGENCE: ASM-2026-0001
+  Assessment Name: API Security Audit | Client ID: client-123
+===========================================================
+  Total Tests:              12
+  Verified Vulnerabilities: 1
+  Not Vulnerable (Enforced): 10
+  Candidates / Inconclusive: 1 / 0
+  Category Breakdown:       BFLA=2, BOLA=6, BOPLA_EXPOSURE=2, BOPLA_MODIFICATION=2
+-----------------------------------------------------------
+
+[+] AUTHORIZATION TEST RESULTS (12)
+CATEGORY  STATE           METHOD  ENDPOINT                  IDENTITY   RESULT SUMMARY
+BOLA      VERIFIED        GET     /api/orders/order_101     user_bob   CONFIRMED BOLA/IDOR: Identity "user_bob" successfully retrieved private order "order_101" belonging to "user_alice" (HTTP 200 with resource data)
+BOLA      NOT_VULNERABLE  GET     /api/orders/order_202     user_alice Access correctly denied (HTTP 403) when unauthorized identity "user_alice" accessed "order_202"
+BFLA      NOT_VULNERABLE  GET     /api/admin/users          user_alice Function access correctly denied (HTTP 403) for unprivileged identity "user_alice"
+```
+
+### 6. Fail-Closed Security Guarantees
+- **No Authorization, No Audit:** If an assessment has no authorization record or its status is `PENDING`, `EXPIRED`, or `REVOKED`, `felix assessment run` and `felix assessment authz --run` exit immediately with a **security refusal** and perform **zero network requests**.
+- **Mutating Write Test Safety Guard:** The authorization engine strictly blocks any mutating request (`POST`, `PUT`, `PATCH`, `DELETE`) unless `allow_write_tests: true` is explicitly configured in the policy document.
 - **Exclusion Precedence:** Exclusions (`HOSTNAME`, `PATH_PREFIX`, `EXACT_URL`) are evaluated before any scope rule. Any target or URL matching an exclusion is strictly skipped.
 - **Interrupted Run Recovery:** If a scan process crashes or is terminated abruptly, the store automatically recovers abandoned `RUNNING` executions on the next invocation, marking them `FAILED` and preserving partial findings.
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"felix/pkg/auth"
+	"felix/pkg/authz"
 	"felix/pkg/config"
 	"felix/pkg/discovery"
 	"felix/pkg/report"
@@ -68,6 +69,13 @@ type Store interface {
 	SaveAuthInventory(authInv auth.AuthInventory) error
 	GetAuthInventory(assessmentID string, executionID string, category string) (*auth.AuthInventory, error)
 	GetAuthSummary(assessmentID string, executionID string) (*auth.AuthSummary, error)
+
+	// Authorization Intelligence (Stage 4)
+	SaveAuthzPolicy(assessmentID string, policy *authz.AuthzPolicy) error
+	GetAuthzPolicy(assessmentID string) (*authz.AuthzPolicy, error)
+	SaveAuthzResults(results []authz.AuthzTestResult) error
+	GetAuthzResults(assessmentID string, executionID string, category string) ([]authz.AuthzTestResult, error)
+	GetAuthzSummary(assessmentID string, executionID string) (*authz.AuthzSummary, error)
 
 	// Report Records
 	SaveReport(r *ReportRecord) error
@@ -458,6 +466,68 @@ func (s *SQLiteStore) migrate() error {
 
 		if _, err := tx.Exec(schemaV3); err != nil {
 			return fmt.Errorf("migration v3 failed: %w", err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+
+	// Migration 4: Authorization & Access Control Intelligence (Stage 4)
+	if currentVersion < 4 {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		schemaV4 := `
+		CREATE TABLE IF NOT EXISTS assessment_authz_policies (
+			id TEXT PRIMARY KEY,
+			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+			authorization_doc TEXT,
+			allow_write_tests INTEGER NOT NULL DEFAULT 0,
+			policy_json TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL,
+			updated_at TIMESTAMP NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_authz_policies_asm_id ON assessment_authz_policies(assessment_id);
+
+		CREATE TABLE IF NOT EXISTS assessment_authz_results (
+			id TEXT PRIMARY KEY,
+			test_case_id TEXT NOT NULL,
+			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+			execution_id TEXT NOT NULL REFERENCES assessment_executions(id) ON DELETE CASCADE,
+			category TEXT NOT NULL,
+			verification_state TEXT NOT NULL,
+			endpoint TEXT NOT NULL,
+			method TEXT NOT NULL,
+			primary_identity TEXT NOT NULL,
+			baseline_identity TEXT,
+			target_resource TEXT,
+			observed_status INTEGER NOT NULL,
+			baseline_status INTEGER,
+			disclosed_data INTEGER NOT NULL DEFAULT 0,
+			property_modified INTEGER NOT NULL DEFAULT 0,
+			evidence_summary TEXT NOT NULL,
+			redacted_request TEXT,
+			redacted_response TEXT,
+			correlated_category TEXT,
+			finding_id TEXT,
+			created_at TIMESTAMP NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_authz_results_asm_id ON assessment_authz_results(assessment_id);
+		CREATE INDEX IF NOT EXISTS idx_authz_results_exec_id ON assessment_authz_results(execution_id);
+		CREATE INDEX IF NOT EXISTS idx_authz_results_cat ON assessment_authz_results(category);
+		CREATE INDEX IF NOT EXISTS idx_authz_results_state ON assessment_authz_results(verification_state);
+
+		INSERT INTO schema_migrations (version, applied_at) VALUES (4, CURRENT_TIMESTAMP);
+		`
+
+		if _, err := tx.Exec(schemaV4); err != nil {
+			return fmt.Errorf("migration v4 failed: %w", err)
 		}
 
 		if err := tx.Commit(); err != nil {
@@ -1727,5 +1797,219 @@ func (s *SQLiteStore) GetAuthSummary(assessmentID string, executionID string) (*
 	sum := engine.GenerateSummary(*inv)
 	return &sum, nil
 }
+
+// --- Authorization Intelligence Methods (Stage 4) ---
+
+func (s *SQLiteStore) SaveAuthzPolicy(assessmentID string, policy *authz.AuthzPolicy) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if policy == nil {
+		return nil
+	}
+
+	now := time.Now().UTC()
+	allowWriteInt := 0
+	if policy.AllowWriteTests {
+		allowWriteInt = 1
+	}
+
+	safeJSON := policy.SafeMetadata()
+
+	// Check if policy already exists
+	var existingID string
+	err := s.db.QueryRow("SELECT id FROM assessment_authz_policies WHERE assessment_id = ?", assessmentID).Scan(&existingID)
+	if err == sql.ErrNoRows {
+		// Insert
+		newID := fmt.Sprintf("pol-%d", time.Now().UnixNano())
+		_, err = s.db.Exec(`
+			INSERT INTO assessment_authz_policies (
+				id, assessment_id, authorization_doc, allow_write_tests, policy_json, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?)
+		`, newID, assessmentID, policy.AuthorizationDoc, allowWriteInt, safeJSON, now, now)
+		return err
+	} else if err != nil {
+		return err
+	}
+
+	// Update existing
+	_, err = s.db.Exec(`
+		UPDATE assessment_authz_policies
+		SET authorization_doc = ?, allow_write_tests = ?, policy_json = ?, updated_at = ?
+		WHERE id = ?
+	`, policy.AuthorizationDoc, allowWriteInt, safeJSON, now, existingID)
+	return err
+}
+
+func (s *SQLiteStore) GetAuthzPolicy(assessmentID string) (*authz.AuthzPolicy, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var policyJSON string
+	err := s.db.QueryRow("SELECT policy_json FROM assessment_authz_policies WHERE assessment_id = ?", assessmentID).Scan(&policyJSON)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return authz.ParsePolicy([]byte(policyJSON))
+}
+
+func (s *SQLiteStore) SaveAuthzResults(results []authz.AuthzTestResult) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(results) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO assessment_authz_results (
+			id, test_case_id, assessment_id, execution_id, category, verification_state,
+			endpoint, method, primary_identity, baseline_identity, target_resource,
+			observed_status, baseline_status, disclosed_data, property_modified,
+			evidence_summary, redacted_request, redacted_response, correlated_category,
+			finding_id, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, r := range results {
+		disclosedInt := 0
+		if r.DisclosedData {
+			disclosedInt = 1
+		}
+		propModInt := 0
+		if r.PropertyModified {
+			propModInt = 1
+		}
+
+		findingID := ""
+		if r.Finding != nil {
+			findingID = r.Finding.ID
+		}
+
+		now := r.CreatedAt
+		if now.IsZero() {
+			now = time.Now().UTC()
+		}
+
+		_, err := stmt.Exec(
+			r.ID, r.TestCaseID, r.AssessmentID, r.ExecutionID, string(r.Category), string(r.VerificationState),
+			r.Endpoint, r.Method, r.PrimaryIdentity, r.BaselineIdentity, r.TargetResource,
+			r.ObservedStatus, r.BaselineStatus, disclosedInt, propModInt,
+			r.EvidenceSummary, r.RedactedRequest, r.RedactedResponse, string(r.CorrelatedCategory),
+			findingID, now,
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+func (s *SQLiteStore) GetAuthzResults(assessmentID string, executionID string, category string) ([]authz.AuthzTestResult, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := `
+		SELECT id, test_case_id, assessment_id, execution_id, category, verification_state,
+		       endpoint, method, primary_identity, baseline_identity, target_resource,
+		       observed_status, baseline_status, disclosed_data, property_modified,
+		       evidence_summary, redacted_request, redacted_response, correlated_category,
+		       finding_id, created_at
+		FROM assessment_authz_results
+		WHERE assessment_id = ?
+	`
+	args := []any{assessmentID}
+
+	if executionID != "" {
+		query += " AND execution_id = ?"
+		args = append(args, executionID)
+	}
+	if category != "" {
+		query += " AND category = ?"
+		args = append(args, category)
+	}
+
+	query += " ORDER BY category ASC, endpoint ASC"
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []authz.AuthzTestResult
+	for rows.Next() {
+		var r authz.AuthzTestResult
+		var catStr, stateStr, corrCatStr, findingID string
+		var disclosedInt, propModInt int
+
+		err := rows.Scan(
+			&r.ID, &r.TestCaseID, &r.AssessmentID, &r.ExecutionID, &catStr, &stateStr,
+			&r.Endpoint, &r.Method, &r.PrimaryIdentity, &r.BaselineIdentity, &r.TargetResource,
+			&r.ObservedStatus, &r.BaselineStatus, &disclosedInt, &propModInt,
+			&r.EvidenceSummary, &r.RedactedRequest, &r.RedactedResponse, &corrCatStr,
+			&findingID, &r.CreatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		r.Category = authz.Category(catStr)
+		r.VerificationState = authz.VerificationState(stateStr)
+		r.CorrelatedCategory = authz.Category(corrCatStr)
+		r.DisclosedData = disclosedInt == 1
+		r.PropertyModified = propModInt == 1
+
+		results = append(results, r)
+	}
+
+	return results, nil
+}
+
+func (s *SQLiteStore) GetAuthzSummary(assessmentID string, executionID string) (*authz.AuthzSummary, error) {
+	results, err := s.GetAuthzResults(assessmentID, executionID, "")
+	if err != nil {
+		return nil, err
+	}
+
+	summary := &authz.AuthzSummary{
+		TotalTests:        len(results),
+		CategoryBreakdown: make(map[string]int),
+		VerifiedBreakdown: make(map[string]int),
+	}
+
+	for _, r := range results {
+		summary.CategoryBreakdown[string(r.Category)]++
+		switch r.VerificationState {
+		case authz.StateVerified:
+			summary.VerifiedCount++
+			summary.VerifiedBreakdown[string(r.Category)]++
+		case authz.StateCandidate:
+			summary.CandidateCount++
+		case authz.StateInconclusive:
+			summary.InconclusiveCount++
+		case authz.StateNotVulnerable:
+			summary.NotVulnerableCount++
+		}
+	}
+
+	return summary, nil
+}
+
 
 

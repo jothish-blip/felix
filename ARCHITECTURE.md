@@ -367,7 +367,22 @@ Stage 3 introduces a dedicated, evidence-driven authentication intelligence subs
   - `assessment_auth_surfaces`: Stores classified authentication surfaces with category, subtype, canonical ID, confidence, auth state, and evidence.
   - `assessment_auth_cookies`: Records cookie metadata, security flags, and defect lists (zero secret value persistence).
   - `assessment_auth_tokens`: Stores token structure observations, algorithm declarations, and locations.
-- **Future Test Account Architecture (`future_accounts.go`):** Complete architectural abstraction ready for Stage 4+ authenticated auditing with client-provided credentials without brittle automation or invasive state modification.
+### 6. Authorization & Access Control Intelligence (`pkg/authz`)
+
+Stage 4 introduces a dedicated, evidence-driven API authorization testing engine that evaluates server-side permission enforcement across five primary vulnerability categories:
+- **Broken Object Level Authorization (BOLA / IDOR):** Models multi-identity object access (Identity A owns Object A, Identity B owns Object B). Detects when Identity B can read or operate on Object A without authorization, distinguishing legitimately shared resources and application-level denial bodies from genuine unauthorized disclosure.
+- **Broken Function Level Authorization (BFLA):** Tests administrative and privileged operations against unprivileged user identities. Verifies whether restricted management endpoints (e.g., user deletion, tenant export) are enforced server-side rather than hidden client-side.
+- **Broken Object Property Level Authorization (BOPLA):**
+  - **Property Exposure:** Detects unauthorized exposure of sensitive internal properties (e.g., `role`, `credit_score`, `price`, `internal_id`) to unprivileged users.
+  - **Property Modification:** Evaluates unauthorized attempts to mutate server-controlled fields (e.g., attempting `{"role": "admin"}` or `{"price": 0.00}`).
+  - **Write Test Safety Guard:** Enforces `policy.allow_write_tests == true` before sending any mutating HTTP requests (`PUT`, `POST`, `PATCH`, `DELETE`). If false, mutating tests are safely refused and reported as candidates with zero destructive network activity.
+- **Horizontal Privilege Escalation:** Verifies tenant and peer isolation boundaries when users of equivalent privilege levels attempt cross-access.
+- **Vertical Privilege Escalation:** Detects when an unprivileged user performs an operation or assumes privileges reserved for administrative roles.
+- **Deep Comparator (`comparator.go`):** Evaluates HTTP status codes, body payloads, resource identifiers, and ownership markers. Never treats HTTP status codes alone as proof of authorization correctness or vulnerability.
+- **Secret Redaction Across Storage & Output:** All sensitive tokens (`Authorization: Bearer [REDACTED]`, cookie values, sensitive query parameters, and private response fields) are scrubbed end-to-end. Raw credentials are never persisted in SQLite or displayed in reports.
+- **Database Schema Migration v4:**
+  - `assessment_authz_policies`: Stores sanitized assessment permission policies and authorization document references.
+  - `assessment_authz_results`: Records test case executions, observed vs baseline status codes, empirical evidence summaries, redacted request/response snippets, and finding associations.
 
 ---
 

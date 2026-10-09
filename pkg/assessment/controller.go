@@ -527,8 +527,8 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 	}, nil
 }
 
-// toAssessmentFinding maps a report.Finding to an AssessmentFinding with full relationship IDs.
-func toAssessmentFinding(assessmentID, executionID, targetID string, f report.Finding) AssessmentFinding {
+// ToAssessmentFinding maps a report.Finding to an AssessmentFinding with full relationship IDs.
+func ToAssessmentFinding(assessmentID, executionID, targetID string, f report.Finding) AssessmentFinding {
 	return AssessmentFinding{
 		ID:                 "fnd-" + uuid.New().String(),
 		AssessmentID:       assessmentID,
@@ -550,6 +550,10 @@ func toAssessmentFinding(assessmentID, executionID, targetID string, f report.Fi
 		Remediation:        f.Remediation,
 		CreatedAt:          time.Now().UTC(),
 	}
+}
+
+func toAssessmentFinding(assessmentID, executionID, targetID string, f report.Finding) AssessmentFinding {
+	return ToAssessmentFinding(assessmentID, executionID, targetID, f)
 }
 
 func getReportsDir(assessmentRef string) (string, error) {

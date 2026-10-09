@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"felix/pkg/auth"
+	"felix/pkg/authz"
 	"felix/pkg/discovery"
 	"felix/pkg/report"
 	"github.com/google/uuid"
@@ -705,5 +706,142 @@ func TestStore_AuthInventoryPersistenceAndMigration(t *testing.T) {
 		t.Errorf("expected 1 session cookie with security issue, got %+v", summary)
 	}
 }
+
+func TestStore_AuthzPersistenceAndMigration(t *testing.T) {
+	store, cleanup := newTestStore(t)
+	defer cleanup()
+
+	// Verify Migration 4 was applied
+	var currentVersion int
+	err := store.db.QueryRow("SELECT MAX(version) FROM schema_migrations").Scan(&currentVersion)
+	if err != nil {
+		t.Fatalf("failed to query schema version: %v", err)
+	}
+	if currentVersion < 4 {
+		t.Errorf("expected schema version >= 4, got %d", currentVersion)
+	}
+
+	client := &Client{Name: "Authz Client"}
+	if err := store.CreateClient(client); err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	asm := &Assessment{
+		ClientID:       client.ID,
+		Name:           "Authz Assessment",
+		AssessmentType: "API_AUDIT",
+	}
+	if err := store.CreateAssessment(asm); err != nil {
+		t.Fatalf("failed to create assessment: %v", err)
+	}
+
+	exec := &AssessmentExecution{
+		AssessmentID: asm.ID,
+		Status:       StatusRunning,
+		StartedAt:    time.Now().UTC(),
+	}
+	if err := store.CreateExecution(exec); err != nil {
+		t.Fatalf("failed to create execution: %v", err)
+	}
+
+	// 1. Policy Persistence & Secret Redaction
+	policy := &authz.AuthzPolicy{
+		AssessmentRef:    asm.Ref,
+		AuthorizationDoc: "DOC-AUTHZ-001",
+		AllowWriteTests:  true,
+		Identities: map[string]authz.TestIdentity{
+			"user_a": {
+				Alias:          "user_a",
+				Role:           "user",
+				TenantID:       "tenant_1",
+				PrivilegeLevel: 1,
+				Headers:        map[string]string{"Authorization": "Bearer secret_token_abc"},
+			},
+		},
+		Resources: map[string]authz.TestResource{
+			"order_101": {ID: "order_101", Type: "order", OwnerAlias: "user_a"},
+		},
+	}
+
+	if err := store.SaveAuthzPolicy(asm.ID, policy); err != nil {
+		t.Fatalf("SaveAuthzPolicy failed: %v", err)
+	}
+
+	fetchedPolicy, err := store.GetAuthzPolicy(asm.ID)
+	if err != nil {
+		t.Fatalf("GetAuthzPolicy failed: %v", err)
+	}
+	if fetchedPolicy == nil {
+		t.Fatalf("expected non-nil policy")
+	}
+	if fetchedPolicy.Identities["user_a"].Headers["Authorization"] == "Bearer secret_token_abc" {
+		t.Errorf("LEAK: Raw Authorization token persisted in SQLite database!")
+	}
+	if fetchedPolicy.Identities["user_a"].Headers["Authorization"] != "[REDACTED]" {
+		t.Errorf("expected [REDACTED] authorization header, got %s", fetchedPolicy.Identities["user_a"].Headers["Authorization"])
+	}
+
+	// 2. Results Persistence
+	results := []authz.AuthzTestResult{
+		{
+			ID:                uuid.New().String(),
+			TestCaseID:        "tc-1",
+			AssessmentID:      asm.ID,
+			ExecutionID:       exec.ID,
+			Category:          authz.CategoryBOLA,
+			VerificationState: authz.StateVerified,
+			Endpoint:          "https://example.com/api/orders/order_101",
+			Method:            "GET",
+			PrimaryIdentity:   "user_b",
+			BaselineIdentity:  "user_a",
+			TargetResource:    "order_101",
+			ObservedStatus:    200,
+			BaselineStatus:    200,
+			DisclosedData:     true,
+			EvidenceSummary:   "CONFIRMED BOLA/IDOR",
+		},
+		{
+			ID:                uuid.New().String(),
+			TestCaseID:        "tc-2",
+			AssessmentID:      asm.ID,
+			ExecutionID:       exec.ID,
+			Category:          authz.CategoryBFLA,
+			VerificationState: authz.StateNotVulnerable,
+			Endpoint:          "https://example.com/api/admin/users",
+			Method:            "GET",
+			PrimaryIdentity:   "user_a",
+			ObservedStatus:    403,
+			EvidenceSummary:   "Function correctly denied",
+		},
+	}
+
+	if err := store.SaveAuthzResults(results); err != nil {
+		t.Fatalf("SaveAuthzResults failed: %v", err)
+	}
+
+	fetchedResults, err := store.GetAuthzResults(asm.ID, exec.ID, "")
+	if err != nil {
+		t.Fatalf("GetAuthzResults failed: %v", err)
+	}
+	if len(fetchedResults) != 2 {
+		t.Errorf("expected 2 results, got %d", len(fetchedResults))
+	}
+
+	// 3. Summary calculation
+	summary, err := store.GetAuthzSummary(asm.ID, exec.ID)
+	if err != nil {
+		t.Fatalf("GetAuthzSummary failed: %v", err)
+	}
+	if summary.TotalTests != 2 {
+		t.Errorf("expected TotalTests = 2, got %d", summary.TotalTests)
+	}
+	if summary.VerifiedCount != 1 {
+		t.Errorf("expected VerifiedCount = 1, got %d", summary.VerifiedCount)
+	}
+	if summary.NotVulnerableCount != 1 {
+		t.Errorf("expected NotVulnerableCount = 1, got %d", summary.NotVulnerableCount)
+	}
+}
+
 
 

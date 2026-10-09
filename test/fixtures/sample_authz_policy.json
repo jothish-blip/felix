@@ -1,0 +1,63 @@
+{
+  "assessment_ref": "ASM-TEST",
+  "authorization_doc": "DOC-AUTHZ-SAMPLE",
+  "allow_write_tests": false,
+  "identities": {
+    "user_alice": {
+      "alias": "user_alice",
+      "role": "user",
+      "tenant_id": "tenant_1",
+      "privilege_level": 1,
+      "headers": {
+        "Authorization": "Bearer sample_token_alice"
+      }
+    },
+    "user_bob": {
+      "alias": "user_bob",
+      "role": "user",
+      "tenant_id": "tenant_2",
+      "privilege_level": 1,
+      "headers": {
+        "Authorization": "Bearer sample_token_bob"
+      }
+    },
+    "admin_charlie": {
+      "alias": "admin_charlie",
+      "role": "admin",
+      "tenant_id": "tenant_1",
+      "privilege_level": 5,
+      "headers": {
+        "Authorization": "Bearer sample_token_admin"
+      }
+    }
+  },
+  "resources": {
+    "order_1001": {
+      "id": "order_1001",
+      "type": "order",
+      "owner_alias": "user_alice",
+      "tenant_id": "tenant_1",
+      "sensitive_properties": ["amount", "credit_card"]
+    },
+    "order_2002": {
+      "id": "order_2002",
+      "type": "order",
+      "owner_alias": "user_bob",
+      "tenant_id": "tenant_2",
+      "sensitive_properties": ["amount"]
+    }
+  },
+  "endpoints": [
+    {
+      "pattern": "/api/admin/users",
+      "method": "GET",
+      "allowed_roles": ["admin"],
+      "admin_only": true
+    },
+    {
+      "pattern": "/api/users/profile",
+      "method": "PUT",
+      "monitored_properties": ["role", "is_admin"]
+    }
+  ]
+}

@@ -14,6 +14,7 @@ import (
 
 	"felix/pkg/assessment"
 	"felix/pkg/auth"
+	"felix/pkg/authz"
 	"github.com/google/uuid"
 )
 
@@ -58,6 +59,8 @@ func runAssessment(args []string) int {
 		return runAssessmentInventory(subArgs)
 	case "auth":
 		return runAssessmentAuth(subArgs)
+	case "authz":
+		return runAssessmentAuthz(subArgs)
 	case "reports":
 		return runAssessmentReports(subArgs)
 	case "cancel":
@@ -83,6 +86,7 @@ func printAssessmentHelp() {
 	fmt.Println("  findings     Inspect findings recorded for an assessment")
 	fmt.Println("  inventory    Inspect discovered attack-surface assets and relationships")
 	fmt.Println("  auth         Inspect discovered authentication surfaces, cookies, tokens, and protection")
+	fmt.Println("  authz        Test and inspect API authorization, BOLA/IDOR, BFLA, BOPLA, and privilege escalation")
 	fmt.Println("  reports      List generated report files for an assessment")
 	fmt.Println("  cancel       Cancel an active or pending assessment")
 	fmt.Println("\nExamples:")
@@ -92,6 +96,7 @@ func printAssessmentHelp() {
 	fmt.Println("  felix assessment findings <asm-ref>")
 	fmt.Println("  felix assessment inventory <asm-ref>")
 	fmt.Println("  felix assessment auth <asm-ref> --verbose")
+	fmt.Println("  felix assessment authz <asm-ref> --policy policy.json --run")
 	fmt.Println("  felix assessment reports <asm-ref>")
 }
 
@@ -1636,6 +1641,321 @@ func runAssessmentAuth(args []string) int {
 				p.Method, p.EndpointPath, p.ObservedStatus, p.ProtectionStatus, challenge)
 		}
 		_ = w.Flush()
+	}
+
+	fmt.Println()
+	return 0
+}
+
+func printAuthzHelp() {
+	fmt.Println("Usage: felix assessment authz <assessment-ref> [flags]")
+	fmt.Println("\nFlags:")
+	fmt.Println("  --policy <path>          Path to authorization policy file (JSON)")
+	fmt.Println("  --run                    Execute planned authorization test cases against target")
+	fmt.Println("  --dry-run                Display planned test cases without executing network requests")
+	fmt.Println("  --category, -c <string>  Filter by category (BOLA, BFLA, BOPLA, HORIZONTAL, VERTICAL)")
+	fmt.Println("  --status, -s <string>    Filter by verification state (VERIFIED, CANDIDATE, INCONCLUSIVE, NOT_VULNERABLE)")
+	fmt.Println("  --verbose, -v            Display extended evidence details, observed status, and diffs")
+	fmt.Println("  --json                   Output authorization intelligence as JSON")
+	fmt.Println("\nExamples:")
+	fmt.Println("  felix assessment authz <asm-ref> --policy policy.json --dry-run")
+	fmt.Println("  felix assessment authz <asm-ref> --policy policy.json --run")
+	fmt.Println("  felix assessment authz <asm-ref> --status VERIFIED --verbose")
+	fmt.Println("  felix assessment authz <asm-ref> --json")
+}
+
+func runAssessmentAuthz(args []string) int {
+	var (
+		assessmentRef  string
+		policyPath     string
+		runExecution   bool
+		dryRun         bool
+		categoryFilter string
+		statusFilter   string
+		jsonOutput     bool
+		verbose        bool
+	)
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--policy":
+			if i+1 < len(args) {
+				policyPath = args[i+1]
+				i++
+			}
+		case arg == "--run":
+			runExecution = true
+		case arg == "--dry-run":
+			dryRun = true
+		case arg == "--category" || arg == "-c":
+			if i+1 < len(args) {
+				categoryFilter = strings.ToUpper(args[i+1])
+				i++
+			}
+		case arg == "--status" || arg == "-s":
+			if i+1 < len(args) {
+				statusFilter = strings.ToUpper(args[i+1])
+				i++
+			}
+		case arg == "--json":
+			jsonOutput = true
+		case arg == "--verbose" || arg == "-v":
+			verbose = true
+		case arg == "--help" || arg == "-h":
+			printAuthzHelp()
+			return 0
+		default:
+			if !strings.HasPrefix(arg, "-") && assessmentRef == "" {
+				assessmentRef = arg
+			}
+		}
+	}
+
+	if assessmentRef == "" {
+		fmt.Fprintf(os.Stderr, "[-] Error: assessment ID or Ref is required\n")
+		return 2
+	}
+
+	store, err := getAssessmentStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Database error: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+
+	asm, err := store.GetAssessment(assessmentRef)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Assessment %q not found: %v\n", assessmentRef, err)
+		return 1
+	}
+	asm.Targets, _ = store.GetTargets(asm.ID)
+	asm.Authorization, _ = store.GetAuthorization(asm.ID)
+	asm.Exclusions, _ = store.GetExclusions(asm.ID)
+	asm.ScopeRules, _ = store.GetScopeRules(asm.ID)
+
+	// 1. Dry Run Mode
+	if dryRun {
+		if policyPath == "" {
+			fmt.Fprintf(os.Stderr, "[-] Error: --policy <file> is required for --dry-run\n")
+			return 2
+		}
+		policy, err := authz.LoadPolicyFromFile(policyPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Failed to load policy: %v\n", err)
+			return 1
+		}
+		targetBase := "https://example.com"
+		if len(asm.Targets) > 0 {
+			targetBase = asm.Targets[0].TargetURL
+		}
+		planner := authz.NewPlanner(policy)
+		planned := planner.PlanTestCases(targetBase)
+
+		fmt.Println("===========================================================")
+		fmt.Printf("  FELIX :: AUTHORIZATION TEST PLAN (DRY-RUN): %s\n", asm.Ref)
+		fmt.Printf("  Identities: %d | Resources: %d | Planned Tests: %d\n", len(policy.Identities), len(policy.Resources), len(planned))
+		fmt.Println("===========================================================")
+
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "CATEGORY\tMETHOD\tENDPOINT\tPRIMARY IDENTITY\tEXPECTED\tDESCRIPTION")
+		for _, tc := range planned {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+				tc.Category, tc.Method, tc.Endpoint, tc.PrimaryIdentity, tc.ExpectedResult, tc.Description)
+		}
+		_ = w.Flush()
+		fmt.Println()
+		return 0
+	}
+
+	// 2. Execution Mode
+	if runExecution {
+		if asm.Authorization == nil {
+			fmt.Fprintf(os.Stderr, "[-] Security refusal: no authorization record found for assessment %s\n", asm.Ref)
+			return 1
+		}
+		valid, reason := asm.Authorization.IsCurrentlyValid(time.Now().UTC())
+		if !valid {
+			fmt.Fprintf(os.Stderr, "[-] Security refusal: authorization invalid: %s\n", reason)
+			return 1
+		}
+
+		var policy *authz.AuthzPolicy
+		if policyPath != "" {
+			p, err := authz.LoadPolicyFromFile(policyPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[-] Failed to load policy from %s: %v\n", policyPath, err)
+				return 1
+			}
+			policy = p
+			if err := store.SaveAuthzPolicy(asm.ID, policy); err != nil {
+				fmt.Fprintf(os.Stderr, "[-] Warning: failed to save policy to store: %v\n", err)
+			}
+		} else {
+			p, err := store.GetAuthzPolicy(asm.ID)
+			if err != nil || p == nil {
+				fmt.Fprintf(os.Stderr, "[-] Error: no authorization policy found for assessment %s. Provide --policy <path>.\n", asm.Ref)
+				return 2
+			}
+			policy = p
+		}
+
+		if len(asm.Targets) == 0 {
+			fmt.Fprintf(os.Stderr, "[-] Error: assessment %s has no targets configured\n", asm.Ref)
+			return 1
+		}
+
+		targetURL := asm.Targets[0].TargetURL
+		targetID := asm.Targets[0].ID
+
+		execID := "exec-" + uuid.New().String()
+		now := time.Now().UTC()
+		execRecord := &assessment.AssessmentExecution{
+			ID:           execID,
+			AssessmentID: asm.ID,
+			Status:       assessment.StatusRunning,
+			StartedAt:    now,
+			ConfigSnapshot: assessment.ScanConfigSnapshot{
+				TimeoutSeconds: 15,
+				Concurrency:    5,
+				ScopeMode:      asm.ScopeMode,
+				FelixVersion:   "2.0",
+			},
+		}
+		if err := store.CreateExecution(execRecord); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Failed to create execution record: %v\n", err)
+			return 1
+		}
+
+		var targetURLs []string
+		for _, t := range asm.Targets {
+			targetURLs = append(targetURLs, t.TargetURL)
+		}
+		scopeVal := assessment.NewScopeValidator(asm.ScopeMode, targetURLs, asm.ScopeRules, asm.Exclusions)
+		engine := authz.NewEngine(nil)
+
+		fmt.Println("===========================================================")
+		fmt.Printf("  EXECUTING AUTHORIZATION AUDIT: %s (%s)\n", asm.Ref, asm.Name)
+		fmt.Printf("  Target: %s | Write Tests Allowed: %t\n", targetURL, policy.AllowWriteTests)
+		fmt.Println("===========================================================")
+
+		startTime := time.Now()
+		results, findings, summary, err := engine.Execute(
+			context.Background(),
+			targetURL,
+			policy,
+			asm.ID,
+			execID,
+			scopeVal.IsAllowed,
+			func(u string) bool { excluded, _ := scopeVal.IsExcluded(u); return excluded },
+		)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Execution error: %v\n", err)
+			execRecord.Status = assessment.StatusFailed
+			execRecord.ErrorMessage = err.Error()
+			_ = store.UpdateExecution(execRecord)
+			return 1
+		}
+
+		duration := time.Since(startTime)
+		completedAt := time.Now().UTC()
+		execRecord.Status = assessment.StatusCompleted
+		execRecord.CompletedAt = &completedAt
+		execRecord.DurationMs = duration.Milliseconds()
+		execRecord.RequestCount = len(results)
+		execRecord.FindingCount = len(findings)
+
+		if err := store.SaveAuthzResults(results); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Warning: failed to save authz results: %v\n", err)
+		}
+
+		var asmFindings []assessment.AssessmentFinding
+		for _, f := range findings {
+			asmFindings = append(asmFindings, assessment.ToAssessmentFinding(asm.ID, execID, targetID, f))
+		}
+		if len(asmFindings) > 0 {
+			if err := store.SaveFindings(asmFindings); err != nil {
+				fmt.Fprintf(os.Stderr, "[-] Warning: failed to save findings: %v\n", err)
+			}
+		}
+		_ = store.UpdateExecution(execRecord)
+
+		fmt.Printf("[✓] Authorization assessment completed in %s (%d tests executed, %d verified findings)\n",
+			duration.Round(time.Millisecond), len(results), summary.VerifiedCount)
+	}
+
+	// 3. Display Results Mode
+	results, err := store.GetAuthzResults(asm.ID, "", categoryFilter)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Failed to fetch authz results: %v\n", err)
+		return 1
+	}
+
+	summary, _ := store.GetAuthzSummary(asm.ID, "")
+
+	if statusFilter != "" {
+		var filtered []authz.AuthzTestResult
+		for _, r := range results {
+			if strings.EqualFold(string(r.VerificationState), statusFilter) {
+				filtered = append(filtered, r)
+			}
+		}
+		results = filtered
+	}
+
+	if jsonOutput {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		output := map[string]any{
+			"assessment_ref": asm.Ref,
+			"assessment_id":  asm.ID,
+			"summary":        summary,
+			"results":        results,
+		}
+		_ = enc.Encode(output)
+		return 0
+	}
+
+	fmt.Println("===========================================================")
+	fmt.Printf("  FELIX :: AUTHORIZATION INTELLIGENCE: %s\n", asm.Ref)
+	fmt.Printf("  Assessment Name: %s | Client ID: %s\n", asm.Name, asm.ClientID)
+	fmt.Println("===========================================================")
+	if summary != nil {
+		fmt.Printf("  Total Tests:            %d\n", summary.TotalTests)
+		fmt.Printf("  Verified Vulnerabilities: %d\n", summary.VerifiedCount)
+		fmt.Printf("  Not Vulnerable (Enforced): %d\n", summary.NotVulnerableCount)
+		fmt.Printf("  Candidates / Inconclusive: %d / %d\n", summary.CandidateCount, summary.InconclusiveCount)
+		if len(summary.CategoryBreakdown) > 0 {
+			fmt.Print("  Category Breakdown:     ")
+			var catParts []string
+			for k, v := range summary.CategoryBreakdown {
+				catParts = append(catParts, fmt.Sprintf("%s=%d", k, v))
+			}
+			fmt.Println(strings.Join(catParts, ", "))
+		}
+		fmt.Println("-----------------------------------------------------------")
+	}
+
+	if len(results) > 0 {
+		fmt.Printf("\n[+] AUTHORIZATION TEST RESULTS (%d)\n", len(results))
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		if verbose {
+			fmt.Fprintln(w, "CATEGORY\tSTATE\tMETHOD\tENDPOINT\tIDENTITY\tSTATUS\tEVIDENCE SUMMARY")
+			for _, r := range results {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\tHTTP %d\t%s\n",
+					r.Category, r.VerificationState, r.Method, r.Endpoint, r.PrimaryIdentity, r.ObservedStatus, r.EvidenceSummary)
+			}
+		} else {
+			fmt.Fprintln(w, "CATEGORY\tSTATE\tMETHOD\tENDPOINT\tIDENTITY\tRESULT SUMMARY")
+			for _, r := range results {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+					r.Category, r.VerificationState, r.Method, r.Endpoint, r.PrimaryIdentity, r.EvidenceSummary)
+			}
+		}
+		_ = w.Flush()
+	} else {
+		fmt.Println("\nNo authorization test results recorded.")
+		fmt.Printf("To execute an authorization audit, run:\n  felix assessment authz %s --policy <policy.json> --run\n", asm.Ref)
 	}
 
 	fmt.Println()
