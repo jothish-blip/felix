@@ -2,7 +2,10 @@ package assessment
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -191,7 +194,42 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 
 	opts.ProgressFunc(fmt.Sprintf("[*] Assessment %s execution started (%s) against %d target(s)...", asm.Ref, execID, len(runnableTargets)))
 
-	// 8. Invoke Existing Felix Scan Pipeline
+	// 8. Invoke Existing Felix Scan Pipeline with strict redirect validation
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+	}
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   timeoutDur,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   20,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ForceAttemptHTTP2:     true,
+		TLSClientConfig:       tlsConfig,
+	}
+	httpClient := &http.Client{
+		Transport: transport,
+		Timeout:   timeoutDur,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("stopped after 10 redirects")
+			}
+			lastURL := ""
+			if len(via) > 0 {
+				lastURL = via[len(via)-1].URL.String()
+			}
+			if err := scopeVal.ValidateRedirect(lastURL, req.URL.String()); err != nil {
+				return fmt.Errorf("redirect blocked by scope validator: %w", err)
+			}
+			return nil
+		},
+	}
+
 	crawlerCfg := crawler.Config{
 		Concurrency:  concurrency,
 		Timeout:      timeoutDur,
@@ -199,11 +237,22 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 		MaxAssets:    maxAssets,
 		ScopeMode:    crawler.ScopeMode(asm.ScopeMode),
 		UserAgent:    userAgent,
+		Client:       httpClient,
 	}
 	cEng := crawler.New(crawlerCfg)
 	detector := secrets.NewDetector()
-	cloudAuditor := cloud.NewDetector(nil)
-	apiAuditor := api.NewDetector(nil)
+	cloudAuditor := cloud.NewDetector(cloud.NewClient(cloud.ClientOptions{
+		Timeout:         timeoutDur,
+		MaxResponseSize: maxSizeBytes,
+		UserAgent:       userAgent,
+		HTTPClient:      httpClient,
+	}))
+	apiAuditor := api.NewDetector(api.NewClient(api.ClientOptions{
+		Timeout:         timeoutDur,
+		MaxResponseSize: maxSizeBytes,
+		UserAgent:       userAgent,
+		HTTPClient:      httpClient,
+	}))
 
 	startTime := time.Now()
 	crawlResultsChan := cEng.CrawlConcurrently(ctx, runnableTargets)

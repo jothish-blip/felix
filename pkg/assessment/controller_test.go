@@ -66,6 +66,52 @@ func TestController_AuthorizationRefusal(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "security refusal: invalid authorization: authorization expired") {
 		t.Fatalf("expected security refusal for expired auth, got: %v", err)
 	}
+
+	// 3. Setup pending authorization: must fail closed
+	_ = store.SetAuthorization(&AuthorizationRecord{
+		ID:                  uuid.New().String(),
+		AssessmentID:        asmID,
+		AuthorizingParty:    "Security Team",
+		AuthorizationMethod: "EMAIL",
+		DateReceived:        time.Now().UTC(),
+		Status:              AuthPending,
+	})
+	_, err = ctrl.RunAssessment(ctx, asmID, ExecutionOptions{})
+	if err == nil || !strings.Contains(err.Error(), "security refusal: invalid authorization: authorization status is PENDING") {
+		t.Fatalf("expected security refusal for pending auth, got: %v", err)
+	}
+
+	// 4. Setup not yet valid authorization (future ValidFrom): must fail closed
+	tomorrow := time.Now().UTC().Add(24 * time.Hour)
+	nextWeek := time.Now().UTC().Add(7 * 24 * time.Hour)
+	_ = store.SetAuthorization(&AuthorizationRecord{
+		ID:                  uuid.New().String(),
+		AssessmentID:        asmID,
+		AuthorizingParty:    "Security Team",
+		AuthorizationMethod: "EMAIL",
+		DateReceived:        time.Now().UTC(),
+		ValidFrom:           &tomorrow,
+		ValidUntil:          &nextWeek,
+		Status:              AuthApproved,
+	})
+	_, err = ctrl.RunAssessment(ctx, asmID, ExecutionOptions{})
+	if err == nil || !strings.Contains(err.Error(), "security refusal: invalid authorization: authorization not yet active") {
+		t.Fatalf("expected security refusal for not yet active auth, got: %v", err)
+	}
+
+	// 5. Setup revoked authorization: must fail closed
+	_ = store.SetAuthorization(&AuthorizationRecord{
+		ID:                  uuid.New().String(),
+		AssessmentID:        asmID,
+		AuthorizingParty:    "Security Team",
+		AuthorizationMethod: "EMAIL",
+		DateReceived:        time.Now().UTC(),
+		Status:              AuthRevoked,
+	})
+	_, err = ctrl.RunAssessment(ctx, asmID, ExecutionOptions{})
+	if err == nil || !strings.Contains(err.Error(), "security refusal: invalid authorization: authorization status is REVOKED") {
+		t.Fatalf("expected security refusal for revoked auth, got: %v", err)
+	}
 }
 
 func TestController_ExclusionRefusal(t *testing.T) {
@@ -261,3 +307,107 @@ func TestController_SyntheticExecutionAndTraceability(t *testing.T) {
 		t.Errorf("expected at least 2 report records (HTML & JSON), got %d (err: %v)", len(reports), err)
 	}
 }
+
+func TestController_NetworkRedirectAndExclusionEnforcement(t *testing.T) {
+	// Setup test HTTP server with redirection
+	var forbiddenHit bool
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/redirect-to-external":
+			http.Redirect(w, r, "https://example.org/forbidden", http.StatusFound)
+		case "/redirect-to-excluded":
+			http.Redirect(w, r, "/admin/secret", http.StatusFound)
+		case "/admin/secret":
+			forbiddenHit = true
+			w.Header().Set("Content-Type", "application/javascript")
+			_, _ = w.Write([]byte(`var key = "AKIAIOSFODNN7EXAMPLE";`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	store, cleanup := newTestStore(t)
+	defer cleanup()
+
+	ctrl := NewController(store)
+	ctx := context.Background()
+
+	clientID := uuid.New().String()
+	_ = store.CreateClient(&Client{ID: clientID, Name: "Redirect & Scope Test"})
+
+	asmID := uuid.New().String()
+	_ = store.CreateAssessment(&Assessment{
+		ID:        asmID,
+		Ref:       "ASM-2026-REDIR",
+		ClientID:  clientID,
+		Name:      "Redirect Scope Test",
+		Status:    StatusReady,
+		ScopeMode: "same-origin",
+	})
+
+	_ = store.SetAuthorization(&AuthorizationRecord{
+		ID:                  uuid.New().String(),
+		AssessmentID:        asmID,
+		AuthorizingParty:    "Security Lead",
+		AuthorizationMethod: "CONTRACT",
+		DateReceived:        time.Now().UTC(),
+		Status:              AuthApproved,
+	})
+
+	// Add excluded path /admin
+	_ = store.AddExclusion(&Exclusion{
+		ID:            uuid.New().String(),
+		AssessmentID:  asmID,
+		ExclusionType: ExclusionPathPrefix,
+		Pattern:       "/admin",
+		Reason:        "Strict admin exclusion",
+	})
+
+	// Case 1: Target redirects to excluded path /admin/secret
+	targetExcludedID := uuid.New().String()
+	_ = store.AddTarget(&AssessmentTarget{
+		ID:           targetExcludedID,
+		AssessmentID: asmID,
+		TargetURL:    ts.URL + "/redirect-to-excluded",
+		ScopeStatus:  "APPROVED",
+	})
+
+	// Case 2: Target redirects to external domain
+	targetExternalID := uuid.New().String()
+	_ = store.AddTarget(&AssessmentTarget{
+		ID:           targetExternalID,
+		AssessmentID: asmID,
+		TargetURL:    ts.URL + "/redirect-to-external",
+		ScopeStatus:  "APPROVED",
+	})
+
+	opts := ExecutionOptions{
+		TimeoutDuration: 3 * time.Second,
+		Concurrency:     2,
+		FelixVersion:    "2.0.0",
+		BuildID:         "test",
+	}
+
+	res, err := ctrl.RunAssessment(ctx, asmID, opts)
+	if err != nil {
+		t.Fatalf("RunAssessment failed unexpectedly: %v", err)
+	}
+
+	if forbiddenHit {
+		t.Fatalf("CRITICAL SECURITY FAILURE: crawler followed redirect to excluded path /admin/secret over the network!")
+	}
+
+	// Verify that zero findings were created from forbidden path
+	findings, err := store.GetFindings(asmID, res.Execution.ID)
+	if err != nil {
+		t.Fatalf("failed to retrieve findings: %v", err)
+	}
+	for _, f := range findings {
+		if strings.Contains(f.Endpoint, "/admin") || strings.Contains(f.TargetURL, "example.org") || strings.Contains(f.Endpoint, "example.org") {
+			t.Fatalf("CRITICAL: found unexpected finding from excluded/external target: %v", f)
+		}
+	}
+}
+
