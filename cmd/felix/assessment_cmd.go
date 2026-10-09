@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -17,6 +18,7 @@ import (
 	"felix/pkg/assessment"
 	"felix/pkg/auth"
 	"felix/pkg/authz"
+	"felix/pkg/webvuln"
 	"github.com/google/uuid"
 )
 
@@ -65,6 +67,8 @@ func runAssessment(args []string) int {
 		return runAssessmentAuthz(subArgs)
 	case "apisec", "api":
 		return runAssessmentAPISec(subArgs)
+	case "webvuln", "vuln":
+		return runAssessmentWebVuln(subArgs)
 	case "reports":
 		return runAssessmentReports(subArgs)
 	case "cancel":
@@ -92,6 +96,7 @@ func printAssessmentHelp() {
 	fmt.Println("  auth         Inspect discovered authentication surfaces, cookies, tokens, and protection")
 	fmt.Println("  authz        Test and inspect API authorization, BOLA/IDOR, BFLA, BOPLA, and privilege escalation")
 	fmt.Println("  apisec       Assess OWASP API Security Top 10 (2023) categories and API inventory")
+	fmt.Println("  webvuln      Assess and verify web application vulnerabilities (XSS, SQLi, SSTI, SSRF, etc.)")
 	fmt.Println("  reports      List generated report files for an assessment")
 	fmt.Println("  cancel       Cancel an active or pending assessment")
 	fmt.Println("\nExamples:")
@@ -103,18 +108,19 @@ func printAssessmentHelp() {
 	fmt.Println("  felix assessment auth <asm-ref> --verbose")
 	fmt.Println("  felix assessment authz <asm-ref> --policy policy.json --run")
 	fmt.Println("  felix assessment apisec <asm-ref> --run --spec openapi.json")
+	fmt.Println("  felix assessment webvuln <asm-ref> --run")
 	fmt.Println("  felix assessment reports <asm-ref>")
 }
 
 func runAssessmentCreate(args []string) int {
 	var (
-		clientRef   string
-		name        string
-		notes       string
-		scopeMode   string
-		targets     []string
-		scopeRules  []string
-		jsonOutput  bool
+		clientRef  string
+		name       string
+		notes      string
+		scopeMode  string
+		targets    []string
+		scopeRules []string
+		jsonOutput bool
 	)
 
 	for i := 0; i < len(args); i++ {
@@ -2418,4 +2424,428 @@ func runAssessmentAPISec(args []string) int {
 	return 0
 }
 
+func printWebVulnHelp() {
+	fmt.Println("Usage: felix assessment webvuln <assessment-ref> [flags]")
+	fmt.Println("\nFlags:")
+	fmt.Println("  --dry-run              Display vulnerability assessment execution plan without making active requests (default)")
+	fmt.Println("  --run                  Execute controlled web vulnerability testing pipeline")
+	fmt.Println("  -c, --category <name>  Filter results by category (XSS, SQLI, NOSQLI, CMDI, PATH_TRAVERSAL, SSTI, SSRF, OPEN_REDIRECT, etc.)")
+	fmt.Println("  -s, --status <state>   Filter results by verification state (VERIFIED, CANDIDATE, OBSERVED, NOT_VULNERABLE)")
+	fmt.Println("  --canary <url>         Public canary callback URL for SSRF out-of-band verification")
+	fmt.Println("  -v, --verbose          Display detailed evidence summaries")
+	fmt.Println("  --json                 Output machine-readable JSON")
+	fmt.Println("  -h, --help             Display this help message")
+	fmt.Println("\nExamples:")
+	fmt.Println("  felix assessment webvuln <asm-ref> --dry-run")
+	fmt.Println("  felix assessment webvuln <asm-ref> --run")
+	fmt.Println("  felix assessment webvuln <asm-ref> --category XSS --status VERIFIED")
+	fmt.Println("  felix assessment webvuln <asm-ref> --json")
+}
 
+func runAssessmentWebVuln(args []string) int {
+	var (
+		assessmentRef  string
+		runExecution   bool
+		dryRun         bool
+		categoryFilter string
+		statusFilter   string
+		canaryURL      string
+		jsonOutput     bool
+		verbose        bool
+	)
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--run":
+			runExecution = true
+		case arg == "--dry-run":
+			dryRun = true
+		case arg == "--category" || arg == "-c":
+			if i+1 < len(args) {
+				categoryFilter = strings.ToUpper(args[i+1])
+				i++
+			}
+		case arg == "--status" || arg == "-s":
+			if i+1 < len(args) {
+				statusFilter = strings.ToUpper(args[i+1])
+				i++
+			}
+		case arg == "--canary":
+			if i+1 < len(args) {
+				canaryURL = args[i+1]
+				i++
+			}
+		case arg == "--json":
+			jsonOutput = true
+		case arg == "--verbose" || arg == "-v":
+			verbose = true
+		case arg == "--help" || arg == "-h":
+			printWebVulnHelp()
+			return 0
+		default:
+			if !strings.HasPrefix(arg, "-") && assessmentRef == "" {
+				assessmentRef = arg
+			}
+		}
+	}
+
+	if assessmentRef == "" {
+		fmt.Fprintf(os.Stderr, "[-] Error: assessment ID or Ref is required\n\n")
+		printWebVulnHelp()
+		return 2
+	}
+
+	store, err := getAssessmentStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Database error: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+
+	asm, err := store.GetAssessment(assessmentRef)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Error finding assessment '%s': %v\n", assessmentRef, err)
+		return 1
+	}
+	asm.Targets, _ = store.GetTargets(asm.ID)
+	asm.Authorization, _ = store.GetAuthorization(asm.ID)
+	asm.Exclusions, _ = store.GetExclusions(asm.ID)
+	asm.ScopeRules, _ = store.GetScopeRules(asm.ID)
+
+	targetBase := "http://localhost"
+	if len(asm.Targets) > 0 {
+		targetBase = strings.TrimRight(asm.Targets[0].TargetURL, "/")
+	}
+
+	// Load inventory endpoints and parameters
+	assets, _, _ := store.GetInventory(asm.ID, "", "", true)
+	var targetEndpoints []webvuln.TargetEndpoint
+	seenEndpoints := make(map[string]bool)
+
+	for _, a := range assets {
+		if a.Type == "ENDPOINT" || a.Type == "endpoint" {
+			method := "GET"
+			if m, ok := a.Metadata["method"].(string); ok && m != "" {
+				method = strings.ToUpper(m)
+			}
+			path := a.DisplayName
+			if p, ok := a.Metadata["path"].(string); ok && p != "" {
+				path = p
+			} else if a.CanonicalID != "" {
+				path = a.CanonicalID
+			}
+			if strings.Contains(path, " ") {
+				parts := strings.SplitN(path, " ", 2)
+				if len(parts) == 2 {
+					if method == "GET" || method == "UNKNOWN" {
+						method = strings.ToUpper(parts[0])
+					}
+					path = parts[1]
+				}
+			}
+			if method == "UNKNOWN" {
+				method = "GET"
+			}
+			if u, err := url.Parse(path); err == nil && u.Path != "" {
+				path = u.Path
+			}
+
+			var params []string
+			if pList, ok := a.Metadata["params"].([]any); ok {
+				for _, p := range pList {
+					if ps, ok := p.(string); ok && ps != "" {
+						params = append(params, ps)
+					}
+				}
+			}
+			key := method + " " + path
+			if !seenEndpoints[key] {
+				seenEndpoints[key] = true
+				targetEndpoints = append(targetEndpoints, webvuln.TargetEndpoint{
+					Method:     method,
+					Path:       path,
+					Parameters: params,
+					Source:     "inventory",
+				})
+			}
+		}
+	}
+
+	if len(targetEndpoints) == 0 {
+		targetEndpoints = append(targetEndpoints, webvuln.TargetEndpoint{
+			Method: "GET",
+			Path:   "/",
+			Source: "target_root",
+		})
+	}
+
+	// Check if existing results exist
+	existingResults, _ := store.GetWebVulnResults(asm.ID, "", "", "")
+	if !runExecution && !dryRun && len(existingResults) == 0 {
+		dryRun = true
+	}
+
+	// 1. Dry Run Mode
+	if dryRun {
+		fmt.Println("===========================================================")
+		fmt.Printf("  FELIX :: WEB VULNERABILITY ENGINE PLAN (DRY-RUN): %s\n", asm.Ref)
+		fmt.Printf("  Assessment: %s | Target Base: %s\n", asm.Name, targetBase)
+		fmt.Printf("  Endpoints Loaded: %d | Categories Supported: 13\n", len(targetEndpoints))
+		fmt.Println("===========================================================")
+
+		fmt.Println("\n[+] SAFETY & VERIFICATION BOUNDARIES:")
+		fmt.Println("  - OS Command Injection: Strictly passive / synthetic fixture only (zero live command execution)")
+		fmt.Println("  - Path Traversal:       Strictly bounded non-sensitive canary indicators (zero live credential dumps)")
+		fmt.Println("  - File Inclusion:       Controlled static analysis only (zero remote attacker payload execution)")
+		fmt.Println("  - SSTI:                 Safe arithmetic proofs only ({{491*13}} -> 6383); literal reflections NOT vulnerable")
+		fmt.Println("  - XSS:                  Inert canaries checked in executable HTML body; encoded/JSON not marked verified")
+		fmt.Println("  - SQLi:                 Database-specific syntax error proof vs baseline; generic 500 marked candidate")
+		fmt.Println("  - SSRF:                 Private and cloud metadata IP ranges blocked; callback canary required")
+		fmt.Println("  - Request Smuggling:    Active desynchronization disabled by default; passive normalization only")
+
+		fmt.Println("\n[+] SUPPORTED VULNERABILITY CATEGORIES (13):")
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "CODE\tCATEGORY\tCWE\tVERIFICATION STANDARD")
+		for _, cat := range []webvuln.VulnCategory{
+			webvuln.CategoryXSS, webvuln.CategorySQLi, webvuln.CategoryNoSQLi,
+			webvuln.CategoryCmdi, webvuln.CategoryPathTraversal, webvuln.CategoryFileInclusion,
+			webvuln.CategorySSTI, webvuln.CategorySSRF, webvuln.CategoryOpenRedirect,
+			webvuln.CategoryRequestIssues, webvuln.CategoryInfoDisclosure,
+			webvuln.CategoryDeserialization, webvuln.CategoryMisconfiguration,
+		} {
+			meta := webvuln.CategoryMetadata[cat]
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", meta.Code, meta.Name, meta.CWE, meta.VerificationBoundary)
+		}
+		_ = w.Flush()
+
+		fmt.Println("\n[+] TARGET ENDPOINTS TO EVALUATE:")
+		w = tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "METHOD\tPATH\tPARAMETERS\tSOURCE")
+		for _, ep := range targetEndpoints {
+			pStr := "-"
+			if len(ep.Parameters) > 0 {
+				pStr = strings.Join(ep.Parameters, ", ")
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", ep.Method, ep.Path, pStr, ep.Source)
+		}
+		_ = w.Flush()
+		fmt.Printf("\nTo execute controlled testing:\n  felix assessment webvuln %s --run\n\n", asm.Ref)
+		return 0
+	}
+
+	// 2. Execution Mode
+	if runExecution {
+		if asm.Authorization == nil {
+			fmt.Fprintf(os.Stderr, "[-] Security refusal: no authorization record found for assessment %s\n", asm.Ref)
+			return 1
+		}
+		valid, reason := asm.Authorization.IsCurrentlyValid(time.Now().UTC())
+		if !valid {
+			fmt.Fprintf(os.Stderr, "[-] Security refusal: authorization invalid: %s\n", reason)
+			return 1
+		}
+
+		if len(asm.Targets) == 0 {
+			fmt.Fprintf(os.Stderr, "[-] Error: assessment %s has no targets configured\n", asm.Ref)
+			return 1
+		}
+
+		targetID := asm.Targets[0].ID
+		execID := "exec-" + uuid.New().String()
+		now := time.Now().UTC()
+		execRecord := &assessment.AssessmentExecution{
+			ID:           execID,
+			AssessmentID: asm.ID,
+			Status:       assessment.StatusRunning,
+			StartedAt:    now,
+			ConfigSnapshot: assessment.ScanConfigSnapshot{
+				TimeoutSeconds: 15,
+				Concurrency:    5,
+				ScopeMode:      asm.ScopeMode,
+				FelixVersion:   "2.0",
+			},
+		}
+		if err := store.CreateExecution(execRecord); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Failed to create execution record: %v\n", err)
+			return 1
+		}
+
+		var targetURLs []string
+		for _, t := range asm.Targets {
+			targetURLs = append(targetURLs, t.TargetURL)
+		}
+		scopeVal := assessment.NewScopeValidator(asm.ScopeMode, targetURLs, asm.ScopeRules, asm.Exclusions)
+
+		cfg := webvuln.DefaultConfig()
+		if canaryURL != "" {
+			cfg.CanaryCallbackURL = canaryURL
+		}
+
+		webvulnHTTPClient := &http.Client{
+			Timeout: cfg.Timeout,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 10 {
+					return fmt.Errorf("stopped after 10 redirects")
+				}
+				lastURL := ""
+				if len(via) > 0 {
+					lastURL = via[len(via)-1].URL.String()
+				}
+				return scopeVal.ValidateRedirect(lastURL, req.URL.String())
+			},
+		}
+		engine := webvuln.NewEngine(webvulnHTTPClient, cfg)
+		actx := &webvuln.AssessmentContext{
+			AssessmentID: asm.ID,
+			ExecutionID:  execID,
+			BaseURL:      targetBase,
+			Endpoints:    targetEndpoints,
+			IsAllowed:    scopeVal.IsAllowed,
+			IsExcluded:   func(u string) bool { excluded, _ := scopeVal.IsExcluded(u); return excluded },
+		}
+
+		fmt.Println("===========================================================")
+		fmt.Printf("  EXECUTING WEB VULNERABILITY AUDIT: %s (%s)\n", asm.Ref, asm.Name)
+		fmt.Printf("  Target: %s | Endpoints: %d\n", targetBase, len(targetEndpoints))
+		fmt.Println("===========================================================")
+
+		startTime := time.Now()
+		results, findings, summary, err := engine.Assess(context.Background(), actx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Execution error: %v\n", err)
+			execRecord.Status = assessment.StatusFailed
+			execRecord.ErrorMessage = err.Error()
+			_ = store.UpdateExecution(execRecord)
+			return 1
+		}
+
+		duration := time.Since(startTime)
+		completedAt := time.Now().UTC()
+		execRecord.Status = assessment.StatusCompleted
+		execRecord.CompletedAt = &completedAt
+		execRecord.DurationMs = duration.Milliseconds()
+		execRecord.RequestCount = len(results)
+		execRecord.FindingCount = len(findings)
+
+		// Save results
+		if err := store.SaveWebVulnResults(results); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Warning: failed to save webvuln results: %v\n", err)
+		}
+
+		// Save RunRecord
+		covJSON, _ := json.Marshal(summary.CoverageMap)
+		runRec := &webvuln.RunRecord{
+			ID:                 uuid.New().String(),
+			AssessmentID:       asm.ID,
+			ExecutionID:        execID,
+			TotalTests:         summary.TotalTests,
+			CategoriesAssessed: summary.CategoriesCovered,
+			VerifiedCount:      summary.VerifiedCount,
+			CandidateCount:     summary.CandidateCount,
+			ObservedCount:      summary.ObservedCount,
+			CoverageJSON:       string(covJSON),
+			CreatedAt:          completedAt,
+		}
+		if err := store.SaveWebVulnRun(runRec); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Warning: failed to save webvuln run record: %v\n", err)
+		}
+
+		// Save findings
+		var asmFindings []assessment.AssessmentFinding
+		for _, f := range findings {
+			asmFindings = append(asmFindings, assessment.ToAssessmentFinding(asm.ID, execID, targetID, f))
+		}
+		if len(asmFindings) > 0 {
+			if err := store.SaveFindings(asmFindings); err != nil {
+				fmt.Fprintf(os.Stderr, "[-] Warning: failed to save assessment findings: %v\n", err)
+			}
+		}
+		_ = store.UpdateExecution(execRecord)
+
+		fmt.Printf("[✓] Web vulnerability audit completed in %s (%d tests executed, %d verified findings)\n",
+			duration.Round(time.Millisecond), summary.TotalTests, summary.VerifiedCount)
+	}
+
+	// 3. Display Results Mode
+	results, err := store.GetWebVulnResults(asm.ID, "", categoryFilter, statusFilter)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Failed to fetch webvuln results: %v\n", err)
+		return 1
+	}
+
+	summary, _ := store.GetWebVulnSummary(asm.ID, "")
+
+	if jsonOutput {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		output := map[string]any{
+			"assessment_ref": asm.Ref,
+			"assessment_id":  asm.ID,
+			"summary":        summary,
+			"results":        results,
+		}
+		_ = enc.Encode(output)
+		return 0
+	}
+
+	fmt.Println("===========================================================")
+	fmt.Printf("  FELIX :: WEB VULNERABILITY ASSESSMENT DOSSIER: %s\n", asm.Ref)
+	fmt.Printf("  Assessment: %s | Target: %s\n", asm.Name, targetBase)
+	fmt.Println("===========================================================")
+
+	if summary != nil {
+		fmt.Println("\n[+] SUMMARY METRICS:")
+		fmt.Printf("  - Total Tests Executed:     %d\n", summary.TotalTests)
+		fmt.Printf("  - Categories Covered:       %d / 13\n", summary.CategoriesCovered)
+		fmt.Printf("  - Verified Vulnerabilities: %d\n", summary.VerifiedCount)
+		fmt.Printf("  - Candidate Vulnerabilities:%d\n", summary.CandidateCount)
+		fmt.Printf("  - Observed Patterns:        %d\n", summary.ObservedCount)
+		fmt.Printf("  - Not Vulnerable / Safe:    %d\n", summary.NotVulnerableCount)
+
+		fmt.Println("\n[+] CATEGORY COVERAGE MATRIX:")
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "CODE\tCATEGORY\tSTATUS\tTESTS\tVERIFIED\tCANDIDATES\tOBSERVED\tEXPLANATION")
+		for _, cat := range []webvuln.VulnCategory{
+			webvuln.CategoryXSS, webvuln.CategorySQLi, webvuln.CategoryNoSQLi,
+			webvuln.CategoryCmdi, webvuln.CategoryPathTraversal, webvuln.CategoryFileInclusion,
+			webvuln.CategorySSTI, webvuln.CategorySSRF, webvuln.CategoryOpenRedirect,
+			webvuln.CategoryRequestIssues, webvuln.CategoryInfoDisclosure,
+			webvuln.CategoryDeserialization, webvuln.CategoryMisconfiguration,
+		} {
+			cov, ok := summary.CoverageMap[string(cat)]
+			if !ok {
+				meta := webvuln.CategoryMetadata[cat]
+				cov = webvuln.CategoryCoverage{Code: meta.Code, Name: meta.Name, Status: webvuln.CoverageUntested}
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%d\t%d\t%s\n",
+				cov.Code, cov.Name, cov.Status, cov.TestsRun, cov.Verified, cov.Candidates, cov.Observations, cov.Explanation)
+		}
+		_ = w.Flush()
+	}
+
+	if len(results) > 0 {
+		fmt.Printf("\n[+] WEB VULNERABILITY TEST RESULTS (%d)\n", len(results))
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		if verbose {
+			fmt.Fprintln(w, "CODE\tSTATE\tSEVERITY\tMETHOD\tENDPOINT\tTEST NAME\tEVIDENCE SUMMARY")
+			for _, r := range results {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					r.VulnCode, r.VerificationState, r.Severity, r.Method, r.Endpoint, r.TestName, r.EvidenceSummary)
+			}
+		} else {
+			fmt.Fprintln(w, "CODE\tSTATE\tSEVERITY\tMETHOD\tENDPOINT\tEVIDENCE SUMMARY")
+			for _, r := range results {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+					r.VulnCode, r.VerificationState, r.Severity, r.Method, r.Endpoint, r.EvidenceSummary)
+			}
+		}
+		_ = w.Flush()
+	} else if summary == nil || summary.TotalTests == 0 {
+		fmt.Println("\nNo web vulnerability test results recorded.")
+		fmt.Printf("To run a web vulnerability assessment:\n  felix assessment webvuln %s --run\n", asm.Ref)
+	}
+
+	fmt.Println()
+	return 0
+}

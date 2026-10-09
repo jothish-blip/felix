@@ -11,6 +11,7 @@ import (
 	"felix/pkg/authz"
 	"felix/pkg/discovery"
 	"felix/pkg/report"
+	"felix/pkg/webvuln"
 	"github.com/google/uuid"
 )
 
@@ -998,6 +999,161 @@ func TestStore_APISecPersistenceAndMigration(t *testing.T) {
 	}
 }
 
+func TestStore_WebVulnPersistenceAndMigration(t *testing.T) {
+	store, cleanup := newTestStore(t)
+	defer cleanup()
 
+	// 1. Verify schema migration version 6 applied
+	var maxVersion int
+	err := store.db.QueryRow("SELECT MAX(version) FROM schema_migrations").Scan(&maxVersion)
+	if err != nil {
+		t.Fatalf("failed to query schema version: %v", err)
+	}
+	if maxVersion < 6 {
+		t.Fatalf("expected schema version >= 6, got %d", maxVersion)
+	}
 
+	// 2. Setup client, assessment, and execution
+	c := &Client{
+		ID:        uuid.New().String(),
+		Name:      "WebVuln Test Org",
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	if err := store.CreateClient(c); err != nil {
+		t.Fatalf("CreateClient failed: %v", err)
+	}
 
+	asm := &Assessment{
+		ID:             uuid.New().String(),
+		Ref:            "ASM-WEBVULN-01",
+		ClientID:       c.ID,
+		Name:           "Web Vulnerability Assessment",
+		AssessmentType: "WEB_VULNERABILITY",
+		Status:         StatusRunning,
+		CreatedAt:      time.Now().UTC(),
+		UpdatedAt:      time.Now().UTC(),
+	}
+	if err := store.CreateAssessment(asm); err != nil {
+		t.Fatalf("CreateAssessment failed: %v", err)
+	}
+
+	exec := &AssessmentExecution{
+		ID:           uuid.New().String(),
+		AssessmentID: asm.ID,
+		Status:       StatusRunning,
+		StartedAt:    time.Now().UTC(),
+	}
+	if err := store.CreateExecution(exec); err != nil {
+		t.Fatalf("CreateExecution failed: %v", err)
+	}
+
+	// 3. Test SaveWebVulnRun and GetWebVulnRun
+	runRec := &webvuln.RunRecord{
+		ID:                 uuid.New().String(),
+		AssessmentID:       asm.ID,
+		ExecutionID:        exec.ID,
+		TotalTests:         13,
+		CategoriesAssessed: 13,
+		VerifiedCount:      3,
+		CandidateCount:     2,
+		ObservedCount:      1,
+		CoverageJSON:       `{"XSS":{"category":"XSS","code":"WV-XSS","name":"Cross-Site Scripting (XSS)","status":"VERIFIED_ISSUE_FOUND","tests_run":5,"verified":1,"candidates":0,"observations":0}}`,
+		CreatedAt:          time.Now().UTC(),
+	}
+	if err := store.SaveWebVulnRun(runRec); err != nil {
+		t.Fatalf("SaveWebVulnRun failed: %v", err)
+	}
+
+	savedRun, err := store.GetWebVulnRun(asm.ID, exec.ID)
+	if err != nil {
+		t.Fatalf("GetWebVulnRun failed: %v", err)
+	}
+	if savedRun == nil {
+		t.Fatalf("expected non-nil RunRecord")
+	}
+	if savedRun.VerifiedCount != 3 {
+		t.Errorf("expected VerifiedCount = 3, got %d", savedRun.VerifiedCount)
+	}
+	if savedRun.CandidateCount != 2 {
+		t.Errorf("expected CandidateCount = 2, got %d", savedRun.CandidateCount)
+	}
+
+	// 4. Test SaveWebVulnResults and GetWebVulnResults
+	results := []webvuln.Result{
+		{
+			ID:                uuid.New().String(),
+			AssessmentID:      asm.ID,
+			ExecutionID:       exec.ID,
+			Category:          webvuln.CategoryXSS,
+			VulnCode:          "WV-XSS",
+			TestName:          "Reflected XSS Probe",
+			Endpoint:          "http://example.com/search",
+			Method:            "GET",
+			VerificationState: webvuln.StateVerified,
+			Severity:          report.SeverityHigh,
+			Confidence:        report.ConfidenceHigh,
+			ObservedStatus:    200,
+			EvidenceSummary:   "Raw unescaped probe tag reflected in HTML",
+			EvidenceDetails:   map[string]string{"reflection": "unescaped_html"},
+			CreatedAt:         time.Now().UTC(),
+		},
+		{
+			ID:                uuid.New().String(),
+			AssessmentID:      asm.ID,
+			ExecutionID:       exec.ID,
+			Category:          webvuln.CategorySQLi,
+			VulnCode:          "WV-SQLI",
+			TestName:          "SQL Syntax Probe",
+			Endpoint:          "http://example.com/items",
+			Method:            "GET",
+			VerificationState: webvuln.StateCandidate,
+			Severity:          report.SeverityMedium,
+			Confidence:        report.ConfidenceLow,
+			ObservedStatus:    500,
+			EvidenceSummary:   "Generic 500 error returned",
+			CreatedAt:         time.Now().UTC(),
+		},
+	}
+	if err := store.SaveWebVulnResults(results); err != nil {
+		t.Fatalf("SaveWebVulnResults failed: %v", err)
+	}
+
+	loadedResults, err := store.GetWebVulnResults(asm.ID, exec.ID, "", "")
+	if err != nil {
+		t.Fatalf("GetWebVulnResults failed: %v", err)
+	}
+	if len(loadedResults) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(loadedResults))
+	}
+
+	// Filter by category
+	filtered, err := store.GetWebVulnResults(asm.ID, exec.ID, string(webvuln.CategoryXSS), "")
+	if err != nil {
+		t.Fatalf("GetWebVulnResults filtered failed: %v", err)
+	}
+	if len(filtered) != 1 {
+		t.Errorf("expected 1 XSS result, got %d", len(filtered))
+	}
+
+	// Filter by state
+	stateFiltered, err := store.GetWebVulnResults(asm.ID, exec.ID, "", string(webvuln.StateVerified))
+	if err != nil {
+		t.Fatalf("GetWebVulnResults by state failed: %v", err)
+	}
+	if len(stateFiltered) != 1 {
+		t.Errorf("expected 1 verified result, got %d", len(stateFiltered))
+	}
+
+	// 5. Test GetWebVulnSummary
+	summary, err := store.GetWebVulnSummary(asm.ID, exec.ID)
+	if err != nil {
+		t.Fatalf("GetWebVulnSummary failed: %v", err)
+	}
+	if summary.TotalTests != 13 {
+		t.Errorf("expected TotalTests = 13 from RunRecord, got %d", summary.TotalTests)
+	}
+	if summary.VerifiedCount != 3 {
+		t.Errorf("expected VerifiedCount = 3, got %d", summary.VerifiedCount)
+	}
+}

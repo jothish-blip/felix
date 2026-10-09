@@ -75,24 +75,24 @@ type Client struct {
 
 // Assessment represents a client-authorized security auditing project.
 type Assessment struct {
-	ID                 string             `json:"id"`
-	Ref                string             `json:"ref"` // Human-readable reference, e.g. ASM-2026-0001
-	ClientID           string             `json:"client_id"`
-	Name               string             `json:"name"`
-	Description        string             `json:"description,omitempty"`
-	AssessmentType     string             `json:"assessment_type"` // e.g. BLACK_BOX_WEB, API_AUDIT, HYBRID
-	Status             AssessmentStatus   `json:"status"`
-	CreatedAt          time.Time          `json:"created_at"`
-	UpdatedAt          time.Time          `json:"updated_at"`
-	StartedAt          *time.Time         `json:"started_at,omitempty"`
-	CompletedAt        *time.Time         `json:"completed_at,omitempty"`
-	ScopeMode          string             `json:"scope_mode"` // same-origin, subdomains, explicit
-	ConfigSnapshotJSON string             `json:"config_snapshot_json,omitempty"`
-	FindingCount       int                `json:"finding_count"`
-	Targets            []AssessmentTarget `json:"targets,omitempty"`
-	Authorization      *AuthorizationRecord `json:"authorization,omitempty"`
-	Exclusions         []Exclusion        `json:"exclusions,omitempty"`
-	ScopeRules         []ScopeRule        `json:"scope_rules,omitempty"`
+	ID                 string                `json:"id"`
+	Ref                string                `json:"ref"` // Human-readable reference, e.g. ASM-2026-0001
+	ClientID           string                `json:"client_id"`
+	Name               string                `json:"name"`
+	Description        string                `json:"description,omitempty"`
+	AssessmentType     string                `json:"assessment_type"` // e.g. BLACK_BOX_WEB, API_AUDIT, HYBRID
+	Status             AssessmentStatus      `json:"status"`
+	CreatedAt          time.Time             `json:"created_at"`
+	UpdatedAt          time.Time             `json:"updated_at"`
+	StartedAt          *time.Time            `json:"started_at,omitempty"`
+	CompletedAt        *time.Time            `json:"completed_at,omitempty"`
+	ScopeMode          string                `json:"scope_mode"` // same-origin, subdomains, explicit
+	ConfigSnapshotJSON string                `json:"config_snapshot_json,omitempty"`
+	FindingCount       int                   `json:"finding_count"`
+	Targets            []AssessmentTarget    `json:"targets,omitempty"`
+	Authorization      *AuthorizationRecord  `json:"authorization,omitempty"`
+	Exclusions         []Exclusion           `json:"exclusions,omitempty"`
+	ScopeRules         []ScopeRule           `json:"scope_rules,omitempty"`
 	Executions         []AssessmentExecution `json:"executions,omitempty"`
 }
 
