@@ -251,65 +251,119 @@ func (e *Engine) assessXSS(ctx context.Context, actx *AssessmentContext, client 
 			}
 
 			// Verification logic:
-			// 1. Properly HTML entity-encoded probe tag (&lt;...) -> NOT_VULNERABLE
-			// 2. Genuinely unsafe executable contexts:
-			//    - Synthetic fixture mode (actx.SyntheticFixture = true) with unescaped probe -> VERIFIED
-			//    - Probe reflected inside an executable <script> context -> VERIFIED
-			// 3. Unescaped inert marker or custom HTML tag in HTML body (<flx_xss_...>) -> CANDIDATE
-			//    (Inert custom elements do not independently establish executable XSS without client-side DOM execution)
-			// 4. Harmless literal text reflection without HTML tags -> OBSERVED
-			// 5. JSON reflection without HTML execution context -> OBSERVED
-			// 6. Not reflected -> NOT_VULNERABLE
+			// 1. Safely encoded / escaped contexts:
+			//    - HTML entity encoded (&lt;...) -> NOT_VULNERABLE
+			//    - JavaScript unicode / hex / backslash escapes (\u003c, \x3c, \<) -> NOT_VULNERABLE
+			// 2. Reflections inside a <script> element:
+			//    - Inside a harmless JavaScript comment (// or /* */) -> OBSERVED
+			//    - Inside a harmless JavaScript string literal ("...", '...', `...`) -> OBSERVED
+			//    - Executable script code or breakout context:
+			//      * In a safe synthetic test fixture (actx.SyntheticFixture = true) demonstrating unsafe interpretation -> VERIFIED
+			//      * On a live target (actx.SyntheticFixture = false): static HTTP response analysis alone cannot prove execution without browser instrumentation -> CANDIDATE
+			// 3. Reflections outside <script> elements:
+			//    - Inert custom HTML tag (<flx_xss_...>) in HTML body -> CANDIDATE (insufficient proof of execution without browser DOM)
+			//    - Harmless literal text reflection without markup tags -> OBSERVED
+			//    - No reflection -> NOT_VULNERABLE
+			// 4. Non-HTML responses:
+			//    - JSON responses reflecting probe or token -> OBSERVED
+			//    - Other non-HTML -> NOT_VULNERABLE
+			lowerBody := strings.ToLower(bodyStr)
+			isSafelyEncoded := strings.Contains(bodyStr, encodedProbe) ||
+				(strings.Contains(bodyStr, "&lt;") && strings.Contains(bodyStr, token)) ||
+				((strings.Contains(lowerBody, "\\u003c") || strings.Contains(lowerBody, "\\x3c") || strings.Contains(bodyStr, "\\<")) && strings.Contains(bodyStr, token))
+
 			if strings.Contains(contentType, "text/html") || strings.Contains(contentType, "application/xhtml+xml") {
-				if strings.Contains(bodyStr, encodedProbe) || (strings.Contains(bodyStr, "&lt;") && strings.Contains(bodyStr, token)) {
+				if isSafelyEncoded {
 					r.VerificationState = StateNotVulnerable
 					r.Severity = report.SeverityInfo
 					r.Confidence = report.ConfidenceHigh
-					r.EvidenceSummary = fmt.Sprintf("Probe on parameter '%s' was safely sanitized/encoded with HTML entities", p)
-				} else if isInsideScriptContext(bodyStr, rawProbe) || (actx.SyntheticFixture && strings.Contains(bodyStr, rawProbe)) {
-					r.VerificationState = StateVerified
-					r.Severity = report.SeverityHigh
-					r.Confidence = report.ConfidenceHigh
-					r.EvidenceSummary = fmt.Sprintf("Probe reflected directly into an executable script/sink context via parameter '%s'", p)
-					r.EvidenceDetails = map[string]string{
-						"parameter":    p,
-						"probe":        rawProbe,
-						"content_type": contentType,
-						"reflection":   "executable_script_context",
+					r.EvidenceSummary = fmt.Sprintf("Probe on parameter '%s' was safely sanitized/encoded for the tested context", p)
+				} else {
+					scriptCtx := getScriptContext(bodyStr, rawProbe)
+					if scriptCtx == ScriptSubContextNone && strings.Contains(bodyStr, token) {
+						scriptCtx = getScriptContext(bodyStr, token)
 					}
 
-					fnd := e.createFinding(actx, r, fmt.Sprintf("Reflected Cross-Site Scripting (XSS) on %s", ep.Path),
-						r.EvidenceSummary, report.SeverityHigh, 75)
-					r.Finding = fnd
-					findings = append(findings, *fnd)
-					cov.Verified++
-					cov.Status = CoverageVerifiedIssueFound
-				} else if strings.Contains(bodyStr, rawProbe) {
-					// Inert custom tag / marker reflected into HTML body without demonstrable execution sink
-					r.VerificationState = StateCandidate
-					r.Severity = report.SeverityMedium
-					r.Confidence = report.ConfidenceMedium
-					r.EvidenceSummary = fmt.Sprintf("Inert custom tag %s reflected unescaped in text/html via parameter '%s'. Unescaped markup reflection detected, but inert custom elements do not independently prove executable XSS without browser DOM execution; reported as CANDIDATE.", rawProbe, p)
-					r.EvidenceDetails = map[string]string{
-						"parameter":    p,
-						"probe":        rawProbe,
-						"content_type": contentType,
-						"reflection":   "inert_custom_element",
-						"limitation":   "browser_dom_execution_not_invoked",
+					switch scriptCtx {
+					case ScriptSubContextComment:
+						r.VerificationState = StateObserved
+						r.Severity = report.SeverityInfo
+						r.Confidence = report.ConfidenceHigh
+						r.EvidenceSummary = fmt.Sprintf("Probe on parameter '%s' reflected within a harmless JavaScript comment inside a <script> element; non-executable", p)
+						cov.Observations++
+
+					case ScriptSubContextString:
+						r.VerificationState = StateObserved
+						r.Severity = report.SeverityInfo
+						r.Confidence = report.ConfidenceHigh
+						r.EvidenceSummary = fmt.Sprintf("Probe on parameter '%s' reflected within a harmless JavaScript string literal inside a <script> element; non-executable without syntax breakout", p)
+						cov.Observations++
+
+					case ScriptSubContextCode:
+						if actx.SyntheticFixture {
+							// Synthetic test fixture demonstrating genuinely unsafe interpretation
+							r.VerificationState = StateVerified
+							r.Severity = report.SeverityHigh
+							r.Confidence = report.ConfidenceHigh
+							r.EvidenceSummary = fmt.Sprintf("Synthetic test fixture verified unsafe script interpretation on parameter '%s'", p)
+							r.EvidenceDetails = map[string]string{
+								"parameter":    p,
+								"probe":        rawProbe,
+								"content_type": contentType,
+								"reflection":   "synthetic_unsafe_script_interpretation",
+							}
+
+							fnd := e.createFinding(actx, r, fmt.Sprintf("Reflected Cross-Site Scripting (XSS) on %s", ep.Path),
+								r.EvidenceSummary, report.SeverityHigh, 75)
+							r.Finding = fnd
+							findings = append(findings, *fnd)
+							cov.Verified++
+							cov.Status = CoverageVerifiedIssueFound
+						} else {
+							// Live target: Plausible unsafe script context, but browser DOM execution was not invoked
+							r.VerificationState = StateCandidate
+							r.Severity = report.SeverityMedium
+							r.Confidence = report.ConfidenceMedium
+							r.EvidenceSummary = fmt.Sprintf("Plausible unsafe unescaped reflection inside <script> element detected via parameter '%s'. Client-side execution cannot be confirmed without browser instrumentation; reported as CANDIDATE.", p)
+							r.EvidenceDetails = map[string]string{
+								"parameter":    p,
+								"probe":        rawProbe,
+								"content_type": contentType,
+								"reflection":   "script_element_unverified",
+								"limitation":   "browser_dom_execution_not_invoked",
+							}
+							cov.Candidates++
+						}
+
+					default: // ScriptSubContextNone (Outside <script> elements)
+						if strings.Contains(bodyStr, rawProbe) {
+							// Inert custom tag / marker reflected into HTML body
+							r.VerificationState = StateCandidate
+							r.Severity = report.SeverityMedium
+							r.Confidence = report.ConfidenceMedium
+							r.EvidenceSummary = fmt.Sprintf("Inert custom tag %s reflected unescaped in text/html via parameter '%s'. Unescaped markup reflection detected, but inert custom elements do not independently prove executable XSS without browser DOM execution; reported as CANDIDATE.", rawProbe, p)
+							r.EvidenceDetails = map[string]string{
+								"parameter":    p,
+								"probe":        rawProbe,
+								"content_type": contentType,
+								"reflection":   "inert_custom_element",
+								"limitation":   "browser_dom_execution_not_invoked",
+							}
+							cov.Candidates++
+						} else if strings.Contains(bodyStr, token) {
+							// Harmless literal text reflection without markup tags
+							r.VerificationState = StateObserved
+							r.Severity = report.SeverityInfo
+							r.Confidence = report.ConfidenceHigh
+							r.EvidenceSummary = fmt.Sprintf("Harmless literal text reflection of token on parameter '%s' without unescaped HTML tags", p)
+							cov.Observations++
+						} else {
+							r.VerificationState = StateNotVulnerable
+							r.Severity = report.SeverityInfo
+							r.Confidence = report.ConfidenceMedium
+							r.EvidenceSummary = fmt.Sprintf("Probe on parameter '%s' was not reflected in response", p)
+						}
 					}
-					cov.Candidates++
-				} else if strings.Contains(bodyStr, token) {
-					// Harmless literal text reflection without markup tags
-					r.VerificationState = StateObserved
-					r.Severity = report.SeverityInfo
-					r.Confidence = report.ConfidenceHigh
-					r.EvidenceSummary = fmt.Sprintf("Harmless literal text reflection of token on parameter '%s' without unescaped HTML tags", p)
-					cov.Observations++
-				} else {
-					r.VerificationState = StateNotVulnerable
-					r.Severity = report.SeverityInfo
-					r.Confidence = report.ConfidenceMedium
-					r.EvidenceSummary = fmt.Sprintf("Probe on parameter '%s' was not reflected in response", p)
 				}
 			} else if strings.Contains(contentType, "application/json") {
 				if strings.Contains(bodyStr, rawProbe) || strings.Contains(bodyStr, token) {
@@ -1835,14 +1889,109 @@ func min(a, b int) int {
 	return b
 }
 
-func isInsideScriptContext(body, probe string) bool {
+// ScriptSubContext represents the specific syntactic context within a <script> element.
+type ScriptSubContext int
+
+const (
+	ScriptSubContextNone    ScriptSubContext = iota // Outside <script> elements
+	ScriptSubContextCode                            // Executable/unquoted JavaScript code or syntax breakout
+	ScriptSubContextString                          // Harmless JavaScript string literal ("...", '...', `...`)
+	ScriptSubContextComment                         // Harmless JavaScript comment (// or /* ... */)
+)
+
+// analyzeScriptContext evaluates the JavaScript syntax preceding a reflected probe
+// to classify whether the probe sits in executable code, a string literal, or a comment.
+func analyzeScriptContext(jsBefore string) ScriptSubContext {
+	var inDoubleQuote, inSingleQuote, inBacktick, inLineComment, inBlockComment, escaped bool
+	for i := 0; i < len(jsBefore); i++ {
+		c := jsBefore[i]
+		if inLineComment {
+			if c == '\n' || c == '\r' {
+				inLineComment = false
+			}
+			continue
+		}
+		if inBlockComment {
+			if c == '*' && i+1 < len(jsBefore) && jsBefore[i+1] == '/' {
+				inBlockComment = false
+				i++
+			}
+			continue
+		}
+		if inDoubleQuote {
+			if escaped {
+				escaped = false
+			} else if c == '\\' {
+				escaped = true
+			} else if c == '"' {
+				inDoubleQuote = false
+			}
+			continue
+		}
+		if inSingleQuote {
+			if escaped {
+				escaped = false
+			} else if c == '\\' {
+				escaped = true
+			} else if c == '\'' {
+				inSingleQuote = false
+			}
+			continue
+		}
+		if inBacktick {
+			if escaped {
+				escaped = false
+			} else if c == '\\' {
+				escaped = true
+			} else if c == '`' {
+				inBacktick = false
+			}
+			continue
+		}
+
+		// Outside quotes and comments:
+		if c == '/' && i+1 < len(jsBefore) {
+			next := jsBefore[i+1]
+			if next == '/' {
+				inLineComment = true
+				i++
+				continue
+			} else if next == '*' {
+				inBlockComment = true
+				i++
+				continue
+			}
+		}
+		if c == '"' {
+			inDoubleQuote = true
+		} else if c == '\'' {
+			inSingleQuote = true
+		} else if c == '`' {
+			inBacktick = true
+		}
+	}
+
+	if inLineComment || inBlockComment {
+		return ScriptSubContextComment
+	}
+	if inDoubleQuote || inSingleQuote || inBacktick {
+		return ScriptSubContextString
+	}
+	return ScriptSubContextCode
+}
+
+// getScriptContext scans the document for occurrences of probe and returns
+// the script sub-context if reflected inside a <script> element.
+func getScriptContext(body, probe string) ScriptSubContext {
 	lowerBody := strings.ToLower(body)
 	lowerProbe := strings.ToLower(probe)
 	offset := 0
+	highestCtx := ScriptSubContextNone
+
 	for {
 		idx := strings.Index(lowerBody[offset:], lowerProbe)
 		if idx == -1 {
-			return false
+			break
 		}
 		actualIdx := offset + idx
 		scriptStart := strings.LastIndex(lowerBody[:actualIdx], "<script")
@@ -1851,10 +2000,30 @@ func isInsideScriptContext(body, probe string) bool {
 			if scriptEnd == -1 || scriptEnd < scriptStart {
 				nextScriptEnd := strings.Index(lowerBody[actualIdx:], "</script>")
 				if nextScriptEnd != -1 {
-					return true
+					// Located inside an active <script> tag
+					openTagRel := strings.Index(body[scriptStart:actualIdx], ">")
+					var jsBefore string
+					if openTagRel != -1 {
+						jsBefore = body[scriptStart+openTagRel+1 : actualIdx]
+					} else {
+						jsBefore = body[scriptStart:actualIdx]
+					}
+					ctx := analyzeScriptContext(jsBefore)
+					if ctx == ScriptSubContextCode {
+						return ScriptSubContextCode // Prioritize dangerous code context
+					}
+					if ctx > highestCtx {
+						highestCtx = ctx
+					}
 				}
 			}
 		}
 		offset = actualIdx + len(lowerProbe)
 	}
+
+	return highestCtx
+}
+
+func isInsideScriptContext(body, probe string) bool {
+	return getScriptContext(body, probe) != ScriptSubContextNone
 }

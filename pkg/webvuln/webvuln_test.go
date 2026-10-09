@@ -11,17 +11,27 @@ import (
 	"felix/pkg/report"
 )
 
-// 1. Test XSS: Dangerous Script Context vs Synthetic Fixture vs Inert Custom Tag vs Encoded vs JSON
+// 1. Test XSS: Comprehensive verification hardening covering all 8 criteria
 func TestWebVuln_XSS(t *testing.T) {
-	// Server 1: Genuinely unsafe script context reflection
-	scriptServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Server 1: Harmless text reflection (server strips HTML tags)
+	textServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("q")
+		stripped := strings.ReplaceAll(strings.ReplaceAll(q, "<", ""), ">", "")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprintf(w, "<html><head><script>var query = \"%s\";</script></head><body>Search</body></html>", q)
+		fmt.Fprintf(w, "<html><body>Search results for: %s</body></html>", stripped)
 	}))
-	defer scriptServer.Close()
+	defer textServer.Close()
 
-	// Server 2: Inert custom tag reflection in HTML body
+	// Server 2: HTML-entity-encoded reflection
+	entityServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("q")
+		escaped := strings.ReplaceAll(strings.ReplaceAll(q, "<", "&lt;"), ">", "&gt;")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprintf(w, "<html><body>Search results for: %s</body></html>", escaped)
+	}))
+	defer entityServer.Close()
+
+	// Server 3: Inert custom HTML tag in HTML body
 	inertServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("q")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -29,27 +39,40 @@ func TestWebVuln_XSS(t *testing.T) {
 	}))
 	defer inertServer.Close()
 
-	// Server 3: Harmless literal text reflection (server strips HTML markup tags)
-	textServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Server 4: A script element containing a harmless string
+	stringScriptServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("q")
-		// Strip angle brackets
-		stripped := strings.ReplaceAll(strings.ReplaceAll(q, "<", ""), ">", "")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprintf(w, "<html><body>Search results for: %s</body></html>", stripped)
+		fmt.Fprintf(w, "<html><head><script>var query = \"%s\";</script></head><body>Search</body></html>", q)
 	}))
-	defer textServer.Close()
+	defer stringScriptServer.Close()
 
-	// Server 4: Safe server HTML entity encoding input
-	safeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Server 5: A script element containing a harmless comment
+	commentScriptServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("q")
-		escaped := strings.ReplaceAll(q, "<", "&lt;")
-		escaped = strings.ReplaceAll(escaped, ">", "&gt;")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprintf(w, "<html><body>Search results for: %s</body></html>", escaped)
+		fmt.Fprintf(w, "<html><head><script>// query parameter: %s\n</script></head><body>Search</body></html>", q)
 	}))
-	defer safeServer.Close()
+	defer commentScriptServer.Close()
 
-	// Server 5: JSON server reflecting input inside JSON data
+	// Server 6: Safely encoded values in a script-related context
+	encodedScriptServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("q")
+		escaped := strings.ReplaceAll(strings.ReplaceAll(q, "<", "\\u003c"), ">", "\\u003e")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprintf(w, "<html><head><script>var query = \"%s\";</script></head><body>Search</body></html>", escaped)
+	}))
+	defer encodedScriptServer.Close()
+
+	// Server 7 & 8: Unsafe script interpretation fixture (unquoted/executable injection into script)
+	unsafeScriptServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("q")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprintf(w, "<html><head><script>var x = 1; %s;</script></head><body>Search</body></html>", q)
+	}))
+	defer unsafeScriptServer.Close()
+
+	// JSON Server
 	jsonServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("q")
 		w.Header().Set("Content-Type", "application/json")
@@ -57,121 +80,155 @@ func TestWebVuln_XSS(t *testing.T) {
 	}))
 	defer jsonServer.Close()
 
-	engine := NewEngine(safeServer.Client(), DefaultConfig())
+	engine := NewEngine(entityServer.Client(), DefaultConfig())
 
-	// Test 1: Unsafe Context: Script context breakout -> VERIFIED
-	actxScript := &AssessmentContext{
-		AssessmentID:     "asm-xss-script",
-		ExecutionID:      "exec-xss-script",
-		BaseURL:          scriptServer.URL,
-		SyntheticFixture: false,
-		Endpoints: []TargetEndpoint{
-			{Method: "GET", Path: "/search", Parameters: []string{"q"}},
-		},
-	}
-	resultsScript, findingsScript, covScript := engine.assessXSS(context.Background(), actxScript, scriptServer.Client())
-	if covScript.Verified != 1 {
-		t.Fatalf("expected 1 verified XSS finding in script context, got %d", covScript.Verified)
-	}
-	if len(resultsScript) == 0 || resultsScript[0].VerificationState != StateVerified {
-		t.Fatalf("expected StateVerified for script context reflection, got %+v", resultsScript)
-	}
-	if len(findingsScript) != 1 || findingsScript[0].Severity != report.SeverityHigh {
-		t.Fatalf("expected 1 HIGH severity finding, got %+v", findingsScript)
-	}
-
-	// Test 2: Synthetic Fixture Mode -> VERIFIED
-	actxSynth := &AssessmentContext{
-		AssessmentID:     "asm-xss-synth",
-		ExecutionID:      "exec-xss-synth",
-		BaseURL:          inertServer.URL,
-		SyntheticFixture: true,
-		Endpoints: []TargetEndpoint{
-			{Method: "GET", Path: "/search", Parameters: []string{"q"}},
-		},
-	}
-	resultsSynth, findingsSynth, covSynth := engine.assessXSS(context.Background(), actxSynth, inertServer.Client())
-	if covSynth.Verified != 1 || len(findingsSynth) != 1 {
-		t.Fatalf("expected 1 verified XSS in synthetic fixture mode, got %d (findings: %d)", covSynth.Verified, len(findingsSynth))
-	}
-	if len(resultsSynth) == 0 || resultsSynth[0].VerificationState != StateVerified {
-		t.Fatalf("expected StateVerified in synthetic fixture mode, got %+v", resultsSynth)
-	}
-
-	// Test 3: Inert custom HTML tag on LIVE target -> CANDIDATE (never verified without execution proof)
-	actxInert := &AssessmentContext{
-		AssessmentID:     "asm-xss-inert",
-		ExecutionID:      "exec-xss-inert",
-		BaseURL:          inertServer.URL,
-		SyntheticFixture: false,
-		Endpoints: []TargetEndpoint{
-			{Method: "GET", Path: "/search", Parameters: []string{"q"}},
-		},
-	}
-	resultsInert, findingsInert, covInert := engine.assessXSS(context.Background(), actxInert, inertServer.Client())
-	if covInert.Verified != 0 {
-		t.Errorf("inert custom tag reflection must NOT be marked verified, got %d verified", covInert.Verified)
-	}
-	if covInert.Candidates != 1 || len(resultsInert) == 0 || resultsInert[0].VerificationState != StateCandidate {
-		t.Errorf("expected StateCandidate for inert tag reflection, got %+v", resultsInert)
-	}
-	if len(findingsInert) != 0 {
-		t.Errorf("inert custom tag candidate should not produce verified finding, got %d", len(findingsInert))
-	}
-	if resultsInert[0].EvidenceDetails["limitation"] != "browser_dom_execution_not_invoked" {
-		t.Errorf("expected limitation noted in EvidenceDetails, got %+v", resultsInert[0].EvidenceDetails)
-	}
-
-	// Test 4: Harmless literal text reflection -> OBSERVED
+	// 1. Harmless text reflection -> OBSERVED
 	actxText := &AssessmentContext{
 		AssessmentID:     "asm-xss-text",
 		ExecutionID:      "exec-xss-text",
 		BaseURL:          textServer.URL,
 		SyntheticFixture: false,
-		Endpoints: []TargetEndpoint{
-			{Method: "GET", Path: "/search", Parameters: []string{"q"}},
-		},
+		Endpoints:        []TargetEndpoint{{Method: "GET", Path: "/search", Parameters: []string{"q"}}},
 	}
-	resultsText, _, covText := engine.assessXSS(context.Background(), actxText, textServer.Client())
-	if covText.Verified != 0 || covText.Observations != 1 {
-		t.Errorf("expected 0 verified, 1 observation for literal text, got verified=%d, obs=%d", covText.Verified, covText.Observations)
+	resultsText, findingsText, covText := engine.assessXSS(context.Background(), actxText, textServer.Client())
+	if covText.Verified != 0 || len(findingsText) != 0 {
+		t.Errorf("harmless text must not be verified, got %d verified", covText.Verified)
 	}
-	if len(resultsText) == 0 || resultsText[0].VerificationState != StateObserved {
-		t.Errorf("expected StateObserved for literal text, got %+v", resultsText)
+	if covText.Observations != 1 || len(resultsText) == 0 || resultsText[0].VerificationState != StateObserved {
+		t.Errorf("expected StateObserved for text reflection, got %+v", resultsText)
 	}
 
-	// Test 5: Negative Control: Encoded Reflection -> NOT_VULNERABLE
-	actxSafe := &AssessmentContext{
-		AssessmentID: "asm-xss-safe",
-		ExecutionID:  "exec-xss-safe",
-		BaseURL:      safeServer.URL,
-		Endpoints: []TargetEndpoint{
-			{Method: "GET", Path: "/search", Parameters: []string{"q"}},
-		},
+	// 2. HTML-entity-encoded reflection -> NOT_VULNERABLE
+	actxEntity := &AssessmentContext{
+		AssessmentID:     "asm-xss-entity",
+		ExecutionID:      "exec-xss-entity",
+		BaseURL:          entityServer.URL,
+		SyntheticFixture: false,
+		Endpoints:        []TargetEndpoint{{Method: "GET", Path: "/search", Parameters: []string{"q"}}},
 	}
-	resultsSafe, _, covSafe := engine.assessXSS(context.Background(), actxSafe, safeServer.Client())
-	if covSafe.Verified != 0 {
-		t.Errorf("expected 0 verified XSS on safe server, got %d", covSafe.Verified)
+	resultsEntity, findingsEntity, covEntity := engine.assessXSS(context.Background(), actxEntity, entityServer.Client())
+	if covEntity.Verified != 0 || len(findingsEntity) != 0 {
+		t.Errorf("entity encoded must not be verified, got %d verified", covEntity.Verified)
 	}
-	if len(resultsSafe) == 0 || resultsSafe[0].VerificationState != StateNotVulnerable {
-		t.Errorf("expected NOT_VULNERABLE state for entity encoded response, got %+v", resultsSafe)
+	if len(resultsEntity) == 0 || resultsEntity[0].VerificationState != StateNotVulnerable {
+		t.Errorf("expected StateNotVulnerable for entity encoded reflection, got %+v", resultsEntity)
 	}
 
-	// Test 6: JSON Control: Reflection in JSON -> OBSERVED (not verified reflected XSS)
+	// 3. Inert custom HTML elements on live target -> CANDIDATE
+	actxInert := &AssessmentContext{
+		AssessmentID:     "asm-xss-inert",
+		ExecutionID:      "exec-xss-inert",
+		BaseURL:          inertServer.URL,
+		SyntheticFixture: false,
+		Endpoints:        []TargetEndpoint{{Method: "GET", Path: "/search", Parameters: []string{"q"}}},
+	}
+	resultsInert, findingsInert, covInert := engine.assessXSS(context.Background(), actxInert, inertServer.Client())
+	if covInert.Verified != 0 || len(findingsInert) != 0 {
+		t.Errorf("inert custom tag must not be verified, got %d verified", covInert.Verified)
+	}
+	if covInert.Candidates != 1 || len(resultsInert) == 0 || resultsInert[0].VerificationState != StateCandidate {
+		t.Errorf("expected StateCandidate for inert tag, got %+v", resultsInert)
+	}
+	if resultsInert[0].EvidenceDetails["limitation"] != "browser_dom_execution_not_invoked" {
+		t.Errorf("expected limitation documented for inert tag, got %+v", resultsInert[0].EvidenceDetails)
+	}
+
+	// 4. A script element containing a harmless string -> OBSERVED (never verified)
+	actxString := &AssessmentContext{
+		AssessmentID:     "asm-xss-str",
+		ExecutionID:      "exec-xss-str",
+		BaseURL:          stringScriptServer.URL,
+		SyntheticFixture: false,
+		Endpoints:        []TargetEndpoint{{Method: "GET", Path: "/search", Parameters: []string{"q"}}},
+	}
+	resultsString, findingsString, covString := engine.assessXSS(context.Background(), actxString, stringScriptServer.Client())
+	if covString.Verified != 0 || len(findingsString) != 0 {
+		t.Errorf("harmless string in script must NOT be verified, got %d verified", covString.Verified)
+	}
+	if covString.Observations != 1 || len(resultsString) == 0 || resultsString[0].VerificationState != StateObserved {
+		t.Errorf("expected StateObserved for string in script, got %+v", resultsString)
+	}
+
+	// 5. A script element containing a harmless comment -> OBSERVED (never verified)
+	actxComment := &AssessmentContext{
+		AssessmentID:     "asm-xss-comment",
+		ExecutionID:      "exec-xss-comment",
+		BaseURL:          commentScriptServer.URL,
+		SyntheticFixture: false,
+		Endpoints:        []TargetEndpoint{{Method: "GET", Path: "/search", Parameters: []string{"q"}}},
+	}
+	resultsComment, findingsComment, covComment := engine.assessXSS(context.Background(), actxComment, commentScriptServer.Client())
+	if covComment.Verified != 0 || len(findingsComment) != 0 {
+		t.Errorf("harmless comment in script must NOT be verified, got %d verified", covComment.Verified)
+	}
+	if covComment.Observations != 1 || len(resultsComment) == 0 || resultsComment[0].VerificationState != StateObserved {
+		t.Errorf("expected StateObserved for comment in script, got %+v", resultsComment)
+	}
+
+	// 6. Safely encoded values in a script-related context -> NOT_VULNERABLE
+	actxEncScript := &AssessmentContext{
+		AssessmentID:     "asm-xss-enc-script",
+		ExecutionID:      "exec-xss-enc-script",
+		BaseURL:          encodedScriptServer.URL,
+		SyntheticFixture: false,
+		Endpoints:        []TargetEndpoint{{Method: "GET", Path: "/search", Parameters: []string{"q"}}},
+	}
+	resultsEncScript, findingsEncScript, covEncScript := engine.assessXSS(context.Background(), actxEncScript, encodedScriptServer.Client())
+	if covEncScript.Verified != 0 || len(findingsEncScript) != 0 {
+		t.Errorf("safely encoded in script context must NOT be verified, got %d verified", covEncScript.Verified)
+	}
+	if len(resultsEncScript) == 0 || resultsEncScript[0].VerificationState != StateNotVulnerable {
+		t.Errorf("expected StateNotVulnerable for encoded script context, got %+v", resultsEncScript)
+	}
+
+	// 7. A synthetic fixture demonstrating genuinely unsafe interpretation -> VERIFIED
+	actxSynthUnsafe := &AssessmentContext{
+		AssessmentID:     "asm-xss-synth-unsafe",
+		ExecutionID:      "exec-xss-synth-unsafe",
+		BaseURL:          unsafeScriptServer.URL,
+		SyntheticFixture: true,
+		Endpoints:        []TargetEndpoint{{Method: "GET", Path: "/search", Parameters: []string{"q"}}},
+	}
+	resultsSynthUnsafe, findingsSynthUnsafe, covSynthUnsafe := engine.assessXSS(context.Background(), actxSynthUnsafe, unsafeScriptServer.Client())
+	if covSynthUnsafe.Verified != 1 || len(findingsSynthUnsafe) != 1 {
+		t.Fatalf("expected 1 verified finding in synthetic unsafe fixture, got %d", covSynthUnsafe.Verified)
+	}
+	if len(resultsSynthUnsafe) == 0 || resultsSynthUnsafe[0].VerificationState != StateVerified {
+		t.Fatalf("expected StateVerified for synthetic unsafe fixture, got %+v", resultsSynthUnsafe)
+	}
+	if findingsSynthUnsafe[0].Severity != report.SeverityHigh {
+		t.Errorf("expected SeverityHigh, got %v", findingsSynthUnsafe[0].Severity)
+	}
+
+	// 8. Live-target findings remaining unverified when the available evidence is insufficient -> CANDIDATE with documented limitation
+	actxLiveUnsafe := &AssessmentContext{
+		AssessmentID:     "asm-xss-live-unsafe",
+		ExecutionID:      "exec-xss-live-unsafe",
+		BaseURL:          unsafeScriptServer.URL,
+		SyntheticFixture: false, // LIVE TARGET
+		Endpoints:        []TargetEndpoint{{Method: "GET", Path: "/search", Parameters: []string{"q"}}},
+	}
+	resultsLiveUnsafe, findingsLiveUnsafe, covLiveUnsafe := engine.assessXSS(context.Background(), actxLiveUnsafe, unsafeScriptServer.Client())
+	if covLiveUnsafe.Verified != 0 || len(findingsLiveUnsafe) != 0 {
+		t.Errorf("live target without browser execution must NEVER be marked verified, got %d verified", covLiveUnsafe.Verified)
+	}
+	if covLiveUnsafe.Candidates != 1 || len(resultsLiveUnsafe) == 0 || resultsLiveUnsafe[0].VerificationState != StateCandidate {
+		t.Errorf("expected StateCandidate for live script reflection, got %+v", resultsLiveUnsafe)
+	}
+	if resultsLiveUnsafe[0].EvidenceDetails["limitation"] != "browser_dom_execution_not_invoked" {
+		t.Errorf("expected browser_dom_execution_not_invoked limitation, got %+v", resultsLiveUnsafe[0].EvidenceDetails)
+	}
+
+	// JSON response control -> OBSERVED
 	actxJSON := &AssessmentContext{
 		AssessmentID: "asm-xss-json",
 		ExecutionID:  "exec-xss-json",
 		BaseURL:      jsonServer.URL,
-		Endpoints: []TargetEndpoint{
-			{Method: "GET", Path: "/api/search", Parameters: []string{"q"}},
-		},
+		Endpoints:    []TargetEndpoint{{Method: "GET", Path: "/api/search", Parameters: []string{"q"}}},
 	}
 	resultsJSON, _, covJSON := engine.assessXSS(context.Background(), actxJSON, jsonServer.Client())
-	if covJSON.Verified != 0 {
-		t.Errorf("expected 0 verified XSS on JSON server, got %d", covJSON.Verified)
-	}
-	if len(resultsJSON) == 0 || resultsJSON[0].VerificationState != StateObserved {
-		t.Errorf("expected OBSERVED state for JSON response, got %+v", resultsJSON)
+	if covJSON.Verified != 0 || len(resultsJSON) == 0 || resultsJSON[0].VerificationState != StateObserved {
+		t.Errorf("expected StateObserved for JSON response, got %+v", resultsJSON)
 	}
 }
 

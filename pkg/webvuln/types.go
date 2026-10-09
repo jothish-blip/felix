@@ -46,7 +46,7 @@ var CategoryMetadata = map[VulnCategory]CategoryInfo{
 		Name:                 "Cross-Site Scripting (XSS)",
 		CWE:                  "CWE-79",
 		Description:          "Untrusted input is reflected or included in web output without appropriate context-aware encoding or sanitization.",
-		VerificationBoundary: "Verified exclusively via synthetic test fixtures or demonstrable executable script context breakout. Inert markers and custom tags do not independently prove XSS and are reported as CANDIDATE. Encoded output is NOT_VULNERABLE.",
+		VerificationBoundary: "Verified exclusively via safe synthetic fixtures demonstrating unsafe interpretation. On live targets, lack of browser DOM instrumentation prevents execution proof, keeping plausible contexts as CANDIDATE and harmless text/strings/comments as OBSERVED. Encoded output is NOT_VULNERABLE.",
 	},
 	CategorySQLi: {
 		Code:                 "WV-SQLI",
