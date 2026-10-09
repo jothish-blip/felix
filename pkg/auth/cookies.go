@@ -21,6 +21,7 @@ var (
 	csrfCookieNames = map[string]struct{}{
 		"csrf": {}, "csrftoken": {}, "csrf_token": {}, "xsrf": {}, "xsrftoken": {},
 		"xsrf-token": {}, "_csrf": {}, "_csrf_token": {}, "anti-forgery": {},
+		"authenticity_token": {}, "__host-csrf": {},
 	}
 )
 
@@ -38,6 +39,8 @@ func ParseAndAnalyzeCookies(headers http.Header, sourceURL, asmID, execID, targe
 	}
 
 	seen := make(map[string]struct{})
+	sanitizedSource := SanitizeURL(sourceURL)
+	isHTTPS := strings.HasPrefix(strings.ToLower(sourceURL), "https://")
 
 	for _, raw := range rawSetCookies {
 		// Use Go's standard http.Header reader to parse Set-Cookie safely
@@ -74,8 +77,10 @@ func ParseAndAnalyzeCookies(headers http.Header, sourceURL, asmID, execID, targe
 				if !c.HttpOnly {
 					defects = append(defects, "Missing HttpOnly flag (accessible to client JavaScript)")
 				}
-				if !c.Secure {
+				if isHTTPS && !c.Secure {
 					defects = append(defects, "Missing Secure flag (transmissible over unencrypted HTTP)")
+				} else if !isHTTPS && !c.Secure {
+					defects = append(defects, "Missing Secure flag (target served over unencrypted HTTP)")
 				}
 				if c.SameSite == http.SameSiteDefaultMode {
 					defects = append(defects, "SameSite attribute unset (relies on browser default)")
@@ -101,7 +106,7 @@ func ParseAndAnalyzeCookies(headers http.Header, sourceURL, asmID, execID, targe
 				IsSession:        isSession,
 				HasSecurityIssue: len(defects) > 0,
 				SecurityDefects:  defects,
-				SourceURL:        sourceURL,
+				SourceURL:        sanitizedSource,
 				CreatedAt:        time.Now().UTC(),
 			}
 
@@ -125,15 +130,24 @@ func classifyCookie(name string) (CookiePurpose, bool) {
 		return CookiePurposeCSRF, false
 	}
 
+	// Avoid false positive on author/authenticity cookies
+	if strings.Contains(lower, "author") || strings.Contains(lower, "authenticity") {
+		if strings.Contains(lower, "authenticity") {
+			return CookiePurposeCSRF, false
+		}
+		return CookiePurposeUnknown, false
+	}
+
+	// Check CSRF substrings before generic auth/token substrings
+	if strings.Contains(lower, "csrf") || strings.Contains(lower, "xsrf") {
+		return CookiePurposeCSRF, false
+	}
+
 	// Check pattern substrings
 	if strings.Contains(lower, "sess") || strings.Contains(lower, "auth") ||
 		strings.Contains(lower, "token") || strings.Contains(lower, "jwt") ||
 		strings.Contains(lower, "login") {
 		return CookiePurposeSession, true
-	}
-
-	if strings.Contains(lower, "csrf") || strings.Contains(lower, "xsrf") {
-		return CookiePurposeCSRF, false
 	}
 
 	if strings.Contains(lower, "lang") || strings.Contains(lower, "theme") ||

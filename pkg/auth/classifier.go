@@ -34,6 +34,22 @@ func (c *Classifier) ClassifyRoute(rawPath string) (AuthCategory, AuthSubtype, b
 		return "", "", false, ""
 	}
 
+	// Filter out non-route static asset files
+	staticExts := []string{".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".css", ".js", ".map", ".woff", ".woff2", ".ttf", ".webp", ".mp4", ".pdf", ".zip", ".tar.gz", ".json", ".xml", ".txt"}
+	for _, ext := range staticExts {
+		if strings.HasSuffix(clean, ext) {
+			return "", "", false, ""
+		}
+	}
+
+	// Filter out static documentation and editorial article paths
+	contentPrefixes := []string{"/docs/", "/documentation/", "/blog/", "/blogs/", "/article/", "/articles/", "/news/", "/author/", "/authors/", "/tutorials/", "/tutorial/", "/guide/", "/guides/"}
+	for _, cp := range contentPrefixes {
+		if strings.HasPrefix(clean, cp) || strings.Contains(clean, cp) {
+			return "", "", false, ""
+		}
+	}
+
 	// 1. Password Reset & Recovery
 	if strings.Contains(clean, "forgot-password") || strings.Contains(clean, "reset-password") ||
 		strings.Contains(clean, "password-reset") || strings.Contains(clean, "/recovery") ||
@@ -92,9 +108,8 @@ func (c *Classifier) ClassifyRoute(rawPath string) (AuthCategory, AuthSubtype, b
 
 	// 7. Login
 	if strings.Contains(clean, "login") || strings.Contains(clean, "signin") ||
-		strings.Contains(clean, "sign-in") || strings.Contains(clean, "/auth") {
-		// Verify /auth is not just general docs
-		if clean == "/auth" || strings.HasPrefix(clean, "/auth/") || strings.Contains(clean, "login") || strings.Contains(clean, "signin") {
+		strings.Contains(clean, "sign-in") || clean == "/auth" || strings.HasPrefix(clean, "/auth/") || strings.Contains(clean, "/api/auth") {
+		if !strings.HasPrefix(clean, "/author") && !strings.HasPrefix(clean, "/authority") && !strings.HasPrefix(clean, "/authenticity") {
 			return CategoryLogin, SubtypePassword, true, "Route name indicates user authentication / login entrypoint"
 		}
 	}
@@ -112,6 +127,8 @@ func (c *Classifier) ClassifyFromParameters(endpointPath string, paramNames []st
 	hasWebAuthn := false
 	hasOAuthToken := false
 	hasPKCE := false
+	hasOAuthContext := false
+	hasGenericCode := false
 
 	for _, name := range paramNames {
 		lower := strings.ToLower(name)
@@ -126,11 +143,20 @@ func (c *Classifier) ClassifyFromParameters(endpointPath string, paramNames []st
 			hasMFAOrOTP = true
 		case strings.Contains(lower, "webauthn") || strings.Contains(lower, "passkey") || lower == "credential_response":
 			hasWebAuthn = true
-		case lower == "access_token" || lower == "refresh_token" || lower == "id_token" || lower == "code":
+		case lower == "access_token" || lower == "refresh_token" || lower == "id_token" || lower == "auth_code" || lower == "authorization_code":
 			hasOAuthToken = true
-		case lower == "code_challenge" || lower == "code_verifier":
+		case lower == "state" || lower == "redirect_uri" || lower == "client_id" || lower == "code_verifier":
+			hasOAuthContext = true
+		case lower == "code":
+			hasGenericCode = true
+		case lower == "code_challenge":
 			hasPKCE = true
 		}
+	}
+
+	// Parameter 'code' only implies OAuth if paired with explicit OAuth context
+	if hasGenericCode && (hasOAuthContext || hasPKCE) {
+		hasOAuthToken = true
 	}
 
 	// Password reset endpoint inferred from parameters
@@ -164,9 +190,10 @@ func (c *Classifier) ClassifyFromParameters(endpointPath string, paramNames []st
 // ClassifyScriptSDK inspects JavaScript assets for known authentication SDKs.
 func (c *Classifier) ClassifyScriptSDK(jsContent string, sourceAsset, asmID, execID, targetID, appID string) []AuthSurface {
 	var surfaces []AuthSurface
+	sanitizedSource := SanitizeURL(sourceAsset)
 
 	addSDKSurface := func(cat AuthCategory, sub AuthSubtype, name, evidence string) {
-		canonicalID := fmt.Sprintf("SDK:%s:%s", name, sourceAsset)
+		canonicalID := fmt.Sprintf("SDK:%s:%s", name, sanitizedSource)
 		surfaces = append(surfaces, AuthSurface{
 			ID:                 uuid.New().String(),
 			AssessmentID:       asmID,
@@ -182,11 +209,11 @@ func (c *Classifier) ClassifyScriptSDK(jsContent string, sourceAsset, asmID, exe
 			VerificationStatus: VerificationInferred,
 			AuthState:          AuthStateIndicatorPresent,
 			InScope:            true,
-			Explanation:        fmt.Sprintf("Recognized %s client authentication SDK in bundle %s", name, sourceAsset),
+			Explanation:        fmt.Sprintf("Recognized %s client authentication SDK in bundle %s", name, sanitizedSource),
 			Evidence: map[string]any{
 				"sdk":          name,
 				"evidence":     evidence,
-				"source_asset": sourceAsset,
+				"source_asset": sanitizedSource,
 			},
 			Metadata: map[string]any{
 				"library": name,

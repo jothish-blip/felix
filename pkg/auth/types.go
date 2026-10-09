@@ -1,8 +1,46 @@
 package auth
 
 import (
+	"net/url"
+	"strings"
 	"time"
 )
+
+// SanitizeURL strips sensitive query parameter values from URL strings to prevent credential leakage.
+func SanitizeURL(rawURL string) string {
+	if rawURL == "" {
+		return ""
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	q := parsed.Query()
+	if len(q) == 0 {
+		return rawURL
+	}
+	modified := false
+	sensitiveKeys := map[string]struct{}{
+		"token": {}, "access_token": {}, "refresh_token": {}, "id_token": {},
+		"auth": {}, "auth_token": {}, "authorization": {}, "code": {},
+		"secret": {}, "client_secret": {}, "api_key": {}, "apikey": {},
+		"key": {}, "password": {}, "passwd": {}, "pass": {},
+		"session": {}, "session_id": {}, "sessionid": {}, "sid": {},
+		"sig": {}, "signature": {}, "credential": {}, "credentials": {},
+	}
+	for k := range q {
+		lowerK := strings.ToLower(k)
+		if _, ok := sensitiveKeys[lowerK]; ok || strings.Contains(lowerK, "token") || strings.Contains(lowerK, "secret") || strings.Contains(lowerK, "pass") {
+			q.Set(k, "[REDACTED]")
+			modified = true
+		}
+	}
+	if modified {
+		parsed.RawQuery = q.Encode()
+		return parsed.String()
+	}
+	return rawURL
+}
 
 // AuthCategory classifies the high-level authentication surface purpose.
 type AuthCategory string

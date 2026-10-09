@@ -12,8 +12,8 @@ import (
 )
 
 var (
-	// Regex identifying 3-part base64url JWT tokens
-	jwtRegex = regexp.MustCompile(`\b(eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})\b`)
+	// Regex identifying 3-part base64url JWT tokens (including unsecured tokens with empty signature part)
+	jwtRegex = regexp.MustCompile(`\b(eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.(?:[A-Za-z0-9_-]+\b)?)`)
 
 	// Regex identifying PKCE parameters in code/requests
 	pkceMethodRegex = regexp.MustCompile(`(?i)(?:code_challenge_method|codeChallengeMethod)\s*[:=]\s*["']?(S256|plain)["']?`)
@@ -35,9 +35,10 @@ var (
 func ExtractAndAnalyzeTokens(content, sourceAsset, asmID, execID, targetID string) []TokenArtifact {
 	var artifacts []TokenArtifact
 	seen := make(map[string]struct{})
+	sanitizedSource := SanitizeURL(sourceAsset)
 
 	addArtifact := func(art TokenArtifact) {
-		key := fmt.Sprintf("%s:%s:%s", art.TokenType, art.Name, art.Location)
+		key := fmt.Sprintf("%s:%s:%s:%s", art.TokenType, art.Name, art.Location, art.Algorithm)
 		if _, exists := seen[key]; !exists {
 			seen[key] = struct{}{}
 			artifacts = append(artifacts, art)
@@ -72,7 +73,7 @@ func ExtractAndAnalyzeTokens(content, sourceAsset, asmID, execID, targetID strin
 
 			summary := fmt.Sprintf("Observed %s structure with algorithm %s", typ, alg)
 			if strings.EqualFold(alg, "none") {
-				summary = "WARNING: JWT structure with 'none' algorithm detected"
+				summary = "WARNING: Unverified JWT structure declaring 'none' algorithm observed in client asset (server acceptance unverified)"
 			}
 
 			addArtifact(TokenArtifact{
@@ -87,7 +88,7 @@ func ExtractAndAnalyzeTokens(content, sourceAsset, asmID, execID, targetID strin
 				Format:          "JWT_3_PART",
 				Algorithm:       alg,
 				EvidenceSummary: summary,
-				SourceAsset:     sourceAsset,
+				SourceAsset:     sanitizedSource,
 				CreatedAt:       time.Now().UTC(),
 			})
 		}
@@ -106,7 +107,7 @@ func ExtractAndAnalyzeTokens(content, sourceAsset, asmID, execID, targetID strin
 
 		summary := fmt.Sprintf("PKCE flow identified (Method: %s)", method)
 		if method == "PLAIN" {
-			summary = "PKCE flow using insecure 'plain' code_challenge_method"
+			summary = "PKCE configuration declaring 'plain' code_challenge_method in client asset (live flow unverified)"
 		}
 
 		addArtifact(TokenArtifact{
@@ -121,7 +122,7 @@ func ExtractAndAnalyzeTokens(content, sourceAsset, asmID, execID, targetID strin
 			Format:          method,
 			Algorithm:       method,
 			EvidenceSummary: summary,
-			SourceAsset:     sourceAsset,
+			SourceAsset:     sanitizedSource,
 			CreatedAt:       time.Now().UTC(),
 		})
 	}
@@ -140,7 +141,7 @@ func ExtractAndAnalyzeTokens(content, sourceAsset, asmID, execID, targetID strin
 			Location:        "PARAM_DECLARATION",
 			Format:          "OPAQUE",
 			EvidenceSummary: fmt.Sprintf("OAuth/OIDC token parameter '%s' declared in client flow", tokenName),
-			SourceAsset:     sourceAsset,
+			SourceAsset:     sanitizedSource,
 			CreatedAt:       time.Now().UTC(),
 		})
 	}
@@ -159,7 +160,7 @@ func ExtractAndAnalyzeTokens(content, sourceAsset, asmID, execID, targetID strin
 			Location:        "PARAM_DECLARATION",
 			Format:          "OPAQUE",
 			EvidenceSummary: fmt.Sprintf("Anti-CSRF parameter '%s' declared in request flow", tokenName),
-			SourceAsset:     sourceAsset,
+			SourceAsset:     sanitizedSource,
 			CreatedAt:       time.Now().UTC(),
 		})
 	}
@@ -178,7 +179,7 @@ func ExtractAndAnalyzeTokens(content, sourceAsset, asmID, execID, targetID strin
 			Location:        "PARAM_DECLARATION",
 			Format:          "OPAQUE",
 			EvidenceSummary: fmt.Sprintf("Account recovery token parameter '%s' observed", tokenName),
-			SourceAsset:     sourceAsset,
+			SourceAsset:     sanitizedSource,
 			CreatedAt:       time.Now().UTC(),
 		})
 	}

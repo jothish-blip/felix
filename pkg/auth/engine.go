@@ -56,7 +56,20 @@ func (e *Engine) AnalyzeAuthentication(
 			for _, defect := range c.SecurityDefects {
 				severity := report.SeverityLow
 				score := 20
-				if strings.Contains(defect, "Secure") {
+				verificationStatus := report.VerificationVerified
+				rationale := "Observed directly in Set-Cookie header on HTTPS response without secret disclosure"
+
+				if strings.Contains(defect, "SameSite attribute unset") {
+					severity = report.SeverityInfo
+					score = 10
+					verificationStatus = report.VerificationObserved
+					rationale = "SameSite attribute omitted; modern browsers apply Lax default behavior"
+				} else if strings.Contains(defect, "target served over unencrypted HTTP") {
+					severity = report.SeverityInfo
+					score = 10
+					verificationStatus = report.VerificationObserved
+					rationale = "Cookie served over unencrypted HTTP transport; Secure flag requires HTTPS transport"
+				} else if strings.Contains(defect, "Missing Secure flag") {
 					score = 25
 				}
 
@@ -67,21 +80,21 @@ func (e *Engine) AnalyzeAuthentication(
 					Category:    "Authentication / Session Security",
 					Severity:    severity,
 					Confidence:  report.ConfidenceHigh,
-					Target:      targetURL,
-					Endpoint:    c.Path,
+					Target:      SanitizeURL(targetURL),
+					Endpoint:    SanitizeURL(c.Path),
 					Method:      "GET",
 					Description: fmt.Sprintf("Session cookie '%s' observed with security defect: %s.", c.Name, defect),
 					Evidence:    fmt.Sprintf("Cookie name: %s | Secure: %t | HttpOnly: %t | SameSite: %s", c.Name, c.IsSecure, c.IsHTTPOnly, c.SameSite),
 					EvidenceDetails: report.EvidenceDetails{
 						Observation:     defect,
-						Location:        fmt.Sprintf("Set-Cookie Header on %s", targetURL),
+						Location:        fmt.Sprintf("Set-Cookie Header on %s", SanitizeURL(targetURL)),
 						HTTPMethod:      "GET",
 						DetectionMethod: "PASSIVE_COOKIE_INSPECTION",
 					},
 					Verification: report.VerificationRecord{
-						Status:    report.VerificationVerified,
-						Result:    "Verified cookie attributes on authorized response",
-						Rationale: "Observed directly in Set-Cookie header without secret disclosure",
+						Status:    verificationStatus,
+						Result:    "Observed cookie attributes on authorized response",
+						Rationale: rationale,
 					},
 					Remediation: "", // Explicitly deferred in Stage 3 per specification
 					Source:      "auth",
@@ -103,29 +116,29 @@ func (e *Engine) AnalyzeAuthentication(
 				fp := fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%s:pkce:plain", asset.URL))))
 				findings = append(findings, report.Finding{
 					ID:          uuid.New().String(),
-					Title:       "Insecure PKCE Implementation (plain code_challenge_method)",
+					Title:       "Potential Insecure PKCE Configuration (plain code_challenge_method)",
 					Category:    "Authentication / OAuth PKCE",
-					Severity:    report.SeverityMedium,
-					Confidence:  report.ConfidenceHigh,
-					Target:      targetURL,
-					Endpoint:    asset.URL,
+					Severity:    report.SeverityInfo,
+					Confidence:  report.ConfidenceMedium,
+					Target:      SanitizeURL(targetURL),
+					Endpoint:    SanitizeURL(asset.URL),
 					Method:      "GET",
-					Description: "Client authentication flow was observed declaring code_challenge_method='plain'. RFC 7636 requires 'S256' for secure authorization code interception defense.",
+					Description: "Client authentication bundle was observed declaring code_challenge_method='plain'. RFC 7636 recommends 'S256' for secure authorization code interception defense. Server-side rejection of plain method was not verified to preserve non-destructive testing.",
 					Evidence:    t.EvidenceSummary,
 					EvidenceDetails: report.EvidenceDetails{
-						Observation:     "PKCE plain method observed",
-						Location:        asset.URL,
+						Observation:     "PKCE plain method observed in script configuration",
+						Location:        SanitizeURL(asset.URL),
 						DetectionMethod: "STATIC_SCRIPT_TOKEN_ANALYSIS",
 					},
 					Verification: report.VerificationRecord{
-						Status:    report.VerificationVerified,
-						Result:    "Verified plain PKCE configuration in script bundle",
-						Rationale: "Directly detected in client OAuth parameter setup",
+						Status:    report.VerificationNotVerified,
+						Result:    "Static parameter configuration for code_challenge_method=plain observed in client script",
+						Rationale: "Static parameter detected in client asset bundle; live OAuth exchange was not initiated to preserve non-destructive testing",
 					},
 					Remediation: "",
 					Source:      "auth",
 					Fingerprint: fp,
-					Score:       45,
+					Score:       10,
 				})
 			}
 
@@ -133,29 +146,29 @@ func (e *Engine) AnalyzeAuthentication(
 				fp := fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%s:jwt:none", asset.URL))))
 				findings = append(findings, report.Finding{
 					ID:          uuid.New().String(),
-					Title:       "Insecure JWT Algorithm ('none') in Client Asset",
+					Title:       "Unverified JWT Structure Declaring Algorithm 'none' in Client Asset",
 					Category:    "Authentication / Token Security",
-					Severity:    report.SeverityHigh,
-					Confidence:  report.ConfidenceHigh,
-					Target:      targetURL,
-					Endpoint:    asset.URL,
+					Severity:    report.SeverityInfo,
+					Confidence:  report.ConfidenceMedium,
+					Target:      SanitizeURL(targetURL),
+					Endpoint:    SanitizeURL(asset.URL),
 					Method:      "GET",
-					Description: "A JWT structure with algorithm 'none' was observed in client assets. Unsigned tokens allow arbitrary claim tampering if accepted by backend verification.",
+					Description: "A JWT-like structure declaring algorithm 'none' was statically identified in client assets. Server-side token acceptance was not verified, as token replay is strictly prohibited during passive auditing.",
 					Evidence:    t.EvidenceSummary,
 					EvidenceDetails: report.EvidenceDetails{
 						Observation:     "JWT header specifies alg=none",
-						Location:        asset.URL,
+						Location:        SanitizeURL(asset.URL),
 						DetectionMethod: "STATIC_JWT_HEADER_ANALYSIS",
 					},
 					Verification: report.VerificationRecord{
-						Status:    report.VerificationVerified,
-						Result:    "Verified alg=none in decoded JWT header",
-						Rationale: "Base64 header inspection revealed unsigned token declaration",
+						Status:    report.VerificationNotVerified,
+						Result:    "Static observation of JWT header declaring alg=none in client asset",
+						Rationale: "Header was decoded statically from client bundle; server-side token acceptance was not verified to prevent unauthorized session replay",
 					},
 					Remediation: "",
 					Source:      "auth",
 					Fingerprint: fp,
-					Score:       70,
+					Score:       10,
 				})
 			}
 		}
