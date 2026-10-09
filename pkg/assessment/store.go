@@ -12,6 +12,7 @@ import (
 	"felix/pkg/apisec"
 	"felix/pkg/auth"
 	"felix/pkg/authz"
+	"felix/pkg/businesslogic"
 	"felix/pkg/cloudsec"
 	"felix/pkg/config"
 	"felix/pkg/discovery"
@@ -108,6 +109,13 @@ type Store interface {
 	SaveCloudSecResults(results []cloudsec.Result) error
 	GetCloudSecResults(assessmentID string, executionID string, provider string, service string, state string) ([]cloudsec.Result, error)
 	GetCloudSecSummary(assessmentID string, executionID string) (*cloudsec.Summary, error)
+
+	// Business Logic Security Engine (Stage 9)
+	SaveBusinessLogicRun(record *businesslogic.RunRecord) error
+	GetBusinessLogicRun(assessmentID string, executionID string) (*businesslogic.RunRecord, error)
+	SaveBusinessLogicResults(results []businesslogic.Result) error
+	GetBusinessLogicResults(assessmentID string, executionID string, category string, state string) ([]businesslogic.Result, error)
+	GetBusinessLogicSummary(assessmentID string, executionID string) (*businesslogic.Summary, error)
 
 	// Report Records
 	SaveReport(r *ReportRecord) error
@@ -816,6 +824,78 @@ func (s *SQLiteStore) migrate() error {
 
 		if _, err := tx.Exec(schemaV8); err != nil {
 			return fmt.Errorf("migration v8 failed: %w", err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+
+	// Migration 9: Business Logic Security Engine (Stage 9)
+	if currentVersion < 9 {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		schemaV9 := `
+		CREATE TABLE IF NOT EXISTS assessment_businesslogic_runs (
+			id TEXT PRIMARY KEY,
+			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+			execution_id TEXT NOT NULL REFERENCES assessment_executions(id) ON DELETE CASCADE,
+			target_url TEXT NOT NULL,
+			total_checks INTEGER NOT NULL DEFAULT 0,
+			categories_assessed INTEGER NOT NULL DEFAULT 0,
+			workflows_modeled INTEGER NOT NULL DEFAULT 0,
+			verified_count INTEGER NOT NULL DEFAULT 0,
+			candidate_count INTEGER NOT NULL DEFAULT 0,
+			observed_count INTEGER NOT NULL DEFAULT 0,
+			inconclusive_count INTEGER NOT NULL DEFAULT 0,
+			blocked_count INTEGER NOT NULL DEFAULT 0,
+			not_vulnerable_count INTEGER NOT NULL DEFAULT 0,
+			synthetic_fixture BOOLEAN NOT NULL DEFAULT 0,
+			coverage_json TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_bizlogic_runs_asm_id ON assessment_businesslogic_runs(assessment_id);
+		CREATE INDEX IF NOT EXISTS idx_bizlogic_runs_exec_id ON assessment_businesslogic_runs(execution_id);
+
+		CREATE TABLE IF NOT EXISTS assessment_businesslogic_results (
+			id TEXT PRIMARY KEY,
+			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+			execution_id TEXT NOT NULL REFERENCES assessment_executions(id) ON DELETE CASCADE,
+			category TEXT NOT NULL,
+			check_id TEXT NOT NULL,
+			check_name TEXT NOT NULL,
+			workflow_id TEXT NOT NULL,
+			workflow_name TEXT NOT NULL,
+			endpoint TEXT NOT NULL,
+			method TEXT NOT NULL,
+			verification_state TEXT NOT NULL,
+			severity TEXT NOT NULL,
+			confidence TEXT NOT NULL,
+			observed_status INTEGER DEFAULT 0,
+			state_before TEXT,
+			state_after TEXT,
+			evidence_summary TEXT NOT NULL,
+			evidence_details_json TEXT,
+			finding_id TEXT,
+			created_at TIMESTAMP NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_bizlogic_res_asm_id ON assessment_businesslogic_results(assessment_id);
+		CREATE INDEX IF NOT EXISTS idx_bizlogic_res_exec_id ON assessment_businesslogic_results(execution_id);
+		CREATE INDEX IF NOT EXISTS idx_bizlogic_res_cat ON assessment_businesslogic_results(category);
+		CREATE INDEX IF NOT EXISTS idx_bizlogic_res_wf ON assessment_businesslogic_results(workflow_id);
+		CREATE INDEX IF NOT EXISTS idx_bizlogic_res_state ON assessment_businesslogic_results(verification_state);
+
+		INSERT INTO schema_migrations (version, applied_at) VALUES (9, CURRENT_TIMESTAMP);
+		`
+
+		if _, err := tx.Exec(schemaV9); err != nil {
+			return fmt.Errorf("migration v9 failed: %w", err)
 		}
 
 		if err := tx.Commit(); err != nil {
@@ -3252,5 +3332,314 @@ func (s *SQLiteStore) GetCloudSecSummary(assessmentID string, executionID string
 		summary.ServiceCoverageMap[r.Service] = cov
 	}
 	summary.ServicesAssessed = len(summary.ServiceCoverageMap)
+	return summary, nil
+}
+
+// ============================================================================
+// Business Logic Security Engine (Stage 9)
+// ============================================================================
+
+func (s *SQLiteStore) SaveBusinessLogicRun(record *businesslogic.RunRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	query := `
+		INSERT INTO assessment_businesslogic_runs (
+			id, assessment_id, execution_id, target_url,
+			total_checks, categories_assessed, workflows_modeled,
+			verified_count, candidate_count, observed_count,
+			inconclusive_count, blocked_count, not_vulnerable_count,
+			synthetic_fixture, coverage_json, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`
+	_, err := s.db.Exec(
+		query,
+		record.ID,
+		record.AssessmentID,
+		record.ExecutionID,
+		record.TargetURL,
+		record.TotalChecks,
+		record.CategoriesAssessed,
+		record.WorkflowsModeled,
+		record.VerifiedCount,
+		record.CandidateCount,
+		record.ObservedCount,
+		record.InconclusiveCount,
+		record.BlockedCount,
+		record.NotVulnerableCount,
+		record.SyntheticFixture,
+		record.CoverageJSON,
+		record.CreatedAt,
+	)
+	return err
+}
+
+func (s *SQLiteStore) GetBusinessLogicRun(assessmentID string, executionID string) (*businesslogic.RunRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := `
+		SELECT id, assessment_id, execution_id, target_url,
+		       total_checks, categories_assessed, workflows_modeled,
+		       verified_count, candidate_count, observed_count,
+		       inconclusive_count, blocked_count, not_vulnerable_count,
+		       synthetic_fixture, coverage_json, created_at
+		FROM assessment_businesslogic_runs
+		WHERE assessment_id = ?
+	`
+	args := []interface{}{assessmentID}
+	if executionID != "" {
+		query += " AND execution_id = ?"
+		args = append(args, executionID)
+	}
+	query += " ORDER BY created_at DESC LIMIT 1"
+
+	var rec businesslogic.RunRecord
+	err := s.db.QueryRow(query, args...).Scan(
+		&rec.ID,
+		&rec.AssessmentID,
+		&rec.ExecutionID,
+		&rec.TargetURL,
+		&rec.TotalChecks,
+		&rec.CategoriesAssessed,
+		&rec.WorkflowsModeled,
+		&rec.VerifiedCount,
+		&rec.CandidateCount,
+		&rec.ObservedCount,
+		&rec.InconclusiveCount,
+		&rec.BlockedCount,
+		&rec.NotVulnerableCount,
+		&rec.SyntheticFixture,
+		&rec.CoverageJSON,
+		&rec.CreatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &rec, nil
+}
+
+func (s *SQLiteStore) SaveBusinessLogicResults(results []businesslogic.Result) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO assessment_businesslogic_results (
+			id, assessment_id, execution_id, category, check_id, check_name,
+			workflow_id, workflow_name, endpoint, method,
+			verification_state, severity, confidence,
+			observed_status, state_before, state_after,
+			evidence_summary, evidence_details_json, finding_id, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, r := range results {
+		var detailsJSON string
+		if len(r.EvidenceDetails) > 0 {
+			b, _ := json.Marshal(r.EvidenceDetails)
+			detailsJSON = string(b)
+		}
+		var findingID string
+		if r.Finding != nil {
+			findingID = r.Finding.ID
+		}
+
+		_, err := stmt.Exec(
+			r.ID,
+			r.AssessmentID,
+			r.ExecutionID,
+			string(r.Category),
+			r.CheckID,
+			r.CheckName,
+			r.WorkflowID,
+			r.WorkflowName,
+			r.Endpoint,
+			r.Method,
+			string(r.VerificationState),
+			r.Severity,
+			r.Confidence,
+			r.ObservedStatus,
+			r.StateBefore,
+			r.StateAfter,
+			r.EvidenceSummary,
+			detailsJSON,
+			findingID,
+			r.CreatedAt,
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+func (s *SQLiteStore) GetBusinessLogicResults(assessmentID string, executionID string, category string, state string) ([]businesslogic.Result, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := `
+		SELECT id, assessment_id, execution_id, category, check_id, check_name,
+		       workflow_id, workflow_name, endpoint, method,
+		       verification_state, severity, confidence,
+		       observed_status, state_before, state_after,
+		       evidence_summary, evidence_details_json, finding_id, created_at
+		FROM assessment_businesslogic_results
+		WHERE assessment_id = ?
+	`
+	args := []interface{}{assessmentID}
+	if executionID != "" {
+		query += " AND execution_id = ?"
+		args = append(args, executionID)
+	}
+	if category != "" {
+		query += " AND category = ?"
+		args = append(args, category)
+	}
+	if state != "" {
+		query += " AND verification_state = ?"
+		args = append(args, state)
+	}
+	query += " ORDER BY created_at ASC"
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []businesslogic.Result
+	for rows.Next() {
+		var r businesslogic.Result
+		var catStr, stateStr, detailsJSON, findingID sql.NullString
+		var stateBefore, stateAfter sql.NullString
+
+		err := rows.Scan(
+			&r.ID,
+			&r.AssessmentID,
+			&r.ExecutionID,
+			&catStr,
+			&r.CheckID,
+			&r.CheckName,
+			&r.WorkflowID,
+			&r.WorkflowName,
+			&r.Endpoint,
+			&r.Method,
+			&stateStr,
+			&r.Severity,
+			&r.Confidence,
+			&r.ObservedStatus,
+			&stateBefore,
+			&stateAfter,
+			&r.EvidenceSummary,
+			&detailsJSON,
+			&findingID,
+			&r.CreatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		if catStr.Valid {
+			r.Category = businesslogic.BLCategory(catStr.String)
+		}
+		if stateStr.Valid {
+			r.VerificationState = businesslogic.VerificationState(stateStr.String)
+		}
+		if stateBefore.Valid {
+			r.StateBefore = stateBefore.String
+		}
+		if stateAfter.Valid {
+			r.StateAfter = stateAfter.String
+		}
+		if detailsJSON.Valid && detailsJSON.String != "" {
+			var details map[string]string
+			if err := json.Unmarshal([]byte(detailsJSON.String), &details); err == nil {
+				r.EvidenceDetails = details
+			}
+		}
+
+		results = append(results, r)
+	}
+
+	return results, nil
+}
+
+func (s *SQLiteStore) GetBusinessLogicSummary(assessmentID string, executionID string) (*businesslogic.Summary, error) {
+	// 1. Try to load saved RunRecord
+	run, err := s.GetBusinessLogicRun(assessmentID, executionID)
+	if err == nil && run != nil && run.CoverageJSON != "" {
+		var covMap map[string]businesslogic.CategoryCoverage
+		if err := json.Unmarshal([]byte(run.CoverageJSON), &covMap); err == nil {
+			summary := &businesslogic.Summary{
+				TargetURL:           run.TargetURL,
+				TotalChecks:         run.TotalChecks,
+				CategoriesAssessed:  run.CategoriesAssessed,
+				WorkflowsModeled:    run.WorkflowsModeled,
+				VerifiedCount:      run.VerifiedCount,
+				CandidateCount:     run.CandidateCount,
+				ObservedCount:      run.ObservedCount,
+				InconclusiveCount:  run.InconclusiveCount,
+				BlockedCount:       run.BlockedCount,
+				NotVulnerableCount: run.NotVulnerableCount,
+				SyntheticFixture:   run.SyntheticFixture,
+				CategoryCoverageMap: covMap,
+			}
+			return summary, nil
+		}
+	}
+
+	// 2. Fallback to computing from raw results
+	results, err := s.GetBusinessLogicResults(assessmentID, executionID, "", "")
+	if err != nil {
+		return nil, err
+	}
+
+	summary := &businesslogic.Summary{
+		TotalChecks:         len(results),
+		CategoryCoverageMap: make(map[string]businesslogic.CategoryCoverage),
+	}
+	for _, r := range results {
+		catKey := string(r.Category)
+		cov := summary.CategoryCoverageMap[catKey]
+		cov.Category = r.Category
+		cov.ChecksRun++
+
+		switch r.VerificationState {
+		case businesslogic.StateVerified:
+			summary.VerifiedCount++
+			cov.Verified++
+		case businesslogic.StateCandidate:
+			summary.CandidateCount++
+			cov.Candidates++
+		case businesslogic.StateObserved:
+			summary.ObservedCount++
+			cov.Observations++
+		case businesslogic.StateInconclusive:
+			summary.InconclusiveCount++
+			cov.Inconclusive++
+		case businesslogic.StateBlockedBySafety:
+			summary.BlockedCount++
+			cov.Blocked++
+		case businesslogic.StateNotVulnerable:
+			summary.NotVulnerableCount++
+			cov.NotVulnerable++
+		}
+		summary.CategoryCoverageMap[catKey] = cov
+	}
+	summary.CategoriesAssessed = len(summary.CategoryCoverageMap)
 	return summary, nil
 }

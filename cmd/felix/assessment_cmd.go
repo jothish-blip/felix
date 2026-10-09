@@ -18,6 +18,7 @@ import (
 	"felix/pkg/assessment"
 	"felix/pkg/auth"
 	"felix/pkg/authz"
+	"felix/pkg/businesslogic"
 	"felix/pkg/cloudsec"
 	"felix/pkg/sessionsec"
 	"felix/pkg/webvuln"
@@ -75,6 +76,8 @@ func runAssessment(args []string) int {
 		return runAssessmentSessionSec(subArgs)
 	case "cloudsec", "cloud":
 		return runAssessmentCloudSec(subArgs)
+	case "businesslogic", "bizlogic", "logic":
+		return runAssessmentBusinessLogic(subArgs)
 	case "reports":
 		return runAssessmentReports(subArgs)
 	case "cancel":
@@ -105,6 +108,7 @@ func printAssessmentHelp() {
 	fmt.Println("  webvuln      Assess and verify web application vulnerabilities (XSS, SQLi, SSTI, SSRF, etc.)")
 	fmt.Println("  sessionsec   Assess session lifecycle, token handling, and identity boundaries (WSTG-SESS/ATHN)")
 	fmt.Println("  cloudsec     Assess cloud security across AWS, Azure, and GCP (External & Credentialed Modes)")
+	fmt.Println("  businesslogic Assess business logic workflows, state transitions, replay, and invariants")
 	fmt.Println("  reports      List generated report files for an assessment")
 	fmt.Println("  cancel       Cancel an active or pending assessment")
 	fmt.Println("\nExamples:")
@@ -120,6 +124,7 @@ func printAssessmentHelp() {
 	fmt.Println("  felix assessment sessionsec <asm-ref> --run")
 	fmt.Println("  felix assessment cloudsec <asm-ref> --mode external")
 	fmt.Println("  felix assessment cloudsec <asm-ref> --mode credentialed --provider aws --credentials aws_creds.json --run")
+	fmt.Println("  felix assessment businesslogic <asm-ref> --run")
 	fmt.Println("  felix assessment reports <asm-ref>")
 }
 
@@ -3909,6 +3914,455 @@ func runAssessmentCloudSec(args []string) int {
 	} else if summary == nil || summary.TotalChecks == 0 {
 		fmt.Println("\nNo cloud security results recorded.")
 		fmt.Printf("To run a cloud security assessment:\n  felix assessment cloudsec %s --run\n", asm.Ref)
+	}
+
+	fmt.Println()
+	return 0
+}
+
+func printBusinessLogicHelp() {
+	fmt.Println("Usage: felix assessment businesslogic <asm-ref> [options]")
+	fmt.Println("\nEvaluate business logic security workflows, state transitions, replay, and invariants.")
+	fmt.Println("\nAliases: bizlogic, logic")
+	fmt.Println("\nOptions:")
+	fmt.Println("  --run                 Execute active business logic assessment against authorized targets")
+	fmt.Println("  --dry-run             Generate test plan and evaluate workflow prerequisites without state mutations")
+	fmt.Println("  --workflow, -w        Filter by workflow ID (e.g. WF-ECOMMERCE-ORDER)")
+	fmt.Println("  --category, -c        Filter by business logic category code (e.g. BL-01, BL-02)")
+	fmt.Println("  --status, -s          Filter by verification state (VERIFIED, CANDIDATE, NOT_VULNERABLE, etc.)")
+	fmt.Println("  --state-changing      Allow state-changing probes (default: safe read-only)")
+	fmt.Println("  --json                Output results in JSON format")
+	fmt.Println("  --verbose, -v         Display detailed findings, evidence observations, and remediation")
+	fmt.Println("  --help, -h            Show this help text")
+	fmt.Println("\nCategories:")
+	fmt.Println("  BL-01  Workflow Circumvention (Skipped Steps)           [CWE-840, WSTG-BUSL-01]")
+	fmt.Println("  BL-02  Unexpected State Transitions                     [CWE-372, WSTG-BUSL-02]")
+	fmt.Println("  BL-03  State Manipulation & Parameter Integrity         [CWE-472, WSTG-BUSL-03]")
+	fmt.Println("  BL-04  Unauthorized Workflow Access                     [CWE-285, WSTG-BUSL-04]")
+	fmt.Println("  BL-05  Sensitive Business-Flow Abuse                    [CWE-799, WSTG-BUSL-05]")
+	fmt.Println("  BL-06  Replay & Idempotency Flaws                       [CWE-294, WSTG-BUSL-06]")
+	fmt.Println("  BL-07  Privilege & State Inconsistency                  [CWE-269, WSTG-BUSL-07]")
+	fmt.Println("  BL-08  Business Data Validation & Invariants            [CWE-20,  WSTG-BUSL-08]")
+	fmt.Println("\nExamples:")
+	fmt.Println("  felix assessment businesslogic <asm-ref> --dry-run")
+	fmt.Println("  felix assessment businesslogic <asm-ref> --run")
+	fmt.Println("  felix assessment businesslogic <asm-ref> --category BL-01 --verbose")
+	fmt.Println("  felix assessment businesslogic <asm-ref> --json")
+}
+
+func runAssessmentBusinessLogic(args []string) int {
+	var (
+		assessmentRef  string
+		runExecution   bool
+		dryRun         bool
+		workflowFilter string
+		categoryFilter string
+		statusFilter   string
+		stateChanging  bool
+		jsonOutput     bool
+		verbose        bool
+	)
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--run":
+			runExecution = true
+		case arg == "--dry-run":
+			dryRun = true
+		case arg == "--workflow" || arg == "-w":
+			if i+1 < len(args) {
+				workflowFilter = args[i+1]
+				i++
+			}
+		case arg == "--category" || arg == "-c":
+			if i+1 < len(args) {
+				categoryFilter = strings.ToUpper(args[i+1])
+				i++
+			}
+		case arg == "--status" || arg == "-s":
+			if i+1 < len(args) {
+				statusFilter = strings.ToUpper(args[i+1])
+				i++
+			}
+		case arg == "--state-changing":
+			stateChanging = true
+		case arg == "--json":
+			jsonOutput = true
+		case arg == "--verbose" || arg == "-v":
+			verbose = true
+		case arg == "--help" || arg == "-h":
+			printBusinessLogicHelp()
+			return 0
+		default:
+			if !strings.HasPrefix(arg, "-") && assessmentRef == "" {
+				assessmentRef = arg
+			}
+		}
+	}
+
+	if assessmentRef == "" {
+		fmt.Fprintf(os.Stderr, "[-] Error: assessment ID or Ref is required\n\n")
+		printBusinessLogicHelp()
+		return 2
+	}
+
+	store, err := getAssessmentStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Database error: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+
+	asm, err := store.GetAssessment(assessmentRef)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Error finding assessment '%s': %v\n", assessmentRef, err)
+		return 1
+	}
+	asm.Targets, _ = store.GetTargets(asm.ID)
+	asm.Authorization, _ = store.GetAuthorization(asm.ID)
+	asm.Exclusions, _ = store.GetExclusions(asm.ID)
+	asm.ScopeRules, _ = store.GetScopeRules(asm.ID)
+
+	targetBase := "http://localhost"
+	var targetURLs []string
+	if len(asm.Targets) > 0 {
+		targetBase = strings.TrimRight(asm.Targets[0].TargetURL, "/")
+		for _, t := range asm.Targets {
+			targetURLs = append(targetURLs, t.TargetURL)
+		}
+	}
+
+	// Load inventory endpoints and auth surfaces
+	assets, _, _ := store.GetInventory(asm.ID, "", "", true)
+	authInv, _ := store.GetAuthInventory(asm.ID, "", "")
+
+	var discoveredEndpoints []businesslogic.DiscoveredEndpoint
+	seenEndpoints := make(map[string]bool)
+
+	for _, a := range assets {
+		if a.Type == "ENDPOINT" || a.Type == "endpoint" {
+			method := "GET"
+			if m, ok := a.Metadata["method"].(string); ok && m != "" {
+				method = strings.ToUpper(m)
+			}
+			path := a.DisplayName
+			if p, ok := a.Metadata["path"].(string); ok && p != "" {
+				path = p
+			} else if a.CanonicalID != "" {
+				path = a.CanonicalID
+			}
+			if u, err := url.Parse(path); err == nil && u.Path != "" {
+				path = u.Path
+			}
+			key := method + " " + path
+			if !seenEndpoints[key] {
+				seenEndpoints[key] = true
+				discoveredEndpoints = append(discoveredEndpoints, businesslogic.DiscoveredEndpoint{
+					Method: method,
+					Path:   path,
+				})
+			}
+		}
+	}
+
+	if authInv != nil {
+		for _, surf := range authInv.Surfaces {
+			path := surf.Identifier
+			if u, err := url.Parse(path); err == nil && u.Path != "" {
+				path = u.Path
+			}
+			method := "GET"
+			if m, ok := surf.Metadata["method"].(string); ok && m != "" {
+				method = strings.ToUpper(m)
+			}
+			key := method + " " + path
+			if !seenEndpoints[key] {
+				seenEndpoints[key] = true
+				discoveredEndpoints = append(discoveredEndpoints, businesslogic.DiscoveredEndpoint{
+					Method: method,
+					Path:   path,
+				})
+			}
+		}
+	}
+
+	scopeVal := assessment.NewScopeValidator(asm.ScopeMode, targetURLs, asm.ScopeRules, asm.Exclusions)
+
+	actx := &businesslogic.AssessmentContext{
+		AssessmentID:  asm.ID,
+		BaseURL:       targetBase,
+		Endpoints:     discoveredEndpoints,
+		IsAllowed:     scopeVal.IsAllowed,
+		IsExcluded:    func(u string) bool { excluded, _ := scopeVal.IsExcluded(u); return excluded },
+		RequestBudget: 50,
+		DryRun:        dryRun,
+	}
+
+	// Check if existing results exist in database
+	existingResults, _ := store.GetBusinessLogicResults(asm.ID, "", categoryFilter, statusFilter)
+	if !runExecution && !dryRun && len(existingResults) == 0 {
+		dryRun = true
+	}
+
+	// 1. Dry Run Mode
+	if dryRun {
+		cfg := businesslogic.DefaultConfig()
+		cfg.AllowStateChanging = stateChanging
+		engine := businesslogic.NewEngine(nil, cfg)
+
+		plan, err := engine.Plan(context.Background(), actx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Dry run planning failed: %v\n", err)
+			return 1
+		}
+
+		if jsonOutput {
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			_ = enc.Encode(plan)
+			return 0
+		}
+
+		fmt.Println("================================================================================")
+		fmt.Printf("FELIX BUSINESS LOGIC SECURITY ENGINE - DRY RUN TEST PLAN\n")
+		fmt.Println("================================================================================")
+		fmt.Printf("Assessment:     %s (%s)\n", asm.Name, asm.Ref)
+		fmt.Printf("Target Base:    %s\n", targetBase)
+		fmt.Printf("Workflows:      %d modeled\n", plan.TotalWorkflows)
+		fmt.Printf("Total Checks:   %d planned (%d ready, %d blocked)\n", plan.TotalPlannedChecks, plan.ReadyChecks, plan.BlockedChecks)
+		if stateChanging {
+			fmt.Println("State Change:   ENABLED (--state-changing active)")
+		} else {
+			fmt.Println("State Change:   DISABLED (Safe read-only mode)")
+		}
+		fmt.Println("--------------------------------------------------------------------------------")
+
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "CHECK ID\tCATEGORY\tWORKFLOW\tSTATUS\tPREREQUISITES / OBJECTIVE")
+		for _, pc := range plan.PlannedChecks {
+			if workflowFilter != "" && pc.WorkflowID != workflowFilter {
+				continue
+			}
+			if categoryFilter != "" && string(pc.Category) != categoryFilter {
+				continue
+			}
+			prereqStr := strings.Join(pc.Preconditions, ", ")
+			if pc.BlockedReason != "" {
+				prereqStr = fmt.Sprintf("BLOCKED: %s", pc.BlockedReason)
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", pc.ID, pc.Category, pc.WorkflowID, pc.Status, prereqStr)
+		}
+		_ = w.Flush()
+
+		fmt.Printf("\nTo execute active business logic testing:\n  felix assessment businesslogic %s --run\n\n", asm.Ref)
+		return 0
+	}
+
+	// 2. Execution Mode
+	if runExecution {
+		if asm.Authorization == nil {
+			fmt.Fprintf(os.Stderr, "[-] Assessment %s is NOT authorized. Client authorization required before running active testing.\n", asm.Ref)
+			return 1
+		}
+		if len(asm.Targets) == 0 {
+			fmt.Fprintf(os.Stderr, "[-] Error: assessment requires at least one target URL in %s\n", asm.Ref)
+			return 1
+		}
+
+		execID := uuid.New().String()
+		startedAt := time.Now().UTC()
+		execRecord := &assessment.AssessmentExecution{
+			ID:           execID,
+			AssessmentID: asm.ID,
+			Status:       assessment.StatusRunning,
+			StartedAt:    startedAt,
+		}
+		if err := store.CreateExecution(execRecord); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Warning: failed to record execution: %v\n", err)
+		}
+
+		actx.ExecutionID = execID
+		cfg := businesslogic.DefaultConfig()
+		cfg.AllowStateChanging = stateChanging
+		engine := businesslogic.NewEngine(nil, cfg)
+
+		fmt.Println("================================================================================")
+		fmt.Printf("FELIX BUSINESS LOGIC SECURITY ENGINE - ACTIVE EVALUATION\n")
+		fmt.Println("================================================================================")
+		fmt.Printf("Assessment:     %s (%s)\n", asm.Name, asm.Ref)
+		fmt.Printf("Target Base:    %s\n", targetBase)
+		fmt.Printf("Execution ID:   %s\n", execID)
+		if stateChanging {
+			fmt.Println("Mode:           STATE-CHANGING ENABLED")
+		} else {
+			fmt.Println("Mode:           SAFE READ-ONLY (State mutations blocked by policy)")
+		}
+		fmt.Println("--------------------------------------------------------------------------------")
+		fmt.Println("[*] Modeling business workflows and evaluating state boundaries...")
+
+		results, findings, summary, err := engine.Assess(context.Background(), actx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Assessment failed: %v\n", err)
+			execRecord.Status = assessment.StatusFailed
+			now := time.Now().UTC()
+			execRecord.CompletedAt = &now
+			_ = store.UpdateExecution(execRecord)
+			return 1
+		}
+
+		completedAt := time.Now().UTC()
+		execRecord.Status = assessment.StatusCompleted
+		execRecord.CompletedAt = &completedAt
+		_ = store.UpdateExecution(execRecord)
+
+		for i := range results {
+			results[i].ExecutionID = execID
+		}
+		if err := store.SaveBusinessLogicResults(results); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Warning: failed to save business logic results: %v\n", err)
+		}
+
+		covJSON, _ := json.Marshal(summary.CategoryCoverageMap)
+		runRec := &businesslogic.RunRecord{
+			ID:                 uuid.New().String(),
+			AssessmentID:       asm.ID,
+			ExecutionID:        execID,
+			TargetURL:          targetBase,
+			TotalChecks:        summary.TotalChecks,
+			CategoriesAssessed: summary.CategoriesAssessed,
+			WorkflowsModeled:   summary.WorkflowsModeled,
+			VerifiedCount:      summary.VerifiedCount,
+			CandidateCount:     summary.CandidateCount,
+			ObservedCount:      summary.ObservedCount,
+			InconclusiveCount:  summary.InconclusiveCount,
+			BlockedCount:       summary.BlockedCount,
+			NotVulnerableCount: summary.NotVulnerableCount,
+			SyntheticFixture:   summary.SyntheticFixture,
+			CoverageJSON:       string(covJSON),
+			CreatedAt:          completedAt,
+		}
+		if err := store.SaveBusinessLogicRun(runRec); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Warning: failed to save business logic run record: %v\n", err)
+		}
+
+		// Save findings
+		targetID := ""
+		if len(asm.Targets) > 0 {
+			targetID = asm.Targets[0].ID
+		}
+		var asmFindings []assessment.AssessmentFinding
+		for _, f := range findings {
+			asmFindings = append(asmFindings, assessment.ToAssessmentFinding(asm.ID, execID, targetID, f))
+		}
+		if len(asmFindings) > 0 {
+			if err := store.SaveFindings(asmFindings); err != nil {
+				fmt.Fprintf(os.Stderr, "[-] Warning: failed to save findings: %v\n", err)
+			}
+		}
+
+		fmt.Printf("[+] Assessment completed: %d checks run across %d workflows\n", summary.TotalChecks, summary.WorkflowsModeled)
+		fmt.Printf("    Verified:       %d\n", summary.VerifiedCount)
+		fmt.Printf("    Candidates:     %d\n", summary.CandidateCount)
+		fmt.Printf("    Observations:   %d\n", summary.ObservedCount)
+		fmt.Printf("    Not Vulnerable: %d\n", summary.NotVulnerableCount)
+		fmt.Printf("    Blocked/Safety: %d\n", summary.BlockedCount)
+		fmt.Printf("    Inconclusive:   %d\n", summary.InconclusiveCount)
+	}
+
+	// 3. Reporting / Inspection Mode
+	results, err := store.GetBusinessLogicResults(asm.ID, "", categoryFilter, statusFilter)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Failed to fetch business logic results: %v\n", err)
+		return 1
+	}
+
+	summary, _ := store.GetBusinessLogicSummary(asm.ID, "")
+
+	if jsonOutput {
+		out := map[string]interface{}{
+			"assessment_ref": asm.Ref,
+			"target_url":     targetBase,
+			"summary":        summary,
+			"results":        results,
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(out)
+		return 0
+	}
+
+	if summary != nil && summary.TotalChecks > 0 {
+		fmt.Println("\n================================================================================")
+		fmt.Printf("BUSINESS LOGIC SECURITY ASSESSMENT SUMMARY: %s (%s)\n", asm.Name, asm.Ref)
+		fmt.Println("================================================================================")
+		fmt.Printf("Target Base:        %s\n", targetBase)
+		fmt.Printf("Total Checks:       %d\n", summary.TotalChecks)
+		fmt.Printf("Categories Tested:  %d of 8\n", summary.CategoriesAssessed)
+		fmt.Printf("Workflows Modeled:  %d\n", summary.WorkflowsModeled)
+		fmt.Printf("Verified Issues:    %d\n", summary.VerifiedCount)
+		fmt.Printf("Candidates:         %d\n", summary.CandidateCount)
+		fmt.Printf("Observations:       %d\n", summary.ObservedCount)
+		fmt.Printf("Not Vulnerable:     %d\n", summary.NotVulnerableCount)
+		fmt.Printf("Blocked (Safety):   %d\n", summary.BlockedCount)
+		fmt.Printf("Inconclusive:       %d\n", summary.InconclusiveCount)
+		if summary.SyntheticFixture {
+			fmt.Printf("Fixture Status:     SYNTHETIC FIXTURE SIMULATION\n")
+		}
+		fmt.Println("--------------------------------------------------------------------------------")
+
+		fmt.Println("\nCATEGORY COVERAGE BREAKDOWN:")
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "CATEGORY\tNAME\tSTATUS\tCHECKS\tVERIFIED\tCANDIDATES\tNOT VULN\tBLOCKED")
+		for _, cat := range businesslogic.AllCategories() {
+			catKey := string(cat)
+			cov, ok := summary.CategoryCoverageMap[catKey]
+			if !ok {
+				meta := businesslogic.CategoryMetadata[cat]
+				cov = businesslogic.CategoryCoverage{
+					Category: cat,
+					Code:     meta.Code,
+					Name:     meta.Name,
+					Status:   businesslogic.CoverageUntested,
+				}
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\n",
+				cov.Code, cov.Name, cov.Status, cov.ChecksRun, cov.Verified, cov.Candidates, cov.NotVulnerable, cov.Blocked)
+		}
+		_ = w.Flush()
+	}
+
+	if len(results) > 0 {
+		fmt.Println("\nRESULTS:")
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		if verbose {
+			fmt.Fprintln(w, "CHECK ID\tCATEGORY\tWORKFLOW\tSTATE\tSEVERITY\tCONFIDENCE\tEVIDENCE & DETAILS")
+			for _, r := range results {
+				if workflowFilter != "" && r.WorkflowID != workflowFilter {
+					continue
+				}
+				detailsStr := r.EvidenceSummary
+				if len(r.EvidenceDetails) > 0 {
+					b, _ := json.Marshal(r.EvidenceDetails)
+					detailsStr += " | Details: " + string(b)
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					r.CheckID, r.Category, r.WorkflowName, r.VerificationState, r.Severity, r.Confidence, detailsStr)
+			}
+		} else {
+			fmt.Fprintln(w, "CHECK ID\tCATEGORY\tWORKFLOW\tSTATE\tSEVERITY\tEVIDENCE SUMMARY")
+			for _, r := range results {
+				if workflowFilter != "" && r.WorkflowID != workflowFilter {
+					continue
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+					r.CheckID, r.Category, r.WorkflowName, r.VerificationState, r.Severity, r.EvidenceSummary)
+			}
+		}
+		_ = w.Flush()
+	} else if summary == nil || summary.TotalChecks == 0 {
+		fmt.Println("\nNo business logic security results recorded.")
+		fmt.Printf("To run a business logic security assessment:\n  felix assessment businesslogic %s --run\n", asm.Ref)
 	}
 
 	fmt.Println()

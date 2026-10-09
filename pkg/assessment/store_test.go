@@ -9,6 +9,7 @@ import (
 	"felix/pkg/apisec"
 	"felix/pkg/auth"
 	"felix/pkg/authz"
+	"felix/pkg/businesslogic"
 	"felix/pkg/cloudsec"
 	"felix/pkg/discovery"
 	"felix/pkg/report"
@@ -1472,5 +1473,160 @@ func TestStore_CloudSecPersistenceAndMigration(t *testing.T) {
 	}
 	if summary.VerifiedCount != 1 {
 		t.Errorf("expected VerifiedCount = 1, got %d", summary.VerifiedCount)
+	}
+}
+
+func TestStore_BusinessLogicPersistenceAndMigration(t *testing.T) {
+	store, cleanup := newTestStore(t)
+	defer cleanup()
+
+	// 1. Create client and assessment
+	client := &Client{
+		ID:        uuid.New().String(),
+		Name:      "BizLogic Test Corp",
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	if err := store.CreateClient(client); err != nil {
+		t.Fatalf("CreateClient failed: %v", err)
+	}
+
+	asm := &Assessment{
+		ID:             uuid.New().String(),
+		Ref:            "ASM-BIZLOGIC-001",
+		ClientID:       client.ID,
+		Name:           "Business Logic Assessment",
+		AssessmentType: "BUSINESS_LOGIC",
+		Status:         StatusRunning,
+		CreatedAt:      time.Now().UTC(),
+		UpdatedAt:      time.Now().UTC(),
+	}
+	if err := store.CreateAssessment(asm); err != nil {
+		t.Fatalf("CreateAssessment failed: %v", err)
+	}
+
+	exec := &AssessmentExecution{
+		ID:           uuid.New().String(),
+		AssessmentID: asm.ID,
+		Status:       StatusRunning,
+		StartedAt:    time.Now().UTC(),
+	}
+	if err := store.CreateExecution(exec); err != nil {
+		t.Fatalf("CreateExecution failed: %v", err)
+	}
+
+	// 2. Test SaveBusinessLogicRun and GetBusinessLogicRun
+	runRec := &businesslogic.RunRecord{
+		ID:                 uuid.New().String(),
+		AssessmentID:       asm.ID,
+		ExecutionID:        exec.ID,
+		TargetURL:          "https://shop.example.com",
+		TotalChecks:        8,
+		CategoriesAssessed: 8,
+		WorkflowsModeled:   2,
+		VerifiedCount:      2,
+		CandidateCount:     1,
+		ObservedCount:      0,
+		InconclusiveCount:  1,
+		BlockedCount:       1,
+		NotVulnerableCount: 3,
+		SyntheticFixture:   false,
+		CoverageJSON:       `{"BL-01":{"category":"BL-01","code":"BL-01","name":"Workflow Circumvention","status":"ACTIVELY_TESTED","checks_run":1,"verified":1}}`,
+		CreatedAt:          time.Now().UTC(),
+	}
+	if err := store.SaveBusinessLogicRun(runRec); err != nil {
+		t.Fatalf("SaveBusinessLogicRun failed: %v", err)
+	}
+
+	fetchedRun, err := store.GetBusinessLogicRun(asm.ID, exec.ID)
+	if err != nil {
+		t.Fatalf("GetBusinessLogicRun failed: %v", err)
+	}
+	if fetchedRun.ID != runRec.ID {
+		t.Errorf("expected run ID %s, got %s", runRec.ID, fetchedRun.ID)
+	}
+	if fetchedRun.VerifiedCount != 2 {
+		t.Errorf("expected VerifiedCount 2, got %d", fetchedRun.VerifiedCount)
+	}
+	if fetchedRun.TargetURL != runRec.TargetURL {
+		t.Errorf("expected target URL %s, got %s", runRec.TargetURL, fetchedRun.TargetURL)
+	}
+
+	// 3. Test SaveBusinessLogicResults and GetBusinessLogicResults
+	res1 := businesslogic.Result{
+		ID:                uuid.New().String(),
+		AssessmentID:      asm.ID,
+		ExecutionID:       exec.ID,
+		Category:          businesslogic.CategoryWorkflowCircumvention,
+		CheckID:           "BL-01-WF-ORDER",
+		CheckName:         "Order Flow Circumvention",
+		WorkflowID:        "WF-ORDER",
+		WorkflowName:      "E-Commerce Order",
+		Endpoint:          "/checkout/fulfill",
+		Method:            "POST",
+		VerificationState: businesslogic.StateVerified,
+		Severity:          report.SeverityHigh,
+		Confidence:        report.ConfidenceHigh,
+		EvidenceSummary:   "Terminal fulfillment executed without payment",
+		CreatedAt:         time.Now().UTC(),
+	}
+	res2 := businesslogic.Result{
+		ID:                uuid.New().String(),
+		AssessmentID:      asm.ID,
+		ExecutionID:       exec.ID,
+		Category:          businesslogic.CategoryUnexpectedStateTransition,
+		CheckID:           "BL-02-WF-ORDER",
+		CheckName:         "Unexpected State Transition",
+		WorkflowID:        "WF-ORDER",
+		WorkflowName:      "E-Commerce Order",
+		Endpoint:          "/order/status",
+		Method:            "POST",
+		VerificationState: businesslogic.StateNotVulnerable,
+		Severity:          report.SeverityInfo,
+		Confidence:        report.ConfidenceHigh,
+		EvidenceSummary:   "Invalid transition correctly rejected",
+		CreatedAt:         time.Now().UTC(),
+	}
+
+	if err := store.SaveBusinessLogicResults([]businesslogic.Result{res1, res2}); err != nil {
+		t.Fatalf("SaveBusinessLogicResults failed: %v", err)
+	}
+
+	allResults, err := store.GetBusinessLogicResults(asm.ID, exec.ID, "", "")
+	if err != nil {
+		t.Fatalf("GetBusinessLogicResults failed: %v", err)
+	}
+	if len(allResults) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(allResults))
+	}
+
+	// Filter by category
+	catFiltered, err := store.GetBusinessLogicResults(asm.ID, exec.ID, string(businesslogic.CategoryWorkflowCircumvention), "")
+	if err != nil {
+		t.Fatalf("GetBusinessLogicResults by category failed: %v", err)
+	}
+	if len(catFiltered) != 1 || catFiltered[0].CheckID != "BL-01-WF-ORDER" {
+		t.Errorf("expected 1 BL-01 result, got %d", len(catFiltered))
+	}
+
+	// Filter by state
+	stateFiltered, err := store.GetBusinessLogicResults(asm.ID, exec.ID, "", string(businesslogic.StateVerified))
+	if err != nil {
+		t.Fatalf("GetBusinessLogicResults by state failed: %v", err)
+	}
+	if len(stateFiltered) != 1 {
+		t.Errorf("expected 1 verified result, got %d", len(stateFiltered))
+	}
+
+	// 4. Test GetBusinessLogicSummary
+	summary, err := store.GetBusinessLogicSummary(asm.ID, exec.ID)
+	if err != nil {
+		t.Fatalf("GetBusinessLogicSummary failed: %v", err)
+	}
+	if summary.TotalChecks != 8 {
+		t.Errorf("expected TotalChecks = 8 from RunRecord, got %d", summary.TotalChecks)
+	}
+	if summary.VerifiedCount != 2 {
+		t.Errorf("expected VerifiedCount = 2, got %d", summary.VerifiedCount)
 	}
 }
