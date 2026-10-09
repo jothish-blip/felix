@@ -506,9 +506,90 @@ BOLA      NOT_VULNERABLE  GET     /api/orders/order_202     user_alice Access co
 BFLA      NOT_VULNERABLE  GET     /api/admin/users          user_alice Function access correctly denied (HTTP 403) for unprivileged identity "user_alice"
 ```
 
-### 6. Fail-Closed Security Guarantees
-- **No Authorization, No Audit:** If an assessment has no authorization record or its status is `PENDING`, `EXPIRED`, or `REVOKED`, `felix assessment run` and `felix assessment authz --run` exit immediately with a **security refusal** and perform **zero network requests**.
+### 6. OWASP API Security Testing (`felix assessment apisec`)
+
+The `apisec` subcommand (alias: `felix assessment api`) systematically audits APIs against all ten categories of the **OWASP API Security Top 10 (2023)** using an evidence-first pipeline:
+
+```bash
+# Dry-run: inspect attack-surface classification and prerequisite coverage (0 network requests)
+felix assessment apisec <assessment-ref> --dry-run --spec openapi.json
+
+# Execute full OWASP API security assessment with OpenAPI spec and authz policy
+felix assessment apisec <assessment-ref> --run --spec openapi.json --policy policy.json
+
+# Execute assessment with safe SSRF canary callback URL
+felix assessment apisec <assessment-ref> --run --canary https://canary.example.com/callback
+
+# View recorded results with extended evidence details
+felix assessment apisec <assessment-ref> --verbose
+
+# Filter recorded results by verification state or OWASP category
+felix assessment apisec <assessment-ref> --status VERIFIED
+felix assessment apisec <assessment-ref> --category API1
+felix assessment apisec <assessment-ref> --category API8 --status VERIFIED
+
+# Output structured JSON report
+felix assessment apisec <assessment-ref> --json
+```
+
+**Supported Flags:**
+- `--run`: Execute OWASP API Security assessment against authorized targets.
+- `--dry-run`: Display planned tests, prerequisite matrix, and endpoint classification without network requests.
+- `--spec <path>`: Path to client-supplied OpenAPI/Swagger JSON or line-delimited routes list (for API9 Shadow API detection).
+- `--policy <path>`: Path to authorization policy file (`JSON`) for multi-user tests (API1, API3, API5).
+- `--category`, `-c <string>`: Filter results by OWASP category code or key (`API1`, `API4`, `API8`, `BOLA`, `SSRF`).
+- `--status`, `-s <string>`: Filter by verification state (`VERIFIED`, `CANDIDATE`, `OBSERVED`, `NOT_VULNERABLE`).
+- `--canary <url>`: Approved callback URL for safe SSRF canary verification (API7). Internal IPs are strictly blocked.
+- `--verbose`, `-v`: Display extended evidence details, observed status codes, and test descriptions.
+- `--json`: Output API security assessment findings and coverage as structured JSON.
+
+**OWASP API Security Top 10 (2023) Coverage:**
+1. **API1:2023 (BOLA / IDOR):** Multi-user object-level access boundaries; correlates Stage 4 authorization tests.
+2. **API2:2023 (Broken Authentication):** Insecure cookie attributes (`HttpOnly`, `Secure`, `SameSite`), token algorithm defects (`alg=none`).
+3. **API3:2023 (BOPLA):** Object property excessive exposure and unauthorized property modification (mass assignment).
+4. **API4:2023 (Resource Consumption):** Rate-limiting telemetry headers (`RateLimit-Limit`, `Retry-After`) and pagination parameter checks.
+5. **API5:2023 (BFLA):** Administrative function access control enforcement; correlates Stage 4 role checks.
+6. **API6:2023 (Business Flows):** Sensitive workflow classification (`USER_REGISTRATION`, `CHECKOUT_TRANSACTION`, `PASSWORD_RESET`).
+7. **API7:2023 (SSRF):** Remote URL-fetching parameters with canary testing; localhost/cloud-metadata probing is strictly forbidden.
+8. **API8:2023 (Security Misconfiguration):** Missing `X-Content-Type-Options: nosniff`, permissive CORS wildcard (`*`), and verbose stack trace disclosures.
+9. **API9:2023 (Improper Inventory):** Discovered vs declared OpenAPI specification comparison (Shadow APIs) and multiple API version exposure.
+10. **API10:2023 (Unsafe Consumption):** Third-party partner and integration endpoint analysis (Stripe, GitHub, Twilio).
+
+**Example Output:**
+```text
+===========================================================
+  FELIX :: OWASP API SECURITY TOP 10 (2023): ASM-2026-0001
+  Assessment: Q1 API Security Audit | Target: https://api.example.com
+===========================================================
+  Total Tests Run:          14
+  Verified Vulnerabilities: 3
+  Candidates / Observations: 5
+-----------------------------------------------------------
+
+[+] OWASP API SECURITY TOP 10 COVERAGE MATRIX:
+CODE       CATEGORY                                 STATUS                      TESTS  VERIFIED  CANDIDATES  EXPLANATION
+API1:2023  Broken Object Level Authorization        VERIFIED_VULNERABILITY_FOUND 2      1         0           Evaluated 2 object-level access tests (1 verified vulnerability)
+API2:2023  Broken Authentication                    VERIFIED_VULNERABILITY_FOUND 4      1         1           Analyzed 2 authentication surfaces, 1 session cookie, and 1 token architecture
+API3:2023  Broken Object Property Level Auth        VERIFIED_VULNERABILITY_FOUND 1      1         0           Evaluated 1 property-level exposure test
+API4:2023  Unrestricted Resource Consumption        ACTIVELY_TESTED             1      0         1           Tested rate limiting headers and pagination limits on /api/v1/items
+API5:2023  Broken Function Level Authorization      ACTIVELY_TESTED             1      0         0           Evaluated 1 function-level role test (0 verified vulnerabilities)
+API6:2023  Unrestricted Access to Business Flows    PASSIVELY_ASSESSED          1      0         1           Identified 1 sensitive business workflow endpoint
+API7:2023  Server-Side Request Forgery              PASSIVELY_ASSESSED          1      0         1           Discovered 1 potential SSRF fetch parameter; internal probing prohibited
+API8:2023  Security Misconfiguration                VERIFIED_VULNERABILITY_FOUND 1      1         0           Audited security headers, CORS policies, and error disclosure
+API9:2023  Improper Inventory Management            ACTIVELY_TESTED             2      0         1           Analyzed 2 discovered endpoints for inventory discrepancies
+API10:2023 Unsafe Consumption of APIs               PASSIVELY_ASSESSED          0      0         0           No external third-party API integration points identified
+
+[+] API SECURITY TEST RESULTS (3)
+CODE       STATE     SEVERITY  METHOD  ENDPOINT                 EVIDENCE SUMMARY
+API1:2023  VERIFIED  HIGH      GET     /api/v1/orders/123       Tenant B accessed Tenant A record with status 200 OK
+API2:2023  VERIFIED  MEDIUM    GET     /auth/login              Session cookie "session_token" missing defensive flags: Missing HttpOnly flag; Missing Secure attribute
+API8:2023  VERIFIED  INFO      GET     https://api.example.com  API response missing X-Content-Type-Options: nosniff defense-in-depth header
+```
+
+### 7. Fail-Closed Security Guarantees
+- **No Authorization, No Audit:** If an assessment has no authorization record or its status is `PENDING`, `EXPIRED`, or `REVOKED`, `felix assessment run`, `felix assessment authz --run`, and `felix assessment apisec --run` exit immediately with a **security refusal** and perform **zero network requests**.
 - **Mutating Write Test Safety Guard:** The authorization engine strictly blocks any mutating request (`POST`, `PUT`, `PATCH`, `DELETE`) unless `allow_write_tests: true` is explicitly configured in the policy document.
+- **SSRF Non-Probing Guard:** The API security engine strictly blocks all requests to private ranges (`10.0.0.0/8`, `192.168.0.0/16`, `172.16.0.0/12`), loopback (`127.0.0.1`, `localhost`), and cloud metadata services (`169.254.169.254`). Active SSRF probes only target approved non-internal canaries.
 - **Exclusion Precedence:** Exclusions (`HOSTNAME`, `PATH_PREFIX`, `EXACT_URL`) are evaluated before any scope rule. Any target or URL matching an exclusion is strictly skipped.
 - **Interrupted Run Recovery:** If a scan process crashes or is terminated abruptly, the store automatically recovers abandoned `RUNNING` executions on the next invocation, marking them `FAILED` and preserving partial findings.
 

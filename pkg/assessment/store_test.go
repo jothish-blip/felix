@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"felix/pkg/apisec"
 	"felix/pkg/auth"
 	"felix/pkg/authz"
 	"felix/pkg/discovery"
@@ -842,6 +843,161 @@ func TestStore_AuthzPersistenceAndMigration(t *testing.T) {
 		t.Errorf("expected NotVulnerableCount = 1, got %d", summary.NotVulnerableCount)
 	}
 }
+
+func TestStore_APISecPersistenceAndMigration(t *testing.T) {
+	store, cleanup := newTestStore(t)
+	defer cleanup()
+
+	// 1. Verify schema migration version 5 applied
+	var maxVersion int
+	err := store.db.QueryRow("SELECT MAX(version) FROM schema_migrations").Scan(&maxVersion)
+	if err != nil {
+		t.Fatalf("failed to query schema version: %v", err)
+	}
+	if maxVersion < 5 {
+		t.Fatalf("expected schema version >= 5, got %d", maxVersion)
+	}
+
+	// 2. Setup client, assessment, and execution
+	c := &Client{
+		ID:        uuid.New().String(),
+		Name:      "APISec Test Org",
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	if err := store.CreateClient(c); err != nil {
+		t.Fatalf("CreateClient failed: %v", err)
+	}
+
+	asm := &Assessment{
+		ID:             uuid.New().String(),
+		Ref:            "ASM-APISEC-01",
+		ClientID:       c.ID,
+		Name:           "API Security Assessment",
+		AssessmentType: "API_SECURITY",
+		Status:         StatusRunning,
+		CreatedAt:      time.Now().UTC(),
+		UpdatedAt:      time.Now().UTC(),
+	}
+	if err := store.CreateAssessment(asm); err != nil {
+		t.Fatalf("CreateAssessment failed: %v", err)
+	}
+
+	exec := &AssessmentExecution{
+		ID:             uuid.New().String(),
+		AssessmentID:   asm.ID,
+		Status:         StatusRunning,
+		StartedAt:      time.Now().UTC(),
+		ConfigSnapshot: ScanConfigSnapshot{TimeoutSeconds: 10, Concurrency: 5},
+	}
+	if err := store.CreateExecution(exec); err != nil {
+		t.Fatalf("CreateExecution failed: %v", err)
+	}
+
+	// 3. Save and retrieve RunRecord
+	run := &apisec.RunRecord{
+		ID:                 uuid.New().String(),
+		AssessmentID:       asm.ID,
+		ExecutionID:        exec.ID,
+		TotalTests:         10,
+		CategoriesAssessed: 10,
+		VerifiedCount:      2,
+		CandidateCount:     3,
+		CoverageJSON:       `{"API1_BOLA":{"category":"API1_BOLA","code":"API1:2023","name":"Broken Object Level Authorization","status":"VERIFIED_VULNERABILITY_FOUND","tests_run":2,"verified_findings":1,"candidate_findings":0,"explanation":"Verified IDOR"}}`,
+		CreatedAt:          time.Now().UTC(),
+	}
+	if err := store.SaveAPISecRun(run); err != nil {
+		t.Fatalf("SaveAPISecRun failed: %v", err)
+	}
+
+	fetchedRun, err := store.GetAPISecRun(asm.ID, exec.ID)
+	if err != nil {
+		t.Fatalf("GetAPISecRun failed: %v", err)
+	}
+	if fetchedRun.TotalTests != 10 || fetchedRun.VerifiedCount != 2 {
+		t.Errorf("unexpected run record data: %+v", fetchedRun)
+	}
+
+	// 4. Save and retrieve Results
+	results := []apisec.Result{
+		{
+			ID:                uuid.New().String(),
+			AssessmentID:      asm.ID,
+			ExecutionID:       exec.ID,
+			Category:          apisec.CategoryAPI1_BOLA,
+			OWASPCode:         "API1:2023",
+			TestName:          "BOLA Verification",
+			Endpoint:          "/api/v1/orders/999",
+			Method:            "GET",
+			VerificationState: apisec.StateVerified,
+			Severity:          report.SeverityHigh,
+			Confidence:        report.ConfidenceHigh,
+			ObservedStatus:    200,
+			EvidenceSummary:   "Tenant cross-access successful",
+			CreatedAt:         time.Now().UTC(),
+		},
+		{
+			ID:                uuid.New().String(),
+			AssessmentID:      asm.ID,
+			ExecutionID:       exec.ID,
+			Category:          apisec.CategoryAPI8_Misconfiguration,
+			OWASPCode:         "API8:2023",
+			TestName:          "Missing Security Headers",
+			Endpoint:          "/api/v1/orders/999",
+			Method:            "GET",
+			VerificationState: apisec.StateCandidate,
+			Severity:          report.SeverityLow,
+			Confidence:        report.ConfidenceMedium,
+			ObservedStatus:    200,
+			EvidenceSummary:   "Missing nosniff header",
+			CreatedAt:         time.Now().UTC(),
+		},
+	}
+
+	if err := store.SaveAPISecResults(results); err != nil {
+		t.Fatalf("SaveAPISecResults failed: %v", err)
+	}
+
+	// 5. Query all results
+	fetchedResults, err := store.GetAPISecResults(asm.ID, exec.ID, "", "")
+	if err != nil {
+		t.Fatalf("GetAPISecResults failed: %v", err)
+	}
+	if len(fetchedResults) != 2 {
+		t.Errorf("expected 2 results, got %d", len(fetchedResults))
+	}
+
+	// Filter by category
+	filteredResults, err := store.GetAPISecResults(asm.ID, exec.ID, string(apisec.CategoryAPI1_BOLA), "")
+	if err != nil {
+		t.Fatalf("GetAPISecResults filtered failed: %v", err)
+	}
+	if len(filteredResults) != 1 {
+		t.Errorf("expected 1 BOLA result, got %d", len(filteredResults))
+	}
+
+	// Filter by state
+	stateResults, err := store.GetAPISecResults(asm.ID, exec.ID, "", string(apisec.StateVerified))
+	if err != nil {
+		t.Fatalf("GetAPISecResults by state failed: %v", err)
+	}
+	if len(stateResults) != 1 {
+		t.Errorf("expected 1 verified result, got %d", len(stateResults))
+	}
+
+	// 6. Test GetAPISecSummary
+	summary, err := store.GetAPISecSummary(asm.ID, exec.ID)
+	if err != nil {
+		t.Fatalf("GetAPISecSummary failed: %v", err)
+	}
+	if summary.TotalTests != 10 {
+		t.Errorf("expected TotalTests = 10 from RunRecord, got %d", summary.TotalTests)
+	}
+	if summary.VerifiedCount != 2 {
+		t.Errorf("expected VerifiedCount = 2, got %d", summary.VerifiedCount)
+	}
+}
+
 
 
 

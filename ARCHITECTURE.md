@@ -77,6 +77,8 @@ The codebase is organized into modular packages under `pkg/` and a thin CLI laye
 | **`pkg/assessment`** | Assessment lifecycle, authorization verification, scope/exclusion engine, embedded SQLite store, and finding traceability. | `models.go`, `scope.go`, `store.go`, `controller.go` |
 | **`pkg/discovery`** | Advanced attack-surface intelligence engine: relational graph modeling, domains, applications, APIs, forms, parameters, auth surfaces, cloud services, and passive tech detection. | `types.go`, `domains.go`, `apps.go`, `forms.go`, `parameters.go`, `auth.go`, `tech.go`, `js.go`, `engine.go` |
 | **`pkg/auth`** | Authentication intelligence subsystem: multi-signal classification, passive cookie auditing, token structure analysis, protected endpoint reasoning, and zero credential probing. | `types.go`, `classifier.go`, `cookies.go`, `tokens.go`, `protected.go`, `engine.go`, `future_accounts.go` |
+| **`pkg/authz`** | Authorization & access control engine: BOLA/IDOR, BFLA, BOPLA, horizontal/vertical privilege escalation, and comparative evidence verification. | `types.go`, `planner.go`, `engine.go`, `comparator.go`, `policy.go` |
+| **`pkg/apisec`** | OWASP API Security Top 10 (2023) assessment engine: unified evidence-first pipeline, inventory & OpenAPI reconciliation, bounded rate-limit audits, SSRF canary testing, and security misconfiguration analysis. | `types.go`, `inventory.go`, `engine.go` |
 | **`pkg/report`** | Finding normalization, deduplication, multi-signal correlation, risk scoring, HTML/JSON generation. | `model.go`, `normalize.go`, `dedup.go`, `correlate.go`, `risk.go`, `summary.go`, `html.go`, `json.go` |
 | **`pkg/config`** | Persistent operational configuration storage (`~/.felix/config.json`). | `config.go` |
 | **`test`** | Integration testing, regression corpus, CLI end-to-end validation, and assessment lifecycle tests. | `regression_test.go`, `cli_test.go`, `assessment_cli_test.go` |
@@ -383,6 +385,23 @@ Stage 4 introduces a dedicated, evidence-driven API authorization testing engine
 - **Database Schema Migration v4:**
   - `assessment_authz_policies`: Stores sanitized assessment permission policies and authorization document references.
   - `assessment_authz_results`: Records test case executions, observed vs baseline status codes, empirical evidence summaries, redacted request/response snippets, and finding associations.
+
+### 7. OWASP API Security Engine (`pkg/apisec`)
+
+Stage 5 introduces a first-class, evidence-driven API security testing engine systematically addressing all ten categories of the **OWASP API Security Top 10 (2023)**:
+- **API1:2023 — Broken Object Level Authorization (BOLA / IDOR):** Maps empirical findings from the Stage 4 authorization engine (`pkg/authz`) and performs passive route analysis for endpoints containing resource identifiers (`/users/{id}`, UUIDs). If no authorization policy is provided, reports entry points with `PREREQUISITE_MISSING`.
+- **API2:2023 — Broken Authentication:** Audits session cookie defensive flags (`Secure`, `HttpOnly`, `SameSite`), token structures, unverified JWT header algorithms (flagging `alg=none`), and unauthenticated identity surfaces discovered via Stage 3 (`pkg/auth`).
+- **API3:2023 — Broken Object Property Level Authorization (BOPLA):** Evaluates unauthorized object property exposure and mutation attempts from Stage 4, distinguishing excessive data exposure from mass-assignment vulnerability.
+- **API4:2023 — Unrestricted Resource Consumption:** Conducts safe, bounded probes (maximum 3 requests) to verify rate-limiting telemetry headers (`RateLimit-Limit`, `RateLimit-Remaining`, `Retry-After`) and analyzes pagination limits (`limit`, `pageSize`, `per_page`). Zero denial-of-service load is generated.
+- **API5:2023 — Broken Function Level Authorization (BFLA):** Evaluates administrative role boundaries and unprivileged function execution from Stage 4, or passively inventories exposed management routes (`/admin`, `/manage`).
+- **API6:2023 — Unrestricted Access to Sensitive Business Flows:** Discovers and categorizes business workflows (`USER_REGISTRATION`, `CHECKOUT_TRANSACTION`, `PASSWORD_RESET`, `INVITATION_REFERRAL`) to audit for anti-automation, rate limiting, and abuse mitigations without executing simulated transactions.
+- **API7:2023 — Server-Side Request Forgery (SSRF):** Identifies remote URL-fetching parameters (`url`, `dest`, `webhook`, `callback`). Probes only an explicitly approved, non-internal canary callback URL. Probing localhost, 127.0.0.1, AWS/GCP cloud metadata (`169.254.169.254`), or private RFC 1918 subnets is strictly blocked by `isInternalAddress` guards.
+- **API8:2023 — Security Misconfiguration:** Audits missing `X-Content-Type-Options: nosniff` headers, overly permissive CORS wildcards (`Access-Control-Allow-Origin: *`), and verbose backend error/stack trace disclosures.
+- **API9:2023 — Improper Inventory Management:** Compares discovered attack-surface endpoints against client-supplied OpenAPI/Swagger JSON or line-delimited route specifications to detect undocumented "Shadow APIs", and flags concurrent exposure of multiple API versions (e.g., `v1` alongside `v2`).
+- **API10:2023 — Unsafe Consumption of APIs:** Audits external third-party integration points (Stripe, Twilio, GitHub, Google) referenced in assets, evaluating downstream trust boundaries without interacting with third-party infrastructure.
+- **Database Schema Migration v5:**
+  - `assessment_apisec_runs`: Stores overall run metrics, total tests executed, categories covered, verified counts, candidate counts, and full category coverage JSON.
+  - `assessment_apisec_results`: Records granular test evaluations, OWASP category codes, verification states (`VERIFIED`, `CANDIDATE`, `OBSERVED`, `NOT_VULNERABLE`), severity, confidence, observed HTTP statuses, evidence summaries, and sanitized finding linkages.
 
 ---
 

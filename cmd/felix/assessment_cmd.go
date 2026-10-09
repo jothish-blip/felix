@@ -12,6 +12,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"felix/pkg/apisec"
 	"felix/pkg/assessment"
 	"felix/pkg/auth"
 	"felix/pkg/authz"
@@ -61,6 +62,8 @@ func runAssessment(args []string) int {
 		return runAssessmentAuth(subArgs)
 	case "authz":
 		return runAssessmentAuthz(subArgs)
+	case "apisec", "api":
+		return runAssessmentAPISec(subArgs)
 	case "reports":
 		return runAssessmentReports(subArgs)
 	case "cancel":
@@ -87,6 +90,7 @@ func printAssessmentHelp() {
 	fmt.Println("  inventory    Inspect discovered attack-surface assets and relationships")
 	fmt.Println("  auth         Inspect discovered authentication surfaces, cookies, tokens, and protection")
 	fmt.Println("  authz        Test and inspect API authorization, BOLA/IDOR, BFLA, BOPLA, and privilege escalation")
+	fmt.Println("  apisec       Assess OWASP API Security Top 10 (2023) categories and API inventory")
 	fmt.Println("  reports      List generated report files for an assessment")
 	fmt.Println("  cancel       Cancel an active or pending assessment")
 	fmt.Println("\nExamples:")
@@ -97,6 +101,7 @@ func printAssessmentHelp() {
 	fmt.Println("  felix assessment inventory <asm-ref>")
 	fmt.Println("  felix assessment auth <asm-ref> --verbose")
 	fmt.Println("  felix assessment authz <asm-ref> --policy policy.json --run")
+	fmt.Println("  felix assessment apisec <asm-ref> --run --spec openapi.json")
 	fmt.Println("  felix assessment reports <asm-ref>")
 }
 
@@ -1961,4 +1966,427 @@ func runAssessmentAuthz(args []string) int {
 	fmt.Println()
 	return 0
 }
+
+func printAPISecHelp() {
+	fmt.Println("Usage: felix assessment apisec <assessment-ref> [flags]")
+	fmt.Println("\nFlags:")
+	fmt.Println("  --run                    Execute OWASP API Security assessment against authorized targets")
+	fmt.Println("  --dry-run                Display planned tests and inventory analysis without network requests")
+	fmt.Println("  --spec <path>            Path to declared OpenAPI / Swagger JSON or routes specification")
+	fmt.Println("  --policy <path>          Path to authorization policy file (JSON) for multi-user tests")
+	fmt.Println("  --category, -c <string>  Filter results by OWASP category code or key (e.g. API1, API4, BOLA)")
+	fmt.Println("  --status, -s <string>    Filter by verification state (VERIFIED, CANDIDATE, OBSERVED, NOT_VULNERABLE)")
+	fmt.Println("  --canary <url>           Approved callback URL for SSRF canary verification (API7)")
+	fmt.Println("  --verbose, -v            Display extended evidence details and audit observations")
+	fmt.Println("  --json                   Output API security assessment findings and coverage as JSON")
+	fmt.Println("\nExamples:")
+	fmt.Println("  felix assessment apisec <asm-ref> --dry-run --spec openapi.json")
+	fmt.Println("  felix assessment apisec <asm-ref> --run --spec openapi.json --policy policy.json")
+	fmt.Println("  felix assessment apisec <asm-ref> --status VERIFIED --verbose")
+	fmt.Println("  felix assessment apisec <asm-ref> --category API1 --json")
+}
+
+func runAssessmentAPISec(args []string) int {
+	var (
+		assessmentRef  string
+		specPath       string
+		policyPath     string
+		canaryURL      string
+		runExecution   bool
+		dryRun         bool
+		categoryFilter string
+		statusFilter   string
+		jsonOutput     bool
+		verbose        bool
+	)
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--spec":
+			if i+1 < len(args) {
+				specPath = args[i+1]
+				i++
+			}
+		case arg == "--policy":
+			if i+1 < len(args) {
+				policyPath = args[i+1]
+				i++
+			}
+		case arg == "--canary":
+			if i+1 < len(args) {
+				canaryURL = args[i+1]
+				i++
+			}
+		case arg == "--run":
+			runExecution = true
+		case arg == "--dry-run":
+			dryRun = true
+		case arg == "--category" || arg == "-c":
+			if i+1 < len(args) {
+				categoryFilter = strings.ToUpper(args[i+1])
+				i++
+			}
+		case arg == "--status" || arg == "-s":
+			if i+1 < len(args) {
+				statusFilter = strings.ToUpper(args[i+1])
+				i++
+			}
+		case arg == "--json":
+			jsonOutput = true
+		case arg == "--verbose" || arg == "-v":
+			verbose = true
+		case arg == "--help" || arg == "-h":
+			printAPISecHelp()
+			return 0
+		default:
+			if !strings.HasPrefix(arg, "-") && assessmentRef == "" {
+				assessmentRef = arg
+			}
+		}
+	}
+
+	if assessmentRef == "" {
+		fmt.Fprintf(os.Stderr, "[-] Error: assessment ID or Ref is required\n")
+		return 2
+	}
+
+	store, err := getAssessmentStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Database error: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+
+	asm, err := store.GetAssessment(assessmentRef)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Assessment %q not found: %v\n", assessmentRef, err)
+		return 1
+	}
+	asm.Targets, _ = store.GetTargets(asm.ID)
+	asm.Authorization, _ = store.GetAuthorization(asm.ID)
+	asm.Exclusions, _ = store.GetExclusions(asm.ID)
+	asm.ScopeRules, _ = store.GetScopeRules(asm.ID)
+
+	targetBase := "https://example.com"
+	if len(asm.Targets) > 0 {
+		targetBase = asm.Targets[0].TargetURL
+	}
+
+	// Gather endpoints from discovered inventory
+	var endpoints []apisec.APIEndpoint
+	assets, _, _ := store.GetInventory(asm.ID, "", "ENDPOINT", false)
+	for _, a := range assets {
+		method := "GET"
+		if m, ok := a.Metadata["method"].(string); ok && m != "" {
+			method = m
+		}
+		path := a.DisplayName
+		if p, ok := a.Metadata["path"].(string); ok && p != "" {
+			path = p
+		}
+		endpoints = append(endpoints, apisec.AnalyzeEndpoint(method, path, "discovered"))
+	}
+
+	// Fallback endpoints if none discovered yet
+	if len(endpoints) == 0 {
+		endpoints = append(endpoints, apisec.AnalyzeEndpoint("GET", "/", "target_root"))
+		endpoints = append(endpoints, apisec.AnalyzeEndpoint("GET", "/api/v1/health", "candidate"))
+	}
+
+	// Load declared spec if supplied
+	var declaredSpec *apisec.DeclaredSpec
+	if specPath != "" {
+		ds, err := apisec.LoadDeclaredSpec(specPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Warning: failed to parse API specification from %s: %v\n", specPath, err)
+		} else {
+			declaredSpec = ds
+		}
+	}
+
+	// Load authentication and authorization intelligence
+	authInv, _ := store.GetAuthInventory(asm.ID, "", "")
+	authzResults, _ := store.GetAuthzResults(asm.ID, "", "")
+
+	var policy *authz.AuthzPolicy
+	if policyPath != "" {
+		p, err := authz.LoadPolicyFromFile(policyPath)
+		if err == nil {
+			policy = p
+		}
+	} else {
+		policy, _ = store.GetAuthzPolicy(asm.ID)
+	}
+
+	// 1. Dry Run Mode
+	if dryRun {
+		fmt.Println("===========================================================")
+		fmt.Printf("  FELIX :: OWASP API SECURITY PLAN (DRY-RUN): %s\n", asm.Ref)
+		fmt.Printf("  Target Base: %s | Endpoints Analyzed: %d\n", targetBase, len(endpoints))
+		fmt.Println("===========================================================")
+
+		fmt.Println("\n[+] PREREQUISITE ASSESSMENT:")
+		policyStatus := "MISSING (API1 BOLA, API3 BOPLA, API5 BFLA active tests skipped)"
+		if policy != nil {
+			policyStatus = fmt.Sprintf("PRESENT (%d identities, %d resources)", len(policy.Identities), len(policy.Resources))
+		}
+		fmt.Printf("  - Multi-User Authz Policy: %s\n", policyStatus)
+
+		specStatus := "MISSING (API9 shadow API detection limited to version analysis)"
+		if declaredSpec != nil {
+			specStatus = fmt.Sprintf("LOADED (%d declared routes)", len(declaredSpec.Endpoints))
+		}
+		fmt.Printf("  - OpenAPI / API Spec:      %s\n", specStatus)
+
+		canaryStatus := "NOT CONFIGURED (API7 SSRF tests limited to parameter discovery)"
+		if canaryURL != "" {
+			canaryStatus = fmt.Sprintf("CONFIGURED (%s)", canaryURL)
+		}
+		fmt.Printf("  - SSRF Canary Callback:    %s\n", canaryStatus)
+
+		fmt.Println("\n[+] ENDPOINT ATTACK SURFACE CLASSIFICATION:")
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "METHOD\tPATH\tOBJECT REF\tPRIVILEGED\tFLOW\tSSRF\tPAGINATION")
+		for _, ep := range endpoints {
+			flowStr := "-"
+			if ep.IsBusinessFlow {
+				flowStr = ep.BusinessFlow
+			}
+			ssrfStr := "-"
+			if ep.HasURLParam {
+				ssrfStr = ep.URLParamName
+			}
+			pageStr := "-"
+			if ep.HasPagination {
+				pageStr = ep.PaginationParam
+			}
+			fmt.Fprintf(w, "%s\t%s\t%t\t%t\t%s\t%s\t%s\n",
+				ep.Method, ep.Path, ep.IsObjectRef, ep.IsPrivileged, flowStr, ssrfStr, pageStr)
+		}
+		_ = w.Flush()
+		fmt.Println()
+		return 0
+	}
+
+	// 2. Execution Mode
+	if runExecution {
+		if asm.Authorization == nil {
+			fmt.Fprintf(os.Stderr, "[-] Security refusal: no authorization record found for assessment %s\n", asm.Ref)
+			return 1
+		}
+		valid, reason := asm.Authorization.IsCurrentlyValid(time.Now().UTC())
+		if !valid {
+			fmt.Fprintf(os.Stderr, "[-] Security refusal: authorization invalid: %s\n", reason)
+			return 1
+		}
+
+		if len(asm.Targets) == 0 {
+			fmt.Fprintf(os.Stderr, "[-] Error: assessment %s has no targets configured\n", asm.Ref)
+			return 1
+		}
+
+		targetID := asm.Targets[0].ID
+		execID := "exec-" + uuid.New().String()
+		now := time.Now().UTC()
+		execRecord := &assessment.AssessmentExecution{
+			ID:           execID,
+			AssessmentID: asm.ID,
+			Status:       assessment.StatusRunning,
+			StartedAt:    now,
+			ConfigSnapshot: assessment.ScanConfigSnapshot{
+				TimeoutSeconds: 15,
+				Concurrency:    5,
+				ScopeMode:      asm.ScopeMode,
+				FelixVersion:   "2.0",
+			},
+		}
+		if err := store.CreateExecution(execRecord); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Failed to create execution record: %v\n", err)
+			return 1
+		}
+
+		var targetURLs []string
+		for _, t := range asm.Targets {
+			targetURLs = append(targetURLs, t.TargetURL)
+		}
+		scopeVal := assessment.NewScopeValidator(asm.ScopeMode, targetURLs, asm.ScopeRules, asm.Exclusions)
+
+		cfg := apisec.DefaultConfig()
+		if canaryURL != "" {
+			cfg.CanaryCallbackURL = canaryURL
+		}
+		if policy != nil && policy.AllowWriteTests {
+			cfg.AllowWriteTests = true
+		}
+
+		engine := apisec.NewEngine(nil, cfg)
+		actx := &apisec.AssessmentContext{
+			AssessmentID: asm.ID,
+			ExecutionID:  execID,
+			BaseURL:      targetBase,
+			Endpoints:    endpoints,
+			AuthInv:      authInv,
+			AuthzPolicy:  policy,
+			AuthzResults: authzResults,
+			DeclaredSpec: declaredSpec,
+			IsAllowed:    scopeVal.IsAllowed,
+			IsExcluded:   func(u string) bool { excluded, _ := scopeVal.IsExcluded(u); return excluded },
+		}
+
+		fmt.Println("===========================================================")
+		fmt.Printf("  EXECUTING OWASP API SECURITY AUDIT: %s (%s)\n", asm.Ref, asm.Name)
+		fmt.Printf("  Target: %s | Endpoints: %d\n", targetBase, len(endpoints))
+		fmt.Println("===========================================================")
+
+		startTime := time.Now()
+		results, findings, summary, err := engine.Assess(context.Background(), actx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Execution error: %v\n", err)
+			execRecord.Status = assessment.StatusFailed
+			execRecord.ErrorMessage = err.Error()
+			_ = store.UpdateExecution(execRecord)
+			return 1
+		}
+
+		duration := time.Since(startTime)
+		completedAt := time.Now().UTC()
+		execRecord.Status = assessment.StatusCompleted
+		execRecord.CompletedAt = &completedAt
+		execRecord.DurationMs = duration.Milliseconds()
+		execRecord.RequestCount = len(results)
+		execRecord.FindingCount = len(findings)
+
+		// Save results
+		if err := store.SaveAPISecResults(results); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Warning: failed to save apisec results: %v\n", err)
+		}
+
+		// Save RunRecord
+		covJSON, _ := json.Marshal(summary.CoverageMap)
+		runRec := &apisec.RunRecord{
+			ID:                 uuid.New().String(),
+			AssessmentID:       asm.ID,
+			ExecutionID:        execID,
+			TotalTests:         summary.TotalTests,
+			CategoriesAssessed: summary.CategoriesCovered,
+			VerifiedCount:      summary.VerifiedCount,
+			CandidateCount:     summary.CandidateCount,
+			CoverageJSON:       string(covJSON),
+			CreatedAt:          completedAt,
+		}
+		if err := store.SaveAPISecRun(runRec); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Warning: failed to save apisec run record: %v\n", err)
+		}
+
+		// Save findings
+		var asmFindings []assessment.AssessmentFinding
+		for _, f := range findings {
+			asmFindings = append(asmFindings, assessment.ToAssessmentFinding(asm.ID, execID, targetID, f))
+		}
+		if len(asmFindings) > 0 {
+			if err := store.SaveFindings(asmFindings); err != nil {
+				fmt.Fprintf(os.Stderr, "[-] Warning: failed to save assessment findings: %v\n", err)
+			}
+		}
+		_ = store.UpdateExecution(execRecord)
+
+		fmt.Printf("[✓] API Security assessment completed in %s (%d tests executed, %d verified findings)\n",
+			duration.Round(time.Millisecond), summary.TotalTests, summary.VerifiedCount)
+	}
+
+	// 3. Display Results Mode
+	results, err := store.GetAPISecResults(asm.ID, "", categoryFilter, statusFilter)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Failed to fetch apisec results: %v\n", err)
+		return 1
+	}
+
+	summary, _ := store.GetAPISecSummary(asm.ID, "")
+
+	if jsonOutput {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		output := map[string]any{
+			"assessment_ref": asm.Ref,
+			"assessment_id":  asm.ID,
+			"summary":        summary,
+			"results":        results,
+		}
+		_ = enc.Encode(output)
+		return 0
+	}
+
+	fmt.Println("===========================================================")
+	fmt.Printf("  FELIX :: OWASP API SECURITY TOP 10 (2023): %s\n", asm.Ref)
+	fmt.Printf("  Assessment: %s | Target: %s\n", asm.Name, targetBase)
+	fmt.Println("===========================================================")
+
+	if summary != nil && len(summary.CoverageMap) > 0 {
+		fmt.Printf("  Total Tests Run:          %d\n", summary.TotalTests)
+		fmt.Printf("  Verified Vulnerabilities: %d\n", summary.VerifiedCount)
+		fmt.Printf("  Candidates / Observations: %d\n", summary.CandidateCount)
+		fmt.Println("-----------------------------------------------------------")
+
+		fmt.Println("\n[+] OWASP API SECURITY TOP 10 COVERAGE MATRIX:")
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "CODE\tCATEGORY\tSTATUS\tTESTS\tVERIFIED\tCANDIDATES\tEXPLANATION")
+
+		// Sort or iterate consistently
+		categories := []apisec.OWASPCategory{
+			apisec.CategoryAPI1_BOLA,
+			apisec.CategoryAPI2_BrokenAuth,
+			apisec.CategoryAPI3_BOPLA,
+			apisec.CategoryAPI4_ResourceConsumption,
+			apisec.CategoryAPI5_BFLA,
+			apisec.CategoryAPI6_BusinessFlows,
+			apisec.CategoryAPI7_SSRF,
+			apisec.CategoryAPI8_Misconfiguration,
+			apisec.CategoryAPI9_ImproperInventory,
+			apisec.CategoryAPI10_UnsafeConsumption,
+		}
+
+		for _, cat := range categories {
+			cov, ok := summary.CoverageMap[string(cat)]
+			if !ok {
+				meta := apisec.OWASPCategoryMetadata[cat]
+				cov = apisec.CategoryCoverage{
+					Code:        meta.Code,
+					Name:        meta.Name,
+					Status:      apisec.CoverageUntested,
+					Explanation: "Untested",
+				}
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%d\t%s\n",
+				cov.Code, cov.Name, cov.Status, cov.TestsRun, cov.Verified, cov.Candidates, cov.Explanation)
+		}
+		_ = w.Flush()
+	}
+
+	if len(results) > 0 {
+		fmt.Printf("\n[+] API SECURITY TEST RESULTS (%d)\n", len(results))
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		if verbose {
+			fmt.Fprintln(w, "CODE\tSTATE\tSEVERITY\tMETHOD\tENDPOINT\tTEST NAME\tEVIDENCE SUMMARY")
+			for _, r := range results {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					r.OWASPCode, r.VerificationState, r.Severity, r.Method, r.Endpoint, r.TestName, r.EvidenceSummary)
+			}
+		} else {
+			fmt.Fprintln(w, "CODE\tSTATE\tSEVERITY\tMETHOD\tENDPOINT\tEVIDENCE SUMMARY")
+			for _, r := range results {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+					r.OWASPCode, r.VerificationState, r.Severity, r.Method, r.Endpoint, r.EvidenceSummary)
+			}
+		}
+		_ = w.Flush()
+	} else if summary == nil || summary.TotalTests == 0 {
+		fmt.Println("\nNo API security test results recorded.")
+		fmt.Printf("To run an API security assessment:\n  felix assessment apisec %s --run\n", asm.Ref)
+	}
+
+	fmt.Println()
+	return 0
+}
+
 
