@@ -17,8 +17,9 @@ import (
 
 // Engine orchestrates authorization test execution, safety verification, and finding generation.
 type Engine struct {
-	client     *http.Client
-	comparator *Comparator
+	client         *http.Client
+	sessionManager *SessionManager
+	comparator     *Comparator
 }
 
 // NewEngine creates an authorization intelligence engine.
@@ -26,10 +27,27 @@ func NewEngine(client *http.Client) *Engine {
 	if client == nil {
 		client = &http.Client{Timeout: 15 * time.Second}
 	}
-	return &Engine{
-		client:     client,
-		comparator: NewComparator(),
+	sm := NewSessionManager(client.Timeout)
+	if client.Transport != nil {
+		sm.SetTransport(client.Transport)
 	}
+	return &Engine{
+		client:         client,
+		sessionManager: sm,
+		comparator:     NewComparator(),
+	}
+}
+
+// SetSessionManager sets the session manager for multi-identity testing.
+func (e *Engine) SetSessionManager(sm *SessionManager) {
+	if sm != nil {
+		e.sessionManager = sm
+	}
+}
+
+// SessionManager returns the Engine's session manager.
+func (e *Engine) SessionManager() *SessionManager {
+	return e.sessionManager
 }
 
 // Execute runs planned authorization tests against the target baseURL under the specified policy.
@@ -49,11 +67,15 @@ func (e *Engine) Execute(
 	planner := NewPlanner(policy)
 	testCases := planner.PlanTestCases(baseURL)
 
+	// Inject credentials from environment variables into policy identities
+	InjectEnvCredentials(policy)
+
 	var results []AuthzTestResult
 	var findings []report.Finding
 
 	// Cache of baseline responses keyed by "identity:method:endpoint"
 	baselineCache := make(map[string]*ResponseData)
+	invalidSessions := make(map[string]bool)
 
 	// Step 1: Run baseline (ALLOW) cases first to establish baseline ground truth
 	for _, tc := range testCases {
@@ -72,6 +94,11 @@ func (e *Engine) Execute(
 		}
 		baselineCache[key] = resp
 
+		// Check if baseline request failed with 401 or 403 on an expected ALLOW endpoint
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			invalidSessions[tc.PrimaryIdentity] = true
+		}
+
 		// Evaluate baseline
 		res := e.getResource(policy, tc.TargetResource)
 		resEval := e.comparator.Compare(&tc, resp, nil, res)
@@ -79,6 +106,10 @@ func (e *Engine) Execute(
 		resEval.AssessmentID = assessmentID
 		resEval.ExecutionID = executionID
 		resEval.CreatedAt = time.Now().UTC()
+		if invalidSessions[tc.PrimaryIdentity] {
+			resEval.VerificationState = StateBlockedInvalidSession
+			resEval.EvidenceSummary = fmt.Sprintf("Baseline check blocked: session for identity %q returned HTTP %d (session expired or invalid)", tc.PrimaryIdentity, resp.StatusCode)
+		}
 		results = append(results, *resEval)
 	}
 
@@ -106,6 +137,26 @@ func (e *Engine) Execute(
 				CreatedAt:         time.Now().UTC(),
 			}
 			results = append(results, refusedResult)
+			continue
+		}
+
+		// Check if primary identity or baseline identity session is invalid
+		if invalidSessions[tc.PrimaryIdentity] || (tc.BaselineIdentity != "" && invalidSessions[tc.BaselineIdentity]) {
+			blockedResult := AuthzTestResult{
+				ID:                uuid.New().String(),
+				TestCaseID:        tc.ID,
+				AssessmentID:      assessmentID,
+				ExecutionID:       executionID,
+				Category:          tc.Category,
+				VerificationState: StateBlockedInvalidSession,
+				Endpoint:          tc.Endpoint,
+				Method:            tc.Method,
+				PrimaryIdentity:   tc.PrimaryIdentity,
+				BaselineIdentity:  tc.BaselineIdentity,
+				EvidenceSummary:   fmt.Sprintf("Authorization test blocked: identity session for %q or baseline %q is invalid or expired", tc.PrimaryIdentity, tc.BaselineIdentity),
+				CreatedAt:         time.Now().UTC(),
+			}
+			results = append(results, blockedResult)
 			continue
 		}
 
@@ -201,7 +252,7 @@ func (e *Engine) executeRequest(
 		}
 	}
 
-	client := e.scopedClient(isAllowed, isExcluded)
+	client := e.scopedClientForIdentity(tc.PrimaryIdentity, isAllowed, isExcluded)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -228,12 +279,22 @@ func (e *Engine) executeRequest(
 }
 
 func (e *Engine) scopedClient(isAllowed func(string) bool, isExcluded func(string) bool) *http.Client {
-	base := e.client
+	return e.scopedClientForIdentity("", isAllowed, isExcluded)
+}
+
+func (e *Engine) scopedClientForIdentity(identityAlias string, isAllowed func(string) bool, isExcluded func(string) bool) *http.Client {
+	var base *http.Client
+	if e.sessionManager != nil && identityAlias != "" {
+		base = e.sessionManager.GetClientForIdentity(identityAlias)
+	} else {
+		base = e.client
+	}
 	origCheck := base.CheckRedirect
 
 	return &http.Client{
 		Transport: base.Transport,
 		Timeout:   base.Timeout,
+		Jar:       base.Jar,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return fmt.Errorf("stopped after 10 redirects")
@@ -383,6 +444,8 @@ func (e *Engine) compileSummary(results []AuthzTestResult) *AuthzSummary {
 			summary.InconclusiveCount++
 		case StateNotVulnerable:
 			summary.NotVulnerableCount++
+		case StateBlockedInvalidSession:
+			summary.BlockedCount++
 		}
 	}
 

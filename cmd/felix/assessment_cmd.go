@@ -4225,7 +4225,38 @@ func runAssessmentBusinessLogic(args []string) int {
 	if policyPath != "" {
 		data, err := os.ReadFile(policyPath)
 		if err == nil {
-			_ = json.Unmarshal(data, &testIdentities)
+			// 1. Try direct slice of businesslogic.TestIdentity
+			if uErr := json.Unmarshal(data, &testIdentities); uErr != nil || len(testIdentities) == 0 {
+				// 2. Try AuthzPolicy struct with map of identities
+				var authzPol struct {
+					Identities map[string]authz.TestIdentity `json:"identities"`
+				}
+				if aErr := json.Unmarshal(data, &authzPol); aErr == nil && len(authzPol.Identities) > 0 {
+					testIdentities = make([]businesslogic.TestIdentity, 0, len(authzPol.Identities))
+					for alias, id := range authzPol.Identities {
+						idName := id.Alias
+						if idName == "" {
+							idName = alias
+						}
+						testIdentities = append(testIdentities, businesslogic.TestIdentity{
+							ID:             idName,
+							Role:           id.Role,
+							PrivilegeLevel: id.PrivilegeLevel,
+							Tokens:         id.Headers,
+							Cookies:        id.Cookies,
+							IsVerified:     true,
+						})
+					}
+				} else {
+					// 3. Try object with identities array
+					var wrapper struct {
+						Identities []businesslogic.TestIdentity `json:"identities"`
+					}
+					if wErr := json.Unmarshal(data, &wrapper); wErr == nil && len(wrapper.Identities) > 0 {
+						testIdentities = wrapper.Identities
+					}
+				}
+			}
 		} else {
 			fmt.Fprintf(os.Stderr, "[-] Warning: failed to read policy/identities file '%s': %v\n", policyPath, err)
 		}

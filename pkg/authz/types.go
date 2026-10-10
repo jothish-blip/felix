@@ -38,11 +38,12 @@ var FindingCategoryTitles = map[Category]string{
 type VerificationState string
 
 const (
-	StateObserved        VerificationState = "OBSERVED"
-	StateCandidate       VerificationState = "CANDIDATE"
-	StateVerified        VerificationState = "VERIFIED"
-	StateInconclusive    VerificationState = "INCONCLUSIVE"
-	StateNotVulnerable   VerificationState = "NOT_VULNERABLE"
+	StateObserved              VerificationState = "OBSERVED"
+	StateCandidate             VerificationState = "CANDIDATE"
+	StateVerified              VerificationState = "VERIFIED"
+	StateInconclusive          VerificationState = "INCONCLUSIVE"
+	StateNotVulnerable         VerificationState = "NOT_VULNERABLE"
+	StateBlockedInvalidSession VerificationState = "BLOCKED_INVALID_SESSION"
 )
 
 // ExpectedResult defines what the authorization policy expects for a given test case.
@@ -160,6 +161,7 @@ type AuthzSummary struct {
 	CandidateCount      int            `json:"candidate_count"`
 	InconclusiveCount   int            `json:"inconclusive_count"`
 	NotVulnerableCount  int            `json:"not_vulnerable_count"`
+	BlockedCount        int            `json:"blocked_count,omitempty"`
 	CategoryBreakdown   map[string]int `json:"category_breakdown"`
 	VerifiedBreakdown   map[string]int `json:"verified_breakdown"`
 }
