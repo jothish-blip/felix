@@ -350,7 +350,13 @@ func evaluateCOR06(f1, f2 *NormalizedFinding) (Relationship, bool) {
 	}
 
 	wf1 := f1.EvidenceDetails["workflow"]
+	if wf1 == "" {
+		wf1 = f1.EvidenceDetails["workflow_id"]
+	}
 	wf2 := f2.EvidenceDetails["workflow"]
+	if wf2 == "" {
+		wf2 = f2.EvidenceDetails["workflow_id"]
+	}
 	if wf1 == "" || wf2 == "" || wf1 != wf2 {
 		// If explicit workflow not tagged, fallback to shared order/checkout endpoint sequence
 		if !strings.Contains(f1.Path, "order") && !strings.Contains(f1.Path, "checkout") && !strings.Contains(f1.Path, "cart") {

@@ -1900,3 +1900,254 @@ func TestStore_CorrelationRunAndPaths(t *testing.T) {
 		t.Errorf("expected VerifiedPaths = 2, got %d", summary.VerifiedPaths)
 	}
 }
+
+func TestScenarioF_PersistenceAndRepeatExecution(t *testing.T) {
+	store, cleanup := newTestStore(t)
+	defer cleanup()
+
+	client := &Client{
+		ID:   uuid.New().String(),
+		Name: "Scenario F Corp",
+	}
+	if err := store.CreateClient(client); err != nil {
+		t.Fatalf("CreateClient failed: %v", err)
+	}
+
+	asm := &Assessment{
+		ID:             uuid.New().String(),
+		Ref:            "ASM-SCENARIO-F",
+		ClientID:       client.ID,
+		Name:           "Scenario F Assessment",
+		AssessmentType: "full",
+		Status:         StatusRunning,
+		CreatedAt:      time.Now().UTC(),
+		UpdatedAt:      time.Now().UTC(),
+	}
+	if err := store.CreateAssessment(asm); err != nil {
+		t.Fatalf("CreateAssessment failed: %v", err)
+	}
+
+	exec1 := &AssessmentExecution{
+		ID:           uuid.New().String(),
+		AssessmentID: asm.ID,
+		Status:       "COMPLETED",
+		StartedAt:    time.Now().UTC(),
+	}
+	if err := store.CreateExecution(exec1); err != nil {
+		t.Fatalf("CreateExecution 1 failed: %v", err)
+	}
+
+	exec2 := &AssessmentExecution{
+		ID:           uuid.New().String(),
+		AssessmentID: asm.ID,
+		Status:       "RUNNING",
+		StartedAt:    time.Now().UTC(),
+	}
+	if err := store.CreateExecution(exec2); err != nil {
+		t.Fatalf("CreateExecution 2 failed: %v", err)
+	}
+
+	// 1. Initial run on Execution 1
+	run1 := &correlation.RunRecord{
+		ID:                     uuid.New().String(),
+		AssessmentID:           asm.ID,
+		ExecutionID:            exec1.ID,
+		TotalFindings:          4,
+		CandidateRelationships: 2,
+		CandidatePaths:         1,
+		VerifiedPaths:          1,
+		HighestRisk:            report.SeverityHigh,
+		CoverageJSON:           `{"total_findings":4,"candidate_paths":1,"verified_paths":1}`,
+		SyntheticFixture:       false,
+		CreatedAt:              time.Now().UTC(),
+	}
+	if err := store.SaveCorrelationRun(run1); err != nil {
+		t.Fatalf("SaveCorrelationRun exec1 failed: %v", err)
+	}
+
+	sharedPathID := "PATH-F01-F02"
+	pathExec1 := correlation.AttackPath{
+		ID:                sharedPathID,
+		Title:             "Exec 1 Shared Path ID",
+		EntryPoint:        "https://api.example.com/v1",
+		TargetAsset:       "https://api.example.com",
+		PrimaryWeakness:   "Weakness 1",
+		TerminalImpact:    "Impact 1",
+		Status:            correlation.PathVerified,
+		Confidence:        report.ConfidenceHigh,
+		CombinedRiskLevel: report.SeverityHigh,
+		CombinedRiskScore: 75,
+		NodeIDs:           []string{"F01", "F02"},
+		CreatedAt:         time.Now().UTC(),
+	}
+	if err := store.SaveAttackPaths(asm.ID, exec1.ID, []correlation.AttackPath{pathExec1}); err != nil {
+		t.Fatalf("SaveAttackPaths exec1 failed: %v", err)
+	}
+
+	paths1, err := store.GetAttackPaths(asm.ID, exec1.ID, "", "")
+	if err != nil || len(paths1) != 1 {
+		t.Fatalf("expected 1 path for exec1, got %d, err: %v", len(paths1), err)
+	}
+
+	// 2. Correlation on Execution 2 with identical logical path ID
+	run2 := &correlation.RunRecord{
+		ID:                     uuid.New().String(),
+		AssessmentID:           asm.ID,
+		ExecutionID:            exec2.ID,
+		TotalFindings:          6,
+		CandidateRelationships: 3,
+		CandidatePaths:         2,
+		VerifiedPaths:          2,
+		HighestRisk:            report.SeverityCritical,
+		CoverageJSON:           `{"total_findings":6,"candidate_paths":2,"verified_paths":2}`,
+		SyntheticFixture:       false,
+		CreatedAt:              time.Now().UTC(),
+	}
+	if err := store.SaveCorrelationRun(run2); err != nil {
+		t.Fatalf("SaveCorrelationRun exec2 failed: %v", err)
+	}
+
+	pathExec2 := correlation.AttackPath{
+		ID:                sharedPathID, // Same logical ID as in exec1
+		Title:             "Exec 2 Identical Logical ID Different Data",
+		EntryPoint:        "https://api.example.com/v2",
+		TargetAsset:       "https://api.example.com/v2",
+		PrimaryWeakness:   "Weakness 2",
+		TerminalImpact:    "Impact 2",
+		Status:            correlation.PathCandidate,
+		Confidence:        report.ConfidenceMedium,
+		CombinedRiskLevel: report.SeverityMedium,
+		CombinedRiskScore: 55,
+		NodeIDs:           []string{"F01", "F02"},
+		CreatedAt:         time.Now().UTC(),
+	}
+	// Must succeed without primary key conflict with exec1
+	if err := store.SaveAttackPaths(asm.ID, exec2.ID, []correlation.AttackPath{pathExec2}); err != nil {
+		t.Fatalf("SaveAttackPaths exec2 with shared ID failed: %v", err)
+	}
+
+	// Verify exec1 was NOT overwritten or corrupted
+	paths1After, err := store.GetAttackPaths(asm.ID, exec1.ID, "", "")
+	if err != nil || len(paths1After) != 1 {
+		t.Fatalf("exec1 paths corrupted after exec2 save: len=%d, err=%v", len(paths1After), err)
+	}
+	if paths1After[0].Title != "Exec 1 Shared Path ID" {
+		t.Errorf("exec1 path overwritten by exec2: got title %q", paths1After[0].Title)
+	}
+	if paths1After[0].Status != correlation.PathVerified {
+		t.Errorf("exec1 status overwritten: got %v", paths1After[0].Status)
+	}
+
+	// Verify exec2 has its own path
+	paths2, err := store.GetAttackPaths(asm.ID, exec2.ID, "", "")
+	if err != nil || len(paths2) != 1 {
+		t.Fatalf("expected 1 path for exec2, got %d, err=%v", len(paths2), err)
+	}
+	if paths2[0].Title != "Exec 2 Identical Logical ID Different Data" {
+		t.Errorf("exec2 path title unexpected: %q", paths2[0].Title)
+	}
+
+	// 3. Rerun on Execution 2 (Repeat execution)
+	run2Updated := &correlation.RunRecord{
+		ID:                     run2.ID, // Same run record ID on rerun
+		AssessmentID:           asm.ID,
+		ExecutionID:            exec2.ID,
+		TotalFindings:          6,
+		CandidateRelationships: 4,
+		CandidatePaths:         2,
+		VerifiedPaths:          2,
+		HighestRisk:            report.SeverityCritical,
+		CoverageJSON:           `{"total_findings":6,"candidate_paths":2,"verified_paths":2,"rerun":true}`,
+		SyntheticFixture:       false,
+		CreatedAt:              time.Now().UTC(),
+	}
+	if err := store.SaveCorrelationRun(run2Updated); err != nil {
+		t.Fatalf("SaveCorrelationRun repeat failed: %v", err)
+	}
+
+	pathExec2Updated := correlation.AttackPath{
+		ID:                sharedPathID,
+		Title:             "Exec 2 Updated Title on Rerun",
+		EntryPoint:        "https://api.example.com/v2-updated",
+		TargetAsset:       "https://api.example.com/v2",
+		PrimaryWeakness:   "Weakness 2 Updated",
+		TerminalImpact:    "Impact 2 Updated",
+		Status:            correlation.PathVerified,
+		Confidence:        report.ConfidenceHigh,
+		CombinedRiskLevel: report.SeverityHigh,
+		CombinedRiskScore: 70,
+		NodeIDs:           []string{"F01", "F02"},
+		CreatedAt:         time.Now().UTC(),
+	}
+	if err := store.SaveAttackPaths(asm.ID, exec2.ID, []correlation.AttackPath{pathExec2Updated}); err != nil {
+		t.Fatalf("SaveAttackPaths repeat on exec2 failed: %v", err)
+	}
+
+	// Confirm no duplicate entries were created for exec2
+	paths2Rerun, err := store.GetAttackPaths(asm.ID, exec2.ID, "", "")
+	if err != nil {
+		t.Fatalf("GetAttackPaths rerun failed: %v", err)
+	}
+	if len(paths2Rerun) != 1 {
+		t.Fatalf("expected exactly 1 path for exec2 after rerun, got %d (duplicate created)", len(paths2Rerun))
+	}
+	if paths2Rerun[0].Title != "Exec 2 Updated Title on Rerun" {
+		t.Errorf("expected updated title after rerun, got %q", paths2Rerun[0].Title)
+	}
+
+	// Confirm exec1 remains untouched
+	paths1Final, err := store.GetAttackPaths(asm.ID, exec1.ID, "", "")
+	if err != nil || len(paths1Final) != 1 {
+		t.Fatalf("exec1 paths damaged after rerun: len=%d, err=%v", len(paths1Final), err)
+	}
+	if paths1Final[0].Title != "Exec 1 Shared Path ID" {
+		t.Errorf("exec1 corrupted after rerun of exec2: %q", paths1Final[0].Title)
+	}
+
+	// 4. Empty results handling
+	exec3 := &AssessmentExecution{
+		ID:           uuid.New().String(),
+		AssessmentID: asm.ID,
+		Status:       "COMPLETED",
+		StartedAt:    time.Now().UTC(),
+	}
+	if err := store.CreateExecution(exec3); err != nil {
+		t.Fatalf("CreateExecution 3 failed: %v", err)
+	}
+
+	run3 := &correlation.RunRecord{
+		ID:                     uuid.New().String(),
+		AssessmentID:           asm.ID,
+		ExecutionID:            exec3.ID,
+		TotalFindings:          0,
+		CandidateRelationships: 0,
+		CandidatePaths:         0,
+		VerifiedPaths:          0,
+		HighestRisk:            "",
+		CoverageJSON:           `{"total_findings":0,"candidate_paths":0,"verified_paths":0}`,
+		SyntheticFixture:       false,
+		CreatedAt:              time.Now().UTC(),
+	}
+	if err := store.SaveCorrelationRun(run3); err != nil {
+		t.Fatalf("SaveCorrelationRun empty exec3 failed: %v", err)
+	}
+	if err := store.SaveAttackPaths(asm.ID, exec3.ID, []correlation.AttackPath{}); err != nil {
+		t.Fatalf("SaveAttackPaths empty exec3 failed: %v", err)
+	}
+
+	emptyPaths, err := store.GetAttackPaths(asm.ID, exec3.ID, "", "")
+	if err != nil {
+		t.Fatalf("GetAttackPaths empty exec3 failed: %v", err)
+	}
+	if len(emptyPaths) != 0 {
+		t.Fatalf("expected 0 paths for empty exec3, got %d", len(emptyPaths))
+	}
+
+	emptySummary, err := store.GetCorrelationSummary(asm.ID, exec3.ID)
+	if err != nil {
+		t.Fatalf("GetCorrelationSummary empty exec3 failed: %v", err)
+	}
+	if emptySummary.TotalFindings != 0 || emptySummary.VerifiedPaths != 0 {
+		t.Errorf("expected 0 findings and 0 verified paths, got %+v", emptySummary)
+	}
+}

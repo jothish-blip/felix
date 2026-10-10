@@ -94,7 +94,8 @@ func NormalizeFinding(f report.Finding) NormalizedFinding {
 		strings.Contains(catLower, "replay") ||
 		strings.Contains(catLower, "invariant") ||
 		strings.Contains(catLower, "bl-") ||
-		details["workflow"] != ""
+		details["workflow"] != "" ||
+		details["workflow_id"] != ""
 
 	synthFixture := details["synthetic_fixture"] == "true" ||
 		strings.Contains(f.Title, "[SYNTHETIC SIMULATION]")

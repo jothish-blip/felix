@@ -181,22 +181,36 @@ func (e *Engine) constructPath(nodeIDs []string, nodes []NormalizedFinding, edge
 	var assumptions []string
 	var missingEvidence []string
 
-	if allEdgesConfirmed && last.IsVerified && !anyInferredHypothesis {
+	allNodesVerified := true
+	anyNodeCandidate := false
+	for _, n := range nodes {
+		if !n.IsVerified {
+			allNodesVerified = false
+		}
+		if n.IsCandidate {
+			anyNodeCandidate = true
+		}
+	}
+
+	if anyEdgeInconclusive {
+		status = PathInconclusive
+		conf = report.ConfidenceLow
+		missingEvidence = append(missingEvidence, "Evidence connecting intermediate transitions is inconclusive.")
+	} else if allEdgesConfirmed && allNodesVerified && !anyInferredHypothesis {
 		status = PathVerified
 		conf = report.ConfidenceHigh
-	} else if anyInferredHypothesis || anyEdgePlausible || last.IsCandidate {
+	} else if anyInferredHypothesis || anyEdgePlausible || anyNodeCandidate {
 		status = PathCandidate
 		conf = report.ConfidenceMedium
 		if anyInferredHypothesis {
 			assumptions = append(assumptions, "One or more nodes depend on an inferred workflow hypothesis requiring operator verification.")
 		}
-		if last.IsCandidate {
-			missingEvidence = append(missingEvidence, "Terminal impact finding is unconfirmed candidate.")
+		if anyNodeCandidate {
+			missingEvidence = append(missingEvidence, "One or more component findings are unconfirmed candidates.")
 		}
-	} else if anyEdgeInconclusive {
-		status = PathInconclusive
-		conf = report.ConfidenceLow
-		missingEvidence = append(missingEvidence, "Evidence connecting intermediate transitions is inconclusive.")
+		if anyEdgePlausible {
+			missingEvidence = append(missingEvidence, "One or more connecting transitions are plausible but unconfirmed.")
+		}
 	} else {
 		status = PathObserved
 		conf = report.ConfidenceLow
@@ -211,6 +225,11 @@ func (e *Engine) constructPath(nodeIDs []string, nodes []NormalizedFinding, edge
 		}
 	}
 
+	terminalImpact := fmt.Sprintf("Direct exploitation of %s at %s", last.Title, last.Endpoint)
+	if status != PathVerified {
+		terminalImpact = fmt.Sprintf("Potential exploitation of %s at %s (unverified candidate)", last.Title, last.Endpoint)
+	}
+
 	path := AttackPath{
 		ID:                fmt.Sprintf("PATH-%s-%s", ruleCode, shortHash(strings.Join(nodeIDs, "->"))),
 		Title:             title,
@@ -220,7 +239,7 @@ func (e *Engine) constructPath(nodeIDs []string, nodes []NormalizedFinding, edge
 		EntryPoint:        first.Endpoint,
 		TargetAsset:       last.Host,
 		PrimaryWeakness:   first.Title,
-		TerminalImpact:    fmt.Sprintf("Direct exploitation of %s at %s", last.Title, last.Endpoint),
+		TerminalImpact:    terminalImpact,
 		Status:            status,
 		Confidence:        conf,
 		Assumptions:       assumptions,

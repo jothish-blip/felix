@@ -4500,8 +4500,8 @@ func runAssessmentCorrelate(args []string) int {
 		}
 
 		if len(rawFindings) == 0 {
-			fmt.Printf("[-] No findings recorded for assessment %s. Run an assessment scan first.\n", asm.Ref)
-			return 1
+			fmt.Printf("[*] No findings recorded for assessment %s to correlate.\n", asm.Ref)
+			return 0
 		}
 
 		var reportFindings []report.Finding
@@ -4550,6 +4550,7 @@ func runAssessmentCorrelate(args []string) int {
 			}
 			_ = store.CreateExecution(execRec)
 		}
+		executionID = execID
 
 		covJSON, _ := json.Marshal(summary)
 		runRec := &correlation.RunRecord{
@@ -4588,6 +4589,12 @@ func runAssessmentCorrelate(args []string) int {
 	}
 
 	// 2. Inspection / Output Mode
+	if executionID == "" {
+		if runRec, _ := store.GetCorrelationRun(asm.ID, ""); runRec != nil && runRec.ExecutionID != "" {
+			executionID = runRec.ExecutionID
+		}
+	}
+
 	paths, err := store.GetAttackPaths(asm.ID, executionID, statusFilter, riskFilter)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[-] Failed to fetch attack paths: %v\n", err)
@@ -4614,10 +4621,14 @@ func runAssessmentCorrelate(args []string) int {
 	summary, _ := store.GetCorrelationSummary(asm.ID, executionID)
 
 	if jsonOutput {
+		outPaths := paths
+		if outPaths == nil {
+			outPaths = []correlation.AttackPath{}
+		}
 		out := map[string]interface{}{
 			"assessment_ref": asm.Ref,
 			"summary":        summary,
-			"attack_paths":   paths,
+			"attack_paths":   outPaths,
 		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")

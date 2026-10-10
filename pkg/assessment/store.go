@@ -3731,6 +3731,15 @@ func (s *SQLiteStore) SaveCorrelationRun(record *correlation.RunRecord) error {
 			candidate_relationships, candidate_paths, verified_paths,
 			highest_risk, coverage_json, synthetic_fixture, created_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			total_findings = excluded.total_findings,
+			candidate_relationships = excluded.candidate_relationships,
+			candidate_paths = excluded.candidate_paths,
+			verified_paths = excluded.verified_paths,
+			highest_risk = excluded.highest_risk,
+			coverage_json = excluded.coverage_json,
+			synthetic_fixture = excluded.synthetic_fixture,
+			created_at = excluded.created_at
 	`
 	_, err := s.db.Exec(
 		query,
@@ -3808,6 +3817,24 @@ func (s *SQLiteStore) SaveAttackPaths(assessmentID string, executionID string, p
 			node_ids_json, nodes_json, edges_json, security_story_json,
 			remediation, synthetic_fixture, created_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			title = excluded.title,
+			entry_point = excluded.entry_point,
+			target_asset = excluded.target_asset,
+			primary_weakness = excluded.primary_weakness,
+			terminal_impact = excluded.terminal_impact,
+			status = excluded.status,
+			confidence = excluded.confidence,
+			combined_risk_level = excluded.combined_risk_level,
+			combined_risk_score = excluded.combined_risk_score,
+			risk_rationale = excluded.risk_rationale,
+			node_ids_json = excluded.node_ids_json,
+			nodes_json = excluded.nodes_json,
+			edges_json = excluded.edges_json,
+			security_story_json = excluded.security_story_json,
+			remediation = excluded.remediation,
+			synthetic_fixture = excluded.synthetic_fixture,
+			created_at = excluded.created_at
 	`)
 	if err != nil {
 		return err
@@ -3825,8 +3852,17 @@ func (s *SQLiteStore) SaveAttackPaths(assessmentID string, executionID string, p
 			createdAt = time.Now()
 		}
 
+		dbID := p.ID
+		if executionID != "" && !strings.Contains(dbID, executionID) {
+			suffix := executionID
+			if len(suffix) > 8 {
+				suffix = suffix[:8]
+			}
+			dbID = fmt.Sprintf("%s-%s", p.ID, suffix)
+		}
+
 		_, err := stmt.Exec(
-			p.ID,
+			dbID,
 			assessmentID,
 			executionID,
 			p.Title,

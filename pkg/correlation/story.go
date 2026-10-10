@@ -41,21 +41,45 @@ func GenerateSecurityStory(path *AttackPath) report.SecurityStory {
 
 	// 2. Action enabled & 5. Asset affected & 6. Impact
 	actionEnabled := fmt.Sprintf("Traversing from %s enables access to %s.", firstNode.Title, lastNode.Title)
+	if path.Status != PathVerified {
+		actionEnabled = fmt.Sprintf("Traversing from %s potentially enables access to %s (candidate).", firstNode.Title, lastNode.Title)
+	}
+
 	impactDesc := path.TerminalImpact
 	if impactDesc == "" {
-		impactDesc = fmt.Sprintf("Compromise of %s via verified relationship chain.", path.TargetAsset)
+		if path.Status == PathVerified {
+			impactDesc = fmt.Sprintf("Compromise of %s via verified relationship chain.", path.TargetAsset)
+		} else {
+			impactDesc = fmt.Sprintf("Potential compromise of %s via candidate relationship chain.", path.TargetAsset)
+		}
 	}
 
 	// 8. Investigate first & Remediation bottleneck
 	investigateFirst, remediationGuidance := deriveBottleneckRemediation(path)
 
 	storyTitle := path.Title
-	if path.Status != PathVerified && !strings.Contains(storyTitle, "Potential") && !strings.Contains(storyTitle, "Candidate") {
-		storyTitle = fmt.Sprintf("Potential Attack Path: %s (Candidate)", storyTitle)
+	if path.Status != PathVerified {
+		if path.Status == PathInconclusive {
+			if !strings.Contains(storyTitle, "(Inconclusive)") {
+				storyTitle = fmt.Sprintf("Potential Attack Path: %s (Inconclusive)", storyTitle)
+			}
+		} else {
+			if !strings.Contains(storyTitle, "(Candidate)") {
+				storyTitle = fmt.Sprintf("Potential Attack Path: %s (Candidate)", storyTitle)
+			}
+		}
+	}
+	if path.SyntheticFixture {
+		if !strings.Contains(storyTitle, "[SYNTHETIC FIXTURE]") {
+			storyTitle = fmt.Sprintf("[SYNTHETIC FIXTURE] %s", storyTitle)
+		}
 	}
 
 	summary := fmt.Sprintf("Attack path connecting %d security condition(s) on %s. Status: %s. Combined Risk: %s.",
 		len(path.Nodes), path.TargetAsset, path.Status, path.CombinedRiskLevel)
+	if path.SyntheticFixture {
+		summary = fmt.Sprintf("[SYNTHETIC TEST FIXTURE - NOT LIVE TARGET EVIDENCE] %s", summary)
+	}
 
 	description := fmt.Sprintf("Initial entry point at %s connects %d weakness(es): %s. %s",
 		entryDesc, len(path.Nodes), strings.Join(weaknessTitles, " → "), actionEnabled)
