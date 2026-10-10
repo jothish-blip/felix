@@ -40,6 +40,8 @@ func SanitizeEvidence(input string) string {
 // sanitizeFinding sanitizes all string fields within a Finding to prevent leaking sensitive credentials.
 func sanitizeFinding(f Finding) Finding {
 	cleanF := f
+	cleanF.Title = SanitizeEvidence(f.Title)
+	cleanF.Description = SanitizeEvidence(f.Description)
 	cleanF.Evidence = SanitizeEvidence(f.Evidence)
 	cleanF.EvidenceDetails.Observation = SanitizeEvidence(f.EvidenceDetails.Observation)
 	cleanF.EvidenceDetails.Location = SanitizeEvidence(f.EvidenceDetails.Location)
@@ -135,6 +137,10 @@ func SanitizeReport(rep Report) Report {
 // GenerateJSON serializes the audit report into formatted, redacted JSON bytes.
 func GenerateJSON(rep Report) ([]byte, error) {
 	sanitized := SanitizeReport(rep)
+	if sanitized.CommercialReport != nil {
+		cr := BuildCommercialReport(sanitized)
+		sanitized.CommercialReport = &cr
+	}
 	return json.MarshalIndent(sanitized, "", "  ")
 }
 

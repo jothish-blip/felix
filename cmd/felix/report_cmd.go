@@ -16,10 +16,11 @@ func runReport(args []string) int {
 	fs := flag.NewFlagSet("felix report", flag.ContinueOnError)
 
 	var (
-		htmlPath string
-		jsonPath string
-		verbose  bool
-		silent   bool
+		htmlPath   string
+		jsonPath   string
+		verbose    bool
+		silent     bool
+		commercial bool
 	)
 
 	fs.StringVar(&htmlPath, "html", "", "Export report to HTML file")
@@ -28,6 +29,7 @@ func runReport(args []string) int {
 	fs.BoolVar(&verbose, "verbose", false, "Verbose terminal output")
 	fs.BoolVar(&silent, "s", false, "Silent / minimal terminal output")
 	fs.BoolVar(&silent, "silent", false, "Silent / minimal terminal output")
+	fs.BoolVar(&commercial, "commercial", false, "Render Commercial Report 2.0 specification")
 
 	fs.Usage = func() {
 		fmt.Println("Usage: felix report <scan-result.json> [options]")
@@ -110,7 +112,10 @@ func runReport(args []string) int {
 
 	// Print terminal output unless silent
 	if !silent {
-		if !silent {
+		if commercial {
+			cr := report.BuildCommercialReport(rep)
+			printCommercialReportSummary(cr, verbose)
+		} else {
 			printReportSummary(rep, verbose)
 		}
 		if len(exported) > 0 {
@@ -123,6 +128,73 @@ func runReport(args []string) int {
 	}
 
 	return determineExitCode(rep)
+}
+
+// printCommercialReportSummary prints Commercial Report 2.0 sections in terminal.
+func printCommercialReportSummary(cr report.CommercialReport, verbose bool) {
+	fmt.Println("===========================================================")
+	fmt.Println(" FELIX :: COMMERCIAL SECURITY ASSESSMENT REPORT 2.0")
+	fmt.Println("===========================================================")
+	fmt.Printf("Report Ref:  %s\n", cr.ReportID)
+	fmt.Printf("Target:      %s\n", cr.ExecutiveSummary.Target)
+	fmt.Printf("Generated:   %s\n", cr.GeneratedAt)
+	fmt.Printf("Risk Score:  %d/100 (%s)\n\n", cr.RiskOverview.RiskScore, cr.RiskOverview.RiskLevel)
+
+	fmt.Println("1. EXECUTIVE SUMMARY:")
+	fmt.Printf("  Status:    %s\n", cr.ExecutiveSummary.CompletionStatus)
+	fmt.Printf("  Scope:     %s\n", cr.ExecutiveSummary.ScopeSummary)
+	fmt.Printf("  Assets:    %d cataloged\n", cr.ExecutiveSummary.AssetsDiscoveredCount)
+	fmt.Printf("  Verified:  %d confirmed exposures\n", cr.ExecutiveSummary.FindingsVerifiedCount)
+	fmt.Printf("  Detected:  %d unverified candidates\n", cr.ExecutiveSummary.FindingsDetectedCount)
+	fmt.Printf("  Observed:  %d observations\n", cr.ExecutiveSummary.ObservationsCount)
+	fmt.Println()
+
+	fmt.Println("2. ASSESSMENT SCOPE:")
+	fmt.Printf("  Domains:   %s\n", strings.Join(cr.AssessmentScope.InScopeDomains, ", "))
+	fmt.Printf("  Assessed:  %d endpoints (Provenance: %s)\n\n", cr.AssessmentScope.AssessedEndpointsCount, cr.AssessmentScope.Provenance)
+
+	fmt.Printf("3. ATTACK SURFACE: %d assets\n\n", cr.AttackSurface.TotalAssets)
+
+	fmt.Println("4. RISK OVERVIEW:")
+	fmt.Printf("  Critical:  %d verified, %d detected\n", cr.RiskOverview.VerifiedCountsBySeverity["CRITICAL"], cr.RiskOverview.DetectedCountsBySeverity["CRITICAL"])
+	fmt.Printf("  High:      %d verified, %d detected\n", cr.RiskOverview.VerifiedCountsBySeverity["HIGH"], cr.RiskOverview.DetectedCountsBySeverity["HIGH"])
+	fmt.Printf("  Medium:    %d verified, %d detected\n", cr.RiskOverview.VerifiedCountsBySeverity["MEDIUM"], cr.RiskOverview.DetectedCountsBySeverity["MEDIUM"])
+	fmt.Printf("  Low/Info:  %d verified, %d detected\n\n", cr.RiskOverview.VerifiedCountsBySeverity["LOW"], cr.RiskOverview.DetectedCountsBySeverity["LOW"])
+
+	fmt.Printf("5. VERIFIED FINDINGS (%d):\n", len(cr.VerifiedFindings))
+	if len(cr.VerifiedFindings) == 0 {
+		fmt.Println("  (No verified findings confirmed)")
+	} else {
+		for _, vf := range cr.VerifiedFindings {
+			fmt.Printf("  [%s] [%s] %s at %s\n", vf.Severity, vf.Verification.Status, vf.Title, vf.AffectedAsset)
+			fmt.Printf("    Impact: %s\n", vf.SecurityImpact.Summary)
+		}
+	}
+	fmt.Println()
+
+	fmt.Printf("6. DETECTED FINDINGS (%d):\n", len(cr.DetectedFindings))
+	if len(cr.DetectedFindings) == 0 {
+		fmt.Println("  (No detected findings recorded)")
+	} else {
+		for _, df := range cr.DetectedFindings {
+			fmt.Printf("  [%s] [%s] %s at %s\n", df.Severity, df.Verification.Status, df.Title, df.AffectedAsset)
+			fmt.Printf("    Impact: %s\n", df.SecurityImpact.Summary)
+		}
+	}
+	fmt.Println()
+
+	fmt.Printf("7. OBSERVATIONS (%d):\n", len(cr.Observations))
+	for _, obs := range cr.Observations {
+		fmt.Printf("  [%s] %s (%s)\n", obs.ObservationType, obs.Title, obs.AffectedAsset)
+	}
+	fmt.Println()
+
+	fmt.Println("8. TECHNICAL APPENDIX:")
+	fmt.Printf("  Negative Verification Probes: %d\n", len(cr.TechnicalAppendix.NegativeVerificationOutcomes))
+	fmt.Printf("  Finding Traceability Entries: %d\n", len(cr.TechnicalAppendix.FindingIndex))
+	fmt.Printf("  Engines Executed:             %d\n", len(cr.TechnicalAppendix.EngineExecutionSummary))
+	fmt.Println("  Note: Remediation recommendations are excluded (reserved for Stage 13).")
+	fmt.Println()
 }
 
 // printReportSummary prints the unified assessment summary in the terminal.

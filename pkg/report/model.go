@@ -172,6 +172,7 @@ type Report struct {
 	SecurityStories     []SecurityStory     `json:"security_stories"`
 	AttackPaths         []AttackPathSummary `json:"attack_paths,omitempty"`
 	VerificationSummary map[string]any      `json:"verification_summary,omitempty"`
+	CommercialReport    *CommercialReport   `json:"commercial_report,omitempty"`
 	Metadata            map[string]any      `json:"metadata,omitempty"`
 }
 

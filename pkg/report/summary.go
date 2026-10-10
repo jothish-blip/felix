@@ -161,7 +161,7 @@ func BuildMultiTargetReport(targets []string, rawFindings []Finding) Report {
 	// 6. Summary
 	summary := Summarize(prioritized)
 
-	return Report{
+	rep := Report{
 		Version:         "1.0.0",
 		Target:          primaryTarget,
 		Targets:         targets,
@@ -184,6 +184,9 @@ func BuildMultiTargetReport(targets []string, rawFindings []Finding) Report {
 			},
 		},
 	}
+	cr := BuildCommercialReport(rep)
+	rep.CommercialReport = &cr
+	return rep
 }
 
 // AttachAttackPaths associates correlated attack paths with the audit report,
@@ -207,6 +210,8 @@ func AttachAttackPaths(rep *Report, paths []AttackPathSummary) {
 		rep.RiskScore = maxPathScore
 		rep.RiskLevel = maxPathLevel
 	}
+	cr := BuildCommercialReport(*rep)
+	rep.CommercialReport = &cr
 }
 
 // AttachSecurityStories replaces correlated security stories on the report.
@@ -215,4 +220,6 @@ func AttachSecurityStories(rep *Report, stories []SecurityStory) {
 		return
 	}
 	rep.SecurityStories = stories
+	cr := BuildCommercialReport(*rep)
+	rep.CommercialReport = &cr
 }

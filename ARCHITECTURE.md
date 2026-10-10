@@ -445,6 +445,46 @@ Stage 11 introduces Verification Engine 2.0 to provide commercial-grade empirica
   - `assessment_verification_runs`: Persists verification run metrics, attempted counts, verified counts, detected counts, not verified counts, not exposed counts, blocked counts, inconclusive counts, synthetic counts, and verifier version (`2.0.0`).
   - `assessment_verification_results`: Persists finding verification results, target URL, endpoint, category, verification status, policy ID, verification method, confidence score, criteria results JSON, reproduction JSON, and timestamps.
 
+### 9. Commercial Report 2.0 (`pkg/report`)
+
+Stage 12 implements Commercial Report 2.0, transforming raw assessment findings, empirical verification results, correlation chains, attack paths, and evidence provenance into an executive-ready, client-facing deliverable without conducting new network activity.
+
+- **Strict Reporting & Presentation Layer:**
+  - Zero new security probes or active checks.
+  - Zero mutation of underlying source findings or risk scores.
+  - No synthetic asset or evidence fabrication.
+  - Deterministic serialization regardless of finding input order.
+- **Strict Exclusion of Remediation Advice:**
+  - Remediation instructions, root cause fixes, remediation prioritization, and fix validation are strictly excluded from Commercial Report 2.0 and reserved for Stage 13 Remediation Intelligence 3.0.
+  - Generic recommendations (e.g., "enable MFA", "update packages", "restrict access") are prohibited.
+  - Finding impact is presented strictly through demonstrated vs plausible vs unverified security consequences without prescribing mitigations.
+- **Eight Canonical Report Sections:**
+  1. **Executive Summary:** Overall completion status, target scope, discovery count, verified vs detected counts, posture narrative, and scope limitations. Empty assessments explicitly state that zero verified findings does not prove the target is entirely secure.
+  2. **Assessment Scope:** In-scope domains, URL boundaries, assessed endpoint count, evaluated authentication identities, executed engines, and explicit exclusions/restrictions.
+  3. **Attack Surface:** Catalog of all discovered assets (routes, static bundles, APIs, forms, cloud endpoints) across crawling, API inspection, secret detection, and cloud modules. Asset presence never implies exploitability.
+  4. **Risk Overview:** Felix 0–100 deterministic risk score meter, correlated attack paths (candidate vs verified), risk concentrations by component, and verified vs detected severity breakdown.
+  5. **Verified Findings:** Strictly reserved for findings with canonical verification status `VERIFIED`. Formatted according to the 10-field specification (A–J).
+  6. **Detected Findings:** Unverified detection hypotheses, including `DETECTED`, `NOT_VERIFIED`, and inconclusive/blocked checks. Never conflated with verified vulnerabilities.
+  7. **Observations:** Informational signals (`OBSERVED`), asset inventory items, and defensive configurations that do not assert a security weakness.
+  8. **Technical Appendix:** Complete auditable appendix containing:
+     - Negative verification outcomes (`NOT_EXPOSED` defensive boundary confirmations).
+     - End-to-end finding traceability index (source, fingerprint, policy, engine).
+     - Engine execution records and synthetic fixture indicators (`[SYNTHETIC FIXTURE]`).
+- **Standardized Finding Model (10 Fields A–J):**
+  - **A. Description:** Objective summary of the condition with secrets redacted.
+  - **B. Affected Asset & Location:** Target endpoint and line/DOM/parameter location.
+  - **C. Severity:** Standardized tier (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, `INFO`, `UNAVAILABLE`).
+  - **D. Confidence:** Dual detection confidence and verification confidence ratings preserved distinctly.
+  - **E. Authentication State:** Explicit state (`Unauthenticated`, `Authenticated`, `Privileged`, `Multiple Identities`, `Unknown`, `Not Applicable`).
+  - **F. Detection Method:** Technique used (`active_probe`, `static_pattern_signature`, `header_inspection`, etc.).
+  - **G. Verification:** Canonical status, policy ID, satisfied criteria, missing criteria, preconditions, and testing limitations.
+  - **H. Evidence:** Sanitized excerpts, HTTP status/method, headers, safe reproduction curl commands, provenance (`LIVE`, `STATIC`, `FIXTURE`), and timestamp.
+  - **I. Security Impact:** Demonstrated impact, plausible secondary impact, and unverified bounds (no remediation).
+  - **J. Risk Contribution:** Source finding score, individual vs correlated vs attack-path contribution, with zero double-counting.
+- **Defensive Boundary Handling (`NOT_EXPOSED`):**
+  - Confirmed access barriers (HTTP 401/403) and negative proof are classified as `NOT_EXPOSED` and routed exclusively to the Technical Appendix.
+  - `NOT_EXPOSED` findings contribute 0 to the risk score and are never displayed in the Verified Findings section.
+
 ---
 
 ## Concurrency, Timeouts & Resource Management

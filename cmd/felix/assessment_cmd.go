@@ -86,7 +86,7 @@ func runAssessment(args []string) int {
 		return runAssessmentCorrelate(subArgs)
 	case "verify", "verification":
 		return runAssessmentVerify(subArgs)
-	case "reports":
+	case "reports", "report":
 		return runAssessmentReports(subArgs)
 	case "cancel":
 		return runAssessmentCancel(subArgs)
@@ -1280,6 +1280,8 @@ func runAssessmentReports(args []string) int {
 	var (
 		assessmentRef string
 		jsonOutput    bool
+		htmlExport    string
+		jsonExport    string
 	)
 
 	for i := 0; i < len(args); i++ {
@@ -1292,8 +1294,18 @@ func runAssessmentReports(args []string) int {
 			}
 		case "--json":
 			jsonOutput = true
+		case "--html":
+			if i+1 < len(args) {
+				htmlExport = args[i+1]
+				i++
+			}
+		case "--json-file", "--export-json":
+			if i+1 < len(args) {
+				jsonExport = args[i+1]
+				i++
+			}
 		case "--help", "-h":
-			fmt.Println("Usage: felix assessment reports <assessment-id> [--json]")
+			fmt.Println("Usage: felix assessment reports <assessment-id> [--json] [--html <path>] [--json-file <path>]")
 			return 0
 		default:
 			if !strings.HasPrefix(arg, "-") && assessmentRef == "" {
@@ -1318,6 +1330,97 @@ func runAssessmentReports(args []string) int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[-] Assessment %q not found: %v\n", assessmentRef, err)
 		return 1
+	}
+
+	if htmlExport != "" || jsonExport != "" {
+		rawFindings, err := store.GetFindings(asm.ID, "")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Failed to fetch assessment findings: %v\n", err)
+			return 1
+		}
+		var reportFindings []report.Finding
+		for _, f := range rawFindings {
+			rf := report.Finding{
+				ID:              f.ID,
+				Title:           f.Title,
+				Category:        f.Category,
+				Severity:        f.Severity,
+				Confidence:      f.Confidence,
+				Target:          f.TargetURL,
+				Endpoint:        f.Endpoint,
+				Method:          f.Method,
+				EvidenceDetails: f.EvidenceDetails,
+				Verification:    f.VerificationRecord,
+				Remediation:     f.Remediation,
+			}
+			reportFindings = append(reportFindings, rf)
+		}
+
+		var targetsList []string
+		for _, t := range asm.Targets {
+			targetsList = append(targetsList, t.TargetURL)
+		}
+		if len(targetsList) == 0 {
+			targetsList = []string{asm.Name}
+		}
+
+		rep := report.BuildMultiTargetReport(targetsList, reportFindings)
+		if rep.Metadata == nil {
+			rep.Metadata = make(map[string]any)
+		}
+		rep.Metadata["assessment_id"] = asm.ID
+		rep.Metadata["assessment_ref"] = asm.Ref
+
+		paths, _ := store.GetAttackPaths(asm.ID, "", "", "")
+		if len(paths) > 0 {
+			var repStories []report.SecurityStory
+			var repPaths []report.AttackPathSummary
+			for _, p := range paths {
+				repStories = append(repStories, p.SecurityStory)
+				var transitions []string
+				for _, e := range p.Edges {
+					transitions = append(transitions, fmt.Sprintf("[%s] %s -> %s: %s",
+						e.ValidationStatus, e.SourceTitle, e.TargetTitle, e.Explanation))
+				}
+				repPaths = append(repPaths, report.AttackPathSummary{
+					ID:                p.ID,
+					Title:             p.Title,
+					Status:            string(p.Status),
+					Confidence:        p.Confidence,
+					CombinedRiskLevel: p.CombinedRiskLevel,
+					CombinedRiskScore: p.CombinedRiskScore,
+					RiskRationale:     p.RiskRationale,
+					EntryPoint:        p.EntryPoint,
+					TargetAsset:       p.TargetAsset,
+					PrimaryWeakness:   p.PrimaryWeakness,
+					TerminalImpact:    p.TerminalImpact,
+					Transitions:       transitions,
+					Assumptions:       p.Assumptions,
+					MissingEvidence:   p.MissingEvidence,
+					Remediation:       p.Remediation,
+					NodeIDs:           p.NodeIDs,
+					SyntheticFixture:  p.SyntheticFixture,
+				})
+			}
+			report.AttachSecurityStories(&rep, repStories)
+			report.AttachAttackPaths(&rep, repPaths)
+		}
+
+		if htmlExport != "" {
+			if err := report.WriteHTML(rep, htmlExport); err != nil {
+				fmt.Fprintf(os.Stderr, "[-] Failed to write HTML report to %s: %v\n", htmlExport, err)
+				return 1
+			}
+			fmt.Printf("[+] Exported HTML report to: %s\n", htmlExport)
+		}
+		if jsonExport != "" {
+			if err := report.WriteJSON(rep, jsonExport); err != nil {
+				fmt.Fprintf(os.Stderr, "[-] Failed to write JSON report to %s: %v\n", jsonExport, err)
+				return 1
+			}
+			fmt.Printf("[+] Exported JSON report to: %s\n", jsonExport)
+		}
+		return 0
 	}
 
 	reports, err := store.GetReports(asm.ID)

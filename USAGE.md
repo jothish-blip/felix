@@ -248,7 +248,27 @@ felix report scan-result.json --html assessment-report.html
 
 # Step 3: Print terminal summary of existing scan result
 felix report scan-result.json
+
+# Step 4: Render Commercial Report 2.0 format (Terminal, HTML, or JSON)
+felix report scan-result.json --commercial
+felix report scan-result.json --commercial --html commercial-report.html
+felix report scan-result.json --commercial --json commercial-report.json
 ```
+
+### Commercial Report 2.0 Specification (`--commercial`)
+
+Commercial Report 2.0 organizes audit data into eight canonical sections designed for engineering teams and executive leadership:
+1. **Executive Summary** (Completion status, posture statement, asset counts, verified vs detected counts, limitations)
+2. **Assessment Scope** (Domains, URLs, evaluated identities, executed engines, restrictions)
+3. **Attack Surface** (Discovered assets cataloged across crawler, API, secrets, cloud)
+4. **Risk Overview** (Deterministic 0–100 risk score, candidate & verified attack paths, component concentration)
+5. **Verified Findings** (Strictly canonical `VERIFIED` status; 10-field finding format A–J)
+6. **Detected Findings** (`DETECTED`, `NOT_VERIFIED`, and inconclusive checks)
+7. **Observations** (`OBSERVED`, informational signals, defensive configurations)
+8. **Technical Appendix** (Defensive `NOT_EXPOSED` boundary proofs, finding traceability index, engine summary)
+
+> [!NOTE]
+> **Explicit Remediation Omission:** Commercial Report 2.0 strictly excludes remediation instructions, fix recommendations, and automated code/configuration advice. These capabilities are reserved for Stage 13 Remediation Intelligence 3.0. Findings describe demonstrated vs plausible vs unverified impact without prescribing remediation.
 
 ---
 
@@ -317,8 +337,8 @@ felix assessment auth <assessment-ref> [--category LOGIN] [--verbose] [--json]
 # Inspect recorded findings with optional severity or verification filters
 felix assessment findings <assessment-ref> [--severity HIGH] [--verification VERIFIED] [--json]
 
-# List generated HTML and JSON report files
-felix assessment reports <assessment-ref>
+# Generate or inspect assessment reports (supports Commercial Report 2.0)
+felix assessment reports <assessment-ref> [--commercial] [--html report.html] [--json-file report.json]
 
 # Cancel an assessment project
 felix assessment cancel <assessment-ref>
