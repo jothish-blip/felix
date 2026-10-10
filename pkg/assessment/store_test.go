@@ -1805,8 +1805,8 @@ func TestStore_VerificationMigrationFromV10(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to query version: %v", err)
 	}
-	if currentVersion != 11 {
-		t.Errorf("expected schema version 11 after upgrade from v10, got %d", currentVersion)
+	if currentVersion < 11 {
+		t.Errorf("expected schema version >= 11 after upgrade from v10, got %d", currentVersion)
 	}
 
 	// 4. Verify migration v11 tables exist

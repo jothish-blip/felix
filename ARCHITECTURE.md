@@ -487,6 +487,42 @@ Stage 12 implements Commercial Report 2.0, transforming raw assessment findings,
 
 ---
 
+## Stage 13: Felix Operator Console & Curation Engine
+
+Stage 13 introduces **Felix Operator**: a local-first management interface and finding curation engine that bridges raw security execution with client-facing commercial reporting and delivery tracking.
+
+```
+Clients → Assessments → Targets & Scope → Scan Execution → Findings & Evidence
+                                                                   ↓
+Reports Delivery Tracking ← Commercial Report 2.0 ← Finding Review Curation
+                                                     (Approved / Rejected / Pending)
+```
+
+### Core Architecture & Invariants
+1. **Local-First, Strict Loopback Binding (`127.0.0.1`):**
+   - Designed strictly as an internal operator tool, never a multi-tenant or public SaaS.
+   - Binds exclusively to loopback addresses (`127.0.0.1` or `::1`). Any attempt to bind to external or wildcard interfaces (`0.0.0.0`) is actively blocked with a security refusal error.
+2. **Cryptographic Token & CSRF Origin Enforcement:**
+   - On startup, the server generates a cryptographically random 32-byte hex operator token (`X-Felix-Operator-Token` header / `Authorization: Bearer`).
+   - For all mutating state changes (`POST`, `PUT`, `DELETE`, `PATCH`), the server validates the `Origin` (and fallback `Referer`) against trusted loopback origins. Cross-origin mutations and permissive CORS are strictly prohibited.
+3. **Editorial vs Technical Verification Invariant:**
+   - Operator finding review decisions (`APPROVED_FOR_REPORT`, `REJECTED`, `PENDING`) are stored exclusively in the `finding_reviews` table.
+   - **Crucial Invariant:** An operator review decision *never* mutates, overrides, or alters the underlying finding's technical `VerificationStatus`, confidence score, raw HTTP evidence, or provenance.
+4. **Curated Commercial Report Generation:**
+   - Only findings explicitly reviewed and marked `APPROVED_FOR_REPORT` are included in finalized Commercial Report 2.0 deliverables.
+   - Unreviewed findings (`PENDING`) block final report compilation to ensure commercial quality, failing closed unless explicitly requested as a labeled `[DRAFT - PENDING REVIEW]` deliverable.
+   - Rejected findings (`REJECTED`) are completely excluded from commercial reports, attack paths, and risk score calculations.
+5. **Report Delivery Handover Tracking:**
+   - Formal client handover tracking (`report_deliveries`) is maintained independently from report compilation.
+   - Supports delivery methods (`ENCRYPTED_EMAIL`, `SECURE_DOWNLOAD`, `CLIENT_PORTAL`, `IN_PERSON`) with delivery timestamps only recorded when verified.
+6. **SQLite Scan Leases & Append-Only Audit Logging:**
+   - Background execution mutual exclusion is managed via SQLite leases (`scan_job_leases`) with heartbeat tracking, preventing duplicate concurrent scans on the same assessment across processes or restarts.
+   - All state-changing operator activities (client creation, authorization, target scoping, scans, reviews, report generation, deliveries) are immutably recorded in `operator_audit_events`.
+7. **Single Binary Distribution (`embed.FS`):**
+   - The web console UI (`pkg/operator/web/`) is embedded directly into the Go executable via `embed.FS`. Zero Node.js, npm, or external web server dependencies are required.
+
+---
+
 ## Concurrency, Timeouts & Resource Management
 
 Felix implements strict resource controls to ensure safety and prevent denial-of-service impacts against target servers:

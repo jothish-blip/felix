@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FELIX OPERATOR — Authorized Security Auditing Console</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-logo">
+        <span class="logo-icon">⚡</span>
+        <span class="brand-name">FELIX <span class="brand-sub">OPERATOR</span></span>
+      </div>
+      <div class="brand-badge">
+        <span class="status-dot"></span>
+        <span class="status-text">127.0.0.1 LOCAL SECURE</span>
+      </div>
+    </div>
+    <nav class="nav-tabs">
+      <button class="nav-tab active" data-tab="dashboard">Dashboard</button>
+      <button class="nav-tab" data-tab="clients">Clients</button>
+      <button class="nav-tab" data-tab="assessments">Assessments</button>
+      <button class="nav-tab" data-tab="reviews">Finding Reviews</button>
+      <button class="nav-tab" data-tab="reports">Reports & Delivery</button>
+      <button class="nav-tab" data-tab="audit">Audit Trail</button>
+    </nav>
+    <div class="operator-meta">
+      <span class="op-badge" id="op-user-badge">Operator: <strong id="op-user-id">operator</strong></span>
+      <button class="btn btn-sm btn-ghost" id="btn-copy-token" title="Copy Session Token">Token 🔑</button>
+    </div>
+  </header>
+
+  <main class="content-container">
+    <!-- Notifications banner -->
+    <div id="notification-banner" class="notification-banner hidden"></div>
+
+    <!-- TAB: DASHBOARD -->
+    <section id="tab-dashboard" class="tab-pane active">
+      <div class="view-header">
+        <div>
+          <h2>Operational Command</h2>
+          <p class="subtitle">Authorized assessment lifecycle, finding curation, and report delivery pipeline.</p>
+        </div>
+        <div class="actions">
+          <button class="btn btn-primary" onclick="showModal('modal-new-assessment')">+ New Assessment</button>
+          <button class="btn btn-secondary" onclick="showModal('modal-new-client')">+ Register Client</button>
+        </div>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-label">Active Clients</div>
+          <div class="stat-val" id="dash-clients-count">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Assessments</div>
+          <div class="stat-val" id="dash-assessments-count">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Pending Reviews</div>
+          <div class="stat-val text-warning" id="dash-pending-count">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Reports Generated</div>
+          <div class="stat-val text-success" id="dash-reports-count">0</div>
+        </div>
+      </div>
+
+      <div class="dashboard-sections">
+        <div class="card">
+          <div class="card-header">
+            <h3>Recent Assessments</h3>
+            <button class="btn btn-sm btn-ghost" onclick="switchTab('assessments')">View All &rarr;</button>
+          </div>
+          <div class="card-body">
+            <div id="dash-assessments-list" class="list-empty">Loading assessments...</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h3>Recent Operator Audit Log</h3>
+            <button class="btn btn-sm btn-ghost" onclick="switchTab('audit')">View All &rarr;</button>
+          </div>
+          <div class="card-body">
+            <div id="dash-audit-list" class="list-empty">Loading audit events...</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB: CLIENTS -->
+    <section id="tab-clients" class="tab-pane">
+      <div class="view-header">
+        <div>
+          <h2>Clients & Organizations</h2>
+          <p class="subtitle">Authorized organizational sponsors for security audit engagements.</p>
+        </div>
+        <div class="actions">
+          <button class="btn btn-primary" onclick="showModal('modal-new-client')">+ Register Client</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-body table-responsive">
+          <table class="data-table" id="table-clients">
+            <thead>
+              <tr>
+                <th>Client Name</th>
+                <th>Organization</th>
+                <th>Primary Contact</th>
+                <th>Contact Email</th>
+                <th>Registered</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="clients-table-body">
+              <tr><td colspan="6" class="text-center">Loading clients...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB: ASSESSMENTS -->
+    <section id="tab-assessments" class="tab-pane">
+      <div class="view-header">
+        <div>
+          <h2>Assessments & Scopes</h2>
+          <p class="subtitle">Client-authorized security auditing projects, target scopes, and execution jobs.</p>
+        </div>
+        <div class="actions">
+          <button class="btn btn-primary" onclick="showModal('modal-new-assessment')">+ New Assessment</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-body table-responsive">
+          <table class="data-table" id="table-assessments">
+            <thead>
+              <tr>
+                <th>Reference</th>
+                <th>Assessment Name</th>
+                <th>Client</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th>Targets</th>
+                <th>Created</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="assessments-table-body">
+              <tr><td colspan="8" class="text-center">Loading assessments...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Assessment Detail Panel -->
+      <div id="assessment-detail-panel" class="detail-panel hidden">
+        <div class="detail-header">
+          <div class="detail-title-group">
+            <span class="ref-badge" id="det-asm-ref">ASM-REF</span>
+            <h3 id="det-asm-name">Assessment Name</h3>
+            <span class="badge" id="det-asm-status">STATUS</span>
+          </div>
+          <div class="detail-actions">
+            <button class="btn btn-sm btn-secondary" id="btn-asm-add-target">+ Add Target</button>
+            <button class="btn btn-sm btn-secondary" id="btn-asm-authorize">📝 Authorize</button>
+            <button class="btn btn-sm btn-primary" id="btn-asm-scan">▶ Run Scan</button>
+            <button class="btn btn-sm btn-ghost" onclick="closeAssessmentDetail()">Close &times;</button>
+          </div>
+        </div>
+
+        <div id="scan-running-bar" class="scan-running-bar hidden">
+          <div class="scan-spinner"></div>
+          <div class="scan-status-info">
+            <strong id="scan-state-label">SCAN RUNNING</strong>: <span id="scan-progress-msg">Initializing scan...</span>
+          </div>
+          <button class="btn btn-sm btn-danger" id="btn-scan-cancel">Cancel Scan</button>
+        </div>
+
+        <div class="detail-grid">
+          <div class="detail-card">
+            <h4>Authorization & Permission</h4>
+            <div id="det-asm-auth-info" class="meta-list">No authorization recorded yet.</div>
+          </div>
+          <div class="detail-card">
+            <h4>Review Progress</h4>
+            <div id="det-asm-review-summary" class="review-stat-summary">
+              <span class="badge badge-success" id="det-rev-approved">0 Approved</span>
+              <span class="badge badge-warning" id="det-rev-pending">0 Pending</span>
+              <span class="badge badge-danger" id="det-rev-rejected">0 Rejected</span>
+              <button class="btn btn-sm btn-primary" id="btn-goto-review">Open Review Workbench &rarr;</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card mt-4">
+          <div class="card-header">
+            <h4>In-Scope Targets</h4>
+          </div>
+          <div class="card-body table-responsive">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Target URL</th>
+                  <th>Type</th>
+                  <th>Status</th>
+                  <th>Label</th>
+                </tr>
+              </thead>
+              <tbody id="det-asm-targets-body">
+                <tr><td colspan="4">No targets defined.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB: FINDING REVIEWS -->
+    <section id="tab-reviews" class="tab-pane">
+      <div class="view-header">
+        <div>
+          <h2>Finding Review Workbench</h2>
+          <p class="subtitle">Operator curation decisions: Approve, Reject, or Suppress findings for Commercial Report inclusion.</p>
+        </div>
+        <div class="actions">
+          <select id="review-asm-selector" class="form-select">
+            <option value="">Select Assessment...</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Invariant reminder banner -->
+      <div class="info-alert">
+        <strong>Commercial Review Invariant:</strong> Editorial review decisions control commercial report inclusion only.
+        Technical verification status, confidence scores, and raw evidence are <em>never mutated</em>.
+      </div>
+
+      <div class="review-summary-bar" id="review-summary-bar">
+        <div class="progress-pill">Total: <strong id="rev-bar-total">0</strong></div>
+        <div class="progress-pill pill-approved">Approved for Report: <strong id="rev-bar-approved">0</strong></div>
+        <div class="progress-pill pill-pending">Pending Review: <strong id="rev-bar-pending">0</strong></div>
+        <div class="progress-pill pill-rejected">Rejected / Excluded: <strong id="rev-bar-rejected">0</strong></div>
+        <div class="actions ml-auto">
+          <button class="btn btn-success" id="btn-generate-report-from-reviews">Compile Commercial Report &rarr;</button>
+        </div>
+      </div>
+
+      <div class="filter-toolbar">
+        <div class="filter-group">
+          <label>Status Filter:</label>
+          <button class="filter-chip active" data-filter-status="ALL">All</button>
+          <button class="filter-chip" data-filter-status="PENDING">Pending</button>
+          <button class="filter-chip" data-filter-status="APPROVED_FOR_REPORT">Approved</button>
+          <button class="filter-chip" data-filter-status="REJECTED">Rejected</button>
+        </div>
+        <div class="filter-group">
+          <label>Severity:</label>
+          <button class="filter-chip active" data-filter-sev="ALL">All</button>
+          <button class="filter-chip" data-filter-sev="CRITICAL">Critical</button>
+          <button class="filter-chip" data-filter-sev="HIGH">High</button>
+          <button class="filter-chip" data-filter-sev="MEDIUM">Medium</button>
+          <button class="filter-chip" data-filter-sev="LOW">Low</button>
+        </div>
+      </div>
+
+      <div id="findings-container" class="findings-list">
+        <div class="card p-4 text-center text-muted">Please select an assessment to review findings.</div>
+      </div>
+    </section>
+
+    <!-- TAB: REPORTS & DELIVERY -->
+    <section id="tab-reports" class="tab-pane">
+      <div class="view-header">
+        <div>
+          <h2>Commercial Reports & Delivery</h2>
+          <p class="subtitle">Commercial Report 2.0 generation, artifact downloads, and formal client handover tracking.</p>
+        </div>
+        <div class="actions">
+          <select id="reports-asm-selector" class="form-select">
+            <option value="">Select Assessment...</option>
+          </select>
+          <button class="btn btn-primary" id="btn-trigger-report-modal">+ Generate Report</button>
+        </div>
+      </div>
+
+      <div class="reports-grid">
+        <div class="card">
+          <div class="card-header">
+            <h3>Generated Reports</h3>
+          </div>
+          <div class="card-body table-responsive">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Format</th>
+                  <th>Created At</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="reports-table-body">
+                <tr><td colspan="4" class="text-center">Select an assessment to view reports.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h3>Delivery History</h3>
+          </div>
+          <div class="card-body table-responsive">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Recipient</th>
+                  <th>Method</th>
+                  <th>Status</th>
+                  <th>Dispatched / Delivered</th>
+                  <th>Operator</th>
+                </tr>
+              </thead>
+              <tbody id="deliveries-table-body">
+                <tr><td colspan="5" class="text-center">No delivery records.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB: AUDIT TRAIL -->
+    <section id="tab-audit" class="tab-pane">
+      <div class="view-header">
+        <div>
+          <h2>Operator Audit Trail</h2>
+          <p class="subtitle">Immutable, append-only log of all operator actions, state changes, and report handovers.</p>
+        </div>
+        <div class="actions">
+          <button class="btn btn-secondary" onclick="loadAuditEvents()">🔄 Refresh Log</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-body table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Timestamp (UTC)</th>
+                <th>Operator</th>
+                <th>Action</th>
+                <th>Entity Type</th>
+                <th>Entity ID</th>
+                <th>Details</th>
+              </tr>
+            </thead>
+            <tbody id="audit-table-body">
+              <tr><td colspan="6" class="text-center">Loading audit log...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- MODALS -->
+
+  <!-- Modal: New Client -->
+  <div id="modal-new-client" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Register New Client</h3>
+        <button class="modal-close" onclick="closeModal('modal-new-client')">&times;</button>
+      </div>
+      <form id="form-new-client" onsubmit="handleCreateClientSubmit(event)">
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Client Name *</label>
+            <input type="text" id="client-name" class="form-control" placeholder="e.g. Acme Corporation" required>
+          </div>
+          <div class="form-group">
+            <label>Formal Organization Title</label>
+            <input type="text" id="client-org" class="form-control" placeholder="e.g. Acme Holdings Inc.">
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Primary Contact Name</label>
+              <input type="text" id="client-contact-name" class="form-control" placeholder="e.g. Jane Doe">
+            </div>
+            <div class="form-group">
+              <label>Contact Email</label>
+              <input type="email" id="client-contact-email" class="form-control" placeholder="e.g. security@acme.com">
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Operational Notes</label>
+            <textarea id="client-notes" class="form-control" rows="3" placeholder="Sponsorship, authorization context, contract references..."></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-ghost" onclick="closeModal('modal-new-client')">Cancel</button>
+          <button type="submit" class="btn btn-primary">Register Client</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal: New Assessment -->
+  <div id="modal-new-assessment" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Create Security Assessment</h3>
+        <button class="modal-close" onclick="closeModal('modal-new-assessment')">&times;</button>
+      </div>
+      <form id="form-new-assessment" onsubmit="handleCreateAssessmentSubmit(event)">
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Client Sponsor *</label>
+            <select id="asm-client-id" class="form-select" required>
+              <option value="">Select registered client...</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Assessment Name *</label>
+            <input type="text" id="asm-name" class="form-control" placeholder="e.g. Q4 Web & API Security Audit" required>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Assessment Type</label>
+              <select id="asm-type" class="form-select">
+                <option value="BLACK_BOX_WEB">Black-Box Web Application</option>
+                <option value="API_AUDIT">REST / GraphQL API Audit</option>
+                <option value="HYBRID">Hybrid Web & API Security</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Scope Mode</label>
+              <select id="asm-scope-mode" class="form-select">
+                <option value="same-origin">Same Origin Only</option>
+                <option value="subdomains">Include Subdomains</option>
+                <option value="explicit">Strict Explicit URLs</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Description / Objective</label>
+            <textarea id="asm-desc" class="form-control" rows="3" placeholder="Scope background, assessment objectives, special instructions..."></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-ghost" onclick="closeModal('modal-new-assessment')">Cancel</button>
+          <button type="submit" class="btn btn-primary">Create Assessment</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal: Add Target -->
+  <div id="modal-add-target" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Add In-Scope Target</h3>
+        <button class="modal-close" onclick="closeModal('modal-add-target')">&times;</button>
+      </div>
+      <form id="form-add-target" onsubmit="handleAddTargetSubmit(event)">
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Target URL *</label>
+            <input type="url" id="target-url" class="form-control" placeholder="https://example.com" required>
+            <span class="help-text">Must be a valid HTTP or HTTPS origin/endpoint within approved scope.</span>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Target Type</label>
+              <select id="target-type" class="form-select">
+                <option value="WEBSITE">Website (Full App)</option>
+                <option value="API_BASE_URL">API Base URL</option>
+                <option value="SUBDOMAIN">Subdomain</option>
+                <option value="ASSET">Single Asset</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Label / Environment</label>
+              <input type="text" id="target-label" class="form-control" placeholder="e.g. Staging, Production API">
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-ghost" onclick="closeModal('modal-add-target')">Cancel</button>
+          <button type="submit" class="btn btn-primary">Add Target</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal: Authorize Assessment -->
+  <div id="modal-authorize" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Record Formal Authorization</h3>
+        <button class="modal-close" onclick="closeModal('modal-authorize')">&times;</button>
+      </div>
+      <form id="form-authorize" onsubmit="handleAuthorizeSubmit(event)">
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Authorizing Party *</label>
+            <input type="text" id="auth-party" class="form-control" placeholder="e.g. John Smith, CISO" required>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Authorization Method</label>
+              <select id="auth-method" class="form-select">
+                <option value="WRITTEN_CONTRACT">Written Contract / SOW</option>
+                <option value="EMAIL">Verified Email Authorization</option>
+                <option value="TICKET">Security Ticket / JIRA</option>
+                <option value="STATEMENT_OF_WORK">Statement of Work (SOW)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Validity (Days)</label>
+              <input type="number" id="auth-days" class="form-control" value="30" min="1" max="365">
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Scope Document Reference</label>
+            <input type="text" id="auth-doc-ref" class="form-control" placeholder="e.g. DOCS/SOW-2026-ACME.pdf">
+          </div>
+          <div class="form-group">
+            <label>Internal Authorization Notes</label>
+            <textarea id="auth-notes" class="form-control" rows="2" placeholder="Authorized testing windows, emergency contacts..."></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-ghost" onclick="closeModal('modal-authorize')">Cancel</button>
+          <button type="submit" class="btn btn-primary">Grant Authorization</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal: Review Finding -->
+  <div id="modal-review-finding" class="modal-overlay hidden">
+    <div class="modal modal-lg">
+      <div class="modal-header">
+        <h3>Operator Finding Review</h3>
+        <button class="modal-close" onclick="closeModal('modal-review-finding')">&times;</button>
+      </div>
+      <form id="form-review-finding" onsubmit="handleReviewFindingSubmit(event)">
+        <input type="hidden" id="rev-finding-id">
+        <input type="hidden" id="rev-asm-id">
+        <div class="modal-body">
+          <div class="finding-review-header">
+            <div id="rev-finding-title-box">
+              <span class="badge" id="rev-modal-sev">HIGH</span>
+              <strong id="rev-modal-title">Finding Title</strong>
+            </div>
+            <div class="finding-tech-meta">
+              <span>Target: <code id="rev-modal-target">https://...</code></span>
+              <span>Verification: <strong id="rev-modal-ver">VERIFIED</strong></span>
+              <span>Confidence: <strong id="rev-modal-conf">HIGH</strong></span>
+            </div>
+          </div>
+
+          <div class="form-group mt-3">
+            <label>Review Decision *</label>
+            <div class="radio-group">
+              <label class="radio-card">
+                <input type="radio" name="review_status" value="APPROVED_FOR_REPORT" checked>
+                <div class="radio-content">
+                  <strong>Approve for Report</strong>
+                  <p>Finding is valid and suitable for the finalized commercial client deliverable.</p>
+                </div>
+              </label>
+              <label class="radio-card">
+                <input type="radio" name="review_status" value="REJECTED">
+                <div class="radio-content">
+                  <strong>Reject / Exclude</strong>
+                  <p>False positive, harmless behavior, or out-of-scope; completely excluded from report.</p>
+                </div>
+              </label>
+              <label class="radio-card">
+                <input type="radio" name="review_status" value="PENDING">
+                <div class="radio-content">
+                  <strong>Pending Further Review</strong>
+                  <p>Requires additional inspection; blocks final report generation unless Draft.</p>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Operator Rationale & Review Notes</label>
+            <textarea id="rev-notes" class="form-control" rows="3" placeholder="Explain the rationale for approval or suppression..."></textarea>
+          </div>
+
+          <div class="evidence-preview-box">
+            <h4>Raw Finding Evidence</h4>
+            <div id="rev-modal-evidence" class="evidence-code">No evidence text available.</div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-ghost" onclick="closeModal('modal-review-finding')">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Review Decision</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal: Generate Commercial Report -->
+  <div id="modal-generate-report" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Generate Commercial Report 2.0</h3>
+        <button class="modal-close" onclick="closeModal('modal-generate-report')">&times;</button>
+      </div>
+      <form id="form-generate-report" onsubmit="handleGenerateReportSubmit(event)">
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Assessment</label>
+            <input type="text" id="gen-rep-asm-name" class="form-control" readonly>
+            <input type="hidden" id="gen-rep-asm-id">
+          </div>
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="gen-rep-draft">
+              <span><strong>Allow Draft Generation</strong> (permit compilation even if findings are pending review)</span>
+            </label>
+            <span class="help-text">Final commercial reports fail closed if unreviewed findings exist.</span>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-ghost" onclick="closeModal('modal-generate-report')">Cancel</button>
+          <button type="submit" class="btn btn-primary">Compile Deliverable</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal: Record Report Delivery -->
+  <div id="modal-record-delivery" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Record Report Delivery / Handover</h3>
+        <button class="modal-close" onclick="closeModal('modal-record-delivery')">&times;</button>
+      </div>
+      <form id="form-record-delivery" onsubmit="handleRecordDeliverySubmit(event)">
+        <input type="hidden" id="deliv-asm-id">
+        <input type="hidden" id="deliv-report-id">
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Recipient Full Name *</label>
+            <input type="text" id="deliv-recipient-name" class="form-control" placeholder="e.g. Sarah Connor, VP Security" required>
+          </div>
+          <div class="form-group">
+            <label>Recipient Email</label>
+            <input type="email" id="deliv-recipient-email" class="form-control" placeholder="e.g. sconnor@client.com">
+          </div>
+          <div class="form-group">
+            <label>Delivery Method</label>
+            <select id="deliv-method" class="form-select">
+              <option value="ENCRYPTED_EMAIL">Encrypted Email (PGP/S/MIME)</option>
+              <option value="SECURE_DOWNLOAD">Secure One-Time Download</option>
+              <option value="CLIENT_PORTAL">Client Security Portal</option>
+              <option value="IN_PERSON">In-Person Handover</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="deliv-confirmed" checked>
+              <span><strong>Confirm Receipt Immediately</strong> (mark delivery confirmed)</span>
+            </label>
+          </div>
+          <div class="form-group">
+            <label>Handover Notes / Verification Details</label>
+            <textarea id="deliv-notes" class="form-control" rows="2" placeholder="GPG key ID, portal ticket number, transfer confirmation ID..."></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-ghost" onclick="closeModal('modal-record-delivery')">Cancel</button>
+          <button type="submit" class="btn btn-primary">Record Delivery</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

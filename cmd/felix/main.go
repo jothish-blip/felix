@@ -33,6 +33,8 @@ func main() {
 		os.Exit(runClient(os.Args[2:]))
 	case "assessment":
 		os.Exit(runAssessment(os.Args[2:]))
+	case "operator":
+		os.Exit(runOperator(os.Args[2:]))
 	case "config":
 		os.Exit(runConfig(os.Args[2:]))
 	case "doctor":
@@ -59,6 +61,8 @@ func main() {
 				os.Exit(runClient([]string{"--help"}))
 			case "assessment":
 				os.Exit(runAssessment([]string{"--help"}))
+			case "operator":
+				os.Exit(runOperator([]string{"--help"}))
 			case "config":
 				os.Exit(runConfig([]string{"--help"}))
 			case "doctor":
@@ -94,6 +98,7 @@ func printRootHelp() {
 	fmt.Println("  report      Generate assessment reports from existing scan results (zero network)")
 	fmt.Println("  client      Manage clients and organizations for structured assessments")
 	fmt.Println("  assessment  Manage authorized security assessment projects and runs")
+	fmt.Println("  operator    Launch local-first operator console for assessment and finding curation")
 	fmt.Println("  config      Manage persistent CLI configuration settings")
 	fmt.Println("  doctor      Diagnose environment, network stack, and permissions")
 	fmt.Println("  version     Display Felix version and build environment")

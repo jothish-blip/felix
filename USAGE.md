@@ -800,6 +800,52 @@ felix completion fish > ~/.config/fish/completions/felix.fish
 
 ---
 
+## Felix Operator Console (`felix operator`)
+
+Stage 13 introduces the **Felix Operator Console**: a local-first management interface for running authorized client assessments, orchestrating scans, curating findings for commercial client reports, and tracking delivery handover.
+
+### 1. Launching the Operator Console
+Launch the console with automatic browser launch:
+```bash
+# Launch on default port 8383 on 127.0.0.1
+felix operator
+
+# Launch with custom port and identity
+felix operator --port 9090 --operator-id "sec-lead"
+
+# Headless / remote shell mode (do not launch browser)
+felix operator --no-open
+```
+
+### 2. Available Flags
+- `--host <string>`: Host address to bind (must be loopback: `127.0.0.1` or `::1`, default: `127.0.0.1`). Binding to non-loopback interfaces (`0.0.0.0`) is strictly prohibited.
+- `--port <int>`: Port number to listen on (default: `8383`).
+- `--operator-id <string>`: Name or identifier of the active operator (default: current OS user or `operator`).
+- `--token <string>`: Explicit session token (auto-generates a secure 32-byte hex token if omitted).
+- `--db <string>`: Custom SQLite database path (default: `%LOCALAPPDATA%\Felix\felix.db` on Windows, `~/.felix/felix.db` on Unix).
+- `--no-open`: Prevents automatic opening of the default web browser.
+
+### 3. Console Capabilities & Workflow
+1. **Clients:** Register authorized clients and organizations sponsoring audits.
+2. **Assessments & Scopes:** Create assessments (`ASM-YYYY-XXXX`), define in-scope target URLs/APIs, and record formal written authorization with expiration dates.
+3. **Scan Execution:** Run background assessment scans with SQLite-backed lease mutual exclusion (`scan_job_leases`), real-time status polling, and graceful cancellation.
+4. **Finding Review Workbench:**
+   - Review findings discovered across all assessment engines.
+   - Inspect raw HTTP evidence, verification status, and confidence levels.
+   - Editorial decisions: **Approve for Report** (`APPROVED_FOR_REPORT`), **Reject / Suppress** (`REJECTED`), or **Reset to Pending** (`PENDING`) with mandatory rationale.
+   - *Invariant:* Editorial reviews control report inclusion only; underlying technical finding data and verification proofs are never modified.
+5. **Commercial Report Generation:**
+   - Compile finalized Commercial Report 2.0 deliverables containing only approved findings.
+   - Unreviewed findings block final generation (fail-closed), or can be compiled as explicitly labeled `[DRAFT - PENDING REVIEW]` deliverables.
+   - Rejected findings are completely excluded from reports, attack paths, and risk scores.
+6. **Report Delivery Tracking:**
+   - Record formal client handover via Encrypted Email, Secure Download, Client Portal, or In-Person.
+   - Delivery timestamps are strictly recorded upon confirmed receipt.
+7. **Append-Only Audit Trail:**
+   - Full chronological view of all operator actions, state changes, and report handovers stored immutably in `operator_audit_events`.
+
+---
+
 ## Exit Code Contract
 
 Felix returns standard exit codes for integration into CI/CD security quality gates:

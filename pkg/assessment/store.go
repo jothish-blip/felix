@@ -137,6 +137,29 @@ type Store interface {
 	// Report Records
 	SaveReport(r *ReportRecord) error
 	GetReports(assessmentID string) ([]ReportRecord, error)
+	GetReport(id string) (*ReportRecord, error)
+
+	// Finding Reviews (Stage 13)
+	SaveFindingReview(review *FindingReview) error
+	GetFindingReview(assessmentID string, findingID string) (*FindingReview, error)
+	ListFindingReviews(assessmentID string) ([]FindingReview, error)
+
+	// Report Deliveries (Stage 13)
+	CreateReportDelivery(delivery *ReportDelivery) error
+	GetReportDelivery(id string) (*ReportDelivery, error)
+	ListReportDeliveries(assessmentID string) ([]ReportDelivery, error)
+	UpdateReportDeliveryStatus(id string, status DeliveryStatus, notes string, timestamp *time.Time) error
+
+	// Audit Events (Stage 13)
+	RecordAuditEvent(event *AuditEvent) error
+	ListAuditEvents(assessmentID string, limit int) ([]AuditEvent, error)
+
+	// Scan Job Leases & Concurrency (Stage 13)
+	AcquireScanJobLease(lease *ScanJobLease) error
+	HeartbeatScanJobLease(assessmentID string, progress string) error
+	ReleaseScanJobLease(assessmentID string, status string, errMsg string) error
+	GetActiveScanJobLease(assessmentID string) (*ScanJobLease, error)
+	RecoverStaleScanJobLeases(staleDuration time.Duration) (int, error)
 
 	// Interrupted run recovery
 	DetectAndRecoverInterruptedRuns() (int, error)
@@ -1059,6 +1082,94 @@ func (s *SQLiteStore) migrate() error {
 		}
 	}
 
+	// Migration 12: Stage 13 Operator Engine (Finding Reviews, Report Delivery, Audit Events, Scan Leases)
+	if currentVersion < 12 {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		schemaV12 := `
+		CREATE TABLE IF NOT EXISTS finding_reviews (
+			id TEXT PRIMARY KEY,
+			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+			finding_id TEXT NOT NULL,
+			review_status TEXT NOT NULL DEFAULT 'PENDING',
+			reviewed_by TEXT NOT NULL,
+			reviewed_at TIMESTAMP NOT NULL,
+			notes TEXT,
+			created_at TIMESTAMP NOT NULL,
+			updated_at TIMESTAMP NOT NULL,
+			UNIQUE(assessment_id, finding_id)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_finding_reviews_asm_id ON finding_reviews(assessment_id);
+		CREATE INDEX IF NOT EXISTS idx_finding_reviews_finding_id ON finding_reviews(finding_id);
+		CREATE INDEX IF NOT EXISTS idx_finding_reviews_status ON finding_reviews(review_status);
+
+		CREATE TABLE IF NOT EXISTS report_deliveries (
+			id TEXT PRIMARY KEY,
+			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+			report_id TEXT NOT NULL REFERENCES assessment_reports(id) ON DELETE CASCADE,
+			delivery_status TEXT NOT NULL,
+			recipient_name TEXT NOT NULL,
+			recipient_email TEXT NOT NULL,
+			delivery_method TEXT NOT NULL,
+			tracking_reference TEXT,
+			notes TEXT,
+			dispatched_at TIMESTAMP,
+			delivered_at TIMESTAMP,
+			operator_id TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL,
+			updated_at TIMESTAMP NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_report_deliveries_asm_id ON report_deliveries(assessment_id);
+		CREATE INDEX IF NOT EXISTS idx_report_deliveries_report_id ON report_deliveries(report_id);
+		CREATE INDEX IF NOT EXISTS idx_report_deliveries_status ON report_deliveries(delivery_status);
+
+		CREATE TABLE IF NOT EXISTS operator_audit_events (
+			id TEXT PRIMARY KEY,
+			assessment_id TEXT,
+			operator_id TEXT NOT NULL,
+			action_type TEXT NOT NULL,
+			entity_type TEXT NOT NULL,
+			entity_id TEXT NOT NULL,
+			details_json TEXT,
+			created_at TIMESTAMP NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_audit_events_asm_id ON operator_audit_events(assessment_id);
+		CREATE INDEX IF NOT EXISTS idx_audit_events_action ON operator_audit_events(action_type);
+		CREATE INDEX IF NOT EXISTS idx_audit_events_created_at ON operator_audit_events(created_at);
+
+		CREATE TABLE IF NOT EXISTS scan_job_leases (
+			id TEXT PRIMARY KEY,
+			execution_id TEXT NOT NULL,
+			operator_id TEXT NOT NULL,
+			acquired_at TIMESTAMP NOT NULL,
+			heartbeat_at TIMESTAMP NOT NULL,
+			status TEXT NOT NULL,
+			error_message TEXT,
+			progress_message TEXT
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_job_leases_status ON scan_job_leases(status);
+		CREATE INDEX IF NOT EXISTS idx_job_leases_heartbeat ON scan_job_leases(heartbeat_at);
+
+		INSERT INTO schema_migrations (version, applied_at) VALUES (12, CURRENT_TIMESTAMP);
+		`
+
+		if _, err := tx.Exec(schemaV12); err != nil {
+			return fmt.Errorf("migration v12 failed: %w", err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -1806,6 +1917,21 @@ func (s *SQLiteStore) GetReports(assessmentID string) ([]ReportRecord, error) {
 		reports = append(reports, r)
 	}
 	return reports, rows.Err()
+}
+
+func (s *SQLiteStore) GetReport(id string) (*ReportRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var r ReportRecord
+	err := s.db.QueryRow(`
+		SELECT id, assessment_id, execution_id, format, file_path, felix_version, status, created_at
+		FROM assessment_reports WHERE id = ?
+	`, id).Scan(&r.ID, &r.AssessmentID, &r.ExecutionID, &r.Format, &r.FilePath, &r.FelixVersion, &r.Status, &r.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
 }
 
 // --- Interrupted Run Recovery ---
