@@ -53,6 +53,21 @@ func sanitizeFinding(f Finding) Finding {
 	}
 	cleanF.Verification.Result = SanitizeEvidence(f.Verification.Result)
 	cleanF.Verification.Rationale = SanitizeEvidence(f.Verification.Rationale)
+	cleanF.Verification.SafeCurlCommand = SanitizeEvidence(f.Verification.SafeCurlCommand)
+	if len(f.Verification.ReproductionSteps) > 0 {
+		cleanSteps := make([]string, len(f.Verification.ReproductionSteps))
+		for j, step := range f.Verification.ReproductionSteps {
+			cleanSteps[j] = SanitizeEvidence(step)
+		}
+		cleanF.Verification.ReproductionSteps = cleanSteps
+	}
+	if len(f.Verification.Limitations) > 0 {
+		cleanLimits := make([]string, len(f.Verification.Limitations))
+		for j, lim := range f.Verification.Limitations {
+			cleanLimits[j] = SanitizeEvidence(lim)
+		}
+		cleanF.Verification.Limitations = cleanLimits
+	}
 	return cleanF
 }
 

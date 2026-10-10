@@ -21,6 +21,7 @@ import (
 	"felix/pkg/discovery"
 	"felix/pkg/report"
 	"felix/pkg/secrets"
+	"felix/pkg/verification"
 	"github.com/google/uuid"
 )
 
@@ -52,13 +53,14 @@ type ExecutionOptions struct {
 
 // ExecutionResult encapsulates the outcome of an assessment run.
 type ExecutionResult struct {
-	Execution        *AssessmentExecution
-	Report           *report.Report
-	InventorySummary *discovery.InventorySummary
-	AuthSummary      *auth.AuthSummary
-	HTMLPath         string
-	JSONPath         string
-	Error            error
+	Execution           *AssessmentExecution
+	Report              *report.Report
+	InventorySummary    *discovery.InventorySummary
+	AuthSummary         *auth.AuthSummary
+	VerificationSummary *verification.VerificationSummary
+	HTMLPath            string
+	JSONPath            string
+	Error               error
 }
 
 // RunAssessment executes a complete assessment run against authorized targets.
@@ -445,14 +447,78 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 		}, scanErr
 	}
 
-	// 9. Persist Findings & Traceability
+	// 9. Verification Engine 2.0 (Stage 11)
+	var verSummary *verification.VerificationSummary
+	if len(allReportFindings) > 0 {
+		opts.ProgressFunc("[*] Executing Verification Engine 2.0 on candidate findings...")
+		safetyChecker := verification.NewSafetyChecker(verification.SafetyOptions{
+			IsAuthorized:         true,
+			AllowStateChanging:   false, // Default safe: non-destructive
+			InScopeFunc:          func(rawURL string) bool { return true }, // Assessment targets are pre-scoped
+			IsExcludedFunc:       func(rawURL string) bool { return false },
+			MaxRequestsPerTarget: 20,
+		})
+		verEngine := verification.NewEngine(safetyChecker)
+		verResults, summary := verEngine.VerifyFindings(ctx, allReportFindings)
+		verSummary = &summary
+
+		// Apply verification results back to report findings
+		allReportFindings = verification.ApplyVerificationToFindings(allReportFindings, verResults)
+
+		// Update allAssessmentFindings to reflect verified status, confidence, and verification record
+		findingMap := make(map[string]report.Finding, len(allReportFindings))
+		for _, rf := range allReportFindings {
+			findingMap[rf.ID] = rf
+		}
+		for i := range allAssessmentFindings {
+			if rf, ok := findingMap[allAssessmentFindings[i].OriginalFindingID]; ok {
+				allAssessmentFindings[i].VerificationStatus = rf.Verification.Status
+				allAssessmentFindings[i].Confidence = rf.Confidence
+				allAssessmentFindings[i].Score = rf.Score
+				allAssessmentFindings[i].VerificationRecord = rf.Verification
+			}
+		}
+
+		// Save verification run & individual results to store
+		runRec := &verification.VerificationRunRecord{
+			ID:                "ver-run-" + uuid.New().String(),
+			AssessmentID:      assessmentID,
+			ExecutionID:       execID,
+			TotalFindings:     summary.TotalFindings,
+			AttemptedCount:    summary.AttemptedCount,
+			VerifiedCount:     summary.VerifiedCount,
+			DetectedCount:     summary.DetectedCount,
+			ObservedCount:     summary.ObservedCount,
+			NotVerifiedCount:  summary.NotVerifiedCount,
+			NotExposedCount:   summary.NotExposedCount,
+			BlockedCount:      summary.BlockedCount,
+			InconclusiveCount: summary.InconclusiveCount,
+			SyntheticCount:    summary.SyntheticCount,
+			VerifierVersion:   verEngine.Version(),
+			CreatedAt:         time.Now().UTC(),
+		}
+		if sJSON, err := json.Marshal(summary); err == nil {
+			runRec.CoverageJSON = string(sJSON)
+		}
+		if err := c.store.SaveVerificationRun(runRec); err != nil {
+			opts.ProgressFunc(fmt.Sprintf("[-] Warning: Failed to persist verification run: %v", err))
+		}
+		if err := c.store.SaveVerificationResults(assessmentID, execID, verResults); err != nil {
+			opts.ProgressFunc(fmt.Sprintf("[-] Warning: Failed to persist verification results: %v", err))
+		}
+
+		opts.ProgressFunc(fmt.Sprintf("[✓] Verification Engine complete: %d verified, %d detected, %d not verified, %d not exposed (attempted rate: %.1f%%)",
+			summary.VerifiedCount, summary.DetectedCount, summary.NotVerifiedCount, summary.NotExposedCount, summary.VerificationRateAttempted))
+	}
+
+	// 10. Persist Findings & Traceability
 	if len(allAssessmentFindings) > 0 {
 		if err := c.store.SaveFindings(allAssessmentFindings); err != nil {
 			opts.ProgressFunc(fmt.Sprintf("[-] Warning: Failed to persist findings to database: %v", err))
 		}
 	}
 
-	// 10. Correlate Findings into Evidence-Backed Attack Paths (Stage 10)
+	// 11. Correlate Findings into Evidence-Backed Attack Paths (Stage 10)
 	var corrAttackPaths []report.AttackPathSummary
 	var corrStories []report.SecurityStory
 	if len(allReportFindings) > 0 {
@@ -509,8 +575,16 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 		}
 	}
 
-	// 11. Generate Unified Report
+	// 12. Generate Unified Report
 	rep := report.BuildMultiTargetReport(runnableTargets, allReportFindings)
+	if verSummary != nil {
+		if vMap, err := json.Marshal(verSummary); err == nil {
+			var m map[string]any
+			if err := json.Unmarshal(vMap, &m); err == nil {
+				rep.VerificationSummary = m
+			}
+		}
+	}
 	if len(corrStories) > 0 {
 		report.AttachSecurityStories(&rep, corrStories)
 	}
@@ -585,12 +659,13 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 	authSummary := authEng.GenerateSummary(combinedAuthInv)
 
 	return &ExecutionResult{
-		Execution:        execRecord,
-		Report:           &rep,
-		InventorySummary: invSummary,
-		AuthSummary:      &authSummary,
-		HTMLPath:         htmlPath,
-		JSONPath:         jsonPath,
+		Execution:           execRecord,
+		Report:              &rep,
+		InventorySummary:    invSummary,
+		AuthSummary:         &authSummary,
+		VerificationSummary: verSummary,
+		HTMLPath:            htmlPath,
+		JSONPath:            jsonPath,
 	}, nil
 }
 

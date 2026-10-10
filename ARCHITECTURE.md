@@ -79,6 +79,12 @@ The codebase is organized into modular packages under `pkg/` and a thin CLI laye
 | **`pkg/auth`** | Authentication intelligence subsystem: multi-signal classification, passive cookie auditing, token structure analysis, protected endpoint reasoning, and zero credential probing. | `types.go`, `classifier.go`, `cookies.go`, `tokens.go`, `protected.go`, `engine.go`, `future_accounts.go` |
 | **`pkg/authz`** | Authorization & access control engine: BOLA/IDOR, BFLA, BOPLA, horizontal/vertical privilege escalation, and comparative evidence verification. | `types.go`, `planner.go`, `engine.go`, `comparator.go`, `policy.go` |
 | **`pkg/apisec`** | OWASP API Security Top 10 (2023) assessment engine: unified evidence-first pipeline, inventory & OpenAPI reconciliation, bounded rate-limit audits, SSRF canary testing, and security misconfiguration analysis. | `types.go`, `inventory.go`, `engine.go` |
+| **`pkg/webvuln`** | Web application vulnerability detection and verification: context-aware XSS reflection analysis, SQL injection signatures, SSTI, and SSRF. | `types.go`, `engine.go` |
+| **`pkg/sessionsec`** | Session lifecycle, token handling, and identity boundaries (WSTG-SESS/ATHN). | `types.go`, `engine.go` |
+| **`pkg/cloudsec`** | Cloud security assessment across AWS, Azure, and GCP (External & Credentialed modes). | `types.go`, `engine.go`, `aws.go`, `azure.go`, `gcp.go` |
+| **`pkg/businesslogic`** | Business logic security engine: workflow transition audits, step-skipping, state manipulation, sensitive flow abuse, and replay. | `types.go`, `engine.go`, `analyzer.go` |
+| **`pkg/correlation`** | Evidence-driven correlation & attack path engine: multi-signal finding graphs, candidate & verified attack paths, combined risk scoring, and security stories. | `types.go`, `graph.go`, `rules.go`, `engine.go`, `risk.go`, `story.go` |
+| **`pkg/verification`** | Verification Engine 2.0: empirical finding verification, dual confidence scoring, safe reproduction generation, safety policy enforcement, and finding trustworthiness. | `types.go`, `confidence.go`, `reproduction.go`, `safety.go`, `policy.go`, `registry.go`, `engine.go` |
 | **`pkg/report`** | Finding normalization, deduplication, multi-signal correlation, risk scoring, HTML/JSON generation. | `model.go`, `normalize.go`, `dedup.go`, `correlate.go`, `risk.go`, `summary.go`, `html.go`, `json.go` |
 | **`pkg/config`** | Persistent operational configuration storage (`~/.felix/config.json`). | `config.go` |
 | **`test`** | Integration testing, regression corpus, CLI end-to-end validation, and assessment lifecycle tests. | `regression_test.go`, `cli_test.go`, `assessment_cli_test.go` |
@@ -402,6 +408,42 @@ Stage 5 introduces a first-class, evidence-driven API security testing engine sy
 - **Database Schema Migration v5:**
   - `assessment_apisec_runs`: Stores overall run metrics, total tests executed, categories covered, verified counts, candidate counts, and full category coverage JSON.
   - `assessment_apisec_results`: Records granular test evaluations, OWASP category codes, verification states (`VERIFIED`, `CANDIDATE`, `OBSERVED`, `NOT_VULNERABLE`), severity, confidence, observed HTTP statuses, evidence summaries, and sanitized finding linkages.
+
+### 8. Verification Engine 2.0 (`pkg/verification`)
+
+Stage 11 introduces Verification Engine 2.0 to provide commercial-grade empirical evidence verification, dual confidence scoring, deterministic reproduction steps, and finding trustworthiness across all assessment engines.
+
+- **Fundamental Principle:** A detection is a hypothesis until sufficient empirical evidence establishes what actually occurred. A finding never becomes `VERIFIED` through high detection confidence, pattern presence, or severity alone.
+- **Canonical Verification States:**
+  - `OBSERVED`: Target asset, surface, or artifact was noted without asserting an active vulnerability or security weakness (e.g., exposed public landing page).
+  - `DETECTED`: Static or heuristic indicator identified, but active empirical verification was not executed, is pending, or is precluded by lack of credentials.
+  - `NOT_VERIFIED`: Verification was attempted, but evidence was inconclusive, prerequisite configurations were absent, or affirmative proof could not be obtained.
+  - `VERIFIED`: Deterministic, empirical, reproducible proof obtained meeting all vulnerability-specific mandatory criteria.
+  - `NOT_EXPOSED`: Confirmed negative evidence demonstrating affirmative denial (e.g. `401 Unauthorized` / `403 Forbidden` access barrier) or validated boundary defenses.
+- **Dual Confidence Scoring Model (`confidence.go`):**
+  - **Detection Confidence (0–40 points):** Measures static pattern clarity, entropy, and heuristic indicators.
+  - **Verification Confidence (0–60 points):** Measures empirical proof, passing criteria, and affirmative verification.
+  - **Dual Invariants:** High detection confidence alone is strictly capped at `ConfidenceMedium` (score ≤ 40). A finding cannot attain `VERIFIED` status without passing all mandatory criteria. Contradictory evidence triggers severe confidence penalties. Synthetic test fixtures are explicitly tracked and labeled (`[SYNTHETIC FIXTURE]`).
+- **Specialized Verification Policies (`policy.go`, `registry.go`):**
+  - `POL-DISC-01` (Discovery & Exposure): Distinguishes observed assets, unverified secrets in client code, and affirmative 401/403 access denials (`NOT_EXPOSED`) from confirmed leaks (`VERIFIED`).
+  - `POL-AUTH-01` (Authentication & Identity): Verifies defensive cookie attributes (`HttpOnly`, `Secure`, `SameSite`) and unauthenticated access; records access barriers as `NOT_EXPOSED`.
+  - `POL-AUTHZ-01` (Authorization & Access Control): Enforces differential comparative access proof between authorized and unauthorized identities; single-request checks without control comparisons fail to `NOT_VERIFIED`.
+  - `POL-APISEC-01` (API Security): Audits excessive data exposure by verifying sensitive payload fields, and audits missing security headers via response header inspection.
+  - `POL-WEBVULN-01` (Web Vulnerabilities): Reflected strings alone are not XSS (requires unescaped execution context); generic 500 errors alone are not SQLi (requires concrete database error signature); 404s are not path traversal.
+  - `POL-CLOUD-01` (Cloud Infrastructure): Distinguishes anonymous bucket listing (`VERIFIED`) from access denial (`NOT_EXPOSED`) and unverified cloud references (`NOT_VERIFIED`).
+  - `POL-BIZLOGIC-01` (Business Logic): Requires before/after state transition proof; state-changing checks blocked by default without write authorization.
+  - `POL-GENERIC-01` (Generic Fallback): Fallback policy for unclassified findings, safely defaulting to `NOT_VERIFIED`.
+- **Safety Boundaries (`safety.go`):**
+  - Scope and origin boundary validation.
+  - Excluded paths and hostnames take absolute precedence.
+  - Non-destructive execution: mutating/state-changing probes (`POST`, `PUT`, `DELETE`) are blocked unless explicitly authorized, falling back to read-only audits.
+  - Per-target request quotas prevent accidental stress on target servers.
+- **Deterministic Reproduction & Secret Redaction (`reproduction.go`):**
+  - Generates human-readable reproduction steps and safe, copy-pasteable `curl` commands.
+  - Redacts authorization tokens, bearer tokens, API keys, passwords, and sensitive cookies (`[REDACTED]`).
+- **Database Schema Migration v11 (`store.go`):**
+  - `assessment_verification_runs`: Persists verification run metrics, attempted counts, verified counts, detected counts, not verified counts, not exposed counts, blocked counts, inconclusive counts, synthetic counts, and verifier version (`2.0.0`).
+  - `assessment_verification_results`: Persists finding verification results, target URL, endpoint, category, verification status, policy ID, verification method, confidence score, criteria results JSON, reproduction JSON, and timestamps.
 
 ---
 

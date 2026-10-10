@@ -158,6 +158,15 @@ func printReportSummary(rep report.Report, verbose bool) {
 	if rep.Summary.NotExposedCount > 0 {
 		fmt.Printf("  NOT_EXPOSED  %d\n", rep.Summary.NotExposedCount)
 	}
+	if rep.Summary.AttemptedCount > 0 {
+		fmt.Printf("  Attempted:   %d (Verification Rate: %.1f%%)\n", rep.Summary.AttemptedCount, rep.Summary.VerificationRateAttempted)
+	}
+	if rep.Summary.BlockedCount > 0 {
+		fmt.Printf("  Blocked:     %d (Safety Boundaries)\n", rep.Summary.BlockedCount)
+	}
+	if rep.Summary.InconclusiveCount > 0 {
+		fmt.Printf("  Inconclusive:%d\n", rep.Summary.InconclusiveCount)
+	}
 	fmt.Println()
 
 	if len(rep.SecurityStories) > 0 {

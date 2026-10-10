@@ -50,10 +50,17 @@ const (
 
 // VerificationRecord encapsulates the empirical verification state, result, and rationale.
 type VerificationRecord struct {
-	Status          VerificationStatus `json:"status"`
-	DetectionStatus string             `json:"detection_status,omitempty"`
-	Result          string             `json:"result"`
-	Rationale       string             `json:"rationale,omitempty"`
+	Status             VerificationStatus `json:"status"`
+	DetectionStatus    string             `json:"detection_status,omitempty"`
+	Result             string             `json:"result"`
+	Rationale          string             `json:"rationale,omitempty"`
+	PolicyID           string             `json:"policy_id,omitempty"`
+	VerificationMethod string             `json:"verification_method,omitempty"`
+	ConfidenceScore    int                `json:"confidence_score,omitempty"`
+	ReproductionSteps  []string           `json:"reproduction_steps,omitempty"`
+	SafeCurlCommand    string             `json:"safe_curl_command,omitempty"`
+	Limitations        []string           `json:"limitations,omitempty"`
+	SyntheticFixture   bool               `json:"synthetic_fixture,omitempty"`
 }
 
 // EvidenceDetails provides structured, machine-readable evidence for a finding.
@@ -128,37 +135,44 @@ type AttackPathSummary struct {
 
 // Summary provides a statistical breakdown of findings.
 type Summary struct {
-	TotalFindings    int            `json:"total_findings"`
-	CriticalCount    int            `json:"critical_count"`
-	HighCount        int            `json:"high_count"`
-	MediumCount      int            `json:"medium_count"`
-	LowCount         int            `json:"low_count"`
-	InfoCount        int            `json:"info_count"`
-	VerifiedCount    int            `json:"verified_count"`
-	DetectedCount    int            `json:"detected_count"`
-	ObservedCount    int            `json:"observed_count"`
-	NotVerifiedCount int            `json:"not_verified_count"`
-	NotExposedCount  int            `json:"not_exposed_count"`
-	BySource         map[string]int `json:"by_source"`
+	TotalFindings             int            `json:"total_findings"`
+	CriticalCount             int            `json:"critical_count"`
+	HighCount                 int            `json:"high_count"`
+	MediumCount               int            `json:"medium_count"`
+	LowCount                  int            `json:"low_count"`
+	InfoCount                 int            `json:"info_count"`
+	VerifiedCount             int            `json:"verified_count"`
+	DetectedCount             int            `json:"detected_count"`
+	ObservedCount             int            `json:"observed_count"`
+	NotVerifiedCount          int            `json:"not_verified_count"`
+	NotExposedCount           int            `json:"not_exposed_count"`
+	AttemptedCount            int            `json:"attempted_count,omitempty"`
+	BlockedCount              int            `json:"blocked_count,omitempty"`
+	InconclusiveCount         int            `json:"inconclusive_count,omitempty"`
+	SyntheticCount            int            `json:"synthetic_count,omitempty"`
+	VerificationRateAttempted float64        `json:"verification_rate_attempted,omitempty"`
+	VerificationRateTotal     float64        `json:"verification_rate_total,omitempty"`
+	BySource                  map[string]int `json:"by_source"`
 }
 
 // Report represents the complete audit results ready for presentation or export.
 type Report struct {
-	Version         string              `json:"version"`
-	Target          string              `json:"target"`
-	Targets         []string            `json:"targets,omitempty"`
-	Timestamp       string              `json:"timestamp"`
-	Duration        string              `json:"duration,omitempty"`
-	DurationMs      int64               `json:"duration_ms,omitempty"`
-	RequestCount    int                 `json:"request_count,omitempty"`
-	RiskScore       int                 `json:"risk_score"`
-	RiskLevel       string              `json:"risk_level"`
-	Summary         Summary             `json:"summary"`
-	TopPriorities   []Finding           `json:"top_priorities"`
-	Findings        []Finding           `json:"findings"`
-	SecurityStories []SecurityStory     `json:"security_stories"`
-	AttackPaths     []AttackPathSummary `json:"attack_paths,omitempty"`
-	Metadata        map[string]any      `json:"metadata,omitempty"`
+	Version             string              `json:"version"`
+	Target              string              `json:"target"`
+	Targets             []string            `json:"targets,omitempty"`
+	Timestamp           string              `json:"timestamp"`
+	Duration            string              `json:"duration,omitempty"`
+	DurationMs          int64               `json:"duration_ms,omitempty"`
+	RequestCount        int                 `json:"request_count,omitempty"`
+	RiskScore           int                 `json:"risk_score"`
+	RiskLevel           string              `json:"risk_level"`
+	Summary             Summary             `json:"summary"`
+	TopPriorities       []Finding           `json:"top_priorities"`
+	Findings            []Finding           `json:"findings"`
+	SecurityStories     []SecurityStory     `json:"security_stories"`
+	AttackPaths         []AttackPathSummary `json:"attack_paths,omitempty"`
+	VerificationSummary map[string]any      `json:"verification_summary,omitempty"`
+	Metadata            map[string]any      `json:"metadata,omitempty"`
 }
 
 // FromSecretFinding converts an Engine 2 secret finding to the unified model.

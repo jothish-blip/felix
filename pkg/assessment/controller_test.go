@@ -704,3 +704,146 @@ func TestController_CorrelationAndReportIntegration(t *testing.T) {
 		t.Errorf("expected security stories in deserialized report")
 	}
 }
+
+func TestController_VerificationEngineIntegration(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			w.Header().Set("Content-Type", "text/html")
+			w.Header().Set("Set-Cookie", "session_token=secret123; Path=/") // Missing HttpOnly & Secure
+			fmt.Fprint(w, `
+				<html>
+				<head><title>App With Leak</title></head>
+				<body>
+					<h1>Home</h1>
+					<script>
+						const aws_key = "AKIAIOSFODNN7EXAMPLE";
+					</script>
+				</body>
+				</html>
+			`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	store, cleanup := newTestStore(t)
+	defer cleanup()
+
+	clientID := uuid.New().String()
+	_ = store.CreateClient(&Client{ID: clientID, Name: "Verification Test Corp"})
+
+	asmID := uuid.New().String()
+	asmRef := GenerateAssessmentRef()
+	_ = store.CreateAssessment(&Assessment{
+		ID:        asmID,
+		Ref:       asmRef,
+		ClientID:  clientID,
+		Name:      "Verification Pipeline Test",
+		Status:    StatusReady,
+		ScopeMode: "same-origin",
+	})
+
+	_ = store.AddTarget(&AssessmentTarget{
+		ID:           uuid.New().String(),
+		AssessmentID: asmID,
+		TargetURL:    server.URL,
+		TargetType:   TargetWebsite,
+		ScopeStatus:  "APPROVED",
+	})
+
+	now := time.Now().UTC()
+	future := now.Add(24 * time.Hour)
+	_ = store.SetAuthorization(&AuthorizationRecord{
+		ID:                  uuid.New().String(),
+		AssessmentID:        asmID,
+		AuthorizingParty:    "Head of Security",
+		AuthorizationMethod: "CONTRACT",
+		DateReceived:        now,
+		ValidUntil:          &future,
+		Status:              AuthApproved,
+	})
+
+	ctrl := NewController(store)
+	res, err := ctrl.RunAssessment(context.Background(), asmID, ExecutionOptions{
+		TimeoutDuration: 5 * time.Second,
+		Concurrency:     2,
+		MaxAssets:       20,
+	})
+	if err != nil {
+		t.Fatalf("RunAssessment failed: %v", err)
+	}
+
+	if res.Execution.Status != StatusCompleted {
+		t.Fatalf("expected execution status COMPLETED, got %s", res.Execution.Status)
+	}
+
+	// 1. Verify ExecutionResult.VerificationSummary is populated
+	if res.VerificationSummary == nil {
+		t.Fatalf("expected non-nil VerificationSummary on ExecutionResult")
+	}
+	if res.VerificationSummary.TotalFindings == 0 {
+		t.Fatalf("expected TotalFindings > 0 in VerificationSummary")
+	}
+
+	// 2. Verify Report.VerificationSummary is attached
+	if res.Report == nil || res.Report.VerificationSummary == nil {
+		t.Fatalf("expected VerificationSummary attached to Report")
+	}
+
+	// 3. Verify SQLite persistence of verification run record
+	runRec, err := store.GetVerificationRun(asmID, res.Execution.ID)
+	if err != nil {
+		t.Fatalf("failed to retrieve verification run from store: %v", err)
+	}
+	if runRec == nil {
+		t.Fatalf("verification run record was not found in store")
+	}
+	if runRec.TotalFindings != res.VerificationSummary.TotalFindings {
+		t.Errorf("verification run total findings mismatch: %d vs %d", runRec.TotalFindings, res.VerificationSummary.TotalFindings)
+	}
+	if runRec.VerifierVersion != "2.0.0" {
+		t.Errorf("expected VerifierVersion 2.0.0, got %s", runRec.VerifierVersion)
+	}
+
+	// 4. Verify SQLite persistence of verification results
+	verResults, err := store.GetVerificationResults(asmID, res.Execution.ID, "")
+	if err != nil {
+		t.Fatalf("failed to retrieve verification results: %v", err)
+	}
+	if len(verResults) == 0 {
+		t.Fatalf("expected at least 1 persisted verification result")
+	}
+	for _, vr := range verResults {
+		if vr.AssessmentID != asmID {
+			t.Errorf("verification result AssessmentID mismatch: expected %s, got %s", asmID, vr.AssessmentID)
+		}
+		if vr.ExecutionID != res.Execution.ID {
+			t.Errorf("verification result ExecutionID mismatch: expected %s, got %s", res.Execution.ID, vr.ExecutionID)
+		}
+		if vr.PolicyID == "" {
+			t.Errorf("expected non-empty PolicyID on verification result %s", vr.ID)
+		}
+		if vr.Status == "" {
+			t.Errorf("expected non-empty Status on verification result %s", vr.ID)
+		}
+	}
+
+	// 5. Verify persisted findings have updated verification fields
+	findings, err := store.GetFindings(asmID, res.Execution.ID)
+	if err != nil {
+		t.Fatalf("failed to get findings: %v", err)
+	}
+	if len(findings) == 0 {
+		t.Fatalf("expected persisted findings")
+	}
+	for _, f := range findings {
+		if f.VerificationStatus == "" {
+			t.Errorf("finding %s has empty VerificationStatus", f.ID)
+		}
+		if f.Confidence == "" {
+			t.Errorf("finding %s has empty Confidence", f.ID)
+		}
+	}
+}

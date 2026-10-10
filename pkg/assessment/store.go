@@ -20,6 +20,7 @@ import (
 	"felix/pkg/discovery"
 	"felix/pkg/report"
 	"felix/pkg/sessionsec"
+	"felix/pkg/verification"
 	"felix/pkg/webvuln"
 	_ "modernc.org/sqlite"
 )
@@ -125,6 +126,13 @@ type Store interface {
 	SaveAttackPaths(assessmentID string, executionID string, paths []correlation.AttackPath) error
 	GetAttackPaths(assessmentID string, executionID string, status string, minRisk string) ([]correlation.AttackPath, error)
 	GetCorrelationSummary(assessmentID string, executionID string) (*correlation.Summary, error)
+
+	// Verification Engine 2.0 (Stage 11)
+	SaveVerificationRun(record *verification.VerificationRunRecord) error
+	GetVerificationRun(assessmentID string, executionID string) (*verification.VerificationRunRecord, error)
+	SaveVerificationResults(assessmentID string, executionID string, results []verification.VerificationResult) error
+	GetVerificationResults(assessmentID string, executionID string, status string) ([]verification.VerificationResult, error)
+	GetVerificationSummary(assessmentID string, executionID string) (*verification.VerificationSummary, error)
 
 	// Report Records
 	SaveReport(r *ReportRecord) error
@@ -971,6 +979,79 @@ func (s *SQLiteStore) migrate() error {
 
 		if _, err := tx.Exec(schemaV10); err != nil {
 			return fmt.Errorf("migration v10 failed: %w", err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+
+	// Migration 11: Verification Engine 2.0 (Stage 11)
+	if currentVersion < 11 {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		schemaV11 := `
+		CREATE TABLE IF NOT EXISTS assessment_verification_runs (
+			id TEXT PRIMARY KEY,
+			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+			execution_id TEXT NOT NULL REFERENCES assessment_executions(id) ON DELETE CASCADE,
+			total_findings INTEGER NOT NULL DEFAULT 0,
+			attempted_count INTEGER NOT NULL DEFAULT 0,
+			verified_count INTEGER NOT NULL DEFAULT 0,
+			detected_count INTEGER NOT NULL DEFAULT 0,
+			observed_count INTEGER NOT NULL DEFAULT 0,
+			not_verified_count INTEGER NOT NULL DEFAULT 0,
+			not_exposed_count INTEGER NOT NULL DEFAULT 0,
+			blocked_count INTEGER NOT NULL DEFAULT 0,
+			inconclusive_count INTEGER NOT NULL DEFAULT 0,
+			synthetic_count INTEGER NOT NULL DEFAULT 0,
+			coverage_json TEXT NOT NULL,
+			verifier_version TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_verification_runs_asm_id ON assessment_verification_runs(assessment_id);
+		CREATE INDEX IF NOT EXISTS idx_verification_runs_exec_id ON assessment_verification_runs(execution_id);
+
+		CREATE TABLE IF NOT EXISTS assessment_verification_results (
+			id TEXT PRIMARY KEY,
+			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+			execution_id TEXT NOT NULL REFERENCES assessment_executions(id) ON DELETE CASCADE,
+			finding_id TEXT NOT NULL,
+			status TEXT NOT NULL,
+			policy_id TEXT NOT NULL,
+			verification_method TEXT NOT NULL,
+			attempted BOOLEAN NOT NULL DEFAULT 0,
+			detection_confidence TEXT NOT NULL,
+			verification_confidence TEXT NOT NULL,
+			overall_confidence TEXT NOT NULL,
+			confidence_score INTEGER NOT NULL DEFAULT 0,
+			confidence_rationale TEXT,
+			reproduction_json TEXT,
+			criteria_results_json TEXT,
+			limitations_json TEXT,
+			safety_decision TEXT,
+			block_reason TEXT,
+			failure_reason TEXT,
+			inconclusive_reason TEXT,
+			synthetic_fixture BOOLEAN NOT NULL DEFAULT 0,
+			created_at TIMESTAMP NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_ver_res_asm_id ON assessment_verification_results(assessment_id);
+		CREATE INDEX IF NOT EXISTS idx_ver_res_exec_id ON assessment_verification_results(execution_id);
+		CREATE INDEX IF NOT EXISTS idx_ver_res_finding_id ON assessment_verification_results(finding_id);
+		CREATE INDEX IF NOT EXISTS idx_ver_res_status ON assessment_verification_results(status);
+
+		INSERT INTO schema_migrations (version, applied_at) VALUES (11, CURRENT_TIMESTAMP);
+		`
+
+		if _, err := tx.Exec(schemaV11); err != nil {
+			return fmt.Errorf("migration v11 failed: %w", err)
 		}
 
 		if err := tx.Commit(); err != nil {
@@ -4044,6 +4125,250 @@ func (s *SQLiteStore) GetCorrelationSummary(assessmentID string, executionID str
 
 	sum.HighestRiskScore = maxScore
 	sum.HighestRiskLevel = highestRisk
+
+	return sum, nil
+}
+
+// --- Verification Engine 2.0 Store Methods (Stage 11) ---
+
+func (s *SQLiteStore) SaveVerificationRun(run *verification.VerificationRunRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	query := `
+		INSERT OR REPLACE INTO assessment_verification_runs (
+			id, assessment_id, execution_id, total_findings,
+			attempted_count, verified_count, detected_count, observed_count,
+			not_verified_count, not_exposed_count, blocked_count, inconclusive_count,
+			synthetic_count, coverage_json, verifier_version, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`
+	_, err := s.db.Exec(query,
+		run.ID, run.AssessmentID, run.ExecutionID, run.TotalFindings,
+		run.AttemptedCount, run.VerifiedCount, run.DetectedCount, run.ObservedCount,
+		run.NotVerifiedCount, run.NotExposedCount, run.BlockedCount, run.InconclusiveCount,
+		run.SyntheticCount, run.CoverageJSON, run.VerifierVersion, run.CreatedAt,
+	)
+	return err
+}
+
+func (s *SQLiteStore) GetVerificationRun(assessmentID string, executionID string) (*verification.VerificationRunRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var run verification.VerificationRunRecord
+	query := `
+		SELECT id, assessment_id, execution_id, total_findings,
+		       attempted_count, verified_count, detected_count, observed_count,
+		       not_verified_count, not_exposed_count, blocked_count, inconclusive_count,
+		       synthetic_count, coverage_json, verifier_version, created_at
+		FROM assessment_verification_runs
+		WHERE assessment_id = ? AND execution_id = ?
+		ORDER BY created_at DESC LIMIT 1
+	`
+	err := s.db.QueryRow(query, assessmentID, executionID).Scan(
+		&run.ID, &run.AssessmentID, &run.ExecutionID, &run.TotalFindings,
+		&run.AttemptedCount, &run.VerifiedCount, &run.DetectedCount, &run.ObservedCount,
+		&run.NotVerifiedCount, &run.NotExposedCount, &run.BlockedCount, &run.InconclusiveCount,
+		&run.SyntheticCount, &run.CoverageJSON, &run.VerifierVersion, &run.CreatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &run, nil
+}
+
+func (s *SQLiteStore) SaveVerificationResults(assessmentID string, executionID string, results []verification.VerificationResult) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Clear previous results for this execution to support reruns
+	_, _ = tx.Exec("DELETE FROM assessment_verification_results WHERE assessment_id = ? AND execution_id = ?", assessmentID, executionID)
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO assessment_verification_results (
+			id, assessment_id, execution_id, finding_id, status,
+			policy_id, verification_method, attempted,
+			detection_confidence, verification_confidence, overall_confidence,
+			confidence_score, confidence_rationale, reproduction_json,
+			criteria_results_json, limitations_json, safety_decision,
+			block_reason, failure_reason, inconclusive_reason,
+			synthetic_fixture, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, r := range results {
+		reproJSON, _ := json.Marshal(r.Reproduction)
+		critJSON, _ := json.Marshal(r.CriteriaResults)
+		limJSON, _ := json.Marshal(r.Limitations)
+
+		_, err := stmt.Exec(
+			r.ID, assessmentID, executionID, r.FindingID, string(r.Status),
+			r.PolicyID, r.VerificationMethod, boolToInt(r.Attempted),
+			r.DetectionConfidence, r.VerificationConfidence, r.OverallConfidence,
+			r.ConfidenceScore, r.ConfidenceRationale, string(reproJSON),
+			string(critJSON), string(limJSON), r.SafetyDecision,
+			r.BlockReason, r.FailureReason, r.InconclusiveReason,
+			boolToInt(r.SyntheticFixture), r.CompletedAt,
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+func (s *SQLiteStore) GetVerificationResults(assessmentID string, executionID string, status string) ([]verification.VerificationResult, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := `
+		SELECT id, assessment_id, execution_id, finding_id, status,
+		       policy_id, verification_method, attempted,
+		       detection_confidence, verification_confidence, overall_confidence,
+		       confidence_score, confidence_rationale, reproduction_json,
+		       criteria_results_json, limitations_json, safety_decision,
+		       block_reason, failure_reason, inconclusive_reason,
+		       synthetic_fixture, created_at
+		FROM assessment_verification_results
+		WHERE assessment_id = ? AND execution_id = ?
+	`
+	args := []any{assessmentID, executionID}
+	if status != "" {
+		query += " AND status = ?"
+		args = append(args, strings.ToUpper(status))
+	}
+	query += " ORDER BY created_at ASC"
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []verification.VerificationResult
+	for rows.Next() {
+		var r verification.VerificationResult
+		var statusStr string
+		var attemptedInt int
+		var synthInt int
+		var confRat, reproJSON, critJSON, limJSON sql.NullString
+		var safetyDec, blockReason, failReason, inconcReason sql.NullString
+
+		err := rows.Scan(
+			&r.ID, &r.AssessmentID, &r.ExecutionID, &r.FindingID, &statusStr,
+			&r.PolicyID, &r.VerificationMethod, &attemptedInt,
+			&r.DetectionConfidence, &r.VerificationConfidence, &r.OverallConfidence,
+			&r.ConfidenceScore, &confRat, &reproJSON,
+			&critJSON, &limJSON, &safetyDec,
+			&blockReason, &failReason, &inconcReason,
+			&synthInt, &r.CompletedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		r.Status = report.VerificationStatus(statusStr)
+		r.Attempted = attemptedInt == 1
+		r.SyntheticFixture = synthInt == 1
+		if confRat.Valid {
+			r.ConfidenceRationale = confRat.String
+		}
+		if reproJSON.Valid && reproJSON.String != "" {
+			_ = json.Unmarshal([]byte(reproJSON.String), &r.Reproduction)
+		}
+		if critJSON.Valid && critJSON.String != "" {
+			_ = json.Unmarshal([]byte(critJSON.String), &r.CriteriaResults)
+		}
+		if limJSON.Valid && limJSON.String != "" {
+			_ = json.Unmarshal([]byte(limJSON.String), &r.Limitations)
+		}
+		if safetyDec.Valid {
+			r.SafetyDecision = safetyDec.String
+		}
+		if blockReason.Valid {
+			r.BlockReason = blockReason.String
+		}
+		if failReason.Valid {
+			r.FailureReason = failReason.String
+		}
+		if inconcReason.Valid {
+			r.InconclusiveReason = inconcReason.String
+		}
+
+		results = append(results, r)
+	}
+
+	return results, nil
+}
+
+func (s *SQLiteStore) GetVerificationSummary(assessmentID string, executionID string) (*verification.VerificationSummary, error) {
+	run, err := s.GetVerificationRun(assessmentID, executionID)
+	if err == nil && run != nil && run.CoverageJSON != "" {
+		var sum verification.VerificationSummary
+		if err := json.Unmarshal([]byte(run.CoverageJSON), &sum); err == nil {
+			return &sum, nil
+		}
+	}
+
+	results, err := s.GetVerificationResults(assessmentID, executionID, "")
+	if err != nil {
+		return nil, err
+	}
+
+	sum := &verification.VerificationSummary{
+		TotalFindings: len(results),
+		CategoryStats: make(map[string]verification.CategoryVerificationStat),
+	}
+
+	for _, r := range results {
+		if r.Attempted {
+			sum.AttemptedCount++
+		}
+		if r.SyntheticFixture {
+			sum.SyntheticCount++
+		}
+		if r.SafetyDecision == verification.DecisionBlocked {
+			sum.BlockedCount++
+		}
+		if r.InconclusiveReason != "" {
+			sum.InconclusiveCount++
+		}
+
+		switch r.Status {
+		case verification.StatusVerified:
+			sum.VerifiedCount++
+		case verification.StatusDetected:
+			sum.DetectedCount++
+		case verification.StatusObserved:
+			sum.ObservedCount++
+		case verification.StatusNotVerified:
+			sum.NotVerifiedCount++
+		case verification.StatusNotExposed:
+			sum.NotExposedCount++
+		}
+	}
+
+	if sum.AttemptedCount > 0 {
+		sum.VerificationRateAttempted = float64(sum.VerifiedCount) / float64(sum.AttemptedCount) * 100.0
+	}
+	if sum.TotalFindings > 0 {
+		sum.VerificationRateTotal = float64(sum.VerifiedCount) / float64(sum.TotalFindings) * 100.0
+	}
 
 	return sum, nil
 }

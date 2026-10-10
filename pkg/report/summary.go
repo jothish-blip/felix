@@ -1,6 +1,7 @@
 package report
 
 import (
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -30,18 +31,35 @@ func Summarize(findings []Finding) Summary {
 		switch NormalizeVerificationStatus(f.Verification.Status) {
 		case VerificationVerified:
 			s.VerifiedCount++
+			s.AttemptedCount++
 		case VerificationDetected:
 			s.DetectedCount++
+			s.AttemptedCount++
 		case VerificationNotVerified:
 			s.NotVerifiedCount++
 		case VerificationObserved:
 			s.ObservedCount++
 		case VerificationNotExposed:
 			s.NotExposedCount++
+			s.AttemptedCount++
+		}
+
+		if f.Verification.SyntheticFixture {
+			s.SyntheticCount++
+		}
+		if strings.Contains(strings.ToLower(f.Verification.Result), "blocked") {
+			s.BlockedCount++
 		}
 
 		src := NormalizeSource(f.Source)
 		s.BySource[src]++
+	}
+
+	if s.AttemptedCount > 0 {
+		s.VerificationRateAttempted = math.Round(float64(s.VerifiedCount)/float64(s.AttemptedCount)*1000) / 10
+	}
+	if s.TotalFindings > 0 {
+		s.VerificationRateTotal = math.Round(float64(s.VerifiedCount)/float64(s.TotalFindings)*1000) / 10
 	}
 
 	return s

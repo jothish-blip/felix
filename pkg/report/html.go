@@ -583,6 +583,14 @@ const htmlReportTemplate = `<!DOCTYPE html>
       {{if .Verification.Result}}
       <div class="verification-block">
         <strong>Verification Status ({{.Verification.Status}}):</strong> {{.Verification.Result}}
+        {{if .Verification.PolicyID}}<span style="font-size:0.8rem; color:#93c5fd; margin-left:0.5rem;">[{{.Verification.PolicyID}}]</span>{{end}}
+      </div>
+      {{end}}
+
+      {{if .Verification.SafeCurlCommand}}
+      <div style="margin-bottom: 0.85rem;">
+        <span style="font-size: 0.8rem; color: #a3a3a3; font-weight: 600;">Safe Reproduction:</span>
+        <div class="code-snippet" style="margin-top: 0.25rem;">{{.Verification.SafeCurlCommand}}</div>
       </div>
       {{end}}
 
@@ -754,6 +762,14 @@ const htmlReportTemplate = `<!DOCTYPE html>
         {{if .Verification.Result}}
         <div class="verification-block">
           <strong>Verification Status ({{.Verification.Status}}):</strong> {{.Verification.Result}}
+          {{if .Verification.PolicyID}}<span style="font-size:0.8rem; color:#93c5fd; margin-left:0.5rem;">[{{.Verification.PolicyID}}]</span>{{end}}
+        </div>
+        {{end}}
+
+        {{if .Verification.SafeCurlCommand}}
+        <div style="margin-bottom: 0.85rem;">
+          <span style="font-size: 0.8rem; color: #a3a3a3; font-weight: 600;">Safe Reproduction:</span>
+          <div class="code-snippet" style="margin-top: 0.25rem;">{{.Verification.SafeCurlCommand}}</div>
         </div>
         {{end}}
 

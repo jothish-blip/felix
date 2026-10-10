@@ -24,6 +24,7 @@ import (
 	"felix/pkg/correlation"
 	"felix/pkg/report"
 	"felix/pkg/sessionsec"
+	"felix/pkg/verification"
 	"felix/pkg/webvuln"
 	"github.com/google/uuid"
 )
@@ -83,6 +84,8 @@ func runAssessment(args []string) int {
 		return runAssessmentBusinessLogic(subArgs)
 	case "correlate", "correlation", "attackpaths", "paths":
 		return runAssessmentCorrelate(subArgs)
+	case "verify", "verification":
+		return runAssessmentVerify(subArgs)
 	case "reports":
 		return runAssessmentReports(subArgs)
 	case "cancel":
@@ -115,6 +118,7 @@ func printAssessmentHelp() {
 	fmt.Println("  cloudsec     Assess cloud security across AWS, Azure, and GCP (External & Credentialed Modes)")
 	fmt.Println("  businesslogic Assess business logic workflows, state transitions, replay, and invariants")
 	fmt.Println("  correlate    Correlate findings into evidence-backed attack paths and combined risk")
+	fmt.Println("  verify       Verify finding evidence, reproduce findings, and calculate confidence")
 	fmt.Println("  reports      List generated report files for an assessment")
 	fmt.Println("  cancel       Cancel an active or pending assessment")
 	fmt.Println("\nExamples:")
@@ -133,6 +137,9 @@ func printAssessmentHelp() {
 	fmt.Println("  felix assessment businesslogic <asm-ref> --run")
 	fmt.Println("  felix assessment correlate <asm-ref> --run")
 	fmt.Println("  felix assessment correlate <asm-ref> --status VERIFIED --verbose")
+	fmt.Println("  felix assessment verify <asm-ref>")
+	fmt.Println("  felix assessment verify <asm-ref> --run")
+	fmt.Println("  felix assessment verify <asm-ref> --status VERIFIED --verbose")
 	fmt.Println("  felix assessment reports <asm-ref>")
 }
 
@@ -4814,5 +4821,381 @@ func runAssessmentCorrelate(args []string) int {
 	}
 
 	fmt.Println()
+	return 0
+}
+
+func runAssessmentVerify(args []string) int {
+	var (
+		assessmentRef  string
+		executionID    string
+		statusFilter   string
+		categoryFilter string
+		findingFilter  string
+		runFlag        bool
+		jsonOutput     bool
+		verbose        bool
+	)
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--run":
+			runFlag = true
+		case "--execution", "--exec":
+			if i+1 < len(args) {
+				executionID = args[i+1]
+				i++
+			}
+		case "--status":
+			if i+1 < len(args) {
+				statusFilter = strings.ToUpper(args[i+1])
+				i++
+			}
+		case "--category", "--cat":
+			if i+1 < len(args) {
+				categoryFilter = strings.ToUpper(args[i+1])
+				i++
+			}
+		case "--finding":
+			if i+1 < len(args) {
+				findingFilter = args[i+1]
+				i++
+			}
+		case "--json":
+			jsonOutput = true
+		case "--verbose", "-v":
+			verbose = true
+		case "--help", "-h":
+			fmt.Println("Usage: felix assessment verify <assessment-id> [flags]")
+			fmt.Println("\nFlags:")
+			fmt.Println("  --run              Execute Verification Engine 2.0 on recorded findings")
+			fmt.Println("  --execution <id>   Scope to specific execution ID")
+			fmt.Println("  --status <state>   Filter results by status (VERIFIED, DETECTED, OBSERVED, NOT_VERIFIED, NOT_EXPOSED)")
+			fmt.Println("  --category <cat>   Filter results by category")
+			fmt.Println("  --finding <id>     Inspect verification details for a specific finding")
+			fmt.Println("  --json             Output results as formatted JSON")
+			fmt.Println("  --verbose          Display full reproduction commands, criteria results, and evidence")
+			return 0
+		default:
+			if !strings.HasPrefix(arg, "-") && assessmentRef == "" {
+				assessmentRef = arg
+			}
+		}
+	}
+
+	if assessmentRef == "" {
+		fmt.Fprintln(os.Stderr, "[-] Error: assessment ID or reference is required")
+		fmt.Fprintln(os.Stderr, "Usage: felix assessment verify <assessment-id> [flags]")
+		return 1
+	}
+
+	store, err := assessment.NewSQLiteStore("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Database initialization failed: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+
+	asm, err := store.GetAssessment(assessmentRef)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Assessment %q not found: %v\n", assessmentRef, err)
+		return 1
+	}
+
+	// 1. Run Mode: Execute verification on candidate findings
+	if runFlag {
+		fmt.Println("================================================================================")
+		fmt.Println("FELIX VERIFICATION ENGINE 2.0 - EMPIRICAL VERIFICATION RUN")
+		fmt.Println("================================================================================")
+		fmt.Printf("Assessment:     %s (%s)\n", asm.Name, asm.Ref)
+		if executionID != "" {
+			fmt.Printf("Execution ID:   %s\n", executionID)
+		}
+		fmt.Println("--------------------------------------------------------------------------------")
+		fmt.Println("[*] Fetching candidate findings for verification...")
+
+		rawFindings, err := store.GetFindings(asm.ID, executionID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Failed to fetch findings: %v\n", err)
+			return 1
+		}
+
+		if len(rawFindings) == 0 {
+			fmt.Printf("[*] No findings recorded for assessment %s to verify.\n", asm.Ref)
+			return 0
+		}
+
+		var reportFindings []report.Finding
+		for _, f := range rawFindings {
+			rf := report.Finding{
+				ID:              f.OriginalFindingID,
+				Title:           f.Title,
+				Category:        f.Category,
+				Severity:        f.Severity,
+				Confidence:      f.Confidence,
+				Score:           f.Score,
+				Target:          f.TargetURL,
+				Endpoint:        f.Endpoint,
+				Method:          f.Method,
+				EvidenceDetails: f.EvidenceDetails,
+				Verification:    f.VerificationRecord,
+				Remediation:     f.Remediation,
+			}
+			if rf.ID == "" {
+				rf.ID = f.ID
+			}
+			reportFindings = append(reportFindings, rf)
+		}
+
+		// Verify using SafetyChecker
+		safetyChecker := verification.NewSafetyChecker(verification.SafetyOptions{
+			IsAuthorized:         true,
+			AllowStateChanging:   false,
+			InScopeFunc:          func(rawURL string) bool { return true },
+			IsExcludedFunc:       func(rawURL string) bool { return false },
+			MaxRequestsPerTarget: 20,
+		})
+		verEngine := verification.NewEngine(safetyChecker)
+
+		fmt.Printf("[*] Evaluating verification policies across %d findings...\n", len(reportFindings))
+		results, summary := verEngine.VerifyFindings(context.Background(), reportFindings)
+
+		execID := executionID
+		if execID == "" {
+			execID = uuid.New().String()
+			now := time.Now().UTC()
+			execRec := &assessment.AssessmentExecution{
+				ID:           execID,
+				AssessmentID: asm.ID,
+				Status:       assessment.StatusCompleted,
+				StartedAt:    now,
+				CompletedAt:  &now,
+				FindingCount: len(rawFindings),
+			}
+			_ = store.CreateExecution(execRec)
+		}
+		executionID = execID
+
+		// Persist verification run record
+		runRec := &verification.VerificationRunRecord{
+			ID:                "ver-run-" + uuid.New().String(),
+			AssessmentID:      asm.ID,
+			ExecutionID:       execID,
+			TotalFindings:     summary.TotalFindings,
+			AttemptedCount:    summary.AttemptedCount,
+			VerifiedCount:     summary.VerifiedCount,
+			DetectedCount:     summary.DetectedCount,
+			ObservedCount:     summary.ObservedCount,
+			NotVerifiedCount:  summary.NotVerifiedCount,
+			NotExposedCount:   summary.NotExposedCount,
+			BlockedCount:      summary.BlockedCount,
+			InconclusiveCount: summary.InconclusiveCount,
+			SyntheticCount:    summary.SyntheticCount,
+			VerifierVersion:   verEngine.Version(),
+			CreatedAt:         time.Now().UTC(),
+		}
+		if sJSON, err := json.Marshal(summary); err == nil {
+			runRec.CoverageJSON = string(sJSON)
+		}
+		if err := store.SaveVerificationRun(runRec); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Warning: failed to save verification run: %v\n", err)
+		}
+
+		// Persist verification results
+		if err := store.SaveVerificationResults(asm.ID, execID, results); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Warning: failed to save verification results: %v\n", err)
+		}
+
+		// Update findings in store with verified status
+		updatedFindings := verification.ApplyVerificationToFindings(reportFindings, results)
+		findingMap := make(map[string]report.Finding, len(updatedFindings))
+		for _, uf := range updatedFindings {
+			findingMap[uf.ID] = uf
+		}
+		for i := range rawFindings {
+			origID := rawFindings[i].OriginalFindingID
+			if origID == "" {
+				origID = rawFindings[i].ID
+			}
+			if uf, ok := findingMap[origID]; ok {
+				rawFindings[i].VerificationStatus = uf.Verification.Status
+				rawFindings[i].Confidence = uf.Confidence
+				rawFindings[i].Score = uf.Score
+				rawFindings[i].VerificationRecord = uf.Verification
+			}
+		}
+		_ = store.SaveFindings(rawFindings)
+
+		fmt.Printf("[+] Verification Engine 2.0 completed:\n")
+		fmt.Printf("    Evaluated Findings:        %d\n", summary.TotalFindings)
+		fmt.Printf("    Attempted Verifications:   %d (%.1f%%)\n", summary.AttemptedCount, summary.VerificationRateAttempted)
+		fmt.Printf("    VERIFIED:                  %d\n", summary.VerifiedCount)
+		fmt.Printf("    DETECTED:                  %d\n", summary.DetectedCount)
+		fmt.Printf("    OBSERVED:                  %d\n", summary.ObservedCount)
+		fmt.Printf("    NOT_VERIFIED:              %d\n", summary.NotVerifiedCount)
+		fmt.Printf("    NOT_EXPOSED:               %d\n", summary.NotExposedCount)
+		if summary.BlockedCount > 0 {
+			fmt.Printf("    BLOCKED (Safety Policy):   %d\n", summary.BlockedCount)
+		}
+		if summary.InconclusiveCount > 0 {
+			fmt.Printf("    Inconclusive:              %d\n", summary.InconclusiveCount)
+		}
+		if summary.SyntheticCount > 0 {
+			fmt.Printf("    Synthetic Fixtures:        %d\n", summary.SyntheticCount)
+		}
+		fmt.Println()
+	}
+
+	// 2. Inspection / Output Mode
+	if executionID == "" {
+		if runRec, _ := store.GetVerificationRun(asm.ID, ""); runRec != nil && runRec.ExecutionID != "" {
+			executionID = runRec.ExecutionID
+		}
+	}
+
+	results, err := store.GetVerificationResults(asm.ID, executionID, statusFilter)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Failed to fetch verification results: %v\n", err)
+		return 1
+	}
+
+	if categoryFilter != "" {
+		var filtered []verification.VerificationResult
+		for _, r := range results {
+			if strings.EqualFold(r.Category, categoryFilter) {
+				filtered = append(filtered, r)
+			}
+		}
+		results = filtered
+	}
+
+	if findingFilter != "" {
+		var filtered []verification.VerificationResult
+		for _, r := range results {
+			if r.FindingID == findingFilter || strings.Contains(r.FindingID, findingFilter) {
+				filtered = append(filtered, r)
+			}
+		}
+		results = filtered
+	}
+
+	summary, _ := store.GetVerificationSummary(asm.ID, executionID)
+
+	if jsonOutput {
+		outResults := results
+		if outResults == nil {
+			outResults = []verification.VerificationResult{}
+		}
+		out := map[string]interface{}{
+			"assessment_ref":       asm.Ref,
+			"summary":              summary,
+			"verification_results": outResults,
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(out)
+		return 0
+	}
+
+	if len(results) == 0 && (summary == nil || summary.TotalFindings == 0) {
+		fmt.Printf("[*] No verification results recorded for assessment %s.\n", asm.Ref)
+		fmt.Printf("To execute Verification Engine 2.0 across recorded findings:\n  felix assessment verify %s --run\n", asm.Ref)
+		return 0
+	}
+
+	fmt.Println("================================================================================")
+	fmt.Printf("FELIX VERIFICATION ENGINE 2.0 - FINDING TRUSTWORTHINESS & EVIDENCE\n")
+	fmt.Println("================================================================================")
+	fmt.Printf("Assessment:     %s (%s)\n", asm.Name, asm.Ref)
+	if executionID != "" {
+		fmt.Printf("Execution ID:   %s\n", executionID)
+	}
+	if summary != nil {
+		fmt.Printf("Total Findings: %d  |  Verified: %d  |  Detected: %d  |  Not Verified: %d  |  Not Exposed: %d\n",
+			summary.TotalFindings, summary.VerifiedCount, summary.DetectedCount, summary.NotVerifiedCount, summary.NotExposedCount)
+		if summary.AttemptedCount > 0 {
+			fmt.Printf("Verification Rate: %.1f%% (Attempted: %d, Blocked: %d, Inconclusive: %d)\n",
+				summary.VerificationRateAttempted, summary.AttemptedCount, summary.BlockedCount, summary.InconclusiveCount)
+		}
+	}
+	fmt.Println("--------------------------------------------------------------------------------")
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "STATUS\tCONF\tPOLICY\tCATEGORY\tENDPOINT\tRESULT / RATIONALE")
+	fmt.Fprintln(w, "------\t----\t------\t--------\t--------\t------------------")
+
+	for _, r := range results {
+		resText := r.ObservedBehavior
+		if r.FailureReason != "" {
+			resText = r.FailureReason
+		}
+		if len(resText) > 40 {
+			resText = resText[:37] + "..."
+		}
+		ep := r.Endpoint
+		if len(ep) > 25 {
+			ep = ep[:22] + "..."
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			r.Status, r.OverallConfidence, r.PolicyID, r.Category, ep, resText)
+	}
+	_ = w.Flush()
+
+	if verbose {
+		fmt.Println("\n================================================================================")
+		fmt.Println("DETAILED VERIFICATION EVIDENCE & REPRODUCTION INSTRUCTIONS")
+		fmt.Println("================================================================================")
+		for _, r := range results {
+			fmt.Println("────────────────────────────────────────────────────────────────────────────────")
+			synth := ""
+			if r.SyntheticFixture {
+				synth = " [SYNTHETIC FIXTURE]"
+			}
+			fmt.Printf("[%s] Finding: %s%s\n", r.Status, r.FindingID, synth)
+			fmt.Printf("  Target / Endpoint:    %s %s\n", r.TargetURL, r.Endpoint)
+			fmt.Printf("  Policy:               %s (v%s)\n", r.PolicyID, r.PolicyVersion)
+			fmt.Printf("  Verification Method:  %s\n", r.VerificationMethod)
+			fmt.Printf("  Confidence Score:     %d/100 (Overall: %s, Det: %s, Ver: %s)\n",
+				r.ConfidenceScore, r.OverallConfidence, r.DetectionConfidence, r.VerificationConfidence)
+			if r.ConfidenceRationale != "" {
+				fmt.Printf("  Rationale:            %s\n", r.ConfidenceRationale)
+			}
+			if r.ExpectedBehavior != "" {
+				fmt.Printf("  Expected Behavior:    %s\n", r.ExpectedBehavior)
+			}
+			if r.ObservedBehavior != "" {
+				fmt.Printf("  Observed Behavior:    %s\n", r.ObservedBehavior)
+			}
+			if r.FailureReason != "" {
+				fmt.Printf("  Failure Reason:       %s\n", r.FailureReason)
+			}
+			if r.InconclusiveReason != "" {
+				fmt.Printf("  Inconclusive Reason:  %s\n", r.InconclusiveReason)
+			}
+			if len(r.CriteriaResults) > 0 {
+				fmt.Println("  Criteria Results:")
+				for _, cr := range r.CriteriaResults {
+					fmt.Printf("    [%s] %s (%s): %s\n", cr.Status, cr.CriterionID, cr.Name, cr.Rationale)
+				}
+			}
+			if len(r.EvidenceReferences) > 0 {
+				fmt.Printf("  Evidence References:  %s\n", strings.Join(r.EvidenceReferences, ", "))
+			}
+			if len(r.Reproduction.ReproductionSteps) > 0 {
+				fmt.Println("  Reproduction Steps:")
+				for _, step := range r.Reproduction.ReproductionSteps {
+					fmt.Printf("    1. %s\n", step)
+				}
+			}
+			if r.Reproduction.SafeCurlCommand != "" {
+				fmt.Printf("  Safe cURL:            %s\n", r.Reproduction.SafeCurlCommand)
+			}
+			if len(r.Limitations) > 0 {
+				fmt.Printf("  Limitations:          %s\n", strings.Join(r.Limitations, "; "))
+			}
+			fmt.Println()
+		}
+	}
+
 	return 0
 }

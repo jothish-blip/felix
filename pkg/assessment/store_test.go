@@ -16,6 +16,7 @@ import (
 	"felix/pkg/discovery"
 	"felix/pkg/report"
 	"felix/pkg/sessionsec"
+	"felix/pkg/verification"
 	"felix/pkg/webvuln"
 	"github.com/google/uuid"
 )
@@ -1738,14 +1739,14 @@ func TestStore_CorrelationMigrationFromV9(t *testing.T) {
 	}
 	defer store.Close()
 
-	// 3. Verify max version is 10
+	// 3. Verify max version is at least 10
 	var currentVersion int
 	err = store.db.QueryRow("SELECT MAX(version) FROM schema_migrations").Scan(&currentVersion)
 	if err != nil {
 		t.Fatalf("failed to query version: %v", err)
 	}
-	if currentVersion != 10 {
-		t.Errorf("expected schema version 10 after upgrade from v9, got %d", currentVersion)
+	if currentVersion < 10 {
+		t.Errorf("expected schema version >= 10 after upgrade from v9, got %d", currentVersion)
 	}
 
 	// 4. Verify migration v10 tables exist
@@ -1757,6 +1758,212 @@ func TestStore_CorrelationMigrationFromV9(t *testing.T) {
 	err = store.db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='assessment_attack_paths'").Scan(&count)
 	if err != nil || count != 1 {
 		t.Errorf("expected assessment_attack_paths table to exist, count: %d, err: %v", count, err)
+	}
+}
+
+func TestStore_VerificationMigrationFromV10(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test_v10_to_v11.db")
+
+	// 1. Manually create schema_migrations with versions up to 10
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("failed to open sqlite db: %v", err)
+	}
+	_, err = db.Exec(`
+		CREATE TABLE schema_migrations (
+			version INTEGER PRIMARY KEY,
+			applied_at TIMESTAMP NOT NULL
+		);
+		INSERT INTO schema_migrations (version, applied_at) VALUES (1, CURRENT_TIMESTAMP);
+		INSERT INTO schema_migrations (version, applied_at) VALUES (2, CURRENT_TIMESTAMP);
+		INSERT INTO schema_migrations (version, applied_at) VALUES (3, CURRENT_TIMESTAMP);
+		INSERT INTO schema_migrations (version, applied_at) VALUES (4, CURRENT_TIMESTAMP);
+		INSERT INTO schema_migrations (version, applied_at) VALUES (5, CURRENT_TIMESTAMP);
+		INSERT INTO schema_migrations (version, applied_at) VALUES (6, CURRENT_TIMESTAMP);
+		INSERT INTO schema_migrations (version, applied_at) VALUES (7, CURRENT_TIMESTAMP);
+		INSERT INTO schema_migrations (version, applied_at) VALUES (8, CURRENT_TIMESTAMP);
+		INSERT INTO schema_migrations (version, applied_at) VALUES (9, CURRENT_TIMESTAMP);
+		INSERT INTO schema_migrations (version, applied_at) VALUES (10, CURRENT_TIMESTAMP);
+	`)
+	if err != nil {
+		db.Close()
+		t.Fatalf("failed to seed v10 schema_migrations: %v", err)
+	}
+	db.Close()
+
+	// 2. Open with NewSQLiteStore which runs migrate()
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore failed to migrate from v10: %v", err)
+	}
+	defer store.Close()
+
+	// 3. Verify max version is 11
+	var currentVersion int
+	err = store.db.QueryRow("SELECT MAX(version) FROM schema_migrations").Scan(&currentVersion)
+	if err != nil {
+		t.Fatalf("failed to query version: %v", err)
+	}
+	if currentVersion != 11 {
+		t.Errorf("expected schema version 11 after upgrade from v10, got %d", currentVersion)
+	}
+
+	// 4. Verify migration v11 tables exist
+	var count int
+	err = store.db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='assessment_verification_runs'").Scan(&count)
+	if err != nil || count != 1 {
+		t.Errorf("expected assessment_verification_runs table to exist, count: %d, err: %v", count, err)
+	}
+	err = store.db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='assessment_verification_results'").Scan(&count)
+	if err != nil || count != 1 {
+		t.Errorf("expected assessment_verification_results table to exist, count: %d, err: %v", count, err)
+	}
+}
+
+func TestStore_VerificationRunAndResults(t *testing.T) {
+	store, cleanup := newTestStore(t)
+	defer cleanup()
+
+	client := &Client{
+		ID:   uuid.New().String(),
+		Name: "Verification Store Test Corp",
+	}
+	if err := store.CreateClient(client); err != nil {
+		t.Fatalf("CreateClient failed: %v", err)
+	}
+
+	asm := &Assessment{
+		ID:        uuid.New().String(),
+		Ref:       "ASM-VER-001",
+		ClientID:  client.ID,
+		Name:      "Verification Engine Assessment",
+		Status:    StatusRunning,
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	if err := store.CreateAssessment(asm); err != nil {
+		t.Fatalf("CreateAssessment failed: %v", err)
+	}
+
+	exec := &AssessmentExecution{
+		ID:           uuid.New().String(),
+		AssessmentID: asm.ID,
+		Status:       "RUNNING",
+		StartedAt:    time.Now().UTC(),
+	}
+	if err := store.CreateExecution(exec); err != nil {
+		t.Fatalf("CreateExecution failed: %v", err)
+	}
+
+	// 1. Save and Get VerificationRun
+	run := &verification.VerificationRunRecord{
+		ID:               uuid.New().String(),
+		AssessmentID:     asm.ID,
+		ExecutionID:      exec.ID,
+		TotalFindings:    10,
+		AttemptedCount:   8,
+		VerifiedCount:    5,
+		DetectedCount:    2,
+		ObservedCount:    1,
+		NotVerifiedCount: 1,
+		NotExposedCount:  1,
+		BlockedCount:     0,
+		InconclusiveCount: 1,
+		SyntheticCount:   0,
+		CoverageJSON:     `{"total_findings":10,"verified_count":5,"attempted_count":8}`,
+		VerifierVersion:  "2.0.0",
+		CreatedAt:        time.Now().UTC(),
+	}
+	if err := store.SaveVerificationRun(run); err != nil {
+		t.Fatalf("SaveVerificationRun failed: %v", err)
+	}
+
+	fetchedRun, err := store.GetVerificationRun(asm.ID, exec.ID)
+	if err != nil {
+		t.Fatalf("GetVerificationRun failed: %v", err)
+	}
+	if fetchedRun == nil || fetchedRun.ID != run.ID {
+		t.Fatalf("fetched run mismatch: %+v", fetchedRun)
+	}
+	if fetchedRun.VerifiedCount != 5 {
+		t.Errorf("expected VerifiedCount=5, got %d", fetchedRun.VerifiedCount)
+	}
+
+	// 2. Save and Get VerificationResults
+	r1 := verification.VerificationResult{
+		ID:                     uuid.New().String(),
+		FindingID:              "FND-01",
+		AssessmentID:           asm.ID,
+		ExecutionID:            exec.ID,
+		TargetURL:              "https://example.com",
+		Endpoint:               "https://example.com/api/v1/users",
+		Category:               "BOLA",
+		Status:                 verification.StatusVerified,
+		VerificationMethod:     "differential_tenant_comparison",
+		PolicyID:               "POL-AUTHZ-01",
+		PolicyVersion:          "2.0.0",
+		Attempted:              true,
+		DetectionConfidence:    report.ConfidenceHigh,
+		VerificationConfidence: report.ConfidenceHigh,
+		OverallConfidence:      report.ConfidenceHigh,
+		ConfidenceScore:        90,
+		ConfidenceRationale:    "Direct differential proof obtained",
+		SafetyDecision:         verification.DecisionAllowed,
+		SyntheticFixture:       false,
+		VerifierVersion:        "2.0.0",
+		CompletedAt:            time.Now().UTC(),
+	}
+	r2 := verification.VerificationResult{
+		ID:                     uuid.New().String(),
+		FindingID:              "FND-02",
+		AssessmentID:           asm.ID,
+		ExecutionID:            exec.ID,
+		TargetURL:              "https://example.com",
+		Endpoint:               "https://example.com/admin",
+		Category:               "AUTH",
+		Status:                 verification.StatusNotExposed,
+		VerificationMethod:     "auth_barrier_check",
+		PolicyID:               "POL-AUTH-01",
+		PolicyVersion:          "2.0.0",
+		Attempted:              true,
+		DetectionConfidence:    report.ConfidenceHigh,
+		VerificationConfidence: report.ConfidenceHigh,
+		OverallConfidence:      report.ConfidenceHigh,
+		ConfidenceScore:        90,
+		ConfidenceRationale:    "HTTP 401 access denied confirmed",
+		SafetyDecision:         verification.DecisionAllowed,
+		SyntheticFixture:       false,
+		VerifierVersion:        "2.0.0",
+		CompletedAt:            time.Now().UTC(),
+	}
+
+	if err := store.SaveVerificationResults(asm.ID, exec.ID, []verification.VerificationResult{r1, r2}); err != nil {
+		t.Fatalf("SaveVerificationResults failed: %v", err)
+	}
+
+	results, err := store.GetVerificationResults(asm.ID, exec.ID, "")
+	if err != nil {
+		t.Fatalf("GetVerificationResults failed: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+
+	verifiedOnly, err := store.GetVerificationResults(asm.ID, exec.ID, string(verification.StatusVerified))
+	if err != nil {
+		t.Fatalf("GetVerificationResults verified failed: %v", err)
+	}
+	if len(verifiedOnly) != 1 || verifiedOnly[0].FindingID != "FND-01" {
+		t.Fatalf("expected 1 verified result, got %+v", verifiedOnly)
+	}
+
+	summary, err := store.GetVerificationSummary(asm.ID, exec.ID)
+	if err != nil {
+		t.Fatalf("GetVerificationSummary failed: %v", err)
+	}
+	if summary == nil || summary.VerifiedCount != 5 {
+		t.Fatalf("expected summary VerifiedCount=5, got %+v", summary)
 	}
 }
 
