@@ -12,6 +12,7 @@ import (
 	"felix/pkg/authz"
 	"felix/pkg/businesslogic"
 	"felix/pkg/cloudsec"
+	"felix/pkg/correlation"
 	"felix/pkg/discovery"
 	"felix/pkg/report"
 	"felix/pkg/sessionsec"
@@ -1678,14 +1679,14 @@ func TestStore_BusinessLogicMigrationFromV8(t *testing.T) {
 	}
 	defer store.Close()
 
-	// 3. Verify max version is 9
+	// 3. Verify max version is at least 9
 	var currentVersion int
 	err = store.db.QueryRow("SELECT MAX(version) FROM schema_migrations").Scan(&currentVersion)
 	if err != nil {
 		t.Fatalf("failed to query version: %v", err)
 	}
-	if currentVersion != 9 {
-		t.Errorf("expected schema version 9 after upgrade from v8, got %d", currentVersion)
+	if currentVersion < 9 {
+		t.Errorf("expected schema version >= 9 after upgrade from v8, got %d", currentVersion)
 	}
 
 	// 4. Verify migration v9 tables exist
@@ -1697,5 +1698,205 @@ func TestStore_BusinessLogicMigrationFromV8(t *testing.T) {
 	err = store.db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='assessment_businesslogic_results'").Scan(&count)
 	if err != nil || count != 1 {
 		t.Errorf("expected assessment_businesslogic_results table to exist, count: %d, err: %v", count, err)
+	}
+}
+
+func TestStore_CorrelationMigrationFromV9(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test_v9_to_v10.db")
+
+	// 1. Manually create schema_migrations with versions up to 9
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("failed to open sqlite db: %v", err)
+	}
+	_, err = db.Exec(`
+		CREATE TABLE schema_migrations (
+			version INTEGER PRIMARY KEY,
+			applied_at TIMESTAMP NOT NULL
+		);
+		INSERT INTO schema_migrations (version, applied_at) VALUES (1, CURRENT_TIMESTAMP);
+		INSERT INTO schema_migrations (version, applied_at) VALUES (2, CURRENT_TIMESTAMP);
+		INSERT INTO schema_migrations (version, applied_at) VALUES (3, CURRENT_TIMESTAMP);
+		INSERT INTO schema_migrations (version, applied_at) VALUES (4, CURRENT_TIMESTAMP);
+		INSERT INTO schema_migrations (version, applied_at) VALUES (5, CURRENT_TIMESTAMP);
+		INSERT INTO schema_migrations (version, applied_at) VALUES (6, CURRENT_TIMESTAMP);
+		INSERT INTO schema_migrations (version, applied_at) VALUES (7, CURRENT_TIMESTAMP);
+		INSERT INTO schema_migrations (version, applied_at) VALUES (8, CURRENT_TIMESTAMP);
+		INSERT INTO schema_migrations (version, applied_at) VALUES (9, CURRENT_TIMESTAMP);
+	`)
+	if err != nil {
+		db.Close()
+		t.Fatalf("failed to seed v9 schema_migrations: %v", err)
+	}
+	db.Close()
+
+	// 2. Open with NewSQLiteStore which runs migrate()
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore failed to migrate from v9: %v", err)
+	}
+	defer store.Close()
+
+	// 3. Verify max version is 10
+	var currentVersion int
+	err = store.db.QueryRow("SELECT MAX(version) FROM schema_migrations").Scan(&currentVersion)
+	if err != nil {
+		t.Fatalf("failed to query version: %v", err)
+	}
+	if currentVersion != 10 {
+		t.Errorf("expected schema version 10 after upgrade from v9, got %d", currentVersion)
+	}
+
+	// 4. Verify migration v10 tables exist
+	var count int
+	err = store.db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='assessment_correlation_runs'").Scan(&count)
+	if err != nil || count != 1 {
+		t.Errorf("expected assessment_correlation_runs table to exist, count: %d, err: %v", count, err)
+	}
+	err = store.db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='assessment_attack_paths'").Scan(&count)
+	if err != nil || count != 1 {
+		t.Errorf("expected assessment_attack_paths table to exist, count: %d, err: %v", count, err)
+	}
+}
+
+func TestStore_CorrelationRunAndPaths(t *testing.T) {
+	store, cleanup := newTestStore(t)
+	defer cleanup()
+
+	client := &Client{
+		ID:   uuid.New().String(),
+		Name: "Correlation Test Corp",
+	}
+	if err := store.CreateClient(client); err != nil {
+		t.Fatalf("CreateClient failed: %v", err)
+	}
+
+	asm := &Assessment{
+		ID:             uuid.New().String(),
+		Ref:            "ASM-COR-001",
+		ClientID:       client.ID,
+		Name:           "Correlation Engine Assessment",
+		AssessmentType: "full",
+		Status:         StatusRunning,
+		CreatedAt:      time.Now().UTC(),
+		UpdatedAt:      time.Now().UTC(),
+	}
+	if err := store.CreateAssessment(asm); err != nil {
+		t.Fatalf("CreateAssessment failed: %v", err)
+	}
+
+	exec := &AssessmentExecution{
+		ID:           uuid.New().String(),
+		AssessmentID: asm.ID,
+		Status:       "RUNNING",
+		StartedAt:    time.Now().UTC(),
+	}
+	if err := store.CreateExecution(exec); err != nil {
+		t.Fatalf("CreateExecution failed: %v", err)
+	}
+
+	// 1. Save and Get CorrelationRun
+	runRec := &correlation.RunRecord{
+		ID:                     uuid.New().String(),
+		AssessmentID:           asm.ID,
+		ExecutionID:            exec.ID,
+		TotalFindings:          12,
+		CandidateRelationships: 6,
+		CandidatePaths:         4,
+		VerifiedPaths:          2,
+		HighestRisk:            report.SeverityCritical,
+		CoverageJSON:           `{"total_findings":12,"candidate_paths":4,"verified_paths":2,"highest_risk_score":90,"highest_risk_level":"CRITICAL"}`,
+		SyntheticFixture:       false,
+		CreatedAt:              time.Now().UTC(),
+	}
+
+	if err := store.SaveCorrelationRun(runRec); err != nil {
+		t.Fatalf("SaveCorrelationRun failed: %v", err)
+	}
+
+	fetchedRun, err := store.GetCorrelationRun(asm.ID, exec.ID)
+	if err != nil {
+		t.Fatalf("GetCorrelationRun failed: %v", err)
+	}
+	if fetchedRun.ID != runRec.ID {
+		t.Errorf("expected run ID %s, got %s", runRec.ID, fetchedRun.ID)
+	}
+	if fetchedRun.VerifiedPaths != 2 {
+		t.Errorf("expected VerifiedPaths = 2, got %d", fetchedRun.VerifiedPaths)
+	}
+
+	// 2. Save and Get AttackPaths
+	path1 := correlation.AttackPath{
+		ID:                uuid.New().String(),
+		Title:             "API Endpoint -> BOLA Customer Record Exposure",
+		EntryPoint:        "https://api.example.com/v1/users",
+		TargetAsset:       "https://api.example.com",
+		PrimaryWeakness:   "Broken Object-Level Authorization",
+		TerminalImpact:    "Unauthorized access to tenant records",
+		Status:            correlation.PathVerified,
+		Confidence:        report.ConfidenceHigh,
+		CombinedRiskLevel: report.SeverityCritical,
+		CombinedRiskScore: 90,
+		RiskRationale:     "Direct verified horizontal IDOR exposes tenant customer records",
+		NodeIDs:           []string{"F-01", "F-02"},
+		Remediation:       "Implement tenant-isolated authorization checks on object retrieval",
+		CreatedAt:         time.Now().UTC(),
+	}
+	path2 := correlation.AttackPath{
+		ID:                uuid.New().String(),
+		Title:             "Public S3 Bucket -> Log Exposure",
+		EntryPoint:        "https://logs.example.com",
+		TargetAsset:       "s3://example-logs",
+		PrimaryWeakness:   "Public Cloud Storage",
+		TerminalImpact:    "Public access to internal access logs",
+		Status:            correlation.PathCandidate,
+		Confidence:        report.ConfidenceMedium,
+		CombinedRiskLevel: report.SeverityMedium,
+		CombinedRiskScore: 50,
+		RiskRationale:     "Candidate path connecting public bucket to unauthenticated reading",
+		NodeIDs:           []string{"F-03", "F-04"},
+		Remediation:       "Apply S3 Block Public Access",
+		CreatedAt:         time.Now().UTC(),
+	}
+
+	if err := store.SaveAttackPaths(asm.ID, exec.ID, []correlation.AttackPath{path1, path2}); err != nil {
+		t.Fatalf("SaveAttackPaths failed: %v", err)
+	}
+
+	// Retrieve all
+	paths, err := store.GetAttackPaths(asm.ID, exec.ID, "", "")
+	if err != nil {
+		t.Fatalf("GetAttackPaths failed: %v", err)
+	}
+	if len(paths) != 2 {
+		t.Fatalf("expected 2 paths, got %d", len(paths))
+	}
+
+	// Filter by status
+	verifiedOnly, err := store.GetAttackPaths(asm.ID, exec.ID, string(correlation.PathVerified), "")
+	if err != nil {
+		t.Fatalf("GetAttackPaths by status failed: %v", err)
+	}
+	if len(verifiedOnly) != 1 || verifiedOnly[0].Status != correlation.PathVerified {
+		t.Errorf("expected 1 verified path, got %d", len(verifiedOnly))
+	}
+
+	// Filter by minRisk
+	critOnly, err := store.GetAttackPaths(asm.ID, exec.ID, "", "CRITICAL")
+	if err != nil {
+		t.Fatalf("GetAttackPaths by minRisk failed: %v", err)
+	}
+	if len(critOnly) != 1 || critOnly[0].CombinedRiskLevel != report.SeverityCritical {
+		t.Errorf("expected 1 critical path, got %d", len(critOnly))
+	}
+
+	// 3. GetCorrelationSummary
+	summary, err := store.GetCorrelationSummary(asm.ID, exec.ID)
+	if err != nil {
+		t.Fatalf("GetCorrelationSummary failed: %v", err)
+	}
+	if summary.VerifiedPaths != 2 {
+		t.Errorf("expected VerifiedPaths = 2, got %d", summary.VerifiedPaths)
 	}
 }

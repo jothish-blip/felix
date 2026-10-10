@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"felix/pkg/businesslogic"
 	"felix/pkg/cloudsec"
 	"felix/pkg/config"
+	"felix/pkg/correlation"
 	"felix/pkg/discovery"
 	"felix/pkg/report"
 	"felix/pkg/sessionsec"
@@ -116,6 +118,13 @@ type Store interface {
 	SaveBusinessLogicResults(results []businesslogic.Result) error
 	GetBusinessLogicResults(assessmentID string, executionID string, category string, state string) ([]businesslogic.Result, error)
 	GetBusinessLogicSummary(assessmentID string, executionID string) (*businesslogic.Summary, error)
+
+	// Correlation & Attack Path Engine (Stage 10)
+	SaveCorrelationRun(record *correlation.RunRecord) error
+	GetCorrelationRun(assessmentID string, executionID string) (*correlation.RunRecord, error)
+	SaveAttackPaths(assessmentID string, executionID string, paths []correlation.AttackPath) error
+	GetAttackPaths(assessmentID string, executionID string, status string, minRisk string) ([]correlation.AttackPath, error)
+	GetCorrelationSummary(assessmentID string, executionID string) (*correlation.Summary, error)
 
 	// Report Records
 	SaveReport(r *ReportRecord) error
@@ -896,6 +905,72 @@ func (s *SQLiteStore) migrate() error {
 
 		if _, err := tx.Exec(schemaV9); err != nil {
 			return fmt.Errorf("migration v9 failed: %w", err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+
+	// Migration 10: Correlation & Attack Path Engine (Stage 10)
+	if currentVersion < 10 {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		schemaV10 := `
+		CREATE TABLE IF NOT EXISTS assessment_correlation_runs (
+			id TEXT PRIMARY KEY,
+			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+			execution_id TEXT NOT NULL REFERENCES assessment_executions(id) ON DELETE CASCADE,
+			total_findings INTEGER NOT NULL DEFAULT 0,
+			candidate_relationships INTEGER NOT NULL DEFAULT 0,
+			candidate_paths INTEGER NOT NULL DEFAULT 0,
+			verified_paths INTEGER NOT NULL DEFAULT 0,
+			highest_risk TEXT NOT NULL,
+			coverage_json TEXT NOT NULL,
+			synthetic_fixture BOOLEAN NOT NULL DEFAULT 0,
+			created_at TIMESTAMP NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_correlation_runs_asm_id ON assessment_correlation_runs(assessment_id);
+		CREATE INDEX IF NOT EXISTS idx_correlation_runs_exec_id ON assessment_correlation_runs(execution_id);
+
+		CREATE TABLE IF NOT EXISTS assessment_attack_paths (
+			id TEXT PRIMARY KEY,
+			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+			execution_id TEXT NOT NULL REFERENCES assessment_executions(id) ON DELETE CASCADE,
+			title TEXT NOT NULL,
+			entry_point TEXT,
+			target_asset TEXT NOT NULL,
+			primary_weakness TEXT NOT NULL,
+			terminal_impact TEXT NOT NULL,
+			status TEXT NOT NULL,
+			confidence TEXT NOT NULL,
+			combined_risk_level TEXT NOT NULL,
+			combined_risk_score INTEGER NOT NULL,
+			risk_rationale TEXT,
+			node_ids_json TEXT NOT NULL,
+			nodes_json TEXT NOT NULL,
+			edges_json TEXT NOT NULL,
+			security_story_json TEXT NOT NULL,
+			remediation TEXT NOT NULL,
+			synthetic_fixture BOOLEAN NOT NULL DEFAULT 0,
+			created_at TIMESTAMP NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_attack_paths_asm_id ON assessment_attack_paths(assessment_id);
+		CREATE INDEX IF NOT EXISTS idx_attack_paths_exec_id ON assessment_attack_paths(execution_id);
+		CREATE INDEX IF NOT EXISTS idx_attack_paths_status ON assessment_attack_paths(status);
+		CREATE INDEX IF NOT EXISTS idx_attack_paths_risk ON assessment_attack_paths(combined_risk_level);
+
+		INSERT INTO schema_migrations (version, applied_at) VALUES (10, CURRENT_TIMESTAMP);
+		`
+
+		if _, err := tx.Exec(schemaV10); err != nil {
+			return fmt.Errorf("migration v10 failed: %w", err)
 		}
 
 		if err := tx.Commit(); err != nil {
@@ -3642,4 +3717,297 @@ func (s *SQLiteStore) GetBusinessLogicSummary(assessmentID string, executionID s
 	}
 	summary.CategoriesAssessed = len(summary.CategoryCoverageMap)
 	return summary, nil
+}
+
+// --- Correlation & Attack Path Engine Methods (Stage 10) ---
+
+func (s *SQLiteStore) SaveCorrelationRun(record *correlation.RunRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	query := `
+		INSERT INTO assessment_correlation_runs (
+			id, assessment_id, execution_id, total_findings,
+			candidate_relationships, candidate_paths, verified_paths,
+			highest_risk, coverage_json, synthetic_fixture, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`
+	_, err := s.db.Exec(
+		query,
+		record.ID,
+		record.AssessmentID,
+		record.ExecutionID,
+		record.TotalFindings,
+		record.CandidateRelationships,
+		record.CandidatePaths,
+		record.VerifiedPaths,
+		record.HighestRisk,
+		record.CoverageJSON,
+		record.SyntheticFixture,
+		record.CreatedAt,
+	)
+	return err
+}
+
+func (s *SQLiteStore) GetCorrelationRun(assessmentID string, executionID string) (*correlation.RunRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := `
+		SELECT id, assessment_id, execution_id, total_findings,
+		       candidate_relationships, candidate_paths, verified_paths,
+		       highest_risk, coverage_json, synthetic_fixture, created_at
+		FROM assessment_correlation_runs
+		WHERE assessment_id = ?
+	`
+	args := []interface{}{assessmentID}
+	if executionID != "" {
+		query += " AND execution_id = ?"
+		args = append(args, executionID)
+	}
+	query += " ORDER BY created_at DESC LIMIT 1"
+
+	var rec correlation.RunRecord
+	err := s.db.QueryRow(query, args...).Scan(
+		&rec.ID,
+		&rec.AssessmentID,
+		&rec.ExecutionID,
+		&rec.TotalFindings,
+		&rec.CandidateRelationships,
+		&rec.CandidatePaths,
+		&rec.VerifiedPaths,
+		&rec.HighestRisk,
+		&rec.CoverageJSON,
+		&rec.SyntheticFixture,
+		&rec.CreatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &rec, nil
+}
+
+func (s *SQLiteStore) SaveAttackPaths(assessmentID string, executionID string, paths []correlation.AttackPath) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO assessment_attack_paths (
+			id, assessment_id, execution_id, title, entry_point, target_asset,
+			primary_weakness, terminal_impact, status, confidence,
+			combined_risk_level, combined_risk_score, risk_rationale,
+			node_ids_json, nodes_json, edges_json, security_story_json,
+			remediation, synthetic_fixture, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, p := range paths {
+		nodeIDsJSON, _ := json.Marshal(p.NodeIDs)
+		nodesJSON, _ := json.Marshal(p.Nodes)
+		edgesJSON, _ := json.Marshal(p.Edges)
+		storyJSON, _ := json.Marshal(p.SecurityStory)
+
+		createdAt := p.CreatedAt
+		if createdAt.IsZero() {
+			createdAt = time.Now()
+		}
+
+		_, err := stmt.Exec(
+			p.ID,
+			assessmentID,
+			executionID,
+			p.Title,
+			p.EntryPoint,
+			p.TargetAsset,
+			p.PrimaryWeakness,
+			p.TerminalImpact,
+			string(p.Status),
+			p.Confidence,
+			p.CombinedRiskLevel,
+			p.CombinedRiskScore,
+			p.RiskRationale,
+			string(nodeIDsJSON),
+			string(nodesJSON),
+			string(edgesJSON),
+			string(storyJSON),
+			p.Remediation,
+			p.SyntheticFixture,
+			createdAt,
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+func (s *SQLiteStore) GetAttackPaths(assessmentID string, executionID string, status string, minRisk string) ([]correlation.AttackPath, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := `
+		SELECT id, assessment_id, execution_id, title, entry_point, target_asset,
+		       primary_weakness, terminal_impact, status, confidence,
+		       combined_risk_level, combined_risk_score, risk_rationale,
+		       node_ids_json, nodes_json, edges_json, security_story_json,
+		       remediation, synthetic_fixture, created_at
+		FROM assessment_attack_paths
+		WHERE assessment_id = ?
+	`
+	args := []interface{}{assessmentID}
+	if executionID != "" {
+		query += " AND execution_id = ?"
+		args = append(args, executionID)
+	}
+	if status != "" {
+		query += " AND status = ?"
+		args = append(args, status)
+	}
+	if minRisk != "" {
+		switch strings.ToUpper(minRisk) {
+		case "CRITICAL":
+			query += " AND combined_risk_level = 'CRITICAL'"
+		case "HIGH":
+			query += " AND combined_risk_level IN ('CRITICAL', 'HIGH')"
+		case "MEDIUM":
+			query += " AND combined_risk_level IN ('CRITICAL', 'HIGH', 'MEDIUM')"
+		}
+	}
+	query += " ORDER BY combined_risk_score DESC, created_at ASC"
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var paths []correlation.AttackPath
+	for rows.Next() {
+		var p correlation.AttackPath
+		var asmID, execID, entryPoint, rationale sql.NullString
+		var statusStr string
+		var nodeIDsJSON, nodesJSON, edgesJSON, storyJSON sql.NullString
+
+		err := rows.Scan(
+			&p.ID,
+			&asmID,
+			&execID,
+			&p.Title,
+			&entryPoint,
+			&p.TargetAsset,
+			&p.PrimaryWeakness,
+			&p.TerminalImpact,
+			&statusStr,
+			&p.Confidence,
+			&p.CombinedRiskLevel,
+			&p.CombinedRiskScore,
+			&rationale,
+			&nodeIDsJSON,
+			&nodesJSON,
+			&edgesJSON,
+			&storyJSON,
+			&p.Remediation,
+			&p.SyntheticFixture,
+			&p.CreatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		p.Status = correlation.PathStatus(statusStr)
+		if entryPoint.Valid {
+			p.EntryPoint = entryPoint.String
+		}
+		if rationale.Valid {
+			p.RiskRationale = rationale.String
+		}
+		if nodeIDsJSON.Valid && nodeIDsJSON.String != "" {
+			_ = json.Unmarshal([]byte(nodeIDsJSON.String), &p.NodeIDs)
+		}
+		if nodesJSON.Valid && nodesJSON.String != "" {
+			_ = json.Unmarshal([]byte(nodesJSON.String), &p.Nodes)
+		}
+		if edgesJSON.Valid && edgesJSON.String != "" {
+			_ = json.Unmarshal([]byte(edgesJSON.String), &p.Edges)
+		}
+		if storyJSON.Valid && storyJSON.String != "" {
+			_ = json.Unmarshal([]byte(storyJSON.String), &p.SecurityStory)
+		}
+
+		paths = append(paths, p)
+	}
+
+	return paths, nil
+}
+
+func (s *SQLiteStore) GetCorrelationSummary(assessmentID string, executionID string) (*correlation.Summary, error) {
+	run, err := s.GetCorrelationRun(assessmentID, executionID)
+	if err == nil && run != nil && run.CoverageJSON != "" {
+		var sum correlation.Summary
+		if err := json.Unmarshal([]byte(run.CoverageJSON), &sum); err == nil {
+			return &sum, nil
+		}
+	}
+
+	paths, err := s.GetAttackPaths(assessmentID, executionID, "", "")
+	if err != nil {
+		return nil, err
+	}
+
+	sum := &correlation.Summary{
+		CandidatePaths: len(paths),
+		RuleStats:      make(map[string]correlation.RuleCoverageStat),
+		AffectedAssets: make([]string, 0),
+	}
+
+	assetMap := make(map[string]bool)
+	maxScore := 0
+	highestRisk := report.SeverityInfo
+
+	for _, p := range paths {
+		if p.TargetAsset != "" && !assetMap[p.TargetAsset] {
+			assetMap[p.TargetAsset] = true
+			sum.AffectedAssets = append(sum.AffectedAssets, p.TargetAsset)
+		}
+		switch p.Status {
+		case correlation.PathVerified:
+			sum.VerifiedPaths++
+		case correlation.PathCandidate:
+			// candidate paths
+		case correlation.PathInconclusive:
+			sum.InconclusivePaths++
+		case correlation.PathObserved:
+			sum.ObservedPaths++
+		}
+		if p.CombinedRiskScore > maxScore {
+			maxScore = p.CombinedRiskScore
+			highestRisk = p.CombinedRiskLevel
+		}
+		for _, e := range p.Edges {
+			codeStr := string(e.RuleCode)
+			st := sum.RuleStats[codeStr]
+			st.Code = e.RuleCode
+			st.PathsGenerated++
+			sum.RuleStats[codeStr] = st
+		}
+	}
+
+	sum.HighestRiskScore = maxScore
+	sum.HighestRiskLevel = highestRisk
+
+	return sum, nil
 }

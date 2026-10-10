@@ -20,6 +20,8 @@ import (
 	"felix/pkg/authz"
 	"felix/pkg/businesslogic"
 	"felix/pkg/cloudsec"
+	"felix/pkg/correlation"
+	"felix/pkg/report"
 	"felix/pkg/sessionsec"
 	"felix/pkg/webvuln"
 	"github.com/google/uuid"
@@ -78,6 +80,8 @@ func runAssessment(args []string) int {
 		return runAssessmentCloudSec(subArgs)
 	case "businesslogic", "bizlogic", "logic":
 		return runAssessmentBusinessLogic(subArgs)
+	case "correlate", "correlation", "attackpaths", "paths":
+		return runAssessmentCorrelate(subArgs)
 	case "reports":
 		return runAssessmentReports(subArgs)
 	case "cancel":
@@ -109,6 +113,7 @@ func printAssessmentHelp() {
 	fmt.Println("  sessionsec   Assess session lifecycle, token handling, and identity boundaries (WSTG-SESS/ATHN)")
 	fmt.Println("  cloudsec     Assess cloud security across AWS, Azure, and GCP (External & Credentialed Modes)")
 	fmt.Println("  businesslogic Assess business logic workflows, state transitions, replay, and invariants")
+	fmt.Println("  correlate    Correlate findings into evidence-backed attack paths and combined risk")
 	fmt.Println("  reports      List generated report files for an assessment")
 	fmt.Println("  cancel       Cancel an active or pending assessment")
 	fmt.Println("\nExamples:")
@@ -125,6 +130,8 @@ func printAssessmentHelp() {
 	fmt.Println("  felix assessment cloudsec <asm-ref> --mode external")
 	fmt.Println("  felix assessment cloudsec <asm-ref> --mode credentialed --provider aws --credentials aws_creds.json --run")
 	fmt.Println("  felix assessment businesslogic <asm-ref> --run")
+	fmt.Println("  felix assessment correlate <asm-ref> --run")
+	fmt.Println("  felix assessment correlate <asm-ref> --status VERIFIED --verbose")
 	fmt.Println("  felix assessment reports <asm-ref>")
 }
 
@@ -4390,6 +4397,328 @@ func runAssessmentBusinessLogic(args []string) int {
 	} else if summary == nil || summary.TotalChecks == 0 {
 		fmt.Println("\nNo business logic security results recorded.")
 		fmt.Printf("To run a business logic security assessment:\n  felix assessment businesslogic %s --run\n", asm.Ref)
+	}
+
+	fmt.Println()
+	return 0
+}
+
+func runAssessmentCorrelate(args []string) int {
+	var (
+		assessmentRef string
+		executionID   string
+		statusFilter  string
+		riskFilter    string
+		ruleFilter    string
+		runFlag       bool
+		jsonOutput    bool
+		verbose       bool
+	)
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--run":
+			runFlag = true
+		case "--execution", "--exec":
+			if i+1 < len(args) {
+				executionID = args[i+1]
+				i++
+			}
+		case "--status":
+			if i+1 < len(args) {
+				statusFilter = strings.ToUpper(args[i+1])
+				i++
+			}
+		case "--risk":
+			if i+1 < len(args) {
+				riskFilter = strings.ToUpper(args[i+1])
+				i++
+			}
+		case "--rule":
+			if i+1 < len(args) {
+				ruleFilter = strings.ToUpper(args[i+1])
+				i++
+			}
+		case "--json":
+			jsonOutput = true
+		case "--verbose", "-v":
+			verbose = true
+		case "--help", "-h":
+			fmt.Println("Usage: felix assessment correlate <assessment-id> [flags]")
+			fmt.Println("\nFlags:")
+			fmt.Println("  --run              Execute correlation analysis across recorded findings")
+			fmt.Println("  --execution <id>   Scope to specific execution ID")
+			fmt.Println("  --status <state>   Filter paths by status (VERIFIED, CANDIDATE, INCONCLUSIVE, OBSERVED)")
+			fmt.Println("  --risk <level>     Filter paths by minimum risk level (CRITICAL, HIGH, MEDIUM, LOW)")
+			fmt.Println("  --rule <code>      Filter paths by rule code (COR-01 to COR-10)")
+			fmt.Println("  --json             Output results as formatted JSON")
+			fmt.Println("  --verbose          Display full multi-step node chains and security story explanations")
+			return 0
+		default:
+			if !strings.HasPrefix(arg, "-") && assessmentRef == "" {
+				assessmentRef = arg
+			}
+		}
+	}
+
+	if assessmentRef == "" {
+		fmt.Fprintln(os.Stderr, "[-] Error: assessment ID or reference is required")
+		fmt.Fprintln(os.Stderr, "Usage: felix assessment correlate <assessment-id> [flags]")
+		return 1
+	}
+
+	store, err := assessment.NewSQLiteStore("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Database initialization failed: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+
+	asm, err := store.GetAssessment(assessmentRef)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Assessment %q not found: %v\n", assessmentRef, err)
+		return 1
+	}
+
+	// 1. Run Mode
+	if runFlag {
+		fmt.Println("================================================================================")
+		fmt.Printf("FELIX CORRELATION & ATTACK PATH ENGINE - ANALYSIS RUN\n")
+		fmt.Println("================================================================================")
+		fmt.Printf("Assessment:     %s (%s)\n", asm.Name, asm.Ref)
+		if executionID != "" {
+			fmt.Printf("Execution ID:   %s\n", executionID)
+		}
+		fmt.Println("--------------------------------------------------------------------------------")
+		fmt.Println("[*] Fetching recorded assessment findings for cross-finding correlation...")
+
+		rawFindings, err := store.GetFindings(asm.ID, executionID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Failed to fetch findings: %v\n", err)
+			return 1
+		}
+
+		if len(rawFindings) == 0 {
+			fmt.Printf("[-] No findings recorded for assessment %s. Run an assessment scan first.\n", asm.Ref)
+			return 1
+		}
+
+		var reportFindings []report.Finding
+		for _, f := range rawFindings {
+			rf := report.Finding{
+				ID:              f.OriginalFindingID,
+				Title:           f.Title,
+				Category:        f.Category,
+				Severity:        f.Severity,
+				Confidence:      f.Confidence,
+				Score:           f.Score,
+				Target:          f.TargetURL,
+				Endpoint:        f.Endpoint,
+				Method:          f.Method,
+				EvidenceDetails: f.EvidenceDetails,
+				Verification:    f.VerificationRecord,
+				Remediation:     f.Remediation,
+			}
+			if rf.ID == "" {
+				rf.ID = f.ID
+			}
+			reportFindings = append(reportFindings, rf)
+		}
+
+		cfg := correlation.DefaultConfig()
+		engine := correlation.NewEngine(cfg)
+
+		fmt.Printf("[*] Evaluating correlation rules COR-01 through COR-10 across %d findings...\n", len(reportFindings))
+		summary, paths, relationships, err := engine.Correlate(context.Background(), reportFindings)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Correlation engine error: %v\n", err)
+			return 1
+		}
+
+		execID := executionID
+		if execID == "" {
+			execID = uuid.New().String()
+			now := time.Now().UTC()
+			execRec := &assessment.AssessmentExecution{
+				ID:           execID,
+				AssessmentID: asm.ID,
+				Status:       assessment.StatusCompleted,
+				StartedAt:    now,
+				CompletedAt:  &now,
+				FindingCount: len(rawFindings),
+			}
+			_ = store.CreateExecution(execRec)
+		}
+
+		covJSON, _ := json.Marshal(summary)
+		runRec := &correlation.RunRecord{
+			ID:                     uuid.New().String(),
+			AssessmentID:           asm.ID,
+			ExecutionID:            execID,
+			TotalFindings:          summary.TotalFindings,
+			CandidateRelationships: summary.CandidateRelationships,
+			CandidatePaths:         summary.CandidatePaths,
+			VerifiedPaths:          summary.VerifiedPaths,
+			HighestRisk:            summary.HighestRiskLevel,
+			CoverageJSON:           string(covJSON),
+			SyntheticFixture:       summary.SyntheticFixture,
+			CreatedAt:              time.Now().UTC(),
+		}
+		if err := store.SaveCorrelationRun(runRec); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Warning: failed to save correlation run: %v\n", err)
+		}
+
+		if err := store.SaveAttackPaths(asm.ID, execID, paths); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Warning: failed to save attack paths: %v\n", err)
+		}
+
+		fmt.Printf("[+] Correlation analysis completed:\n")
+		fmt.Printf("    Evaluated Findings:        %d\n", summary.EvaluatedFindings)
+		fmt.Printf("    Candidate Relationships:   %d\n", summary.CandidateRelationships)
+		fmt.Printf("    Confirmed Relationships:   %d\n", summary.ConfirmedRelationships)
+		fmt.Printf("    Candidate Attack Paths:    %d\n", summary.CandidatePaths)
+		fmt.Printf("    Verified Attack Paths:     %d\n", summary.VerifiedPaths)
+		fmt.Printf("    Inconclusive Paths:        %d\n", summary.InconclusivePaths)
+		fmt.Printf("    Highest Combined Risk:     %s (%d/100)\n", summary.HighestRiskLevel, summary.HighestRiskScore)
+		if summary.LimitsReached {
+			fmt.Printf("    [!] Limits Reached:        %s\n", summary.TruncationReason)
+		}
+		_ = relationships
+	}
+
+	// 2. Inspection / Output Mode
+	paths, err := store.GetAttackPaths(asm.ID, executionID, statusFilter, riskFilter)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Failed to fetch attack paths: %v\n", err)
+		return 1
+	}
+
+	if ruleFilter != "" {
+		var filtered []correlation.AttackPath
+		for _, p := range paths {
+			hasRule := false
+			for _, e := range p.Edges {
+				if strings.EqualFold(string(e.RuleCode), ruleFilter) {
+					hasRule = true
+					break
+				}
+			}
+			if hasRule {
+				filtered = append(filtered, p)
+			}
+		}
+		paths = filtered
+	}
+
+	summary, _ := store.GetCorrelationSummary(asm.ID, executionID)
+
+	if jsonOutput {
+		out := map[string]interface{}{
+			"assessment_ref": asm.Ref,
+			"summary":        summary,
+			"attack_paths":   paths,
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(out)
+		return 0
+	}
+
+	if summary != nil && (summary.CandidatePaths > 0 || summary.VerifiedPaths > 0 || len(paths) > 0) {
+		fmt.Println("\n================================================================================")
+		fmt.Printf("CORRELATION & ATTACK PATH ANALYSIS SUMMARY: %s (%s)\n", asm.Name, asm.Ref)
+		fmt.Println("================================================================================")
+		fmt.Printf("Total Findings:         %d\n", summary.TotalFindings)
+		fmt.Printf("Candidate Relationships: %d\n", summary.CandidateRelationships)
+		fmt.Printf("Confirmed Relationships: %d\n", summary.ConfirmedRelationships)
+		fmt.Printf("Candidate Paths:        %d\n", summary.CandidatePaths)
+		fmt.Printf("Verified Paths:         %d\n", summary.VerifiedPaths)
+		fmt.Printf("Inconclusive Paths:     %d\n", summary.InconclusivePaths)
+		fmt.Printf("Highest Combined Risk:  %s (%d/100)\n", summary.HighestRiskLevel, summary.HighestRiskScore)
+		if len(summary.AffectedAssets) > 0 {
+			fmt.Printf("Affected Assets:        %s\n", strings.Join(summary.AffectedAssets, ", "))
+		}
+		if summary.LimitsReached {
+			fmt.Printf("Pruning / Limits:       %s\n", summary.TruncationReason)
+		}
+		fmt.Println("--------------------------------------------------------------------------------")
+
+		fmt.Println("\nCORRELATION RULE COVERAGE:")
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "RULE\tNAME\tEDGE TYPE\tRELATIONSHIPS\tPATHS GENERATED")
+		for _, code := range correlation.AllRules() {
+			meta := correlation.RuleCatalog[code]
+			st := summary.RuleStats[string(code)]
+			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\n",
+				code, meta.Name, meta.EdgeType, st.RelationshipsGenerated, st.PathsGenerated)
+		}
+		_ = w.Flush()
+	}
+
+	if len(paths) > 0 {
+		fmt.Println("\nATTACK PATHS:")
+		if verbose {
+			for i, p := range paths {
+				fmt.Printf("\n--- [Path %d: %s] ------------------------------------\n", i+1, p.ID)
+				fmt.Printf("Title:          %s\n", p.Title)
+				fmt.Printf("Status:         %s | Confidence: %s\n", p.Status, p.Confidence)
+				fmt.Printf("Combined Risk:  %s (%d/100)\n", p.CombinedRiskLevel, p.CombinedRiskScore)
+				fmt.Printf("Target Asset:   %s\n", p.TargetAsset)
+				fmt.Printf("Primary Flaw:   %s\n", p.PrimaryWeakness)
+				fmt.Printf("Terminal Impact:%s\n", p.TerminalImpact)
+				fmt.Printf("Risk Rationale: %s\n", p.RiskRationale)
+
+				fmt.Println("\n  PATH CHAIN:")
+				for stepIdx, n := range p.Nodes {
+					fmt.Printf("    [%d] %s (%s) - %s [%s]\n",
+						stepIdx+1, n.ID, n.Category, n.Title, n.Endpoint)
+					if stepIdx < len(p.Edges) {
+						e := p.Edges[stepIdx]
+						fmt.Printf("        ↳ %s via %s (%s, %s)\n",
+							e.Type, e.RuleCode, e.ValidationStatus, e.Confidence)
+					}
+				}
+
+				fmt.Println("\n  SECURITY STORY & EXPLANATION:")
+				fmt.Printf("    1. Primary Weakness:         %s\n", p.PrimaryWeakness)
+				if p.EntryPoint != "" {
+					fmt.Printf("    2. Attack Reachability:       Entry point accessible via %s\n", p.EntryPoint)
+				}
+				if len(p.Assumptions) > 0 {
+					fmt.Printf("    3. Preconditions/Assumptions: %s\n", strings.Join(p.Assumptions, "; "))
+				}
+				fmt.Printf("    4. Technical Consequence:     %s\n", p.TerminalImpact)
+				if p.SecurityStory.Impact != "" {
+					fmt.Printf("    5. Business Consequence:      %s\n", p.SecurityStory.Impact)
+				}
+				if len(p.SecurityStory.Evidence) > 0 {
+					fmt.Printf("    6. Supporting Evidence:       %s\n", strings.Join(p.SecurityStory.Evidence, "; "))
+				}
+				if len(p.MissingEvidence) > 0 {
+					fmt.Printf("    7. Missing Evidence / Gaps:   %s\n", strings.Join(p.MissingEvidence, "; "))
+				}
+				if p.SecurityStory.InvestigateFirst != "" {
+					fmt.Printf("    8. Investigate First:         %s\n", p.SecurityStory.InvestigateFirst)
+				}
+				if p.Remediation != "" {
+					fmt.Printf("    9. Choke Point Remediation:   %s\n", p.Remediation)
+				}
+				fmt.Println()
+			}
+		} else {
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "STATUS\tRISK\tSCORE\tSTEPS\tTITLE\tTARGET ASSET")
+			for _, p := range paths {
+				fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%s\t%s\n",
+					p.Status, p.CombinedRiskLevel, p.CombinedRiskScore, len(p.Nodes), p.Title, p.TargetAsset)
+			}
+			_ = w.Flush()
+			fmt.Printf("\nUse --verbose to see full path chains, supporting evidence, and security stories.\n")
+		}
+	} else if summary == nil || (summary.CandidatePaths == 0 && summary.VerifiedPaths == 0) {
+		fmt.Println("\nNo attack paths or correlations recorded.")
+		fmt.Printf("To run correlation analysis across findings:\n  felix assessment correlate %s --run\n", asm.Ref)
 	}
 
 	fmt.Println()
