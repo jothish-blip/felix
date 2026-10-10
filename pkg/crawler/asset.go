@@ -26,6 +26,12 @@ var (
 	ErrOutOfScope    = errors.New("asset is out of scope")
 )
 
+// Asset provenance constants.
+const (
+	ProvenanceStatic  = "PROVENANCE_STATIC"
+	ProvenanceBrowser = "PROVENANCE_BROWSER"
+)
+
 // Asset represents a discovered and optionally downloaded web asset.
 type Asset struct {
 	URL         string    `json:"url"`
@@ -36,6 +42,7 @@ type Asset struct {
 	ContentType string    `json:"content_type"`
 	IsSourceMap bool      `json:"is_source_map"`
 	InScope     bool      `json:"in_scope"`
+	Provenance  string    `json:"provenance,omitempty"`
 	Error       error     `json:"error,omitempty"`
 }
 

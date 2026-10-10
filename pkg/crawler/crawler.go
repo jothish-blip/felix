@@ -21,10 +21,11 @@ type Result struct {
 	Target  string               `json:"target"`
 	Scripts []string             `json:"scripts"` // Discovered script URLs (for backward compatibility)
 	Assets  []Asset              `json:"assets"`  // Full inventory of discovered and processed assets
-	HTML    []byte               `json:"-"`       // Raw HTML body of target page
-	Header  http.Header          `json:"-"`       // HTTP response headers from target page
-	TLS     *tls.ConnectionState `json:"-"`       // TLS handshake state if HTTPS
-	Err     error                `json:"error,omitempty"`
+	HTML             []byte                  `json:"-"`       // Raw HTML body of target page
+	Header           http.Header             `json:"-"`       // HTTP response headers from target page
+	TLS              *tls.ConnectionState    `json:"-"`       // TLS handshake state if HTTPS
+	BrowserDiscovery *BrowserDiscoveryResult `json:"browser_discovery,omitempty"`
+	Err              error                   `json:"error,omitempty"`
 }
 
 // DiscoveredAsset stores a URL and its initial detected type from HTML tags.
@@ -272,9 +273,10 @@ func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
 		if !inScope {
 			assetsMu.Lock()
 			assets = append(assets, Asset{
-				URL:     da.URL,
-				Type:    da.Type,
-				InScope: false,
+				URL:        da.URL,
+				Type:       da.Type,
+				InScope:    false,
+				Provenance: ProvenanceStatic,
 			})
 			assetsMu.Unlock()
 			continue
@@ -331,6 +333,7 @@ func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
 				Type:        AssetSourceMap,
 				IsSourceMap: true,
 				InScope:     false,
+				Provenance:  ProvenanceStatic,
 			})
 			assetsMu.Unlock()
 			continue
@@ -346,6 +349,7 @@ func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
 			smAsset := c.downloadAsset(ctx, targetClient, targetURL, AssetSourceMap)
 			smAsset.Type = AssetSourceMap
 			smAsset.IsSourceMap = true
+			smAsset.Provenance = ProvenanceStatic
 			assetsMu.Lock()
 			assets = append(assets, smAsset)
 			assetsMu.Unlock()
@@ -353,6 +357,76 @@ func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
 	}
 
 	wg.Wait()
+
+	// Phase 3: Dynamic Browser Discovery (if enabled)
+	if c.config.BrowserDiscovery.Enabled {
+		driver := c.config.BrowserDiscovery.Driver
+		if driver == nil {
+			driver = NewHeadlessBrowserDriver()
+		}
+
+		browserTimeout := c.config.BrowserDiscovery.Timeout
+		if browserTimeout <= 0 {
+			browserTimeout = 10 * time.Second
+		}
+		browserCtx, browserCancel := context.WithTimeout(ctx, browserTimeout)
+		defer browserCancel()
+
+		browserRes, bErr := driver.Discover(browserCtx, rawTarget, c.config.BrowserDiscovery, scope)
+		if browserRes != nil {
+			res.BrowserDiscovery = browserRes
+			if bErr != nil {
+				res.BrowserDiscovery.Inconclusive = true
+				if res.BrowserDiscovery.Reason == "" {
+					res.BrowserDiscovery.Reason = bErr.Error()
+				}
+			}
+
+			var dynamicJobs []DynamicEndpoint
+			for _, ep := range browserRes.Endpoints {
+				if _, exists := seen[ep.URL]; !exists {
+					seen[ep.URL] = struct{}{}
+					dynamicJobs = append(dynamicJobs, ep)
+					if ep.Type == AssetJavaScript {
+						res.Scripts = append(res.Scripts, ep.URL)
+					}
+				}
+			}
+
+			for _, ep := range dynamicJobs {
+				if c.config.MaxAssets > 0 && len(assets) >= c.config.MaxAssets {
+					break
+				}
+				if !ep.InScope {
+					assets = append(assets, Asset{
+						URL:        ep.URL,
+						Type:       ep.Type,
+						InScope:    false,
+						Provenance: ProvenanceBrowser,
+					})
+					continue
+				}
+
+				if ep.Type == AssetJavaScript || ep.Type == AssetStylesheet || ep.Type == AssetManifest || ep.Type == AssetSourceMap {
+					down := c.downloadAsset(ctx, targetClient, ep.URL, ep.Type)
+					down.Provenance = ProvenanceBrowser
+					assets = append(assets, down)
+				} else {
+					assets = append(assets, Asset{
+						URL:        ep.URL,
+						Type:       ep.Type,
+						InScope:    true,
+						Provenance: ProvenanceBrowser,
+					})
+				}
+			}
+		} else if bErr != nil {
+			res.BrowserDiscovery = &BrowserDiscoveryResult{
+				Inconclusive: true,
+				Reason:       bErr.Error(),
+			}
+		}
+	}
 
 	if c.config.MaxAssets > 0 {
 		if len(assets) > c.config.MaxAssets {
@@ -408,6 +482,7 @@ func (c *Crawler) downloadAsset(ctx context.Context, client *http.Client, assetU
 		ContentType: contentType,
 		IsSourceMap: classifiedType == AssetSourceMap,
 		InScope:     true,
+		Provenance:  ProvenanceStatic,
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {

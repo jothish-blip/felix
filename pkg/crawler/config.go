@@ -23,8 +23,9 @@ type Config struct {
 	AllowedHosts       []string          `json:"allowed_hosts"`
 	InsecureSkipVerify bool              `json:"insecure_skip_verify"`
 	Client             *http.Client      `json:"-"`
-	IsAllowed          func(string) bool `json:"-"`
-	IsExcluded         func(string) bool `json:"-"`
+	IsAllowed          func(string) bool       `json:"-"`
+	IsExcluded         func(string) bool       `json:"-"`
+	BrowserDiscovery   BrowserDiscoveryOptions `json:"browser_discovery,omitempty"`
 }
 
 // DefaultConfig provides sensible defaults for web auditing.
