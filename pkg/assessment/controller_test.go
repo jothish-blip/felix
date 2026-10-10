@@ -2,6 +2,7 @@ package assessment
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"felix/pkg/correlation"
+	"felix/pkg/report"
 
 	"github.com/google/uuid"
 )
@@ -443,5 +447,260 @@ func TestController_NetworkRedirectAndExclusionEnforcement(t *testing.T) {
 		if strings.Contains(f.Endpoint, "/admin") || strings.Contains(f.TargetURL, "example.org") || strings.Contains(f.Endpoint, "example.org") {
 			t.Fatalf("CRITICAL: found unexpected finding from excluded/external target: %v", f)
 		}
+	}
+}
+
+func TestController_CorrelationAndReportIntegration(t *testing.T) {
+	// 1. Setup store
+	store, cleanup := newTestStore(t)
+	defer cleanup()
+
+	clientID := uuid.New().String()
+	_ = store.CreateClient(&Client{ID: clientID, Name: "Attack Path Integration Corp"})
+
+	asmID := uuid.New().String()
+	asmRef := "ASM-2026-CORR"
+	_ = store.CreateAssessment(&Assessment{
+		ID:        asmID,
+		Ref:       asmRef,
+		ClientID:  clientID,
+		Name:      "Correlated Assessment",
+		Status:    StatusReady,
+		ScopeMode: "same-origin",
+	})
+
+	targetID := uuid.New().String()
+	targetURL := "https://api.example.com"
+	_ = store.AddTarget(&AssessmentTarget{
+		ID:           targetID,
+		AssessmentID: asmID,
+		TargetURL:    targetURL,
+		TargetType:   TargetAPIBaseURL,
+		ScopeStatus:  "APPROVED",
+	})
+
+	now := time.Now().UTC()
+	future := now.Add(24 * time.Hour)
+	_ = store.SetAuthorization(&AuthorizationRecord{
+		ID:                  uuid.New().String(),
+		AssessmentID:        asmID,
+		AuthorizingParty:    "Security Team",
+		AuthorizationMethod: "TICKET",
+		DateReceived:        now,
+		ValidUntil:          &future,
+		Status:              AuthApproved,
+	})
+
+	// 2. Prepare findings that correlate into an attack path:
+	// Finding 1: Entry Point (COR-01)
+	// Finding 2: Vulnerable API resource with BOLA (COR-03)
+	// Finding 3: Sensitive data exposed in response
+	f1 := report.Finding{
+		ID:          "fnd-entrypoint",
+		Title:       "Public API Endpoint Discovered",
+		Category:    "RECON",
+		Severity:    report.SeverityInfo,
+		Confidence:  report.ConfidenceHigh,
+		Target:      targetURL,
+		Endpoint:    targetURL + "/api/v1/users/123",
+		Method:      "GET",
+		Description: "Public API entry point",
+		EvidenceDetails: report.EvidenceDetails{
+			Observation: "Discovered active endpoint",
+			Details: map[string]string{
+				"status": "200",
+			},
+		},
+		Verification: report.VerificationRecord{
+			Status: report.VerificationVerified,
+		},
+	}
+	f2 := report.Finding{
+		ID:          "fnd-bola",
+		Title:       "Broken Object Level Authorization (BOLA)",
+		Category:    "BOLA",
+		Severity:    report.SeverityHigh,
+		Confidence:  report.ConfidenceHigh,
+		Target:      targetURL,
+		Endpoint:    targetURL + "/api/v1/users/123",
+		Method:      "GET",
+		Description: "BOLA allows accessing another tenant record",
+		EvidenceDetails: report.EvidenceDetails{
+			Observation: "Unauthorized record access",
+			Details: map[string]string{
+				"resource_id": "user-123",
+			},
+		},
+		Verification: report.VerificationRecord{
+			Status: report.VerificationVerified,
+		},
+	}
+	f3 := report.Finding{
+		ID:          "fnd-pii",
+		Title:       "Customer PII Exposed in Response",
+		Category:    "DATA_EXPOSURE",
+		Severity:    report.SeverityCritical,
+		Confidence:  report.ConfidenceHigh,
+		Target:      targetURL,
+		Endpoint:    targetURL + "/api/v1/users/123",
+		Method:      "GET",
+		Description: "Response body contains plaintext PII",
+		EvidenceDetails: report.EvidenceDetails{
+			Observation: "Exposed customer credentials and PII",
+			Details: map[string]string{
+				"resource_id": "user-123",
+			},
+		},
+		Verification: report.VerificationRecord{
+			Status: report.VerificationVerified,
+		},
+	}
+
+	reportFindings := []report.Finding{f1, f2, f3}
+
+	// 3. Test correlation engine directly with findings
+	cfg := correlation.DefaultConfig()
+	eng := correlation.NewEngine(cfg)
+	summary, paths, _, err := eng.Correlate(context.Background(), reportFindings)
+	if err != nil {
+		t.Fatalf("correlation failed: %v", err)
+	}
+	if len(paths) == 0 {
+		t.Fatalf("expected at least 1 correlated attack path, got 0")
+	}
+
+	// 4. Verify persistence of attack paths and correlation run in store
+	execID := "exec-test-corr"
+	exec := &AssessmentExecution{
+		ID:           execID,
+		AssessmentID: asmID,
+		Status:       "RUNNING",
+		StartedAt:    time.Now().UTC(),
+	}
+	if err := store.CreateExecution(exec); err != nil {
+		t.Fatalf("CreateExecution failed: %v", err)
+	}
+
+	runRec := &correlation.RunRecord{
+		ID:                     uuid.New().String(),
+		AssessmentID:           asmID,
+		ExecutionID:            execID,
+		TotalFindings:          summary.TotalFindings,
+		CandidateRelationships: summary.CandidateRelationships,
+		CandidatePaths:         summary.CandidatePaths,
+		VerifiedPaths:          summary.VerifiedPaths,
+		HighestRisk:            summary.HighestRiskLevel,
+		CoverageJSON:           "{}",
+		SyntheticFixture:       summary.SyntheticFixture,
+		CreatedAt:              time.Now().UTC(),
+	}
+	if err := store.SaveCorrelationRun(runRec); err != nil {
+		t.Fatalf("SaveCorrelationRun failed: %v", err)
+	}
+	if err := store.SaveAttackPaths(asmID, execID, paths); err != nil {
+		t.Fatalf("SaveAttackPaths failed: %v", err)
+	}
+
+	loadedRun, err := store.GetCorrelationRun(asmID, execID)
+	if err != nil {
+		t.Fatalf("GetCorrelationRun failed: %v", err)
+	}
+	if loadedRun == nil || loadedRun.AssessmentID != asmID {
+		t.Fatalf("loaded correlation run mismatch: %+v", loadedRun)
+	}
+
+	loadedPaths, err := store.GetAttackPaths(asmID, execID, "", "")
+	if err != nil {
+		t.Fatalf("GetAttackPaths failed: %v", err)
+	}
+	if len(loadedPaths) != len(paths) {
+		t.Fatalf("expected %d loaded paths, got %d", len(paths), len(loadedPaths))
+	}
+
+	// 5. Test report integration: build report, attach attack paths & security stories, export HTML & JSON
+	rep := report.BuildMultiTargetReport([]string{targetURL}, reportFindings)
+	var corrSummaries []report.AttackPathSummary
+	var stories []report.SecurityStory
+	for _, p := range paths {
+		stories = append(stories, p.SecurityStory)
+		var transitions []string
+		for _, e := range p.Edges {
+			transitions = append(transitions, fmt.Sprintf("[%s] %s -> %s: %s",
+				e.ValidationStatus, e.SourceTitle, e.TargetTitle, e.Explanation))
+		}
+		corrSummaries = append(corrSummaries, report.AttackPathSummary{
+			ID:                p.ID,
+			Title:             p.Title,
+			Status:            string(p.Status),
+			CombinedRiskLevel: p.CombinedRiskLevel,
+			CombinedRiskScore: p.CombinedRiskScore,
+			Confidence:        p.Confidence,
+			TargetAsset:       p.TargetAsset,
+			PrimaryWeakness:   p.PrimaryWeakness,
+			TerminalImpact:    p.TerminalImpact,
+			Transitions:       transitions,
+			Assumptions:       p.Assumptions,
+			MissingEvidence:   p.MissingEvidence,
+			Remediation:       p.Remediation,
+			NodeIDs:           p.NodeIDs,
+			SyntheticFixture:  p.SyntheticFixture,
+		})
+	}
+	report.AttachAttackPaths(&rep, corrSummaries)
+	report.AttachSecurityStories(&rep, stories)
+
+	if len(rep.AttackPaths) == 0 {
+		t.Fatalf("expected rep.AttackPaths to be populated")
+	}
+	if len(rep.SecurityStories) == 0 {
+		t.Fatalf("expected rep.SecurityStories to be populated")
+	}
+
+	tmpDir, err := os.MkdirTemp("", "felix_corr_report_test_*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	htmlPath := filepath.Join(tmpDir, "report.html")
+	jsonPath := filepath.Join(tmpDir, "report.json")
+
+	if err := report.WriteHTML(rep, htmlPath); err != nil {
+		t.Fatalf("WriteHTML failed: %v", err)
+	}
+	if err := report.WriteJSON(rep, jsonPath); err != nil {
+		t.Fatalf("WriteJSON failed: %v", err)
+	}
+
+	// Verify HTML file contains Correlated Attack Paths section and badge
+	htmlBytes, err := os.ReadFile(htmlPath)
+	if err != nil {
+		t.Fatalf("failed to read generated HTML: %v", err)
+	}
+	htmlContent := string(htmlBytes)
+	if !strings.Contains(htmlContent, "Correlated Attack Paths") {
+		t.Errorf("HTML report missing 'Correlated Attack Paths' section")
+	}
+	if !strings.Contains(htmlContent, "badge-") {
+		t.Errorf("HTML report missing path status badge")
+	}
+
+	// Verify JSON file contains attack_paths array and security_stories array
+	jsonBytes, err := os.ReadFile(jsonPath)
+	if err != nil {
+		t.Fatalf("failed to read generated JSON: %v", err)
+	}
+	var deserialized report.Report
+	if err := json.Unmarshal(jsonBytes, &deserialized); err != nil {
+		t.Fatalf("failed to unmarshal JSON report: %v", err)
+	}
+	if len(deserialized.AttackPaths) != len(paths) {
+		t.Fatalf("expected %d deserialized attack paths, got %d", len(paths), len(deserialized.AttackPaths))
+	}
+	if deserialized.AttackPaths[0].Title != paths[0].Title {
+		t.Errorf("deserialized attack path title mismatch: %s vs %s", deserialized.AttackPaths[0].Title, paths[0].Title)
+	}
+	if len(deserialized.SecurityStories) == 0 {
+		t.Errorf("expected security stories in deserialized report")
 	}
 }

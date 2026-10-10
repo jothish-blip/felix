@@ -1493,4 +1493,101 @@ func TestMatrix18_WeakObservations_NoFalseSecurityStory(t *testing.T) {
 	}
 }
 
+// 26. Attack paths integration and sanitization
+func TestReportIntegration_AttackPathsSerializationAndSanitization(t *testing.T) {
+	target := "https://example.com"
+	f := Finding{
+		ID:         "FND-1",
+		Title:      "Initial Finding",
+		Category:   "bola",
+		Severity:   SeverityHigh,
+		Confidence: ConfidenceHigh,
+		Target:     target,
+		Endpoint:   "https://example.com/api/v1/users/42",
+		Method:     "GET",
+	}
 
+	rep := BuildReport(target, []Finding{f})
+
+	path := AttackPathSummary{
+		ID:                "PATH-001",
+		Title:             "API Endpoint -> BOLA Customer Record Exposure",
+		Status:            "VERIFIED",
+		Confidence:        ConfidenceHigh,
+		CombinedRiskLevel: SeverityCritical,
+		CombinedRiskScore: 88,
+		RiskRationale:     "Direct access to customer records via token=ey12345678.ey87654321.abcdefgh",
+		EntryPoint:        "https://example.com/api/v1/users",
+		TargetAsset:       "https://example.com",
+		PrimaryWeakness:   "Broken Object-Level Authorization",
+		TerminalImpact:    "password=SuperSecretPassword123 disclosed",
+		Transitions: []string{
+			"[CONFIRMED] Route -> BOLA: password=SuperSecretPassword123",
+		},
+		Assumptions: []string{
+			"Endpoint reachable from public internet",
+		},
+		MissingEvidence: []string{},
+		Remediation:     "Enforce tenant ownership check at the query layer",
+		NodeIDs:         []string{"FND-1"},
+		SyntheticFixture: true,
+	}
+
+	AttachAttackPaths(&rep, []AttackPathSummary{path})
+
+	// Prove: Risk score was elevated from 88/CRITICAL attack path
+	if rep.RiskScore != 88 || rep.RiskLevel != SeverityCritical {
+		t.Errorf("expected report risk score 88 CRITICAL, got %d %s", rep.RiskScore, rep.RiskLevel)
+	}
+
+	// 1. JSON generation & sanitization test
+	jsonBytes, err := GenerateJSON(rep)
+	if err != nil {
+		t.Fatalf("GenerateJSON failed: %v", err)
+	}
+	jsonStr := string(jsonBytes)
+
+	// Ensure sensitive tokens are redacted in attack path fields
+	if strings.Contains(jsonStr, "SuperSecretPassword123") {
+		t.Errorf("CRITICAL LEAK: Password in attack path was not sanitized: %s", jsonStr)
+	}
+	if strings.Contains(jsonStr, "ey12345678") {
+		t.Errorf("CRITICAL LEAK: JWT token in attack path was not sanitized: %s", jsonStr)
+	}
+	if !strings.Contains(jsonStr, "PATH-001") {
+		t.Errorf("JSON missing attack path ID")
+	}
+
+	// Parse back
+	parsed, err := ParseReport(jsonBytes)
+	if err != nil {
+		t.Fatalf("ParseReport failed: %v", err)
+	}
+	if len(parsed.AttackPaths) != 1 {
+		t.Fatalf("expected 1 attack path in parsed report, got %d", len(parsed.AttackPaths))
+	}
+	if parsed.AttackPaths[0].Status != "VERIFIED" {
+		t.Errorf("expected VERIFIED status, got %s", parsed.AttackPaths[0].Status)
+	}
+	if !parsed.AttackPaths[0].SyntheticFixture {
+		t.Errorf("expected SyntheticFixture to be true")
+	}
+
+	// 2. HTML generation test
+	htmlStr, err := GenerateHTML(rep)
+	if err != nil {
+		t.Fatalf("GenerateHTML failed: %v", err)
+	}
+	if !strings.Contains(htmlStr, "Correlated Attack Paths") {
+		t.Errorf("HTML report missing Correlated Attack Paths section")
+	}
+	if !strings.Contains(htmlStr, "API Endpoint -&gt; BOLA Customer Record Exposure") && !strings.Contains(htmlStr, "API Endpoint -> BOLA Customer Record Exposure") {
+		t.Errorf("HTML report missing attack path title")
+	}
+	if !strings.Contains(htmlStr, "[SYNTHETIC FIXTURE]") {
+		t.Errorf("HTML report missing [SYNTHETIC FIXTURE] badge")
+	}
+	if strings.Contains(htmlStr, "SuperSecretPassword123") {
+		t.Errorf("CRITICAL LEAK: HTML report leaked raw password in attack path: %s", htmlStr)
+	}
+}

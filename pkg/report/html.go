@@ -189,6 +189,8 @@ const htmlReportTemplate = `<!DOCTYPE html>
   .badge-INFO { background: var(--info-bg); color: #cbd5e1; border: 1px solid var(--info-border); }
 
   .badge-VERIFIED { background: var(--verified-bg); color: #6ee7b7; border: 1px solid var(--verified-border); }
+  .badge-CANDIDATE { background: var(--med-bg); color: #fde047; border: 1px solid var(--med-border); }
+  .badge-INCONCLUSIVE { background: #141414; color: #a3a3a3; border: 1px solid #333333; }
   .badge-DETECTED { background: var(--med-bg); color: #fde047; border: 1px solid var(--med-border); }
   .badge-OBSERVED { background: #141414; color: #a3a3a3; border: 1px solid #333333; }
   .badge-NOT_VERIFIED { background: #171717; color: #d4d4d4; border: 1px solid #404040; }
@@ -635,6 +637,73 @@ const htmlReportTemplate = `<!DOCTYPE html>
       <div class="remediation-block">
         <strong>Remediation Guidance:</strong> {{.Remediation}}
       </div>
+    </div>
+    {{end}}
+  </section>
+  {{end}}
+
+  <!-- Correlated Attack Paths -->
+  {{if .AttackPaths}}
+  <section>
+    <h2>Correlated Attack Paths ({{len .AttackPaths}})</h2>
+    {{range .AttackPaths}}
+    <div class="story-card" style="border-left-color: {{if eq .Status "VERIFIED"}}#10b981{{else if eq .Status "CANDIDATE"}}#f59e0b{{else}}#6b7280{{end}};">
+      <div class="item-header">
+        <div class="item-title">{{if .SyntheticFixture}}<span class="badge badge-INFO">[SYNTHETIC FIXTURE]</span> {{end}}{{.Title}}</div>
+        <div style="display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap;">
+          <span class="badge badge-{{.Status}}">{{.Status}}</span>
+          <span class="badge badge-{{.CombinedRiskLevel}}">{{.CombinedRiskLevel}} ({{.CombinedRiskScore}}/100)</span>
+          <span class="badge badge-INFO">Conf: {{.Confidence}}</span>
+        </div>
+      </div>
+
+      <div class="item-meta">
+        <strong>Target Asset:</strong> {{.TargetAsset}}
+        {{if .EntryPoint}}&bull; <strong>Entry Point:</strong> {{.EntryPoint}}{{end}}
+        &bull; <strong>Primary Weakness:</strong> {{.PrimaryWeakness}}
+      </div>
+
+      <div style="font-size: 0.85rem; font-weight: 600; color: #fca5a5; margin-bottom: 0.25rem;">Terminal Impact:</div>
+      <p style="font-size: 0.9rem; margin-bottom: 0.75rem; color: #fecaca;">{{.TerminalImpact}}</p>
+
+      {{if .RiskRationale}}
+      <p style="font-size: 0.88rem; color: #d4d4d4; margin-bottom: 0.75rem;"><strong>Risk Rationale:</strong> {{.RiskRationale}}</p>
+      {{end}}
+
+      {{if .Transitions}}
+      <div style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 0.25rem;">Validated Transition Sequence:</div>
+      <ul class="story-list">
+        {{range .Transitions}}
+        <li>{{.}}</li>
+        {{end}}
+      </ul>
+      {{end}}
+
+      {{if .Assumptions}}
+      <div style="font-size: 0.85rem; font-weight: 600; color: #fde047; margin-bottom: 0.25rem;">Preconditions & Assumptions:</div>
+      <ul class="story-list">
+        {{range .Assumptions}}
+        <li>{{.}}</li>
+        {{end}}
+      </ul>
+      {{end}}
+
+      {{if .MissingEvidence}}
+      <div class="negative-block" style="margin-bottom: 0.75rem;">
+        <strong>Missing Evidence / Verification Gaps:</strong>
+        <ul style="padding-left: 1.25rem; margin-top: 0.25rem;">
+          {{range .MissingEvidence}}
+          <li>{{.}}</li>
+          {{end}}
+        </ul>
+      </div>
+      {{end}}
+
+      {{if .Remediation}}
+      <div class="remediation-block">
+        <strong>Choke Point Remediation:</strong> {{.Remediation}}
+      </div>
+      {{end}}
     </div>
     {{end}}
   </section>

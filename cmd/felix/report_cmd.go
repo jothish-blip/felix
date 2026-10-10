@@ -180,6 +180,49 @@ func printReportSummary(rep report.Report, verbose bool) {
 		}
 	}
 
+	if len(rep.AttackPaths) > 0 {
+		fmt.Printf("Correlated Attack Paths (%d):\n", len(rep.AttackPaths))
+		fmt.Println("────────────────────────────────────────")
+		for _, p := range rep.AttackPaths {
+			synth := ""
+			if p.SyntheticFixture {
+				synth = "[SYNTHETIC FIXTURE] "
+			}
+			fmt.Printf("[%s] [%s] %s%s (%d/100, Conf: %s)\n", p.Status, p.CombinedRiskLevel, synth, p.Title, p.CombinedRiskScore, p.Confidence)
+			if p.TargetAsset != "" {
+				fmt.Printf("  Target Asset:     %s\n", p.TargetAsset)
+			}
+			if p.EntryPoint != "" {
+				fmt.Printf("  Entry Point:      %s\n", p.EntryPoint)
+			}
+			if p.PrimaryWeakness != "" {
+				fmt.Printf("  Primary Weakness: %s\n", p.PrimaryWeakness)
+			}
+			if p.TerminalImpact != "" {
+				fmt.Printf("  Terminal Impact:  %s\n", p.TerminalImpact)
+			}
+			if p.RiskRationale != "" {
+				fmt.Printf("  Risk Rationale:   %s\n", p.RiskRationale)
+			}
+			if len(p.Transitions) > 0 && verbose {
+				fmt.Println("  Validated Transitions:")
+				for _, tr := range p.Transitions {
+					fmt.Printf("    ↳ %s\n", tr)
+				}
+			}
+			if len(p.Assumptions) > 0 {
+				fmt.Printf("  Assumptions:      %s\n", strings.Join(p.Assumptions, "; "))
+			}
+			if len(p.MissingEvidence) > 0 {
+				fmt.Printf("  Missing Evidence: %s\n", strings.Join(p.MissingEvidence, "; "))
+			}
+			if p.Remediation != "" {
+				fmt.Printf("  Remediation:      %s\n", p.Remediation)
+			}
+			fmt.Println()
+		}
+	}
+
 	if len(rep.TopPriorities) > 0 {
 		fmt.Println("Top Priorities:")
 		fmt.Println("────────────────────────────────────────")

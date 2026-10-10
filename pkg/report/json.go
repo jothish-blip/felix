@@ -82,9 +82,38 @@ func SanitizeReport(rep Report) Report {
 		cleanStories[i] = cleanS
 	}
 
+	cleanPaths := make([]AttackPathSummary, len(rep.AttackPaths))
+	for i, p := range rep.AttackPaths {
+		cleanP := p
+		cleanP.Title = SanitizeEvidence(p.Title)
+		cleanP.RiskRationale = SanitizeEvidence(p.RiskRationale)
+		cleanP.EntryPoint = SanitizeEvidence(p.EntryPoint)
+		cleanP.TargetAsset = SanitizeEvidence(p.TargetAsset)
+		cleanP.PrimaryWeakness = SanitizeEvidence(p.PrimaryWeakness)
+		cleanP.TerminalImpact = SanitizeEvidence(p.TerminalImpact)
+		cleanP.Remediation = SanitizeEvidence(p.Remediation)
+		cleanTr := make([]string, len(p.Transitions))
+		for j, tr := range p.Transitions {
+			cleanTr[j] = SanitizeEvidence(tr)
+		}
+		cleanP.Transitions = cleanTr
+		cleanAs := make([]string, len(p.Assumptions))
+		for j, as := range p.Assumptions {
+			cleanAs[j] = SanitizeEvidence(as)
+		}
+		cleanP.Assumptions = cleanAs
+		cleanMe := make([]string, len(p.MissingEvidence))
+		for j, me := range p.MissingEvidence {
+			cleanMe[j] = SanitizeEvidence(me)
+		}
+		cleanP.MissingEvidence = cleanMe
+		cleanPaths[i] = cleanP
+	}
+
 	rep.Findings = cleanFindings
 	rep.TopPriorities = cleanPriorities
 	rep.SecurityStories = cleanStories
+	rep.AttackPaths = cleanPaths
 	return rep
 }
 

@@ -167,3 +167,34 @@ func BuildMultiTargetReport(targets []string, rawFindings []Finding) Report {
 		},
 	}
 }
+
+// AttachAttackPaths associates correlated attack paths with the audit report,
+// updating the report's risk level if any path represents a higher verified risk.
+func AttachAttackPaths(rep *Report, paths []AttackPathSummary) {
+	if rep == nil || len(paths) == 0 {
+		return
+	}
+	rep.AttackPaths = paths
+
+	// Check if any attack path reflects higher combined risk
+	maxPathScore := rep.RiskScore
+	maxPathLevel := rep.RiskLevel
+	for _, p := range paths {
+		if p.CombinedRiskScore > maxPathScore {
+			maxPathScore = p.CombinedRiskScore
+			maxPathLevel = p.CombinedRiskLevel
+		}
+	}
+	if maxPathScore > rep.RiskScore {
+		rep.RiskScore = maxPathScore
+		rep.RiskLevel = maxPathLevel
+	}
+}
+
+// AttachSecurityStories replaces correlated security stories on the report.
+func AttachSecurityStories(rep *Report, stories []SecurityStory) {
+	if rep == nil || len(stories) == 0 {
+		return
+	}
+	rep.SecurityStories = stories
+}

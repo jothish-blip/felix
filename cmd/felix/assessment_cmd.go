@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -4572,6 +4573,86 @@ func runAssessmentCorrelate(args []string) int {
 
 		if err := store.SaveAttackPaths(asm.ID, execID, paths); err != nil {
 			fmt.Fprintf(os.Stderr, "[-] Warning: failed to save attack paths: %v\n", err)
+		}
+
+		// Update or generate client reports for this assessment execution
+		reportsDir, _ := assessment.GetReportsDir(asm.Ref)
+		if reportsDir != "" {
+			var targetsList []string
+			for _, t := range asm.Targets {
+				targetsList = append(targetsList, t.TargetURL)
+			}
+			if len(targetsList) == 0 {
+				targetsList = []string{asm.Name}
+			}
+			rep := report.BuildMultiTargetReport(targetsList, reportFindings)
+			var repStories []report.SecurityStory
+			var repPaths []report.AttackPathSummary
+			for _, p := range paths {
+				repStories = append(repStories, p.SecurityStory)
+				var transitions []string
+				for _, e := range p.Edges {
+					transitions = append(transitions, fmt.Sprintf("[%s] %s -> %s: %s",
+						e.ValidationStatus, e.SourceTitle, e.TargetTitle, e.Explanation))
+				}
+				repPaths = append(repPaths, report.AttackPathSummary{
+					ID:                p.ID,
+					Title:             p.Title,
+					Status:            string(p.Status),
+					Confidence:        p.Confidence,
+					CombinedRiskLevel: p.CombinedRiskLevel,
+					CombinedRiskScore: p.CombinedRiskScore,
+					RiskRationale:     p.RiskRationale,
+					EntryPoint:        p.EntryPoint,
+					TargetAsset:       p.TargetAsset,
+					PrimaryWeakness:   p.PrimaryWeakness,
+					TerminalImpact:    p.TerminalImpact,
+					Transitions:       transitions,
+					Assumptions:       p.Assumptions,
+					MissingEvidence:   p.MissingEvidence,
+					Remediation:       p.Remediation,
+					NodeIDs:           p.NodeIDs,
+					SyntheticFixture:  p.SyntheticFixture,
+				})
+			}
+			if len(repStories) > 0 {
+				report.AttachSecurityStories(&rep, repStories)
+			}
+			if len(repPaths) > 0 {
+				report.AttachAttackPaths(&rep, repPaths)
+			}
+			if rep.Metadata == nil {
+				rep.Metadata = make(map[string]any)
+			}
+			rep.Metadata["assessment_id"] = asm.ID
+			rep.Metadata["assessment_ref"] = asm.Ref
+			rep.Metadata["execution_id"] = execID
+
+			jsonFile := filepath.Join(reportsDir, fmt.Sprintf("%s_%s.json", asm.Ref, execID))
+			htmlFile := filepath.Join(reportsDir, fmt.Sprintf("%s_%s.html", asm.Ref, execID))
+
+			if err := report.WriteJSON(rep, jsonFile); err == nil {
+				_ = store.SaveReport(&assessment.ReportRecord{
+					ID:           "rep-" + uuid.New().String(),
+					AssessmentID: asm.ID,
+					ExecutionID:  execID,
+					Format:       "JSON",
+					FilePath:     jsonFile,
+					FelixVersion: "2.0",
+					Status:       "GENERATED",
+				})
+			}
+			if err := report.WriteHTML(rep, htmlFile); err == nil {
+				_ = store.SaveReport(&assessment.ReportRecord{
+					ID:           "rep-" + uuid.New().String(),
+					AssessmentID: asm.ID,
+					ExecutionID:  execID,
+					Format:       "HTML",
+					FilePath:     htmlFile,
+					FelixVersion: "2.0",
+					Status:       "GENERATED",
+				})
+			}
 		}
 
 		fmt.Printf("[+] Correlation analysis completed:\n")

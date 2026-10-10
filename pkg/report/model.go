@@ -105,6 +105,27 @@ type SecurityStory struct {
 	RelatedIDs       []string `json:"related_finding_ids"`
 }
 
+// AttackPathSummary represents an evidence-backed correlated attack path in client-facing reports.
+type AttackPathSummary struct {
+	ID                string   `json:"id"`
+	Title             string   `json:"title"`
+	Status            string   `json:"status"`
+	Confidence        string   `json:"confidence"`
+	CombinedRiskLevel string   `json:"combined_risk_level"`
+	CombinedRiskScore int      `json:"combined_risk_score"`
+	RiskRationale     string   `json:"risk_rationale,omitempty"`
+	EntryPoint        string   `json:"entry_point,omitempty"`
+	TargetAsset       string   `json:"target_asset"`
+	PrimaryWeakness   string   `json:"primary_weakness"`
+	TerminalImpact    string   `json:"terminal_impact"`
+	Transitions       []string `json:"transitions,omitempty"`
+	Assumptions       []string `json:"assumptions,omitempty"`
+	MissingEvidence   []string `json:"missing_evidence,omitempty"`
+	Remediation       string   `json:"remediation,omitempty"`
+	NodeIDs           []string `json:"node_ids"`
+	SyntheticFixture  bool     `json:"synthetic_fixture,omitempty"`
+}
+
 // Summary provides a statistical breakdown of findings.
 type Summary struct {
 	TotalFindings    int            `json:"total_findings"`
@@ -123,20 +144,21 @@ type Summary struct {
 
 // Report represents the complete audit results ready for presentation or export.
 type Report struct {
-	Version         string          `json:"version"`
-	Target          string          `json:"target"`
-	Targets         []string        `json:"targets,omitempty"`
-	Timestamp       string          `json:"timestamp"`
-	Duration        string          `json:"duration,omitempty"`
-	DurationMs      int64           `json:"duration_ms,omitempty"`
-	RequestCount    int             `json:"request_count,omitempty"`
-	RiskScore       int             `json:"risk_score"`
-	RiskLevel       string          `json:"risk_level"`
-	Summary         Summary         `json:"summary"`
-	TopPriorities   []Finding       `json:"top_priorities"`
-	Findings        []Finding       `json:"findings"`
-	SecurityStories []SecurityStory `json:"security_stories"`
-	Metadata        map[string]any  `json:"metadata,omitempty"`
+	Version         string              `json:"version"`
+	Target          string              `json:"target"`
+	Targets         []string            `json:"targets,omitempty"`
+	Timestamp       string              `json:"timestamp"`
+	Duration        string              `json:"duration,omitempty"`
+	DurationMs      int64               `json:"duration_ms,omitempty"`
+	RequestCount    int                 `json:"request_count,omitempty"`
+	RiskScore       int                 `json:"risk_score"`
+	RiskLevel       string              `json:"risk_level"`
+	Summary         Summary             `json:"summary"`
+	TopPriorities   []Finding           `json:"top_priorities"`
+	Findings        []Finding           `json:"findings"`
+	SecurityStories []SecurityStory     `json:"security_stories"`
+	AttackPaths     []AttackPathSummary `json:"attack_paths,omitempty"`
+	Metadata        map[string]any      `json:"metadata,omitempty"`
 }
 
 // FromSecretFinding converts an Engine 2 secret finding to the unified model.
