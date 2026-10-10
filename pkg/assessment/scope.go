@@ -176,6 +176,10 @@ func (v *ScopeValidator) IsAllowed(rawURL string) bool {
 		return false
 	}
 
+	if strings.TrimSpace(rawURL) == "" {
+		return false
+	}
+
 	// 1. Exclusions check: EXCLUSIONS MUST ALWAYS OVERRIDE SCOPE
 	if excluded, _ := v.IsExcluded(rawURL); excluded {
 		return false
@@ -183,6 +187,11 @@ func (v *ScopeValidator) IsAllowed(rawURL string) bool {
 
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
+		return false
+	}
+
+	// Reject non-http(s) schemes explicitly (e.g. javascript:, data:, file:, mailto:)
+	if parsed.Scheme != "" && !strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https") {
 		return false
 	}
 

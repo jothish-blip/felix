@@ -535,7 +535,8 @@ Reports Delivery Tracking ← Commercial Report 2.0 ← Finding Review Curation
 5. **Report Delivery Handover Tracking:**
    - Formal client handover tracking (`report_deliveries`) is maintained independently from report compilation.
    - Supports delivery methods (`ENCRYPTED_EMAIL`, `SECURE_DOWNLOAD`, `CLIENT_PORTAL`, `IN_PERSON`) with delivery timestamps only recorded when verified.
-6. **SQLite Scan Leases & Append-Only Audit Logging:**
+6. **SQLite Scan Leases & Append-Only Audit Logging (Database Schema Migration v12):**
+   - Migration `12` in `store.go` establishes operator persistence: `finding_reviews`, `report_deliveries`, `scan_job_leases`, and `operator_audit_events`.
    - Background execution mutual exclusion is managed via SQLite leases (`scan_job_leases`) with heartbeat tracking, preventing duplicate concurrent scans on the same assessment across processes or restarts.
    - All state-changing operator activities (client creation, authorization, target scoping, scans, reviews, report generation, deliveries) are immutably recorded in `operator_audit_events`.
 7. **Single Binary Distribution (`embed.FS`):**
@@ -550,7 +551,7 @@ Felix implements strict resource controls to ensure safety and prevent denial-of
 - **Timeout Management:** Every network request is bound by `context.WithTimeout` (default: 10s) and propagated into Go's `http.Transport` and `net.Dialer`.
 - **Response Size Caps:** All response body reading is bounded by `io.LimitReader(resp.Body, maxBytes+1)`. If an asset exceeds the configured limit, reading aborts immediately with `ErrAssetTooLarge`.
 - **Redirect Limits:** Custom `http.Client.CheckRedirect` halts redirection chains after 10 hops to prevent redirect loops.
-- **Rate-Limit Backoff:** HTTP `429 Too Many Requests` responses are respected with backoff delays.
+- **Rate-Limit Handling:** HTTP `429 Too Many Requests` responses fail fast with `ErrRateLimited` rather than silently blocking worker goroutines with sleep backoffs. For rate-sensitive targets, use `--concurrency 1`.
 
 ---
 

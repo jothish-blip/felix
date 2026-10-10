@@ -56,8 +56,8 @@ The `--max-assets` flag places a hard ceiling on the number of assets queued, do
 ### Redirect Loop Protection
 Felix's custom HTTP redirect handler tracks redirect depth and halts execution after 10 hops (`stopped after 10 redirects`), mitigating infinite redirection loops.
 
-### Rate-Limit Backoff (HTTP 429)
-When servers return HTTP `429 Too Many Requests`, Felix detects rate-limiting headers (e.g., `Retry-After`) and backs off to respect server constraints.
+### Rate-Limit Handling (HTTP 429)
+When servers return HTTP `429 Too Many Requests`, Felix fails fast on that asset with `ErrRateLimited` rather than silently blocking crawler worker goroutines with sleep backoffs. For rate-limited targets, operators should set `--concurrency 1`.
 
 ---
 

@@ -567,8 +567,21 @@ func parseHTMLAssets(r io.Reader, baseURL *url.URL) ([]DiscoveredAsset, []string
 							continue
 						}
 
+						lowerSrc := strings.ToLower(src)
+						if strings.HasPrefix(lowerSrc, "javascript:") ||
+							strings.HasPrefix(lowerSrc, "data:") ||
+							strings.HasPrefix(lowerSrc, "mailto:") ||
+							strings.HasPrefix(lowerSrc, "#") {
+							continue
+						}
+
 						resolved, err := resolveURL(currentBase, src)
 						if err != nil {
+							continue
+						}
+
+						parsedRes, err := url.Parse(resolved)
+						if err != nil || (parsedRes.Scheme != "" && !strings.EqualFold(parsedRes.Scheme, "http") && !strings.EqualFold(parsedRes.Scheme, "https")) {
 							continue
 						}
 
@@ -607,8 +620,21 @@ func parseHTMLAssets(r io.Reader, baseURL *url.URL) ([]DiscoveredAsset, []string
 					continue
 				}
 
+				lowerHref := strings.ToLower(hrefVal)
+				if strings.HasPrefix(lowerHref, "javascript:") ||
+					strings.HasPrefix(lowerHref, "data:") ||
+					strings.HasPrefix(lowerHref, "mailto:") ||
+					strings.HasPrefix(lowerHref, "#") {
+					continue
+				}
+
 				resolved, err := resolveURL(currentBase, hrefVal)
 				if err != nil {
+					continue
+				}
+
+				parsedRes, err := url.Parse(resolved)
+				if err != nil || (parsedRes.Scheme != "" && !strings.EqualFold(parsedRes.Scheme, "http") && !strings.EqualFold(parsedRes.Scheme, "https")) {
 					continue
 				}
 
@@ -698,8 +724,21 @@ func parseScriptTags(r io.Reader, baseURL *url.URL) ([]string, error) {
 							continue
 						}
 
+						lowerSrc := strings.ToLower(src)
+						if strings.HasPrefix(lowerSrc, "javascript:") ||
+							strings.HasPrefix(lowerSrc, "data:") ||
+							strings.HasPrefix(lowerSrc, "mailto:") ||
+							strings.HasPrefix(lowerSrc, "#") {
+							continue
+						}
+
 						resolved, err := resolveURL(currentBase, src)
 						if err != nil {
+							continue
+						}
+
+						parsedRes, err := url.Parse(resolved)
+						if err != nil || (parsedRes.Scheme != "" && !strings.EqualFold(parsedRes.Scheme, "http") && !strings.EqualFold(parsedRes.Scheme, "https")) {
 							continue
 						}
 

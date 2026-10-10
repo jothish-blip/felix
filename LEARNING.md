@@ -338,22 +338,21 @@ Security assessment reports must provide irrefutable technical evidence (HTTP st
 Enterprise assessments require reliable local-first persistence, transactional integrity, and complete auditability. Felix uses pure Go SQLite (`modernc.org/sqlite`) with zero external database processes, managing forward-only schema migrations across stages.
 
 ### 9.2 Key Files & Symbols
-- [`pkg/assessment/store.go`](pkg/assessment/store.go): `Store`, SQLite connection management, and CRUD operations.
-- [`pkg/assessment/migrations.go`](pkg/assessment/migrations.go): Schema migrations v1 through v10.
+- [`pkg/assessment/store.go`](pkg/assessment/store.go): `Store`, SQLite connection management, forward-only schema migrations v1 through v12, and CRUD operations.
 - Database Tables:
   - `assessments`, `targets`, `scans`, `findings`
-  - `verification_records`, `correlation_graphs`, `attack_paths`, `security_stories`
-  - `operator_reviews`, `operator_audit_events`, `report_deliveries`
+  - `assessment_verification_runs`, `assessment_verification_results`, `assessment_correlations`, `attack_paths`, `security_stories`
+  - `finding_reviews`, `operator_audit_events`, `report_deliveries`, `scan_job_leases`
 
 ### 9.3 Data Flow & Execution Path
 1. `NewStore()` opens the local SQLite database file (e.g. `%LOCALAPPDATA%\Felix\felix.db`).
-2. `Migrate()` executes any unapplied migration scripts sequentially within a database transaction.
+2. `Migrate()` executes any unapplied migration scripts (v1 through v12) sequentially within a database transaction.
 3. Every operator review decision, scan execution, and report delivery creates an immutable record in `operator_audit_events`.
 4. Crucial Invariant: Operator editorial decisions (`APPROVED_FOR_REPORT`, `REJECTED`) control report visibility only; they **never mutate or overwrite** the technical finding's verification status, raw evidence, or provenance.
 
 ### 9.4 Reading Order
-1. [`pkg/assessment/migrations.go`](pkg/assessment/migrations.go)
-2. [`pkg/assessment/store.go`](pkg/assessment/store.go)
+1. [`pkg/assessment/store.go`](pkg/assessment/store.go) (inspect `Migrate()` and migration definitions v1–v12)
+2. [`pkg/assessment/store_test.go`](pkg/assessment/store_test.go)
 
 ### 9.5 Comprehension Questions
 1. How does Felix ensure zero external database server dependencies while supporting concurrent reads?
@@ -362,7 +361,7 @@ Enterprise assessments require reliable local-first persistence, transactional i
 
 ### 9.6 Practical Exercises
 - **Exercise 9.1:** Run `go test -v ./pkg/assessment` to verify all migrations and database transactions.
-- **Exercise 9.2:** Inspect the schema definition for migration v10 in `pkg/assessment/migrations.go` and trace the correlation tables.
+- **Exercise 9.2:** Inspect the schema definitions for migrations v10, v11, and v12 in `pkg/assessment/store.go` and trace the verification and operator tables.
 
 ---
 

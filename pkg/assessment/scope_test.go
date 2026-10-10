@@ -124,6 +124,25 @@ func TestScopeValidator_ExclusionPrecedence(t *testing.T) {
 	if !validator.IsAllowed("https://example.com/logout-preview") {
 		t.Errorf("expected https://example.com/logout-preview to be allowed")
 	}
+
+	// 7. Non-HTTP(S) schemes and invalid inputs must be blocked even if no explicit exclusion exists
+	blockedSchemes := []string{
+		"javascript:alert(1)",
+		"javascript:void(0)",
+		"data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==",
+		"file:///etc/passwd",
+		"file:///C:/Windows/win.ini",
+		"mailto:admin@example.com",
+		"gopher://evil.com/1",
+		"ftp://example.com/asset.js",
+		"",
+		"   ",
+	}
+	for _, raw := range blockedSchemes {
+		if validator.IsAllowed(raw) {
+			t.Errorf("expected non-http/invalid rawURL %q to be disallowed by ScopeValidator", raw)
+		}
+	}
 }
 
 func TestScopeValidator_RedirectValidation(t *testing.T) {

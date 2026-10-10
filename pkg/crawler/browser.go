@@ -240,12 +240,19 @@ func ExtractDynamicEndpoints(htmlContent string, baseURL *url.URL, scope *Scope)
 	seen := make(map[string]struct{})
 
 	addEndpoint := func(rawURL string, assetType AssetType, inferred bool) {
-		if rawURL == "" || strings.HasPrefix(rawURL, "javascript:") || strings.HasPrefix(rawURL, "mailto:") || strings.HasPrefix(rawURL, "#") {
+		rawTrimmed := strings.TrimSpace(rawURL)
+		lowerRaw := strings.ToLower(rawTrimmed)
+		if rawTrimmed == "" || strings.HasPrefix(lowerRaw, "javascript:") || strings.HasPrefix(lowerRaw, "data:") || strings.HasPrefix(lowerRaw, "mailto:") || strings.HasPrefix(lowerRaw, "#") {
 			return
 		}
 
-		resolved, err := resolveURL(baseURL, rawURL)
+		resolved, err := resolveURL(baseURL, rawTrimmed)
 		if err != nil {
+			return
+		}
+
+		parsedRes, err := url.Parse(resolved)
+		if err != nil || (parsedRes.Scheme != "" && !strings.EqualFold(parsedRes.Scheme, "http") && !strings.EqualFold(parsedRes.Scheme, "https")) {
 			return
 		}
 

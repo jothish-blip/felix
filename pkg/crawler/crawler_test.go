@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -775,6 +776,72 @@ func TestScopeRules(t *testing.T) {
 	}
 	if sExp.IsAllowed("https://untrusted.com/evil.js") {
 		t.Errorf("explicit: untrusted.com should NOT be allowed")
+	}
+
+	// Non-HTTP(S) schemes and invalid inputs must be blocked across all modes
+	blockedSchemes := []string{
+		"javascript:alert(1)",
+		"javascript:void(0)",
+		"data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==",
+		"file:///etc/passwd",
+		"file:///C:/Windows/win.ini",
+		"mailto:admin@example.com",
+		"gopher://evil.com/1",
+		"ftp://example.com/asset.js",
+		"",
+		"   ",
+	}
+	for _, raw := range blockedSchemes {
+		if sOrigin.IsAllowed(raw) {
+			t.Errorf("same-origin: expected %q to be rejected as non-http/invalid", raw)
+		}
+		if sSub.IsAllowed(raw) {
+			t.Errorf("subdomains: expected %q to be rejected as non-http/invalid", raw)
+		}
+		if sExp.IsAllowed(raw) {
+			t.Errorf("explicit: expected %q to be rejected as non-http/invalid", raw)
+		}
+	}
+}
+
+func TestParseHTMLAssets_IgnoresNonHTTPSchemes(t *testing.T) {
+	baseURL, _ := url.Parse("https://example.com/page.html")
+	htmlBody := `
+	<!DOCTYPE html>
+	<html>
+	<head>
+		<script src="javascript:alert(1)"></script>
+		<script src="data:text/javascript,console.log('pwn')"></script>
+		<script src="mailto:admin@example.com"></script>
+		<script src="#fragment-only"></script>
+		<script src="/valid.js"></script>
+		<link rel="stylesheet" href="data:text/css,body{color:red}">
+		<link rel="stylesheet" href="javascript:void(0)">
+		<link rel="stylesheet" href="/style.css">
+	</head>
+	</html>
+	`
+	discovered, scripts, err := parseHTMLAssets(strings.NewReader(htmlBody), baseURL)
+	if err != nil {
+		t.Fatalf("unexpected error parsing HTML: %v", err)
+	}
+
+	for _, s := range scripts {
+		if strings.HasPrefix(s, "javascript:") || strings.HasPrefix(s, "data:") || strings.HasPrefix(s, "mailto:") {
+			t.Errorf("parseHTMLAssets returned unexpected non-http script: %s", s)
+		}
+	}
+	if len(scripts) != 1 || scripts[0] != "https://example.com/valid.js" {
+		t.Errorf("expected only 1 valid script, got: %v", scripts)
+	}
+
+	for _, d := range discovered {
+		if strings.HasPrefix(d.URL, "javascript:") || strings.HasPrefix(d.URL, "data:") || strings.HasPrefix(d.URL, "mailto:") {
+			t.Errorf("parseHTMLAssets returned unexpected non-http asset: %s", d.URL)
+		}
+	}
+	if len(discovered) != 2 {
+		t.Errorf("expected 2 discovered assets (valid.js, style.css), got %d: %+v", len(discovered), discovered)
 	}
 }
 
