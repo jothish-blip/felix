@@ -403,6 +403,7 @@ func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
 						Type:       ep.Type,
 						InScope:    false,
 						Provenance: ProvenanceBrowser,
+						Inferred:   ep.Inferred,
 					})
 					continue
 				}
@@ -410,6 +411,7 @@ func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
 				if ep.Type == AssetJavaScript || ep.Type == AssetStylesheet || ep.Type == AssetManifest || ep.Type == AssetSourceMap {
 					down := c.downloadAsset(ctx, targetClient, ep.URL, ep.Type)
 					down.Provenance = ProvenanceBrowser
+					down.Inferred = ep.Inferred
 					assets = append(assets, down)
 				} else {
 					assets = append(assets, Asset{
@@ -417,6 +419,7 @@ func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
 						Type:       ep.Type,
 						InScope:    true,
 						Provenance: ProvenanceBrowser,
+						Inferred:   ep.Inferred,
 					})
 				}
 			}

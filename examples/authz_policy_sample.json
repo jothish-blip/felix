@@ -1,0 +1,89 @@
+{
+  "assessment_ref": "ASM-SAMPLE-AUTHZ-2026",
+  "authorization_doc": "AUTHZ-STATEMENT-OF-WORK-SAMPLE-01",
+  "allow_write_tests": false,
+  "identities": {
+    "user_a": {
+      "alias": "user_a",
+      "role": "standard_user",
+      "tenant_id": "tenant_alpha",
+      "privilege_level": 1,
+      "headers": {
+        "Authorization": "Bearer ${FELIX_AUTH_USER_A_TOKEN}"
+      }
+    },
+    "user_b": {
+      "alias": "user_b",
+      "role": "standard_user",
+      "tenant_id": "tenant_beta",
+      "privilege_level": 1,
+      "headers": {
+        "Authorization": "Bearer ${FELIX_AUTH_USER_B_TOKEN}"
+      }
+    },
+    "admin": {
+      "alias": "admin",
+      "role": "tenant_admin",
+      "tenant_id": "tenant_alpha",
+      "privilege_level": 5,
+      "headers": {
+        "Authorization": "Bearer ${FELIX_AUTH_ADMIN_TOKEN}"
+      }
+    }
+  },
+  "resources": {
+    "doc_101": {
+      "id": "doc_101",
+      "type": "document",
+      "owner_alias": "user_a",
+      "tenant_id": "tenant_alpha",
+      "is_shared": false,
+      "sensitive_properties": [
+        "salary",
+        "internal_notes"
+      ],
+      "immutable_properties": [
+        "id",
+        "tenant_id",
+        "created_at"
+      ]
+    },
+    "doc_202": {
+      "id": "doc_202",
+      "type": "document",
+      "owner_alias": "user_b",
+      "tenant_id": "tenant_beta",
+      "is_shared": false,
+      "sensitive_properties": [
+        "salary",
+        "internal_notes"
+      ],
+      "immutable_properties": [
+        "id",
+        "tenant_id",
+        "created_at"
+      ]
+    }
+  },
+  "endpoints": [
+    {
+      "pattern": "/api/v1/documents/{id}",
+      "method": "GET",
+      "allowed_roles": [
+        "standard_user",
+        "tenant_admin"
+      ],
+      "admin_only": false,
+      "tenant_scoped": true
+    },
+    {
+      "pattern": "/api/v1/admin/audit-logs",
+      "method": "GET",
+      "allowed_roles": [
+        "tenant_admin"
+      ],
+      "admin_only": true,
+      "tenant_scoped": true
+    }
+  ]
+}

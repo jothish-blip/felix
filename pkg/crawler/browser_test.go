@@ -107,11 +107,17 @@ func TestBrowserDiscovery_JSRenderedRoute(t *testing.T) {
 			if asset.Provenance != ProvenanceBrowser {
 				t.Errorf("expected ProvenanceBrowser for /dashboard/metrics, got %s", asset.Provenance)
 			}
+			if asset.Inferred {
+				t.Errorf("expected DOM rendered route to have Inferred=false")
+			}
 		}
 		if strings.HasSuffix(asset.URL, "/admin/users") {
 			foundAdmin = true
 			if asset.Provenance != ProvenanceBrowser {
 				t.Errorf("expected ProvenanceBrowser for /admin/users, got %s", asset.Provenance)
+			}
+			if asset.Inferred {
+				t.Errorf("expected DOM rendered route to have Inferred=false")
 			}
 		}
 		if strings.HasSuffix(asset.URL, "/bundle.js") {
@@ -213,6 +219,9 @@ func TestBrowserDiscovery_RuntimeAPIRequests(t *testing.T) {
 			foundV1 = true
 			if ep.Provenance != ProvenanceBrowser {
 				t.Errorf("expected ProvenanceBrowser, got %s", ep.Provenance)
+			}
+			if !ep.Inferred {
+				t.Errorf("expected regex API discovery to have Inferred=true")
 			}
 		}
 		if strings.Contains(ep.URL, "/api/v2/orders/recent") {
@@ -407,5 +416,96 @@ func TestHeadlessBrowserDriver_IntegrationIfAvailable(t *testing.T) {
 
 	if !foundDynamic {
 		t.Logf("rendered HTML: %s", res.RenderedHTML)
+	}
+}
+
+// 8. Test browser CLI argument security and sandbox flag enforcement
+func TestBrowserDiscovery_SandboxFlagProtection(t *testing.T) {
+	// By default, sandbox must remain active (no --no-sandbox flag)
+	defaultOpts := BrowserDiscoveryOptions{
+		DisableSandbox: false,
+	}
+	defaultArgs := BuildBrowserArgs(defaultOpts, 1500, "https://example.com/test")
+
+	for _, arg := range defaultArgs {
+		if arg == "--no-sandbox" {
+			t.Errorf("security violation: --no-sandbox must not be present by default")
+		}
+	}
+
+	var hasHeadless, hasDumpDOM bool
+	for _, arg := range defaultArgs {
+		if arg == "--headless=new" {
+			hasHeadless = true
+		}
+		if arg == "--dump-dom" {
+			hasDumpDOM = true
+		}
+	}
+	if !hasHeadless || !hasDumpDOM {
+		t.Errorf("expected required headless and dump-dom flags, got %v", defaultArgs)
+	}
+
+	// Only when explicitly configured should --no-sandbox be appended
+	customOpts := BrowserDiscoveryOptions{
+		DisableSandbox: true,
+	}
+	customArgs := BuildBrowserArgs(customOpts, 2000, "https://example.com/test")
+	var hasNoSandbox bool
+	for _, arg := range customArgs {
+		if arg == "--no-sandbox" {
+			hasNoSandbox = true
+		}
+	}
+	if !hasNoSandbox {
+		t.Errorf("expected --no-sandbox when DisableSandbox=true")
+	}
+}
+
+// 9. Test Observed (DOM) vs Inferred (Regex) distinction
+func TestBrowserDiscovery_ObservedVsInferredDistinction(t *testing.T) {
+	htmlSample := `<!DOCTYPE html>
+<html>
+<head>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <a href="/profile/edit">Edit Profile</a>
+  <form action="/auth/submit"></form>
+  <script src="/static/app.js"></script>
+  <script>
+    fetch('/api/v1/stream');
+    axios.post('/api/v2/telemetry');
+  </script>
+</body>
+</html>`
+
+	base, _ := url.Parse("https://app.test.local/")
+	endpoints := ExtractDynamicEndpoints(htmlSample, base, nil)
+
+	var (
+		observedCount int
+		inferredCount int
+	)
+
+	for _, ep := range endpoints {
+		if ep.Inferred {
+			inferredCount++
+			if strings.Contains(ep.URL, "/profile/edit") || strings.Contains(ep.URL, "/assets/style.css") {
+				t.Errorf("DOM element %s was incorrectly classified as inferred", ep.URL)
+			}
+		} else {
+			observedCount++
+			if strings.Contains(ep.URL, "/api/v1/stream") || strings.Contains(ep.URL, "/api/v2/telemetry") {
+				t.Errorf("Script pattern %s was incorrectly classified as observed DOM element", ep.URL)
+			}
+		}
+	}
+
+	if observedCount != 4 { // /assets/style.css, /profile/edit, /auth/submit, /static/app.js
+		t.Errorf("expected 4 observed DOM endpoints, got %d", observedCount)
+	}
+	if inferredCount != 2 { // /api/v1/stream, /api/v2/telemetry
+		t.Errorf("expected 2 inferred script endpoints, got %d", inferredCount)
 	}
 }

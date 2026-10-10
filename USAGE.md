@@ -761,10 +761,7 @@ felix config path
 
 ### Reset Defaults (`felix config reset`)
 ```bash
-# Reset a specific key
-felix config reset timeout
-
-# Reset all keys to default
+# Reset all configuration keys to default settings
 felix config reset
 ```
 

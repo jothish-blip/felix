@@ -85,7 +85,7 @@ Web crawling without strict scope boundaries risks unintended requests against t
 1. `NewScope()` normalizes target URLs and configures allowed domains and host boundaries.
 2. In Phase 1, `Crawler.Crawl()` fetches the base HTML, parses tags (`<script>`, `<link>`, `<form>`, `<a>`), resolves relative URLs, and downloads in-scope assets concurrently using a worker pool.
 3. In Phase 2, JavaScript assets are inspected for `sourceMappingURL` references, and discovered source maps are ingested.
-4. In Phase 3, if dynamic browser discovery is enabled (`BrowserDiscovery.Enabled`), `BrowserDiscoveryDriver` launches a bounded headless browser session (`--headless=new --dump-dom`), executes JavaScript, extracts DOM-injected routes and runtime API calls (`fetch`, `axios`), and tags discoveries with `ProvenanceBrowser` while blocking out-of-scope navigations.
+4. In Phase 3, if dynamic browser discovery is enabled (`BrowserDiscovery.Enabled`), `BrowserDiscoveryDriver` launches a bounded headless browser session with OS sandbox protections active by default (`--headless=new --dump-dom`), executes JavaScript, extracts DOM-injected routes and runtime API calls (`fetch`, `axios`), distinguishes observed DOM elements (`Inferred: false`) from script regex heuristics (`Inferred: true`), and tags discoveries with `ProvenanceBrowser` while blocking out-of-scope navigations.
 
 ### 2.4 Reading Order
 1. [`pkg/crawler/scope.go`](pkg/crawler/scope.go)
@@ -172,10 +172,11 @@ Broken Object Level Authorization (BOLA/IDOR) and Broken Function Level Authoriz
 
 ### 4.4 Reading Order
 1. [`pkg/authz/types.go`](pkg/authz/types.go)
-2. [`pkg/authz/session_manager.go`](pkg/authz/session_manager.go)
-3. [`pkg/authz/planner.go`](pkg/authz/planner.go)
-4. [`pkg/authz/comparator.go`](pkg/authz/comparator.go)
-5. [`pkg/authz/engine.go`](pkg/authz/engine.go)
+2. [`pkg/authz/policy.go`](pkg/authz/policy.go) & [`examples/authz_policy_sample.json`](examples/authz_policy_sample.json)
+3. [`pkg/authz/session_manager.go`](pkg/authz/session_manager.go)
+4. [`pkg/authz/planner.go`](pkg/authz/planner.go)
+5. [`pkg/authz/comparator.go`](pkg/authz/comparator.go)
+6. [`pkg/authz/engine.go`](pkg/authz/engine.go)
 
 ### 4.5 Comprehension Questions
 1. How does `SessionManager` ensure that session cookies received by Alice are never transmitted in requests sent on behalf of Bob?
@@ -184,7 +185,7 @@ Broken Object Level Authorization (BOLA/IDOR) and Broken Function Level Authoriz
 
 ### 4.6 Practical Exercises
 - **Exercise 4.1:** Run `go test -v -run TestSessionManager ./pkg/authz` and trace the cookie isolation and environment variable injection tests.
-- **Exercise 4.2:** Construct a local test policy in JSON with two identities and run `pkg/authz` engine against a mock HTTP server to observe BOLA verification.
+- **Exercise 4.2:** Inspect the verified sample policy at [`examples/authz_policy_sample.json`](examples/authz_policy_sample.json) and run `go test -v -run TestLoadPolicyFromFile_SamplePolicy ./pkg/authz` to observe policy validation and environment variable injection.
 
 ---
 
@@ -316,8 +317,9 @@ Security assessment reports must provide irrefutable technical evidence (HTTP st
 
 ### 8.4 Reading Order
 1. [`pkg/report/json.go`](pkg/report/json.go)
-2. [`pkg/authz/types.go`](pkg/authz/types.go) (Lines 180–375)
-3. [`pkg/verification/types.go`](pkg/verification/types.go)
+2. [`pkg/report/sarif.go`](pkg/report/sarif.go) & [`.github/workflows/felix-audit.yml`](.github/workflows/felix-audit.yml)
+3. [`pkg/authz/types.go`](pkg/authz/types.go) (Lines 180–375)
+4. [`pkg/verification/types.go`](pkg/verification/types.go)
 
 ### 8.5 Comprehension Questions
 1. How does `RedactBody()` handle structured JSON responses versus free-form unstructured text?
@@ -326,7 +328,7 @@ Security assessment reports must provide irrefutable technical evidence (HTTP st
 
 ### 8.6 Practical Exercises
 - **Exercise 8.1:** Run `go test -v -run TestSecretRedaction ./pkg/report` and `go test -v -run TestSecretRedaction_EndToEnd ./pkg/authz`.
-- **Exercise 8.2:** Test `SanitizeEvidence("Authorization: Bearer eyJhbGciOi...")` in a scratch script and observe the redacted output.
+- **Exercise 8.2:** Run `go test -v -run TestSARIF ./pkg/report` and inspect [`.github/workflows/felix-audit.yml`](.github/workflows/felix-audit.yml) to see how SARIF 2.1.0 exports integrate into CI/CD security quality gates.
 
 ---
 

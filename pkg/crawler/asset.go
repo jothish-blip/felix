@@ -43,6 +43,7 @@ type Asset struct {
 	IsSourceMap bool      `json:"is_source_map"`
 	InScope     bool      `json:"in_scope"`
 	Provenance  string    `json:"provenance,omitempty"`
+	Inferred    bool      `json:"inferred,omitempty"`
 	Error       error     `json:"error,omitempty"`
 }
 

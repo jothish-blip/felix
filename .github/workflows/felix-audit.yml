@@ -1,0 +1,77 @@
+name: FELIX Security Assessment Audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: 'Target URL to assess (Requires formal written authorization)'
+        required: true
+        type: string
+        default: ''
+      authorization_confirmed:
+        description: 'I confirm that I possess explicit written authorization to scan this target'
+        required: true
+        type: boolean
+        default: false
+      timeout:
+        description: 'Scan timeout (e.g. 30s, 1m, 2m)'
+        required: false
+        type: string
+        default: '1m'
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  audit:
+    name: Run Authorized Assessment & Upload SARIF
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate Target & Authorization
+        run: |
+          if [ -z "${{ inputs.target_url }}" ]; then
+            echo "[-] Error: target_url is required."
+            exit 1
+          fi
+          if [ "${{ inputs.authorization_confirmed }}" != "true" ]; then
+            echo "[-] Error: Security scanning requires explicit written authorization. Set authorization_confirmed to true."
+            exit 1
+          fi
+          echo "[+] Target validated: ${{ inputs.target_url }}"
+          echo "[+] Authorization confirmed."
+
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go Toolchain
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          check-latest: true
+
+      - name: Compile FELIX Standalone Binary
+        run: |
+          go build -trimpath -ldflags="-s -w" -o bin/felix ./cmd/felix
+          ./bin/felix version
+
+      - name: Execute Assessment & Generate SARIF 2.1.0 Report
+        run: |
+          ./bin/felix scan "${{ inputs.target_url }}" \
+            --timeout "${{ inputs.timeout }}" \
+            --sarif results.sarif
+
+      - name: Upload SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        if: always() && hashFiles('results.sarif') != ''
+        with:
+          sarif_file: results.sarif
+          category: felix-security-assessment
+
+      - name: Upload SARIF Artifact
+        uses: actions/upload-artifact@v4
+        if: always() && hashFiles('results.sarif') != ''
+        with:
+          name: felix-assessment-sarif
+          path: results.sarif
+          retention-days: 14

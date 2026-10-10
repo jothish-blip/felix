@@ -29,6 +29,7 @@ type BrowserDiscoveryOptions struct {
 	BrowserBinary  string                 `json:"browser_binary,omitempty"`
 	Timeout        time.Duration          `json:"timeout,omitempty"`
 	WaitUntilReady time.Duration          `json:"wait_until_ready,omitempty"`
+	DisableSandbox bool                   `json:"disable_sandbox,omitempty"` // Explicit opt-in for containerized environments
 	Driver         BrowserDiscoveryDriver `json:"-"`
 }
 
@@ -39,6 +40,7 @@ type DynamicEndpoint struct {
 	Method     string    `json:"method,omitempty"`
 	InScope    bool      `json:"in_scope"`
 	Provenance string    `json:"provenance"` // ProvenanceBrowser
+	Inferred   bool      `json:"inferred"`   // false for rendered DOM elements, true for regex/script pattern matches
 }
 
 // BrowserDiscoveryResult represents the outcome of dynamic browser discovery.
@@ -105,16 +107,7 @@ func (d *HeadlessBrowserDriver) Discover(ctx context.Context, targetURL string, 
 		budgetMs = int(opts.WaitUntilReady.Milliseconds())
 	}
 
-	args := []string{
-		"--headless=new",
-		"--disable-gpu",
-		"--no-first-run",
-		"--no-default-browser-check",
-		"--no-sandbox",
-		fmt.Sprintf("--virtual-time-budget=%d", budgetMs),
-		"--dump-dom",
-		targetURL,
-	}
+	args := BuildBrowserArgs(opts, budgetMs, targetURL)
 
 	cmd := exec.CommandContext(execCtx, binPath, args...)
 	var stdout, stderr bytes.Buffer
@@ -149,6 +142,24 @@ func (d *HeadlessBrowserDriver) Discover(ctx context.Context, targetURL string, 
 	res.Endpoints = endpoints
 
 	return res, nil
+}
+
+// BuildBrowserArgs constructs CLI arguments for Chromium headless execution.
+// Sandbox protections remain active by default and are only disabled if explicitly opted-in via DisableSandbox.
+func BuildBrowserArgs(opts BrowserDiscoveryOptions, budgetMs int, targetURL string) []string {
+	args := []string{
+		"--headless=new",
+		"--disable-gpu",
+		"--no-first-run",
+		"--no-default-browser-check",
+		fmt.Sprintf("--virtual-time-budget=%d", budgetMs),
+		"--dump-dom",
+	}
+	if opts.DisableSandbox {
+		args = append(args, "--no-sandbox")
+	}
+	args = append(args, targetURL)
+	return args
 }
 
 // FindBrowserBinary resolves the path to an installed Chromium-compatible browser.
@@ -228,7 +239,7 @@ func ExtractDynamicEndpoints(htmlContent string, baseURL *url.URL, scope *Scope)
 	var endpoints []DynamicEndpoint
 	seen := make(map[string]struct{})
 
-	addEndpoint := func(rawURL string, assetType AssetType) {
+	addEndpoint := func(rawURL string, assetType AssetType, inferred bool) {
 		if rawURL == "" || strings.HasPrefix(rawURL, "javascript:") || strings.HasPrefix(rawURL, "mailto:") || strings.HasPrefix(rawURL, "#") {
 			return
 		}
@@ -253,6 +264,7 @@ func ExtractDynamicEndpoints(htmlContent string, baseURL *url.URL, scope *Scope)
 			Type:       assetType,
 			InScope:    inScope,
 			Provenance: ProvenanceBrowser,
+			Inferred:   inferred,
 		})
 	}
 
@@ -266,13 +278,13 @@ func ExtractDynamicEndpoints(htmlContent string, baseURL *url.URL, scope *Scope)
 				case "a":
 					for _, attr := range n.Attr {
 						if strings.EqualFold(attr.Key, "href") {
-							addEndpoint(attr.Val, AssetUnknown)
+							addEndpoint(attr.Val, AssetUnknown, false)
 						}
 					}
 				case "script":
 					for _, attr := range n.Attr {
 						if strings.EqualFold(attr.Key, "src") {
-							addEndpoint(attr.Val, AssetJavaScript)
+							addEndpoint(attr.Val, AssetJavaScript, false)
 						}
 					}
 				case "link":
@@ -286,17 +298,17 @@ func ExtractDynamicEndpoints(htmlContent string, baseURL *url.URL, scope *Scope)
 					}
 					if href != "" {
 						if rel == "stylesheet" {
-							addEndpoint(href, AssetStylesheet)
+							addEndpoint(href, AssetStylesheet, false)
 						} else if rel == "manifest" {
-							addEndpoint(href, AssetManifest)
+							addEndpoint(href, AssetManifest, false)
 						} else {
-							addEndpoint(href, AssetUnknown)
+							addEndpoint(href, AssetUnknown, false)
 						}
 					}
 				case "form":
 					for _, attr := range n.Attr {
 						if strings.EqualFold(attr.Key, "action") {
-							addEndpoint(attr.Val, AssetUnknown)
+							addEndpoint(attr.Val, AssetUnknown, false)
 						}
 					}
 				}
@@ -308,25 +320,25 @@ func ExtractDynamicEndpoints(htmlContent string, baseURL *url.URL, scope *Scope)
 		walk(doc)
 	}
 
-	// 2. Scan inline scripts and strings for runtime API invocations (fetch, axios, ajax, /api/ routes)
+	// 2. Scan inline scripts and strings for runtime API invocations (Inferred heuristic pattern matches)
 	for _, m := range fetchRegex.FindAllStringSubmatch(htmlContent, -1) {
 		if len(m) > 1 {
-			addEndpoint(m[1], AssetUnknown)
+			addEndpoint(m[1], AssetUnknown, true)
 		}
 	}
 	for _, m := range axiosRegex.FindAllStringSubmatch(htmlContent, -1) {
 		if len(m) > 1 {
-			addEndpoint(m[1], AssetUnknown)
+			addEndpoint(m[1], AssetUnknown, true)
 		}
 	}
 	for _, m := range ajaxRegex.FindAllStringSubmatch(htmlContent, -1) {
 		if len(m) > 1 {
-			addEndpoint(m[1], AssetUnknown)
+			addEndpoint(m[1], AssetUnknown, true)
 		}
 	}
 	for _, m := range apiURIRegex.FindAllStringSubmatch(htmlContent, -1) {
 		if len(m) > 1 {
-			addEndpoint(m[1], AssetUnknown)
+			addEndpoint(m[1], AssetUnknown, true)
 		}
 	}
 

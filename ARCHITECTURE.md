@@ -109,7 +109,9 @@ The crawler acts as the ingestion foundation for all downstream security analysi
 - **Source Map Discovery:** Downloaded JavaScript files are parsed for `//# sourceMappingURL=` comments. If referenced in-scope, source maps are scheduled for download to allow deeper analysis.
 - **Dynamic Headless Browser Discovery (`pkg/crawler/browser.go`):**
   - *Zero-Dependency Native Driver:* Uses system Chromium browsers (`msedge`, `chrome`, `chromium`) via CLI headless flags (`--headless=new --dump-dom`), requiring zero Node.js, npm, or Playwright runtime dependencies.
+  - *Browser Isolation Safety:* Standard OS browser sandbox protections remain active by default. The isolation-weakening flag `--no-sandbox` is never passed by default and is only available via explicit `DisableSandbox: true` for restricted containerized environments.
   - *DOM Rendering & API Interception:* Evaluates client-side JavaScript within a bounded virtual time budget, discovering dynamically generated links (`<a href="...">`) and runtime API calls (`fetch`, `axios`, `$.ajax`).
+  - *Observed vs Inferred Discoveries:* Accurately distinguishes rendered DOM elements (`Inferred: false`) from script string regex heuristics (`Inferred: true`).
   - *Provenance Tagging:* Dynamic discoveries are tagged with `Provenance: PROVENANCE_BROWSER` to preserve complete audit history.
   - *Scope & Redirect Guards:* Enforces strict scope validation before navigation and blocks out-of-scope cross-host redirects.
   - *Graceful Fallback:* If no browser is installed or if the execution times out, the driver reports `Inconclusive: true` and cleanly falls back to static discoveries without aborting the crawl.
@@ -395,7 +397,7 @@ Stage 4 introduces a dedicated, evidence-driven API authorization testing engine
 - **Vertical Privilege Escalation:** Detects when an unprivileged user performs an operation or assumes privileges reserved for administrative roles.
 - **Multi-Identity Session Manager (`session_manager.go`):**
   - *Isolated Cookie Jars:* Maintains dedicated `http.Client` instances with separate `cookiejar.Jar`s per identity alias. Session cookies set for `user_a` never leak or cross-contaminate requests made on behalf of `user_b`.
-  - *Runtime Environment Credential Injection:* Supports injecting tokens and session cookies via environment variables (`FELIX_AUTH_<ALIAS>_TOKEN`, `FELIX_AUTH_<ALIAS>_COOKIE`, `FELIX_AUTH_<ALIAS>_HEADER_<KEY>`), allowing sensitive test credentials to be supplied securely at runtime without committing secrets to policy files.
+  - *Runtime Environment Credential Injection:* Supports injecting tokens and session cookies via environment variables (`FELIX_AUTH_<ALIAS>_TOKEN`, `FELIX_AUTH_<ALIAS>_COOKIE`, `FELIX_AUTH_<ALIAS>_HEADER_<KEY>`), allowing sensitive test credentials to be supplied securely at runtime without committing secrets to policy files (see verified sample template in `examples/authz_policy_sample.json`).
   - *Pre-Flight Session Validation:* Verifies each identity's baseline access prior to comparative differential testing. If an identity's session returns HTTP 401 or 403 on its own resource, tests involving that identity are classified as `BLOCKED_INVALID_SESSION`, preventing false positive BOLA findings and false negatives.
 - **Deep Comparator (`comparator.go`):** Evaluates HTTP status codes, body payloads, resource identifiers, and ownership markers. Never treats HTTP status codes alone as proof of authorization correctness or vulnerability.
 - **Secret Redaction Across Storage & Output:** All sensitive tokens (`Authorization: Bearer [REDACTED]`, cookie values, sensitive query parameters, and private response fields) are scrubbed end-to-end. Raw credentials are never persisted in SQLite or displayed in reports.
