@@ -58,6 +58,7 @@ Felix processes targets through a strict, unidirectional analysis pipeline desig
     │  Terminal Output  │           │ Offline Reports   │ (Zero Network)
     │  Milestone Status │           │ HTML (Black Mode) │
     └───────────────────┘           │ Sanitized JSON    │
+                                    │ SARIF 2.1.0 (CI)  │
                                     └───────────────────┘
 ```
 
@@ -70,14 +71,14 @@ The codebase is organized into modular packages under `pkg/` and a thin CLI laye
 | Package | Primary Responsibility | Key Files |
 | :--- | :--- | :--- |
 | **`cmd/felix`** | CLI parsing, argument validation, subcommand routing, user-facing output formatting. | `main.go`, `scan_cmd.go`, `report_cmd.go`, `config_cmd.go`, `doctor.go`, `version.go`, `completion.go`, `install_cmd.go` |
-| **`pkg/crawler`** | Scope enforcement, asset discovery, concurrent downloading, and source map detection. | `crawler.go`, `config.go`, `asset.go`, `scope.go` |
+| **`pkg/crawler`** | Scope enforcement, static asset discovery, headless browser dynamic SPA discovery, and source maps. | `crawler.go`, `config.go`, `asset.go`, `scope.go`, `browser.go` |
 | **`pkg/secrets`** | Pattern detection, Shannon entropy evaluation, placeholder filtering, and secret redaction. | `detector.go`, `patterns.go`, `entropy.go`, `filters.go`, `finding.go` |
 | **`pkg/cloud`** | Cloud provider discovery and non-destructive exposure verification (Supabase, Firebase, S3, GCP). | `detector.go`, `provider.go`, `supabase.go`, `firebase.go`, `storage.go`, `client.go`, `finding.go` |
 | **`pkg/api`** | Client route extraction, endpoint classification, authentication reasoning, CORS, and header checks. | `detector.go`, `endpoints.go`, `cors.go`, `graphql.go`, `headers.go`, `client.go`, `finding.go` |
 | **`pkg/assessment`** | Assessment lifecycle, authorization verification, scope/exclusion engine, embedded SQLite store, and finding traceability. | `models.go`, `scope.go`, `store.go`, `controller.go` |
 | **`pkg/discovery`** | Advanced attack-surface intelligence engine: relational graph modeling, domains, applications, APIs, forms, parameters, auth surfaces, cloud services, and passive tech detection. | `types.go`, `domains.go`, `apps.go`, `forms.go`, `parameters.go`, `auth.go`, `tech.go`, `js.go`, `engine.go` |
 | **`pkg/auth`** | Authentication intelligence subsystem: multi-signal classification, passive cookie auditing, token structure analysis, protected endpoint reasoning, and zero credential probing. | `types.go`, `classifier.go`, `cookies.go`, `tokens.go`, `protected.go`, `engine.go`, `future_accounts.go` |
-| **`pkg/authz`** | Authorization & access control engine: BOLA/IDOR, BFLA, BOPLA, horizontal/vertical privilege escalation, and comparative evidence verification. | `types.go`, `planner.go`, `engine.go`, `comparator.go`, `policy.go` |
+| **`pkg/authz`** | Authorization & access control engine: BOLA/IDOR, BFLA, BOPLA, horizontal/vertical privilege escalation, session isolation, and env credential injection. | `types.go`, `session_manager.go`, `planner.go`, `engine.go`, `comparator.go`, `policy.go` |
 | **`pkg/apisec`** | OWASP API Security Top 10 (2023) assessment engine: unified evidence-first pipeline, inventory & OpenAPI reconciliation, bounded rate-limit audits, SSRF canary testing, and security misconfiguration analysis. | `types.go`, `inventory.go`, `engine.go` |
 | **`pkg/webvuln`** | Web application vulnerability detection and verification: context-aware XSS reflection analysis, SQL injection signatures, SSTI, and SSRF. | `types.go`, `engine.go` |
 | **`pkg/sessionsec`** | Session lifecycle, token handling, and identity boundaries (WSTG-SESS/ATHN). | `types.go`, `engine.go` |
@@ -85,7 +86,7 @@ The codebase is organized into modular packages under `pkg/` and a thin CLI laye
 | **`pkg/businesslogic`** | Business logic security engine: workflow transition audits, step-skipping, state manipulation, sensitive flow abuse, and replay. | `types.go`, `engine.go`, `analyzer.go` |
 | **`pkg/correlation`** | Evidence-driven correlation & attack path engine: multi-signal finding graphs, candidate & verified attack paths, combined risk scoring, and security stories. | `types.go`, `graph.go`, `rules.go`, `engine.go`, `risk.go`, `story.go` |
 | **`pkg/verification`** | Verification Engine 2.0: empirical finding verification, dual confidence scoring, safe reproduction generation, safety policy enforcement, and finding trustworthiness. | `types.go`, `confidence.go`, `reproduction.go`, `safety.go`, `policy.go`, `registry.go`, `engine.go` |
-| **`pkg/report`** | Finding normalization, deduplication, multi-signal correlation, risk scoring, HTML/JSON generation. | `model.go`, `normalize.go`, `dedup.go`, `correlate.go`, `risk.go`, `summary.go`, `html.go`, `json.go` |
+| **`pkg/report`** | Finding normalization, deduplication, multi-signal correlation, risk scoring, HTML/JSON/SARIF 2.1.0 generation. | `model.go`, `normalize.go`, `dedup.go`, `correlate.go`, `risk.go`, `summary.go`, `html.go`, `json.go`, `sarif.go` |
 | **`pkg/config`** | Persistent operational configuration storage (`~/.felix/config.json`). | `config.go` |
 | **`test`** | Integration testing, regression corpus, CLI end-to-end validation, and assessment lifecycle tests. | `regression_test.go`, `cli_test.go`, `assessment_cli_test.go` |
 
@@ -106,6 +107,12 @@ The crawler acts as the ingestion foundation for all downstream security analysi
   - `<link rel="manifest" href="...">`: Web app manifests.
   - `<base href="...">`: Correct relative URL resolution against declared base targets.
 - **Source Map Discovery:** Downloaded JavaScript files are parsed for `//# sourceMappingURL=` comments. If referenced in-scope, source maps are scheduled for download to allow deeper analysis.
+- **Dynamic Headless Browser Discovery (`pkg/crawler/browser.go`):**
+  - *Zero-Dependency Native Driver:* Uses system Chromium browsers (`msedge`, `chrome`, `chromium`) via CLI headless flags (`--headless=new --dump-dom`), requiring zero Node.js, npm, or Playwright runtime dependencies.
+  - *DOM Rendering & API Interception:* Evaluates client-side JavaScript within a bounded virtual time budget, discovering dynamically generated links (`<a href="...">`) and runtime API calls (`fetch`, `axios`, `$.ajax`).
+  - *Provenance Tagging:* Dynamic discoveries are tagged with `Provenance: PROVENANCE_BROWSER` to preserve complete audit history.
+  - *Scope & Redirect Guards:* Enforces strict scope validation before navigation and blocks out-of-scope cross-host redirects.
+  - *Graceful Fallback:* If no browser is installed or if the execution times out, the driver reports `Inconclusive: true` and cleanly falls back to static discoveries without aborting the crawl.
 - **Resource Limits:**
   - `io.LimitReader`: Streaming reads are capped at `MaxAssetSize` (default: 10MB) to prevent memory exhaustion from oversized assets.
   - `MaxAssets`: Bounded ingestion capping the maximum number of assets processed.
@@ -386,6 +393,10 @@ Stage 4 introduces a dedicated, evidence-driven API authorization testing engine
   - **Write Test Safety Guard:** Enforces `policy.allow_write_tests == true` before sending any mutating HTTP requests (`PUT`, `POST`, `PATCH`, `DELETE`). If false, mutating tests are safely refused and reported as candidates with zero destructive network activity.
 - **Horizontal Privilege Escalation:** Verifies tenant and peer isolation boundaries when users of equivalent privilege levels attempt cross-access.
 - **Vertical Privilege Escalation:** Detects when an unprivileged user performs an operation or assumes privileges reserved for administrative roles.
+- **Multi-Identity Session Manager (`session_manager.go`):**
+  - *Isolated Cookie Jars:* Maintains dedicated `http.Client` instances with separate `cookiejar.Jar`s per identity alias. Session cookies set for `user_a` never leak or cross-contaminate requests made on behalf of `user_b`.
+  - *Runtime Environment Credential Injection:* Supports injecting tokens and session cookies via environment variables (`FELIX_AUTH_<ALIAS>_TOKEN`, `FELIX_AUTH_<ALIAS>_COOKIE`, `FELIX_AUTH_<ALIAS>_HEADER_<KEY>`), allowing sensitive test credentials to be supplied securely at runtime without committing secrets to policy files.
+  - *Pre-Flight Session Validation:* Verifies each identity's baseline access prior to comparative differential testing. If an identity's session returns HTTP 401 or 403 on its own resource, tests involving that identity are classified as `BLOCKED_INVALID_SESSION`, preventing false positive BOLA findings and false negatives.
 - **Deep Comparator (`comparator.go`):** Evaluates HTTP status codes, body payloads, resource identifiers, and ownership markers. Never treats HTTP status codes alone as proof of authorization correctness or vulnerability.
 - **Secret Redaction Across Storage & Output:** All sensitive tokens (`Authorization: Bearer [REDACTED]`, cookie values, sensitive query parameters, and private response fields) are scrubbed end-to-end. Raw credentials are never persisted in SQLite or displayed in reports.
 - **Database Schema Migration v4:**
@@ -484,6 +495,13 @@ Stage 12 implements Commercial Report 2.0, transforming raw assessment findings,
 - **Defensive Boundary Handling (`NOT_EXPOSED`):**
   - Confirmed access barriers (HTTP 401/403) and negative proof are classified as `NOT_EXPOSED` and routed exclusively to the Technical Appendix.
   - `NOT_EXPOSED` findings contribute 0 to the risk score and are never displayed in the Verified Findings section.
+- **CI/CD SARIF 2.1.0 Integration (`pkg/report/sarif.go`):**
+  - *Standard Compliance:* Generates schema-valid OASIS SARIF 2.1.0 JSON exports directly ingestible by GitHub Code Scanning, GitLab Security Dashboard, and Azure DevOps.
+  - *Rule Deduplication:* Normalizes and deduplicates finding categories into deterministic `tool.driver.rules` with stable indexing.
+  - *Severity Mapping:* Maps Felix severities (`CRITICAL`/`HIGH` $\rightarrow$ `error`, `MEDIUM` $\rightarrow$ `warning`, `LOW` $\rightarrow$ `note`, `INFO` $\rightarrow$ `none`).
+  - *Accurate Locations:* Uses `logicalLocations` (`GET /api/v1/orders/{id}`) without fabricating fake source code line numbers when evaluating black-box HTTP targets.
+  - *Full Property Bag:* Preserves Felix empirical metadata (`verification_status`, `confidence`, `provenance`, `safe_reproduction`, `score`) in result properties.
+  - *Secret Scrubbing:* Recursively redacts tokens and sensitive data before serialization.
 
 ---
 
@@ -537,6 +555,8 @@ Felix implements strict resource controls to ensure safety and prevent denial-of
 ## Navigation & Cross-References
 
 - **[Operator Usage Guide](USAGE.md)** — Command syntax and flag reference.
+- **[Author Learning Guide](LEARNING.md)** — 10 progressive study modules covering architecture, discovery, verification, authz, correlation, risk, and extensions.
+- **[Validation Matrix](VALIDATION-MATRIX.md)** — Source-grounded capability matrix, test coverage, and non-goals.
 - **[Detection & Verification Model](DETECTION-MODEL.md)** — Deep dive into verification states and evidence records.
 - **[Security & Safety Controls](SECURITY.md)** — Safety boundaries and non-destructive guarantees.
 - **[Limitations & Non-Goals](LIMITATIONS.md)** — Black-box boundaries and operational limits.

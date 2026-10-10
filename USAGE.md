@@ -626,8 +626,9 @@ All scan control flags follow strict validation:
 | **`--scope`** | `same-origin` \| `subdomains` \| `explicit` | `same-origin` | Domain boundary enforcement. Rejects unsupported values with exit code `2`. |
 | **`--max-assets`** | `<int>` (positive integer) | unbounded | Maximum number of assets processed. Rejects `<= 0` with exit code `2`. |
 | **`--max-response-size`** | `<size>` (`5MB`, `10MB`, `512KB`) | `10MB` | Maximum response byte limit per asset. Rejects `<= 0` with exit code `2`. |
-| **`--export`** | `<file>` (`report.html`, `report.json`) | none | Export assessment report to file(s). Single scan execution. |
+| **`--export`** | `<file>` (`report.html`, `report.json`, `audit.sarif`) | none | Export assessment report to file(s). Single scan execution. |
 | **`--json`** | `[file]` | `scan-result.json` | Save machine-readable scan result as JSON (or output to stdout). |
+| **`--sarif`** | `[file]` | `scan-result.sarif` | Export assessment report to standardized SARIF 2.1.0 JSON format for CI/CD. |
 | **`--quiet`**, `-q`, `-s` | *boolean flag* | `false` | Suppress human-readable progress, banners, and summary. Preserves exit codes. |
 | **`--verbose`**, `-v` | *boolean flag* | `false` | Display operational parameters and asset inventory safely without token leakage. |
 | **`-l`** | `<file>` | none | File containing target URLs (one per line). |
@@ -846,7 +847,7 @@ felix operator --no-open
 
 ---
 
-## Exit Code Contract
+## Exit Code Contract & CI/CD SARIF Integration
 
 Felix returns standard exit codes for integration into CI/CD security quality gates:
 
@@ -856,16 +857,20 @@ Felix returns standard exit codes for integration into CI/CD security quality ga
 | **`1`** | **Actionable Findings** | Audit detected actionable security findings requiring attention (`LOW`, `MEDIUM`, `HIGH`, or `CRITICAL`). |
 | **`2`** | **Usage / Runtime Error** | Invalid flag arguments, conflicting flags, missing target, unreadable files, or unreachable target. |
 
-### CI/CD Pipeline Integration Example
+### CI/CD Pipeline Integration (GitHub Actions / GitLab CI)
+Felix exports versioned **OASIS SARIF 2.1.0** reports directly readable by GitHub Code Scanning, GitLab Security Dashboard, and Azure DevOps:
+
 ```bash
 #!/usr/bin/env bash
-felix scan https://staging.internal.app --export staging-report.html --quiet
+# Run Felix scan with quiet terminal mode and export SARIF
+felix scan https://staging.internal.app --sarif felix-results.sarif --quiet
 EXIT_STATUS=$?
 
 if [ $EXIT_STATUS -eq 0 ]; then
     echo "Felix Security Audit Passed: No actionable vulnerabilities found."
 elif [ $EXIT_STATUS -eq 1 ]; then
-    echo "Felix Security Audit Failed: Actionable findings detected. Review staging-report.html."
+    echo "Felix Security Audit: Actionable findings detected. Uploading SARIF."
+    # Upload felix-results.sarif to GitHub Code Scanning via github/codeql-action/upload-sarif
     exit 1
 else
     echo "Felix Scan Runtime Error: Please verify configuration or network accessibility."
@@ -875,9 +880,45 @@ fi
 
 ---
 
+## Dynamic Single Page Application (SPA) Discovery
+
+When auditing client-side JavaScript applications (React, Vue, Angular), Felix uses a bounded headless browser driver:
+- Automatically detects installed system Chromium browsers (`msedge`, `chrome`, `chromium`).
+- Executes JavaScript in `--headless=new --dump-dom` mode with a virtual time budget.
+- Discovers DOM-rendered navigation links (`<a href="...">`) and intercepts runtime API calls (`fetch`, `axios`).
+- Tags dynamic discoveries with `Provenance: PROVENANCE_BROWSER` to preserve evidence history.
+- Enforces scope bounds: out-of-scope URLs and cross-host redirects are blocked.
+- Gracefully falls back: if no browser binary is installed, the crawler records `Inconclusive: true` and retains all static discoveries without failing the scan.
+
+---
+
+## Multi-Identity Authorization Credential Injection
+
+For multi-role authorization assessments (BOLA/IDOR, BFLA, privilege escalation), Felix supports runtime credential injection via environment variables, avoiding committed secrets in policy files:
+
+```bash
+# Identity "user_a" credentials
+export FELIX_AUTH_USER_A_TOKEN="eyJhbGciOi..."
+export FELIX_AUTH_USER_A_COOKIE="session_id=alice_session_abc123"
+
+# Identity "user_b" credentials
+export FELIX_AUTH_USER_B_TOKEN="eyJhbGciOi..."
+export FELIX_AUTH_USER_B_COOKIE="session_id=bob_session_xyz789"
+
+# Identity "admin" credentials
+export FELIX_AUTH_ADMIN_TOKEN="eyJhbGciOi..."
+export FELIX_AUTH_ADMIN_HEADER_X_API_KEY="admin-secret-key"
+```
+
+Each identity executes inside an isolated `http.Client` with its own `http.CookieJar`. Cookies set for Alice never bleed into requests sent on behalf of Bob. Expired sessions are caught by pre-flight checks and classified as `BLOCKED_INVALID_SESSION`, preventing false positive findings.
+
+---
+
 ## Navigation & Cross-References
 
 - **[README](README.md)** — Project overview and quick start.
+- **[Author Learning Guide](LEARNING.md)** — 10 progressive study modules covering architecture, discovery, verification, authz, correlation, risk, and extensions.
+- **[Validation Matrix](VALIDATION-MATRIX.md)** — Capability matrix, test coverage, and non-goals.
 - **[Architecture Guide](ARCHITECTURE.md)** — Subsystem design, pipeline, and concurrency.
 - **[Detection & Verification Model](DETECTION-MODEL.md)** — Evidence and verification states.
 - **[Security & Safety Controls](SECURITY.md)** — Non-destructive guarantees and scope controls.
