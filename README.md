@@ -135,19 +135,49 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o bin
 
 ---
 
-## Download Felix
+## Installation
 
-Download pre-compiled, standalone binaries and release packages from the **[Official GitHub Releases](https://github.com/jothish-blip/felix/releases/latest)** page.
+Felix is distributed through native package managers for Kali Linux/Debian and macOS, as well as standalone signed binaries for Windows and POSIX systems.
 
-No Go compiler, Git toolchain, or source code is required to run Felix.
+For full distribution details, APT repository keys, and troubleshooting, see the **[Production Installation Guide (docs/INSTALLATION.md)](docs/INSTALLATION.md)**.
 
-| Platform | Architecture | Standalone Binary | Package Archive | Checksum |
+### Kali Linux, Debian & Ubuntu (APT)
+
+```bash
+# 1. One-time repository and GPG signing key configuration
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://jothish-blip.github.io/apt-repo/felix-archive-keyring.gpg | sudo tee /etc/apt/keyrings/felix-archive-keyring.gpg > /dev/null
+echo "deb [signed-by=/etc/apt/keyrings/felix-archive-keyring.gpg] https://jothish-blip.github.io/apt-repo stable main" | sudo tee /etc/apt/sources.list.d/felix.list > /dev/null
+
+# 2. Update and install Felix
+sudo apt update
+sudo apt install felix
+```
+
+### macOS (Homebrew Tap)
+
+Install via the official verified Homebrew tap:
+
+```bash
+brew install jothish-blip/tap/felix
+```
+
+*(Alternatively: `brew tap jothish-blip/tap && brew install felix`)*
+
+---
+
+## Download Felix v2.0.0
+
+Download pre-compiled, standalone binaries and packages from the **[Official GitHub Releases](https://github.com/jothish-blip/felix/releases/tag/v2.0.0)** page.
+
+| Platform | Architecture | Standalone Binary | Package Archive / Debian Package | Checksum |
 | :--- | :--- | :--- | :--- | :--- |
-| **Windows** | x86_64 / amd64 | [`felix_windows_amd64.exe`](https://github.com/jothish-blip/felix/releases/latest/download/felix_windows_amd64.exe) | [`felix_1.0.0_windows_amd64.zip`](https://github.com/jothish-blip/felix/releases/latest/download/felix_1.0.0_windows_amd64.zip) | [SHA256SUMS](https://github.com/jothish-blip/felix/releases/latest/download/SHA256SUMS) |
-| **Linux** | x86_64 / amd64 | [`felix_linux_amd64`](https://github.com/jothish-blip/felix/releases/latest/download/felix_linux_amd64) | [`felix_1.0.0_linux_amd64.tar.gz`](https://github.com/jothish-blip/felix/releases/latest/download/felix_1.0.0_linux_amd64.tar.gz) | [SHA256SUMS](https://github.com/jothish-blip/felix/releases/latest/download/SHA256SUMS) |
-| **Linux** | ARM64 / aarch64 | [`felix_linux_arm64`](https://github.com/jothish-blip/felix/releases/latest/download/felix_linux_arm64) | [`felix_1.0.0_linux_arm64.tar.gz`](https://github.com/jothish-blip/felix/releases/latest/download/felix_1.0.0_linux_arm64.tar.gz) | [SHA256SUMS](https://github.com/jothish-blip/felix/releases/latest/download/SHA256SUMS) |
-| **macOS** | Intel (x86_64) | [`felix_darwin_amd64`](https://github.com/jothish-blip/felix/releases/latest/download/felix_darwin_amd64) | [`felix_1.0.0_darwin_amd64.tar.gz`](https://github.com/jothish-blip/felix/releases/latest/download/felix_1.0.0_darwin_amd64.tar.gz) | [SHA256SUMS](https://github.com/jothish-blip/felix/releases/latest/download/SHA256SUMS) |
-| **macOS** | Apple Silicon (M-series) | [`felix_darwin_arm64`](https://github.com/jothish-blip/felix/releases/latest/download/felix_darwin_arm64) | [`felix_1.0.0_darwin_arm64.tar.gz`](https://github.com/jothish-blip/felix/releases/latest/download/felix_1.0.0_darwin_arm64.tar.gz) | [SHA256SUMS](https://github.com/jothish-blip/felix/releases/latest/download/SHA256SUMS) |
+| **Windows** | x86_64 / amd64 | [`felix_windows_amd64.exe`](https://github.com/jothish-blip/felix/releases/download/v2.0.0/felix_windows_amd64.exe) | [`felix_2.0.0_windows_amd64.zip`](https://github.com/jothish-blip/felix/releases/download/v2.0.0/felix_2.0.0_windows_amd64.zip) | [SHA256SUMS](https://github.com/jothish-blip/felix/releases/download/v2.0.0/SHA256SUMS) |
+| **Linux (Debian/Kali)** | x86_64 / amd64 | [`felix_linux_amd64`](https://github.com/jothish-blip/felix/releases/download/v2.0.0/felix_linux_amd64) | [`felix_2.0.0_amd64.deb`](https://github.com/jothish-blip/felix/releases/download/v2.0.0/felix_2.0.0_amd64.deb) | [SHA256SUMS](https://github.com/jothish-blip/felix/releases/download/v2.0.0/SHA256SUMS) |
+| **Linux (Debian/Kali)** | ARM64 / aarch64 | [`felix_linux_arm64`](https://github.com/jothish-blip/felix/releases/download/v2.0.0/felix_linux_arm64) | [`felix_2.0.0_arm64.deb`](https://github.com/jothish-blip/felix/releases/download/v2.0.0/felix_2.0.0_arm64.deb) | [SHA256SUMS](https://github.com/jothish-blip/felix/releases/download/v2.0.0/SHA256SUMS) |
+| **Linux (Tarball)** | x86_64 / amd64 | [`felix_linux_amd64`](https://github.com/jothish-blip/felix/releases/download/v2.0.0/felix_linux_amd64) | [`felix_2.0.0_linux_amd64.tar.gz`](https://github.com/jothish-blip/felix/releases/download/v2.0.0/felix_2.0.0_linux_amd64.tar.gz) | [SHA256SUMS](https://github.com/jothish-blip/felix/releases/download/v2.0.0/SHA256SUMS) |
+| **macOS** | Intel (x86_64) | [`felix_darwin_amd64`](https://github.com/jothish-blip/felix/releases/download/v2.0.0/felix_darwin_amd64) | [`felix_2.0.0_darwin_amd64.tar.gz`](https://github.com/jothish-blip/felix/releases/download/v2.0.0/felix_2.0.0_darwin_amd64.tar.gz) | [SHA256SUMS](https://github.com/jothish-blip/felix/releases/download/v2.0.0/SHA256SUMS) |
+| **macOS** | Apple Silicon (M-series) | [`felix_darwin_arm64`](https://github.com/jothish-blip/felix/releases/download/v2.0.0/felix_darwin_arm64) | [`felix_2.0.0_darwin_arm64.tar.gz`](https://github.com/jothish-blip/felix/releases/download/v2.0.0/felix_2.0.0_darwin_arm64.tar.gz) | [SHA256SUMS](https://github.com/jothish-blip/felix/releases/download/v2.0.0/SHA256SUMS) |
 
 ### Integrity Verification
 
@@ -155,41 +185,30 @@ Verify the SHA-256 hash of your downloaded binary before execution:
 
 ```powershell
 # Windows PowerShell
-Get-FileHash .\felix_windows_amd64.exe -Algorithm SHA256
+Get-FileHash .\felix_2.0.0_windows_amd64.zip -Algorithm SHA256
 ```
 
 ```bash
 # Linux / macOS
-sha256sum felix_linux_amd64
-# or macOS
-shasum -a 256 felix_darwin_arm64
+sha256sum felix_2.0.0_linux_amd64.tar.gz
+# or Debian package
+sha256sum felix_2.0.0_amd64.deb
 ```
 
 ---
-
-## Quick Start
 
 ## Windows Installation
 
 Felix provides two distinct Windows installation paths:
 
 ### Path A: Developer / Local Testing — FREE (No Azure / No Paid Certificates)
-For developers, security analysts, and contributors running Felix on their own Windows machines without paying for cloud signing services:
+For developers, security analysts, and contributors running Felix on their own Windows machines:
 
-1. **Acquire Felix:** Download the release ZIP or clone the repository.
-2. **Run Developer Setup:**
+1. **Run Developer Setup:**
    ```powershell
    powershell -ExecutionPolicy Bypass -File .\scripts\setup-dev.ps1
    ```
-   This automated script:
-   - Generates a dedicated **Felix Development Code Signing Certificate** (`CN=Felix Development Code Signing, O=Felix Development, OU=Development Testing Only`).
-   - Prompts for explicit confirmation before installing trust into your local `CurrentUser` store.
-   - Signs `felix.exe` with standard Windows Authenticode.
-   - Installs Felix to `%LOCALAPPDATA%\Felix\bin` and registers it in User `PATH`.
-   - Runs `felix version` and `felix doctor --security` diagnostics.
-
-> [!NOTE]
-> **Local Trust Scope**: The development certificate is trusted **only on your local machine** where you explicitly confirm installation. It is explicitly labeled for DEVELOPMENT / TESTING ONLY and is not a commercial root.
+   This signs `felix.exe` with local development Authenticode, installs Felix to `%LOCALAPPDATA%\Felix\bin`, and registers it in User `PATH`.
 
 To remove development trust at any time:
 ```powershell
@@ -197,29 +216,19 @@ powershell -ExecutionPolicy Bypass -File .\scripts\uninstall-dev-trust.ps1
 ```
 
 ### Path B: Public Production Distribution (Official Releases)
-For users downloading pre-built public releases:
-1. Download `felix_windows_amd64.exe` or `felix_1.0.0_windows_amd64.zip` from [Official GitHub Releases](https://github.com/jothish-blip/felix/releases/latest).
-2. Verify SHA-256 integrity against the published manifest:
-   ```powershell
-   Get-FileHash .\felix_windows_amd64.exe -Algorithm SHA256
-   ```
-3. Run the standard installer:
+1. Download `felix_windows_amd64.exe` or `felix_2.0.0_windows_amd64.zip` from [Official GitHub Releases](https://github.com/jothish-blip/felix/releases/tag/v2.0.0).
+2. Run the installer:
    ```powershell
    powershell -ExecutionPolicy Bypass -File .\scripts\install\install.ps1
    ```
 
-> [!IMPORTANT]
-> **Public SmartScreen Reputation vs. Local Trust**:
-> Public releases are distributed with cryptographic SHA-256 checksums and optional cloud signing hooks. Microsoft Defender SmartScreen reputation develops naturally over download volume and publisher identity. Felix does not bypass SmartScreen; instead, Felix provides the free, safe local development trust path (Path A above) so you can develop and test locally with verified Authenticode signatures.
-
-### Linux & macOS (POSIX)
-1. Download and extract the archive for your architecture:
-   ```bash
-   tar -xzf felix_1.0.0_linux_amd64.tar.gz
-   mkdir -p ~/.felix/bin
-   mv felix ~/.felix/bin/
-   export PATH="$HOME/.felix/bin:$PATH"
-   ```
+### Manual Linux & macOS (POSIX) Tarball Install
+```bash
+tar -xzf felix_2.0.0_linux_amd64.tar.gz
+mkdir -p ~/.felix/bin
+mv felix ~/.felix/bin/
+export PATH="$HOME/.felix/bin:$PATH"
+```
 2. Verify installation:
    ```bash
    felix version

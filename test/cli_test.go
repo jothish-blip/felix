@@ -61,8 +61,8 @@ func TestCLI_Version(t *testing.T) {
 	if !strings.Contains(out, "Felix Security Auditor") {
 		t.Errorf("expected version output to contain 'Felix Security Auditor', got: %s", out)
 	}
-	if !strings.Contains(out, "1.0.0") {
-		t.Errorf("expected version output to contain '1.0.0', got: %s", out)
+	if !strings.Contains(out, "2.0.0") {
+		t.Errorf("expected version output to contain '2.0.0', got: %s", out)
 	}
 }
 

@@ -10,12 +10,12 @@
     Optional local path to felix_windows_amd64.exe or felix.exe. If omitted, downloads from official GitHub release.
 
 .PARAMETER Version
-    The release version to install (defaults to 1.0.0).
+    The release version to install (defaults to 2.0.0).
 #>
 
 param(
     [string]$BinaryPath = "",
-    [string]$Version = "1.0.0",
+    [string]$Version = "2.0.0",
     [switch]$DevSign
 )
 

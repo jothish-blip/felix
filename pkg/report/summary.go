@@ -162,7 +162,7 @@ func BuildMultiTargetReport(targets []string, rawFindings []Finding) Report {
 	summary := Summarize(prioritized)
 
 	rep := Report{
-		Version:         "1.0.0",
+		Version:         "2.0.0",
 		Target:          primaryTarget,
 		Targets:         targets,
 		Timestamp:       time.Now().UTC().Format(time.RFC3339),

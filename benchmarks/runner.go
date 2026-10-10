@@ -43,7 +43,7 @@ func RunBenchmarkSuite(cfg RunnerConfig) (*BenchmarkResult, int) {
 
 	// 1. Collect Git and Environment Metadata
 	gitCommit := getGitCommit(repoRoot)
-	felixVersion := "1.0.0"
+	felixVersion := "2.0.0"
 
 	envInfo := EnvironmentInfo{
 		OS:        runtime.GOOS,

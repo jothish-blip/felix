@@ -12,15 +12,34 @@ Felix is distributed as self-contained, standalone native binaries with **zero r
 
 ### Option 1: Standalone Binary Release (Recommended)
 
-Download the pre-compiled archive for your platform from the [GitHub Releases](https://github.com/jothish-blip/felix/releases):
+Download the pre-compiled archive for your platform from the [GitHub Releases](https://github.com/jothish-blip/felix/releases/tag/v2.0.0):
 
-| Platform | Architecture | Archive | Binary |
+### Package Manager Installation
+
+#### Kali Linux, Debian & Ubuntu (APT)
+```bash
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://jothish-blip.github.io/apt-repo/felix-archive-keyring.gpg | sudo tee /etc/apt/keyrings/felix-archive-keyring.gpg > /dev/null
+echo "deb [signed-by=/etc/apt/keyrings/felix-archive-keyring.gpg] https://jothish-blip.github.io/apt-repo stable main" | sudo tee /etc/apt/sources.list.d/felix.list > /dev/null
+sudo apt update && sudo apt install felix
+```
+
+#### macOS (Homebrew Tap)
+```bash
+brew install jothish-blip/tap/felix
+```
+
+### Standalone Binary Archives
+
+| Platform | Architecture | Archive / Package | Binary |
 | :--- | :--- | :--- | :--- |
-| **Windows** | x86_64 (`amd64`) | `felix_1.0.0_windows_amd64.zip` | `felix_windows_amd64.exe` (`felix.exe`) |
-| **Linux** | x86_64 (`amd64`) | `felix_1.0.0_linux_amd64.tar.gz` | `felix_linux_amd64` (`felix`) |
-| **Linux** | ARM64 (`aarch64`) | `felix_1.0.0_linux_arm64.tar.gz` | `felix_linux_arm64` (`felix`) |
-| **macOS** | Apple Silicon (`arm64`) | `felix_1.0.0_darwin_arm64.tar.gz` | `felix_darwin_arm64` (`felix`) |
-| **macOS** | Intel x86_64 (`amd64`) | `felix_1.0.0_darwin_amd64.tar.gz` | `felix_darwin_amd64` (`felix`) |
+| **Windows** | x86_64 (`amd64`) | `felix_2.0.0_windows_amd64.zip` | `felix_windows_amd64.exe` (`felix.exe`) |
+| **Linux (Debian/Kali)**| x86_64 (`amd64`) | `felix_2.0.0_amd64.deb` | `/usr/bin/felix` |
+| **Linux (Debian/Kali)**| ARM64 (`aarch64`) | `felix_2.0.0_arm64.deb` | `/usr/bin/felix` |
+| **Linux (Tarball)** | x86_64 (`amd64`) | `felix_2.0.0_linux_amd64.tar.gz` | `felix_linux_amd64` (`felix`) |
+| **Linux (Tarball)** | ARM64 (`aarch64`) | `felix_2.0.0_linux_arm64.tar.gz` | `felix_linux_arm64` (`felix`) |
+| **macOS** | Apple Silicon (`arm64`) | `felix_2.0.0_darwin_arm64.tar.gz` | `felix_darwin_arm64` (`felix`) |
+| **macOS** | Intel x86_64 (`amd64`) | `felix_2.0.0_darwin_amd64.tar.gz` | `felix_darwin_amd64` (`felix`) |
 
 #### Windows Installation
 
