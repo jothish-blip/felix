@@ -2,6 +2,8 @@
 
 This guide provides practical instructions for installing, configuring, running, and automating security audits with the Felix CLI.
 
+> For deep command-by-command breakdowns, complete flag specifications, and hands-on testing exercises, see the **[CLI Learning Guide (docs/cli/)](docs/cli/README.md)**.
+
 ---
 
 ## Installation & Distribution

@@ -34,14 +34,19 @@ type CommercialExecutiveSummary struct {
 	ScopeSummary            string         `json:"scope_summary"`
 	CompletionStatus        string         `json:"completion_status"` // COMPLETED, COMPLETED_WITH_ERRORS, PARTIAL, EMPTY
 	AssetsDiscoveredCount   int            `json:"assets_discovered_count"`
+	FrontendAssetsCount     int            `json:"frontend_assets_count,omitempty"`
+	APIEndpointsCount       int            `json:"api_endpoints_count,omitempty"`
+	WebRoutesCount          int            `json:"web_routes_count,omitempty"`
 	FindingsDetectedCount   int            `json:"findings_detected_count"`
 	FindingsVerifiedCount   int            `json:"findings_verified_count"`
 	FindingsUnverifiedCount int            `json:"findings_unverified_count"`
 	ObservationsCount       int            `json:"observations_count"`
+	NotExposedChecksCount   int            `json:"not_exposed_checks_count"`
 	InconclusiveChecksCount int            `json:"inconclusive_checks_count"`
 	NotAssessedChecksCount  int            `json:"not_assessed_checks_count"`
 	SeverityDistribution    map[string]int `json:"severity_distribution"`
 	RiskScore               int            `json:"risk_score"` // 0-100
+	RiskScoreAvailable      bool           `json:"risk_score_available"`
 	RiskLevel               string         `json:"risk_level"` // CRITICAL, HIGH, MEDIUM, LOW, INFORMATIONAL
 	AttackSurfaceHighlights []string       `json:"attack_surface_highlights"`
 	KeyConcerns             []string       `json:"key_concerns"`
@@ -59,6 +64,9 @@ type CommercialAssessmentScope struct {
 	InScopeURLs              []string `json:"in_scope_urls"`
 	DiscoveredEndpointsCount int      `json:"discovered_endpoints_count"`
 	AssessedEndpointsCount   int      `json:"assessed_endpoints_count"`
+	FrontendAssetsCount      int      `json:"frontend_assets_count,omitempty"`
+	APIEndpointsCount        int      `json:"api_endpoints_count,omitempty"`
+	WebRoutesCount           int      `json:"web_routes_count,omitempty"`
 	APIServices              []string `json:"api_services"`
 	CloudResources           []string `json:"cloud_resources"`
 	AuthenticationContexts   []string `json:"authentication_contexts"`
@@ -83,9 +91,12 @@ type CommercialAssessmentScope struct {
 
 // CommercialAttackSurface organizes discovered assets without equating reachability to vulnerability.
 type CommercialAttackSurface struct {
-	TotalAssets  int                            `json:"total_assets"`
-	AssetsByType map[string]int                 `json:"assets_by_type"`
-	Assets       []CommercialAttackSurfaceAsset `json:"assets"`
+	TotalAssets         int                            `json:"total_assets"`
+	FrontendAssetsCount int                            `json:"frontend_assets_count,omitempty"`
+	APIEndpointsCount   int                            `json:"api_endpoints_count,omitempty"`
+	WebRoutesCount      int                            `json:"web_routes_count,omitempty"`
+	AssetsByType        map[string]int                 `json:"assets_by_type"`
+	Assets              []CommercialAttackSurfaceAsset `json:"assets"`
 }
 
 // CommercialAttackSurfaceAsset represents an individual discovered surface item.
@@ -105,15 +116,27 @@ type CommercialAttackSurfaceAsset struct {
 // Section 4: Risk Overview
 // -----------------------------------------------------------------------------
 
+// CommercialScoreBreakdown provides explicit mathematical reconciliation of the final risk score.
+type CommercialScoreBreakdown struct {
+	ExposureSubtotal  float64 `json:"exposure_subtotal"`
+	HardeningSubtotal float64 `json:"hardening_subtotal"`
+	StoryBonus        float64 `json:"story_bonus"`
+	AttackPathScore   int     `json:"attack_path_score,omitempty"`
+	TotalScore        int     `json:"total_score"`
+	Formula           string  `json:"formula"`
+}
+
 // CommercialRiskOverview details the deterministic risk calculation and correlation models.
 type CommercialRiskOverview struct {
 	RiskScore                int                           `json:"risk_score"`
+	RiskScoreAvailable       bool                          `json:"risk_score_available"`
 	RiskLevel                string                        `json:"risk_level"`
 	ScoringModelDescription  string                        `json:"scoring_model_description"`
 	SeverityDistribution     map[string]int                `json:"severity_distribution"`
 	VerifiedCountsBySeverity map[string]int                `json:"verified_counts_by_severity"`
 	DetectedCountsBySeverity map[string]int                `json:"detected_counts_by_severity"`
 	FindingRiskContributions []CommercialRiskContribution  `json:"finding_risk_contributions"`
+	ScoreBreakdown           CommercialScoreBreakdown      `json:"score_breakdown"`
 	SecurityStories          []SecurityStory               `json:"security_stories,omitempty"`
 	AttackPaths              []AttackPathSummary           `json:"attack_paths,omitempty"`
 	RiskConcentrations       []CommercialRiskConcentration `json:"risk_concentrations"`
@@ -217,9 +240,11 @@ type CommercialRiskContribution struct {
 	Title              string   `json:"title,omitempty"`
 	Severity           string   `json:"severity,omitempty"`
 	VerificationStatus string   `json:"verification_status,omitempty"`
-	Score              int      `json:"score"` // 0-40 individual score
+	Score              int      `json:"score"` // 0-40 individual score (raw)
+	Weight             float64  `json:"weight,omitempty"` // diminishing returns multiplier (e.g. 1.0, 0.5, 0.3, 0.2, 0.1)
+	AdjustedScore      float64  `json:"adjusted_score,omitempty"` // score * weight net contribution
 	Model              string   `json:"model"` // "felix_deterministic_v1"
-	RiskType           string   `json:"risk_type"` // "INDIVIDUAL", "CORRELATED", "ATTACK_PATH", "HARDENING_DEFENSE_IN_DEPTH"
+	RiskType           string   `json:"risk_type"` // "EXPOSURE", "HARDENING_DEFENSE_IN_DEPTH", "CORRELATED", "ATTACK_PATH"
 	CorrelatedStoryIDs []string `json:"correlated_story_ids,omitempty"`
 	AttackPathIDs      []string `json:"attack_path_ids,omitempty"`
 	Rationale          string   `json:"rationale"`

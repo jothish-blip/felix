@@ -1,0 +1,1116 @@
+{
+  "version": "1.0.0",
+  "target": "https://www.google.com/",
+  "targets": [
+    "https://www.google.com/"
+  ],
+  "timestamp": "2026-10-10T19:23:34Z",
+  "duration": "4.866s",
+  "duration_ms": 4866,
+  "request_count": 12,
+  "risk_score": 8,
+  "risk_level": "LOW",
+  "summary": {
+    "total_findings": 5,
+    "critical_count": 0,
+    "high_count": 0,
+    "medium_count": 0,
+    "low_count": 2,
+    "info_count": 3,
+    "verified_count": 5,
+    "detected_count": 0,
+    "observed_count": 0,
+    "not_verified_count": 0,
+    "not_exposed_count": 0,
+    "attempted_count": 5,
+    "verification_rate_attempted": 100,
+    "verification_rate_total": 100,
+    "by_source": {
+      "api": 5
+    }
+  },
+  "top_priorities": [
+    {
+      "id": "API-bd9aa948",
+      "title": "Missing Content-Security-Policy (CSP) defense-in-depth header",
+      "category": "missing-csp",
+      "severity": "LOW",
+      "confidence": "HIGH",
+      "target": "https://www.google.com",
+      "endpoint": "https://www.google.com",
+      "method": "GET",
+      "description": "Missing Content-Security-Policy (CSP) defense-in-depth header",
+      "evidence_summary": "Response headers do not include Content-Security-Policy.",
+      "evidence": {
+        "observation": "Response headers do not include Content-Security-Policy.",
+        "location": "https://www.google.com/",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "header_inspection",
+        "detection_status": "DETECTED",
+        "negative_evidence": "Informational hardening observation; does not constitute an exploitable vulnerability by itself.",
+        "details": {
+          "category": "missing-csp",
+          "header": "Content-Security-Policy",
+          "observed": "absent"
+        }
+      },
+      "verification": {
+        "status": "VERIFIED",
+        "detection_status": "DETECTED",
+        "result": "Evaluated server HTTP response headers; missing-csp defense-in-depth header was not present."
+      },
+      "remediation": "Deploy a robust Content-Security-Policy (CSP) header restricting script execution, styles, and object embeds to trusted sources. Begin with `Content-Security-Policy-Report-Only` during staging.",
+      "source": "api",
+      "fingerprint": "bd9aa948fa46dde4272ab852379cf808e652871229b3ff50046a54717ec6b57f",
+      "score": 5
+    },
+    {
+      "id": "API-65534c31",
+      "title": "Missing HTTP Strict-Transport-Security (HSTS) header on HTTPS endpoint",
+      "category": "missing-hsts",
+      "severity": "LOW",
+      "confidence": "HIGH",
+      "target": "https://www.google.com",
+      "endpoint": "https://www.google.com",
+      "method": "GET",
+      "description": "Missing HTTP Strict-Transport-Security (HSTS) header on HTTPS endpoint",
+      "evidence_summary": "HTTPS response headers do not include Strict-Transport-Security.",
+      "evidence": {
+        "observation": "HTTPS response headers do not include Strict-Transport-Security.",
+        "location": "https://www.google.com/",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "header_inspection",
+        "detection_status": "DETECTED",
+        "negative_evidence": "Endpoint is served over HTTPS but does not mandate persistent transport security.",
+        "details": {
+          "category": "missing-hsts",
+          "header": "Strict-Transport-Security",
+          "observed": "absent"
+        }
+      },
+      "verification": {
+        "status": "VERIFIED",
+        "detection_status": "DETECTED",
+        "result": "Evaluated server HTTP response headers; missing-hsts defense-in-depth header was not present."
+      },
+      "remediation": "Enable HTTP Strict-Transport-Security (HSTS) with a directive such as `Strict-Transport-Security: max-age=31536000; includeSubDomains; preload` on all HTTPS responses.",
+      "source": "api",
+      "fingerprint": "65534c31a56bf7b07a65469ea29ae70fab3f2df47ab806e9c5286239f0448851",
+      "score": 5
+    },
+    {
+      "id": "API-8536c535",
+      "title": "Missing Permissions-Policy header (browser feature gating)",
+      "category": "missing-permissions-policy",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "https://www.google.com",
+      "endpoint": "https://www.google.com",
+      "method": "GET",
+      "description": "Missing Permissions-Policy header (browser feature gating)",
+      "evidence_summary": "Response headers do not include Permissions-Policy.",
+      "evidence": {
+        "observation": "Response headers do not include Permissions-Policy.",
+        "location": "https://www.google.com/",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "header_inspection",
+        "detection_status": "DETECTED",
+        "negative_evidence": "Browser feature delegation policy not explicitly configured.",
+        "details": {
+          "category": "missing-permissions-policy",
+          "header": "Permissions-Policy",
+          "observed": "absent"
+        }
+      },
+      "verification": {
+        "status": "VERIFIED",
+        "detection_status": "DETECTED",
+        "result": "Evaluated server HTTP response headers; missing-permissions-policy defense-in-depth header was not present."
+      },
+      "remediation": "Configure a `Permissions-Policy` header explicitly disabling unnecessary browser capabilities (e.g. `camera=(), microphone=(), geolocation=()`).",
+      "source": "api",
+      "fingerprint": "8536c5354ca68ea590d5eee8e22fa07404bfbda9893bab7ad0128d207374a291",
+      "score": 1
+    },
+    {
+      "id": "API-eaadbe75",
+      "title": "Missing Referrer-Policy defense-in-depth header",
+      "category": "missing-referrer-policy",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "https://www.google.com",
+      "endpoint": "https://www.google.com",
+      "method": "GET",
+      "description": "Missing Referrer-Policy defense-in-depth header",
+      "evidence_summary": "Response headers do not include Referrer-Policy (browser default applies).",
+      "evidence": {
+        "observation": "Response headers do not include Referrer-Policy (browser default applies).",
+        "location": "https://www.google.com/",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "header_inspection",
+        "detection_status": "DETECTED",
+        "negative_evidence": "Referrer policy is not explicitly declared; browser fallback applies.",
+        "details": {
+          "category": "missing-referrer-policy",
+          "header": "Referrer-Policy",
+          "observed": "absent"
+        }
+      },
+      "verification": {
+        "status": "VERIFIED",
+        "detection_status": "DETECTED",
+        "result": "Evaluated server HTTP response headers; missing-referrer-policy defense-in-depth header was not present."
+      },
+      "remediation": "Review the observed endpoint and asset configurations, adhere to principle of least privilege, and restrict unauthorized access.",
+      "source": "api",
+      "fingerprint": "eaadbe75444b67a00fa50ef4de9a7a4b837ad74e42680463c5874f58a8af5bf3",
+      "score": 1
+    },
+    {
+      "id": "API-2558c243",
+      "title": "Missing or incomplete X-Content-Type-Options: nosniff header",
+      "category": "missing-x-content-type-options",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "https://www.google.com",
+      "endpoint": "https://www.google.com",
+      "method": "GET",
+      "description": "Missing or incomplete X-Content-Type-Options: nosniff header",
+      "evidence_summary": "X-Content-Type-Options observed: \"\" (expected 'nosniff').",
+      "evidence": {
+        "observation": "X-Content-Type-Options observed: \"\" (expected 'nosniff').",
+        "location": "https://www.google.com/",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "header_inspection",
+        "detection_status": "DETECTED",
+        "negative_evidence": "MIME sniffing protection not explicitly declared.",
+        "details": {
+          "category": "missing-x-content-type-options",
+          "header": "X-Content-Type-Options",
+          "observed": ""
+        }
+      },
+      "verification": {
+        "status": "VERIFIED",
+        "detection_status": "DETECTED",
+        "result": "Evaluated server HTTP response headers; missing-x-content-type-options defense-in-depth header was not present."
+      },
+      "remediation": "Add `X-Content-Type-Options: nosniff` header across all responses to prevent browser MIME-type sniffing.",
+      "source": "api",
+      "fingerprint": "2558c24325549d9d52800ba4ca0afc59faebfea3df59d9763c28022d9033ec59",
+      "score": 1
+    }
+  ],
+  "findings": [
+    {
+      "id": "API-bd9aa948",
+      "title": "Missing Content-Security-Policy (CSP) defense-in-depth header",
+      "category": "missing-csp",
+      "severity": "LOW",
+      "confidence": "HIGH",
+      "target": "https://www.google.com",
+      "endpoint": "https://www.google.com",
+      "method": "GET",
+      "description": "Missing Content-Security-Policy (CSP) defense-in-depth header",
+      "evidence_summary": "Response headers do not include Content-Security-Policy.",
+      "evidence": {
+        "observation": "Response headers do not include Content-Security-Policy.",
+        "location": "https://www.google.com/",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "header_inspection",
+        "detection_status": "DETECTED",
+        "negative_evidence": "Informational hardening observation; does not constitute an exploitable vulnerability by itself.",
+        "details": {
+          "category": "missing-csp",
+          "header": "Content-Security-Policy",
+          "observed": "absent"
+        }
+      },
+      "verification": {
+        "status": "VERIFIED",
+        "detection_status": "DETECTED",
+        "result": "Evaluated server HTTP response headers; missing-csp defense-in-depth header was not present."
+      },
+      "remediation": "Deploy a robust Content-Security-Policy (CSP) header restricting script execution, styles, and object embeds to trusted sources. Begin with `Content-Security-Policy-Report-Only` during staging.",
+      "source": "api",
+      "fingerprint": "bd9aa948fa46dde4272ab852379cf808e652871229b3ff50046a54717ec6b57f",
+      "score": 5
+    },
+    {
+      "id": "API-65534c31",
+      "title": "Missing HTTP Strict-Transport-Security (HSTS) header on HTTPS endpoint",
+      "category": "missing-hsts",
+      "severity": "LOW",
+      "confidence": "HIGH",
+      "target": "https://www.google.com",
+      "endpoint": "https://www.google.com",
+      "method": "GET",
+      "description": "Missing HTTP Strict-Transport-Security (HSTS) header on HTTPS endpoint",
+      "evidence_summary": "HTTPS response headers do not include Strict-Transport-Security.",
+      "evidence": {
+        "observation": "HTTPS response headers do not include Strict-Transport-Security.",
+        "location": "https://www.google.com/",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "header_inspection",
+        "detection_status": "DETECTED",
+        "negative_evidence": "Endpoint is served over HTTPS but does not mandate persistent transport security.",
+        "details": {
+          "category": "missing-hsts",
+          "header": "Strict-Transport-Security",
+          "observed": "absent"
+        }
+      },
+      "verification": {
+        "status": "VERIFIED",
+        "detection_status": "DETECTED",
+        "result": "Evaluated server HTTP response headers; missing-hsts defense-in-depth header was not present."
+      },
+      "remediation": "Enable HTTP Strict-Transport-Security (HSTS) with a directive such as `Strict-Transport-Security: max-age=31536000; includeSubDomains; preload` on all HTTPS responses.",
+      "source": "api",
+      "fingerprint": "65534c31a56bf7b07a65469ea29ae70fab3f2df47ab806e9c5286239f0448851",
+      "score": 5
+    },
+    {
+      "id": "API-8536c535",
+      "title": "Missing Permissions-Policy header (browser feature gating)",
+      "category": "missing-permissions-policy",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "https://www.google.com",
+      "endpoint": "https://www.google.com",
+      "method": "GET",
+      "description": "Missing Permissions-Policy header (browser feature gating)",
+      "evidence_summary": "Response headers do not include Permissions-Policy.",
+      "evidence": {
+        "observation": "Response headers do not include Permissions-Policy.",
+        "location": "https://www.google.com/",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "header_inspection",
+        "detection_status": "DETECTED",
+        "negative_evidence": "Browser feature delegation policy not explicitly configured.",
+        "details": {
+          "category": "missing-permissions-policy",
+          "header": "Permissions-Policy",
+          "observed": "absent"
+        }
+      },
+      "verification": {
+        "status": "VERIFIED",
+        "detection_status": "DETECTED",
+        "result": "Evaluated server HTTP response headers; missing-permissions-policy defense-in-depth header was not present."
+      },
+      "remediation": "Configure a `Permissions-Policy` header explicitly disabling unnecessary browser capabilities (e.g. `camera=(), microphone=(), geolocation=()`).",
+      "source": "api",
+      "fingerprint": "8536c5354ca68ea590d5eee8e22fa07404bfbda9893bab7ad0128d207374a291",
+      "score": 1
+    },
+    {
+      "id": "API-eaadbe75",
+      "title": "Missing Referrer-Policy defense-in-depth header",
+      "category": "missing-referrer-policy",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "https://www.google.com",
+      "endpoint": "https://www.google.com",
+      "method": "GET",
+      "description": "Missing Referrer-Policy defense-in-depth header",
+      "evidence_summary": "Response headers do not include Referrer-Policy (browser default applies).",
+      "evidence": {
+        "observation": "Response headers do not include Referrer-Policy (browser default applies).",
+        "location": "https://www.google.com/",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "header_inspection",
+        "detection_status": "DETECTED",
+        "negative_evidence": "Referrer policy is not explicitly declared; browser fallback applies.",
+        "details": {
+          "category": "missing-referrer-policy",
+          "header": "Referrer-Policy",
+          "observed": "absent"
+        }
+      },
+      "verification": {
+        "status": "VERIFIED",
+        "detection_status": "DETECTED",
+        "result": "Evaluated server HTTP response headers; missing-referrer-policy defense-in-depth header was not present."
+      },
+      "remediation": "Review the observed endpoint and asset configurations, adhere to principle of least privilege, and restrict unauthorized access.",
+      "source": "api",
+      "fingerprint": "eaadbe75444b67a00fa50ef4de9a7a4b837ad74e42680463c5874f58a8af5bf3",
+      "score": 1
+    },
+    {
+      "id": "API-2558c243",
+      "title": "Missing or incomplete X-Content-Type-Options: nosniff header",
+      "category": "missing-x-content-type-options",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "https://www.google.com",
+      "endpoint": "https://www.google.com",
+      "method": "GET",
+      "description": "Missing or incomplete X-Content-Type-Options: nosniff header",
+      "evidence_summary": "X-Content-Type-Options observed: \"\" (expected 'nosniff').",
+      "evidence": {
+        "observation": "X-Content-Type-Options observed: \"\" (expected 'nosniff').",
+        "location": "https://www.google.com/",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "header_inspection",
+        "detection_status": "DETECTED",
+        "negative_evidence": "MIME sniffing protection not explicitly declared.",
+        "details": {
+          "category": "missing-x-content-type-options",
+          "header": "X-Content-Type-Options",
+          "observed": ""
+        }
+      },
+      "verification": {
+        "status": "VERIFIED",
+        "detection_status": "DETECTED",
+        "result": "Evaluated server HTTP response headers; missing-x-content-type-options defense-in-depth header was not present."
+      },
+      "remediation": "Add `X-Content-Type-Options: nosniff` header across all responses to prevent browser MIME-type sniffing.",
+      "source": "api",
+      "fingerprint": "2558c24325549d9d52800ba4ca0afc59faebfea3df59d9763c28022d9033ec59",
+      "score": 1
+    }
+  ],
+  "security_stories": [],
+  "commercial_report": {
+    "schema_version": "2.0.0",
+    "report_id": "REP-ASM-d0e196a0",
+    "generated_at": "2026-10-10T19:23:34Z",
+    "executive_summary": {
+      "assessment_id": "ASM-d0e196a0",
+      "target": "https://www.google.com/",
+      "targets": [
+        "https://www.google.com/"
+      ],
+      "timestamp": "2026-10-10T19:23:34Z",
+      "scope_summary": "Authorized web security evaluation of https://www.google.com/ spanning 1 targets.",
+      "completion_status": "COMPLETED",
+      "assets_discovered_count": 2,
+      "findings_detected_count": 0,
+      "findings_verified_count": 5,
+      "findings_unverified_count": 0,
+      "observations_count": 0,
+      "inconclusive_checks_count": 0,
+      "not_assessed_checks_count": 0,
+      "severity_distribution": {
+        "CRITICAL": 0,
+        "HIGH": 0,
+        "INFO": 3,
+        "LOW": 2,
+        "MEDIUM": 0
+      },
+      "risk_score": 8,
+      "risk_level": "LOW",
+      "attack_surface_highlights": [
+        "2 total assets identified across 1 endpoint/route categories."
+      ],
+      "key_concerns": [
+        "No Critical or High severity exposures were verified during assessment execution."
+      ],
+      "assessment_limitations": [
+        "Assessment strictly enforced authorized, non-destructive black-box audit boundaries.",
+        "No invasive privilege mutation, destructive payloads, or credential stuffing attacks were executed."
+      ],
+      "posture_statement": "Felix confirmed 5 verified findings and 0 detected findings, resulting in a deterministic risk score of 8/100 (LOW). High-priority verified findings represent immediate actionable exposures."
+    },
+    "assessment_scope": {
+      "in_scope_domains": [
+        "www.google.com"
+      ],
+      "in_scope_urls": [
+        "https://www.google.com/"
+      ],
+      "discovered_endpoints_count": 2,
+      "assessed_endpoints_count": 5,
+      "api_services": null,
+      "cloud_resources": null,
+      "authentication_contexts": [
+        "Unauthenticated Baseline"
+      ],
+      "started_at": "2026-10-10T19:23:34Z",
+      "completed_at": "2026-10-10T19:23:34Z",
+      "duration": "4.866s",
+      "engines_executed": [
+        "felix-crawler",
+        "felix-secrets",
+        "felix-cloud",
+        "felix-api",
+        "felix-webvuln",
+        "felix-authz",
+        "felix-sessionsec",
+        "felix-businesslogic",
+        "felix-correlation",
+        "felix-verification"
+      ],
+      "engines_skipped": null,
+      "completed_checks_count": 5,
+      "incomplete_checks_count": 0,
+      "inconclusive_checks_count": 0,
+      "explicit_restrictions": null,
+      "excluded_targets": null,
+      "provenance": "LIVE",
+      "synthetic_fixture": false
+    },
+    "attack_surface": {
+      "total_assets": 2,
+      "assets_by_type": {
+        "DOMAIN": 2
+      },
+      "assets": [
+        {
+          "asset_id": "AST-https://",
+          "url": "https://www.google.com",
+          "asset_type": "DOMAIN",
+          "discovery_source": "api",
+          "assessment_state": "ASSESSED",
+          "authentication_context": "Unknown",
+          "associated_finding_ids": [
+            "API-bd9aa948",
+            "API-65534c31",
+            "API-8536c535",
+            "API-eaadbe75",
+            "API-2558c243"
+          ],
+          "exposure_info": "Observed via api (missing-csp)",
+          "http_status": 200
+        },
+        {
+          "asset_id": "AST-https://",
+          "url": "https://www.google.com/",
+          "asset_type": "DOMAIN",
+          "discovery_source": "assessment_target_configuration",
+          "assessment_state": "ASSESSED",
+          "authentication_context": "Configured Assessment Target",
+          "exposure_info": "Primary authorized target boundary"
+        }
+      ]
+    },
+    "risk_overview": {
+      "risk_score": 8,
+      "risk_level": "LOW",
+      "scoring_model_description": "Felix Deterministic Risk Model (0–100): Weighted empirical verification, multi-exposure diminishing returns, hardening caps (max 20 pts), and correlated story bonuses (max +15 pts). This metric reflects demonstrable exposure and is deliberately distinct from standalone CVSS base scoring.",
+      "severity_distribution": {
+        "CRITICAL": 0,
+        "HIGH": 0,
+        "INFO": 3,
+        "LOW": 2,
+        "MEDIUM": 0
+      },
+      "verified_counts_by_severity": {
+        "INFO": 3,
+        "LOW": 2
+      },
+      "detected_counts_by_severity": {},
+      "finding_risk_contributions": [
+        {
+          "finding_id": "API-65534c31",
+          "title": "Missing HTTP Strict-Transport-Security (HSTS) header on HTTPS endpoint",
+          "severity": "LOW",
+          "verification_status": "VERIFIED",
+          "score": 5,
+          "model": "felix_deterministic_v1",
+          "risk_type": "HARDENING_DEFENSE_IN_DEPTH",
+          "rationale": "Calculated risk score 5/40 weighted by severity (LOW), confidence (HIGH), and verification status (VERIFIED).",
+          "is_available": true
+        },
+        {
+          "finding_id": "API-bd9aa948",
+          "title": "Missing Content-Security-Policy (CSP) defense-in-depth header",
+          "severity": "LOW",
+          "verification_status": "VERIFIED",
+          "score": 5,
+          "model": "felix_deterministic_v1",
+          "risk_type": "HARDENING_DEFENSE_IN_DEPTH",
+          "rationale": "Calculated risk score 5/40 weighted by severity (LOW), confidence (HIGH), and verification status (VERIFIED).",
+          "is_available": true
+        },
+        {
+          "finding_id": "API-2558c243",
+          "title": "Missing or incomplete X-Content-Type-Options: nosniff header",
+          "severity": "INFO",
+          "verification_status": "VERIFIED",
+          "score": 1,
+          "model": "felix_deterministic_v1",
+          "risk_type": "HARDENING_DEFENSE_IN_DEPTH",
+          "rationale": "Calculated risk score 1/40 weighted by severity (INFO), confidence (HIGH), and verification status (VERIFIED).",
+          "is_available": true
+        },
+        {
+          "finding_id": "API-8536c535",
+          "title": "Missing Permissions-Policy header (browser feature gating)",
+          "severity": "INFO",
+          "verification_status": "VERIFIED",
+          "score": 1,
+          "model": "felix_deterministic_v1",
+          "risk_type": "HARDENING_DEFENSE_IN_DEPTH",
+          "rationale": "Calculated risk score 1/40 weighted by severity (INFO), confidence (HIGH), and verification status (VERIFIED).",
+          "is_available": true
+        },
+        {
+          "finding_id": "API-eaadbe75",
+          "title": "Missing Referrer-Policy defense-in-depth header",
+          "severity": "INFO",
+          "verification_status": "VERIFIED",
+          "score": 1,
+          "model": "felix_deterministic_v1",
+          "risk_type": "HARDENING_DEFENSE_IN_DEPTH",
+          "rationale": "Calculated risk score 1/40 weighted by severity (INFO), confidence (HIGH), and verification status (VERIFIED).",
+          "is_available": true
+        }
+      ],
+      "risk_concentrations": [
+        {
+          "component": "www.google.com",
+          "risk_level": "LOW",
+          "score": 13,
+          "count": 5
+        }
+      ],
+      "risk_limitations": [
+        "Risk score reflects non-destructive black-box evaluation and does not calculate likelihood of zero-day attacks or internal network penetration.",
+        "Hardening findings (e.g. defense-in-depth headers) are strictly capped at 20 points maximum to prevent artificial score inflation on otherwise secure targets.",
+        "Candidate attack paths without empirical confirmation contribute zero unverified risk to the primary score."
+      ]
+    },
+    "verified_findings": [
+      {
+        "id": "API-65534c31",
+        "title": "Missing HTTP Strict-Transport-Security (HSTS) header on HTTPS endpoint",
+        "description": "Missing HTTP Strict-Transport-Security (HSTS) header on HTTPS endpoint",
+        "affected_asset": "https://www.google.com",
+        "asset_location": "https://www.google.com/",
+        "severity": "LOW",
+        "confidence": {
+          "detection_confidence": "HIGH",
+          "verification_confidence": "HIGH",
+          "overall_confidence": "HIGH",
+          "confidence_score": 90,
+          "rationale": "Detection confidence HIGH based on api; verification empirical confidence HIGH."
+        },
+        "authentication_state": "Unknown",
+        "detection_method": "header_inspection",
+        "verification": {
+          "status": "VERIFIED",
+          "method_or_policy": "POL-MISSING-HSTS-01",
+          "criteria_satisfied": [
+            "Resource reachability verified",
+            "Response content criteria satisfied"
+          ],
+          "preconditions": [
+            "Authorized assessment target within defined scope boundaries"
+          ],
+          "limitations": [
+            "Verification establishes tested condition only; non-destructive bounds enforced."
+          ],
+          "result_summary": "Evaluated server HTTP response headers; missing-hsts defense-in-depth header was not present."
+        },
+        "evidence": {
+          "observation": "HTTPS response headers do not include Strict-Transport-Security.",
+          "location": "https://www.google.com/",
+          "http_method": "GET",
+          "http_status": 200,
+          "sanitized_excerpt": "HTTPS response headers do not include Strict-Transport-Security.",
+          "evidence_summary": "HTTPS response headers do not include Strict-Transport-Security.",
+          "negative_evidence": "Endpoint is served over HTTPS but does not mandate persistent transport security.",
+          "evidence_references": [
+            "https://www.google.com",
+            "https://www.google.com/"
+          ],
+          "provenance": "LIVE",
+          "timestamp": "2026-10-10T19:23:34Z",
+          "is_available": true
+        },
+        "security_impact": {
+          "demonstrated_impact": "Server HTTP response headers lack standard defense-in-depth protection directives.",
+          "plausible_impact": "In the event of an independent injection flaw, browser-side defensive mitigations would be absent.",
+          "unverified_impact": "No active injection, cross-site scripting, or framing condition was demonstrated.",
+          "summary": "Absence of hardening headers reduces defense-in-depth protection against secondary attacks."
+        },
+        "risk_contribution": {
+          "finding_id": "API-65534c31",
+          "title": "Missing HTTP Strict-Transport-Security (HSTS) header on HTTPS endpoint",
+          "severity": "LOW",
+          "verification_status": "VERIFIED",
+          "score": 5,
+          "model": "felix_deterministic_v1",
+          "risk_type": "HARDENING_DEFENSE_IN_DEPTH",
+          "rationale": "Calculated risk score 5/40 weighted by severity (LOW), confidence (HIGH), and verification status (VERIFIED).",
+          "is_available": true
+        },
+        "category": "missing-hsts",
+        "source": "api"
+      },
+      {
+        "id": "API-bd9aa948",
+        "title": "Missing Content-Security-Policy (CSP) defense-in-depth header",
+        "description": "Missing Content-Security-Policy (CSP) defense-in-depth header",
+        "affected_asset": "https://www.google.com",
+        "asset_location": "https://www.google.com/",
+        "severity": "LOW",
+        "confidence": {
+          "detection_confidence": "HIGH",
+          "verification_confidence": "HIGH",
+          "overall_confidence": "HIGH",
+          "confidence_score": 90,
+          "rationale": "Detection confidence HIGH based on api; verification empirical confidence HIGH."
+        },
+        "authentication_state": "Unknown",
+        "detection_method": "header_inspection",
+        "verification": {
+          "status": "VERIFIED",
+          "method_or_policy": "POL-MISSING-CSP-01",
+          "criteria_satisfied": [
+            "Resource reachability verified",
+            "Response content criteria satisfied"
+          ],
+          "preconditions": [
+            "Authorized assessment target within defined scope boundaries"
+          ],
+          "limitations": [
+            "Verification establishes tested condition only; non-destructive bounds enforced."
+          ],
+          "result_summary": "Evaluated server HTTP response headers; missing-csp defense-in-depth header was not present."
+        },
+        "evidence": {
+          "observation": "Response headers do not include Content-Security-Policy.",
+          "location": "https://www.google.com/",
+          "http_method": "GET",
+          "http_status": 200,
+          "sanitized_excerpt": "Response headers do not include Content-Security-Policy.",
+          "evidence_summary": "Response headers do not include Content-Security-Policy.",
+          "negative_evidence": "Informational hardening observation; does not constitute an exploitable vulnerability by itself.",
+          "evidence_references": [
+            "https://www.google.com",
+            "https://www.google.com/"
+          ],
+          "provenance": "LIVE",
+          "timestamp": "2026-10-10T19:23:34Z",
+          "is_available": true
+        },
+        "security_impact": {
+          "demonstrated_impact": "Server HTTP response headers lack standard defense-in-depth protection directives.",
+          "plausible_impact": "In the event of an independent injection flaw, browser-side defensive mitigations would be absent.",
+          "unverified_impact": "No active injection, cross-site scripting, or framing condition was demonstrated.",
+          "summary": "Absence of hardening headers reduces defense-in-depth protection against secondary attacks."
+        },
+        "risk_contribution": {
+          "finding_id": "API-bd9aa948",
+          "title": "Missing Content-Security-Policy (CSP) defense-in-depth header",
+          "severity": "LOW",
+          "verification_status": "VERIFIED",
+          "score": 5,
+          "model": "felix_deterministic_v1",
+          "risk_type": "HARDENING_DEFENSE_IN_DEPTH",
+          "rationale": "Calculated risk score 5/40 weighted by severity (LOW), confidence (HIGH), and verification status (VERIFIED).",
+          "is_available": true
+        },
+        "category": "missing-csp",
+        "source": "api"
+      },
+      {
+        "id": "API-2558c243",
+        "title": "Missing or incomplete X-Content-Type-Options: nosniff header",
+        "description": "Missing or incomplete X-Content-Type-Options: nosniff header",
+        "affected_asset": "https://www.google.com",
+        "asset_location": "https://www.google.com/",
+        "severity": "INFO",
+        "confidence": {
+          "detection_confidence": "HIGH",
+          "verification_confidence": "HIGH",
+          "overall_confidence": "HIGH",
+          "confidence_score": 90,
+          "rationale": "Detection confidence HIGH based on api; verification empirical confidence HIGH."
+        },
+        "authentication_state": "Unknown",
+        "detection_method": "header_inspection",
+        "verification": {
+          "status": "VERIFIED",
+          "method_or_policy": "POL-MISSING-X-CONTENT-TYPE-OPTIONS-01",
+          "criteria_satisfied": [
+            "Resource reachability verified",
+            "Response content criteria satisfied"
+          ],
+          "preconditions": [
+            "Authorized assessment target within defined scope boundaries"
+          ],
+          "limitations": [
+            "Verification establishes tested condition only; non-destructive bounds enforced."
+          ],
+          "result_summary": "Evaluated server HTTP response headers; missing-x-content-type-options defense-in-depth header was not present."
+        },
+        "evidence": {
+          "observation": "X-Content-Type-Options observed: \"\" (expected 'nosniff').",
+          "location": "https://www.google.com/",
+          "http_method": "GET",
+          "http_status": 200,
+          "sanitized_excerpt": "X-Content-Type-Options observed: \"\" (expected 'nosniff').",
+          "evidence_summary": "X-Content-Type-Options observed: \"\" (expected 'nosniff').",
+          "negative_evidence": "MIME sniffing protection not explicitly declared.",
+          "evidence_references": [
+            "https://www.google.com",
+            "https://www.google.com/"
+          ],
+          "provenance": "LIVE",
+          "timestamp": "2026-10-10T19:23:34Z",
+          "is_available": true
+        },
+        "security_impact": {
+          "demonstrated_impact": "Server HTTP response headers lack standard defense-in-depth protection directives.",
+          "plausible_impact": "In the event of an independent injection flaw, browser-side defensive mitigations would be absent.",
+          "unverified_impact": "No active injection, cross-site scripting, or framing condition was demonstrated.",
+          "summary": "Absence of hardening headers reduces defense-in-depth protection against secondary attacks."
+        },
+        "risk_contribution": {
+          "finding_id": "API-2558c243",
+          "title": "Missing or incomplete X-Content-Type-Options: nosniff header",
+          "severity": "INFO",
+          "verification_status": "VERIFIED",
+          "score": 1,
+          "model": "felix_deterministic_v1",
+          "risk_type": "HARDENING_DEFENSE_IN_DEPTH",
+          "rationale": "Calculated risk score 1/40 weighted by severity (INFO), confidence (HIGH), and verification status (VERIFIED).",
+          "is_available": true
+        },
+        "category": "missing-x-content-type-options",
+        "source": "api"
+      },
+      {
+        "id": "API-8536c535",
+        "title": "Missing Permissions-Policy header (browser feature gating)",
+        "description": "Missing Permissions-Policy header (browser feature gating)",
+        "affected_asset": "https://www.google.com",
+        "asset_location": "https://www.google.com/",
+        "severity": "INFO",
+        "confidence": {
+          "detection_confidence": "HIGH",
+          "verification_confidence": "HIGH",
+          "overall_confidence": "HIGH",
+          "confidence_score": 90,
+          "rationale": "Detection confidence HIGH based on api; verification empirical confidence HIGH."
+        },
+        "authentication_state": "Unknown",
+        "detection_method": "header_inspection",
+        "verification": {
+          "status": "VERIFIED",
+          "method_or_policy": "POL-MISSING-PERMISSIONS-POLICY-01",
+          "criteria_satisfied": [
+            "Resource reachability verified",
+            "Response content criteria satisfied"
+          ],
+          "preconditions": [
+            "Authorized assessment target within defined scope boundaries"
+          ],
+          "limitations": [
+            "Verification establishes tested condition only; non-destructive bounds enforced."
+          ],
+          "result_summary": "Evaluated server HTTP response headers; missing-permissions-policy defense-in-depth header was not present."
+        },
+        "evidence": {
+          "observation": "Response headers do not include Permissions-Policy.",
+          "location": "https://www.google.com/",
+          "http_method": "GET",
+          "http_status": 200,
+          "sanitized_excerpt": "Response headers do not include Permissions-Policy.",
+          "evidence_summary": "Response headers do not include Permissions-Policy.",
+          "negative_evidence": "Browser feature delegation policy not explicitly configured.",
+          "evidence_references": [
+            "https://www.google.com",
+            "https://www.google.com/"
+          ],
+          "provenance": "LIVE",
+          "timestamp": "2026-10-10T19:23:34Z",
+          "is_available": true
+        },
+        "security_impact": {
+          "demonstrated_impact": "Server HTTP response headers lack standard defense-in-depth protection directives.",
+          "plausible_impact": "In the event of an independent injection flaw, browser-side defensive mitigations would be absent.",
+          "unverified_impact": "No active injection, cross-site scripting, or framing condition was demonstrated.",
+          "summary": "Absence of hardening headers reduces defense-in-depth protection against secondary attacks."
+        },
+        "risk_contribution": {
+          "finding_id": "API-8536c535",
+          "title": "Missing Permissions-Policy header (browser feature gating)",
+          "severity": "INFO",
+          "verification_status": "VERIFIED",
+          "score": 1,
+          "model": "felix_deterministic_v1",
+          "risk_type": "HARDENING_DEFENSE_IN_DEPTH",
+          "rationale": "Calculated risk score 1/40 weighted by severity (INFO), confidence (HIGH), and verification status (VERIFIED).",
+          "is_available": true
+        },
+        "category": "missing-permissions-policy",
+        "source": "api"
+      },
+      {
+        "id": "API-eaadbe75",
+        "title": "Missing Referrer-Policy defense-in-depth header",
+        "description": "Missing Referrer-Policy defense-in-depth header",
+        "affected_asset": "https://www.google.com",
+        "asset_location": "https://www.google.com/",
+        "severity": "INFO",
+        "confidence": {
+          "detection_confidence": "HIGH",
+          "verification_confidence": "HIGH",
+          "overall_confidence": "HIGH",
+          "confidence_score": 90,
+          "rationale": "Detection confidence HIGH based on api; verification empirical confidence HIGH."
+        },
+        "authentication_state": "Unknown",
+        "detection_method": "header_inspection",
+        "verification": {
+          "status": "VERIFIED",
+          "method_or_policy": "POL-MISSING-REFERRER-POLICY-01",
+          "criteria_satisfied": [
+            "Resource reachability verified",
+            "Response content criteria satisfied"
+          ],
+          "preconditions": [
+            "Authorized assessment target within defined scope boundaries"
+          ],
+          "limitations": [
+            "Verification establishes tested condition only; non-destructive bounds enforced."
+          ],
+          "result_summary": "Evaluated server HTTP response headers; missing-referrer-policy defense-in-depth header was not present."
+        },
+        "evidence": {
+          "observation": "Response headers do not include Referrer-Policy (browser default applies).",
+          "location": "https://www.google.com/",
+          "http_method": "GET",
+          "http_status": 200,
+          "sanitized_excerpt": "Response headers do not include Referrer-Policy (browser default applies).",
+          "evidence_summary": "Response headers do not include Referrer-Policy (browser default applies).",
+          "negative_evidence": "Referrer policy is not explicitly declared; browser fallback applies.",
+          "evidence_references": [
+            "https://www.google.com",
+            "https://www.google.com/"
+          ],
+          "provenance": "LIVE",
+          "timestamp": "2026-10-10T19:23:34Z",
+          "is_available": true
+        },
+        "security_impact": {
+          "demonstrated_impact": "Server HTTP response headers lack standard defense-in-depth protection directives.",
+          "plausible_impact": "In the event of an independent injection flaw, browser-side defensive mitigations would be absent.",
+          "unverified_impact": "No active injection, cross-site scripting, or framing condition was demonstrated.",
+          "summary": "Absence of hardening headers reduces defense-in-depth protection against secondary attacks."
+        },
+        "risk_contribution": {
+          "finding_id": "API-eaadbe75",
+          "title": "Missing Referrer-Policy defense-in-depth header",
+          "severity": "INFO",
+          "verification_status": "VERIFIED",
+          "score": 1,
+          "model": "felix_deterministic_v1",
+          "risk_type": "HARDENING_DEFENSE_IN_DEPTH",
+          "rationale": "Calculated risk score 1/40 weighted by severity (INFO), confidence (HIGH), and verification status (VERIFIED).",
+          "is_available": true
+        },
+        "category": "missing-referrer-policy",
+        "source": "api"
+      }
+    ],
+    "detected_findings": null,
+    "observations": null,
+    "technical_appendix": {
+      "assessment_metadata": {
+        "duration": "4.866s",
+        "engine_version": "5.0.0",
+        "engines": [
+          "felix-crawler",
+          "felix-secrets",
+          "felix-cloud",
+          "felix-api",
+          "felix-report"
+        ],
+        "request_count": 12,
+        "scanner": "Felix",
+        "target": "https://www.google.com/"
+      },
+      "engine_execution_summary": [
+        {
+          "engine_name": "felix-crawler",
+          "version": "2.0.0",
+          "status": "EXECUTED",
+          "assets_analyzed": 5,
+          "findings_count": 0
+        },
+        {
+          "engine_name": "felix-secrets",
+          "version": "2.0.0",
+          "status": "EXECUTED",
+          "assets_analyzed": 5,
+          "findings_count": 0
+        },
+        {
+          "engine_name": "felix-cloud",
+          "version": "2.0.0",
+          "status": "EXECUTED",
+          "assets_analyzed": 5,
+          "findings_count": 0
+        },
+        {
+          "engine_name": "felix-api",
+          "version": "2.0.0",
+          "status": "EXECUTED",
+          "assets_analyzed": 5,
+          "findings_count": 5
+        },
+        {
+          "engine_name": "felix-verification",
+          "version": "2.0.0",
+          "status": "EXECUTED",
+          "assets_analyzed": 5,
+          "findings_count": 5
+        },
+        {
+          "engine_name": "felix-correlation",
+          "version": "2.0.0",
+          "status": "EXECUTED",
+          "assets_analyzed": 5,
+          "findings_count": 0
+        }
+      ],
+      "discovery_and_detection_stats": {
+        "attack_paths_total": 0,
+        "attempted_checks": 5,
+        "critical_count": 0,
+        "high_count": 0,
+        "info_count": 3,
+        "low_count": 2,
+        "medium_count": 0,
+        "stories_total": 0,
+        "total_findings": 5
+      },
+      "verification_status_counts": {
+        "BLOCKED": 0,
+        "DETECTED": 0,
+        "INCONCLUSIVE": 0,
+        "NOT_EXPOSED": 0,
+        "NOT_VERIFIED": 0,
+        "OBSERVED": 0,
+        "SYNTHETIC": 0,
+        "VERIFIED": 5
+      },
+      "negative_verification_outcomes": null,
+      "finding_index": [
+        {
+          "finding_id": "API-2558c243",
+          "title": "Missing or incomplete X-Content-Type-Options: nosniff header",
+          "source_engine": "api",
+          "category": "missing-x-content-type-options",
+          "detection_method": "header_inspection",
+          "policy_or_rule_id": "POL-MISSING-X-CONTENT-TYPE-OPTIONS",
+          "evidence_references": "https://www.google.com",
+          "provenance": "LIVE",
+          "authentication_state": "Unknown",
+          "canonical_status": "VERIFIED",
+          "severity": "INFO"
+        },
+        {
+          "finding_id": "API-65534c31",
+          "title": "Missing HTTP Strict-Transport-Security (HSTS) header on HTTPS endpoint",
+          "source_engine": "api",
+          "category": "missing-hsts",
+          "detection_method": "header_inspection",
+          "policy_or_rule_id": "POL-MISSING-HSTS",
+          "evidence_references": "https://www.google.com",
+          "provenance": "LIVE",
+          "authentication_state": "Unknown",
+          "canonical_status": "VERIFIED",
+          "severity": "LOW"
+        },
+        {
+          "finding_id": "API-8536c535",
+          "title": "Missing Permissions-Policy header (browser feature gating)",
+          "source_engine": "api",
+          "category": "missing-permissions-policy",
+          "detection_method": "header_inspection",
+          "policy_or_rule_id": "POL-MISSING-PERMISSIONS-POLICY",
+          "evidence_references": "https://www.google.com",
+          "provenance": "LIVE",
+          "authentication_state": "Unknown",
+          "canonical_status": "VERIFIED",
+          "severity": "INFO"
+        },
+        {
+          "finding_id": "API-bd9aa948",
+          "title": "Missing Content-Security-Policy (CSP) defense-in-depth header",
+          "source_engine": "api",
+          "category": "missing-csp",
+          "detection_method": "header_inspection",
+          "policy_or_rule_id": "POL-MISSING-CSP",
+          "evidence_references": "https://www.google.com",
+          "provenance": "LIVE",
+          "authentication_state": "Unknown",
+          "canonical_status": "VERIFIED",
+          "severity": "LOW"
+        },
+        {
+          "finding_id": "API-eaadbe75",
+          "title": "Missing Referrer-Policy defense-in-depth header",
+          "source_engine": "api",
+          "category": "missing-referrer-policy",
+          "detection_method": "header_inspection",
+          "policy_or_rule_id": "POL-MISSING-REFERRER-POLICY",
+          "evidence_references": "https://www.google.com",
+          "provenance": "LIVE",
+          "authentication_state": "Unknown",
+          "canonical_status": "VERIFIED",
+          "severity": "INFO"
+        }
+      ],
+      "correlation_rules_evaluated": [
+        "COR-01: Entry Point to Vulnerable Resource (WSTG-INFO-01 / CWE-200)",
+        "COR-02: Authentication to Authorization (WSTG-ATHN-01 / CWE-287)",
+        "COR-03: BOLA and Sensitive Data Exposure (WSTG-ATHZ-04 / CWE-639)",
+        "COR-04: Public Exposure to Sensitive Resource (WSTG-CONF-04 / CWE-552)",
+        "COR-05: Privilege Escalation (WSTG-ATHZ-03 / CWE-269)",
+        "COR-06: Business Logic Chains (WSTG-BUSL-01 / CWE-840)",
+        "COR-07: Session and Identity Dependencies (WSTG-SESS-06 / CWE-613)",
+        "COR-08: Cloud and Application Dependencies (WSTG-INPV-12 / CWE-918)",
+        "COR-09: Common Root Cause (WSTG-CONF-01 / CWE-657)",
+        "COR-10: Impact Amplification (WSTG-CLNT-07 / CWE-942)"
+      ],
+      "errors_and_coverage_gaps": null,
+      "synthetic_fixture_indicators": null,
+      "risk_model_metadata": {
+        "algorithm": "felix_deterministic_v1",
+        "diminishing_weights": [
+          1,
+          0.5,
+          0.3,
+          0.2,
+          0.1
+        ],
+        "hardening_cap": 20,
+        "range": "0-100",
+        "story_bonus_cap": 15
+      },
+      "report_generated_at": "2026-10-10T19:23:34Z",
+      "report_schema_version": "2.0.0"
+    }
+  },
+  "metadata": {
+    "engine_version": "5.0.0",
+    "engines": [
+      "felix-crawler",
+      "felix-secrets",
+      "felix-cloud",
+      "felix-api",
+      "felix-report"
+    ],
+    "scanner": "Felix"
+  }
+}

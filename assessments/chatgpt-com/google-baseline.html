@@ -1,17 +1,9 @@
-package report
-
-import (
-	"bytes"
-	"html/template"
-	"os"
-)
-
-const htmlReportTemplate = `<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Felix Security Assessment Report — {{.Target}}</title>
+<title>Felix Security Assessment Report — https://www.google.com/</title>
 <style>
   :root {
     --bg-main: #000000;
@@ -120,7 +112,7 @@ const htmlReportTemplate = `<!DOCTYPE html>
   .color-LOW { color: var(--low); }
   .color-INFORMATIONAL, .color-INFO { color: var(--info); }
 
-  /* Sections */
+   
   section { margin-bottom: 3rem; }
   h2 {
     font-size: 1.3rem;
@@ -141,7 +133,7 @@ const htmlReportTemplate = `<!DOCTYPE html>
     margin-bottom: 0.75rem;
   }
 
-  /* Grid & Cards */
+   
   .grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
@@ -171,7 +163,7 @@ const htmlReportTemplate = `<!DOCTYPE html>
     color: #ffffff;
   }
 
-  /* Badges */
+   
   .badge {
     display: inline-block;
     padding: 0.25rem 0.55rem;
@@ -196,7 +188,7 @@ const htmlReportTemplate = `<!DOCTYPE html>
   .badge-NOT_VERIFIED { background: #171717; color: #d4d4d4; border: 1px solid #404040; }
   .badge-NOT_EXPOSED { background: #042f2e; color: #5eead4; border: 1px solid #0f766e; }
 
-  /* Narrative Boxes */
+   
   .summary-narrative {
     background-color: var(--bg-surface);
     border: 1px solid var(--border-default);
@@ -210,7 +202,7 @@ const htmlReportTemplate = `<!DOCTYPE html>
   .summary-narrative p + p { margin-top: 0.75rem; }
   .summary-narrative strong { color: var(--text-primary); }
 
-  /* Risk Bar */
+   
   .risk-bar-container {
     background-color: var(--bg-surface);
     border: 1px solid var(--border-default);
@@ -242,28 +234,8 @@ const htmlReportTemplate = `<!DOCTYPE html>
   .risk-fill-MEDIUM { background: var(--med); }
   .risk-fill-LOW { background: var(--low); }
   .risk-fill-INFORMATIONAL { background: var(--info); }
-  table.data-table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-top: 0.75rem;
-    font-size: 0.85rem;
-  }
-  table.data-table th, table.data-table td {
-    padding: 0.5rem 0.65rem;
-    text-align: left;
-    border-bottom: 1px solid var(--border-subtle);
-  }
-  table.data-table th {
-    background: var(--bg-surface-elevated);
-    color: var(--text-secondary);
-    font-weight: 700;
-    text-transform: uppercase;
-    font-size: 0.72rem;
-    letter-spacing: 0.05em;
-  }
-  table.data-table tr:hover td { background: var(--bg-surface-subtle); }
 
-  /* Finding & Story Cards */
+   
   .item-card {
     background-color: var(--bg-surface);
     border: 1px solid var(--border-default);
@@ -374,7 +346,7 @@ const htmlReportTemplate = `<!DOCTYPE html>
   }
   .story-list li { margin-bottom: 0.35rem; }
 
-  /* Interactive Filters */
+   
   .filter-bar {
     display: flex;
     flex-wrap: wrap;
@@ -417,7 +389,7 @@ const htmlReportTemplate = `<!DOCTYPE html>
     border-color: #525252;
   }
 
-  /* Expandable Accordion */
+   
   details {
     background-color: var(--bg-surface);
     border: 1px solid var(--border-subtle);
@@ -476,142 +448,77 @@ const htmlReportTemplate = `<!DOCTYPE html>
 <body>
 <div class="container">
 
-  <!-- 1. Report Header -->
+  
   <header>
     <div class="header-title">
       <div class="brand-tag">Felix Security Auditor</div>
       <h1>FELIX SECURITY AUDIT REPORT</h1>
       <div class="header-meta">
-        <span>Target: <strong>{{.Target}}</strong></span>
-        <span>Generated: <strong>{{.Timestamp}}</strong></span>
-        {{if .Duration}}<span>Duration: <strong>{{.Duration}}</strong></span>{{else if .DurationMs}}<span>Duration: <strong>{{.DurationMs}}ms</strong></span>{{end}}
-        <span>Version: <strong>Felix {{.Version}}</strong></span>
+        <span>Target: <strong>https://www.google.com/</strong></span>
+        <span>Generated: <strong>2026-10-10T19:23:34Z</strong></span>
+        <span>Duration: <strong>4.866s</strong></span>
+        <span>Version: <strong>Felix 1.0.0</strong></span>
       </div>
     </div>
     <div class="score-card">
-      {{if or (eq .CompletionStatus "BLOCKED") (eq .CompletionStatus "FAILED") (eq .RiskLevel "UNAVAILABLE")}}
-      <div class="score-val" style="color: #ef4444;">N/A</div>
-      <div class="score-lbl">ASSESSMENT {{if eq .CompletionStatus "BLOCKED"}}BLOCKED{{else if eq .CompletionStatus "FAILED"}}FAILED{{else}}UNAVAILABLE{{end}}</div>
-      {{else}}
-      <div class="score-val color-{{.RiskLevel}}">{{.RiskScore}}</div>
-      <div class="score-lbl">Felix Risk Score ({{.RiskLevel}})</div>
-      {{end}}
+      <div class="score-val color-LOW">8</div>
+      <div class="score-lbl">Felix Risk Score (LOW)</div>
     </div>
   </header>
 
-  {{if eq .CompletionStatus "BLOCKED"}}
-  <div style="background: #200808; border: 1px solid #7f1d1d; border-radius: 0.5rem; padding: 1.25rem 1.5rem; margin-bottom: 2rem; color: #fca5a5;">
-    <strong style="color: #ef4444; font-size: 1.05rem;">ASSESSMENT BLOCKED:</strong> Target presented access controls or automated challenge barriers (HTTP 403 / Cloudflare). In accordance with non-destructive authorized testing policies, automated assessments were halted. Security posture could not be evaluated.
-  </div>
-  {{else if eq .CompletionStatus "FAILED"}}
-  <div style="background: #200808; border: 1px solid #7f1d1d; border-radius: 0.5rem; padding: 1.25rem 1.5rem; margin-bottom: 2rem; color: #fca5a5;">
-    <strong style="color: #ef4444; font-size: 1.05rem;">ASSESSMENT FAILED:</strong> Target reachability could not be established due to network, transport, or server errors. Security posture could not be evaluated.
-  </div>
-  {{end}}
-
-  <!-- 2. Executive Summary -->
+  
   <section>
     <h2>Executive Summary</h2>
     <div class="summary-narrative">
       <p>
-        Felix {{if eq .CompletionStatus "BLOCKED"}}was blocked while assessing{{else if eq .CompletionStatus "FAILED"}}failed to connect to{{else}}completed an automated defensive security audit of{{end}} <strong>{{.Target}}</strong>.
-        {{if eq .CompletionStatus "BLOCKED"}}
-        The target denied access or presented an automated challenge barrier (HTTP 403 Forbidden). No challenge bypasses or invasive circumventions were attempted. Because the application was unreachable for analysis, no risk score was computed and its security posture remains unevaluated.
-        {{else if eq .CompletionStatus "FAILED"}}
-        Connection could not be established to the target due to network or transport errors. Because the target was unreachable, no risk score was computed and its security posture remains unevaluated.
-        {{else if eq .RiskScore 0}}
-        No active vulnerabilities, leaked credentials, or missing security baselines were observed during the audit.
-        {{else if le .RiskScore 20}}
-        The target maintains a secure baseline posture with <strong>{{.RiskLevel}}</strong> overall risk ({{.RiskScore}}/100).
+        Felix completed an automated defensive security audit of <strong>https://www.google.com/</strong>.
+        
+        The target maintains a secure baseline posture with <strong>LOW</strong> overall risk (8/100).
         Identified findings represent defense-in-depth hardening opportunities (such as web application security headers) and passive endpoint inventory observations.
-        {{else if le .RiskScore 59}}
-        The target exhibited <strong>{{.RiskLevel}}</strong> risk ({{.RiskScore}}/100). Important exposures or informational disclosures warrant prompt administrative review.
-        {{else}}
-        The target exhibited <strong>{{.RiskLevel}}</strong> risk ({{.RiskScore}}/100). High-impact security conditions or exposed infrastructure credentials were confirmed and require immediate remediation.
-        {{end}}
+        
       </p>
-      {{if .TopPriorities}}
+      
       <p>
-        <strong>Primary Focus:</strong> Immediate investigation should prioritize <em>{{(index .TopPriorities 0).Title}}</em> at <code>{{(index .TopPriorities 0).Endpoint}}</code>.
+        <strong>Primary Focus:</strong> Immediate investigation should prioritize <em>Missing Content-Security-Policy (CSP) defense-in-depth header</em> at <code>https://www.google.com</code>.
       </p>
-      {{end}}
+      
     </div>
 
-    {{if not (or (eq .CompletionStatus "BLOCKED") (eq .CompletionStatus "FAILED") (eq .RiskLevel "UNAVAILABLE"))}}
-    <!-- 3. Risk Meter -->
+    
     <div class="risk-bar-container">
       <div class="risk-bar-header">
         <span>Felix Deterministic Risk Meter (0–100)</span>
-        <span class="color-{{.RiskLevel}}"><strong>{{.RiskScore}} / 100 — {{.RiskLevel}}</strong></span>
+        <span class="color-LOW"><strong>8 / 100 — LOW</strong></span>
       </div>
       <div class="risk-track">
-        <div class="risk-fill risk-fill-{{.RiskLevel}}" style="width: {{.RiskScore}}%;"></div>
+        <div class="risk-fill risk-fill-LOW" style="width: 8%;"></div>
       </div>
       <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.5rem;">
         Note: The Felix Risk Score is a deterministic 0–100 exposure metric weighted by empirical verification, multi-exposure diminishing returns, and hardening caps. It is not CVSS.
       </div>
-      {{if .CommercialReport}}
-      {{if .CommercialReport.RiskOverview.ScoreBreakdown.Formula}}
-      <div style="margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid var(--border-subtle);">
-        <div style="font-size: 0.82rem; font-weight: 700; color: #f5f5f5; margin-bottom: 0.35rem;">Score Attribution & Reconciliation:</div>
-        <code style="font-size: 0.82rem; color: #38bdf8;">{{.CommercialReport.RiskOverview.ScoreBreakdown.Formula}}</code>
-      </div>
-      {{if .CommercialReport.RiskOverview.FindingRiskContributions}}
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Ref</th>
-            <th>Title</th>
-            <th>Type</th>
-            <th>Status</th>
-            <th>Severity</th>
-            <th style="text-align: right;">Raw</th>
-            <th style="text-align: right;">Weight</th>
-            <th style="text-align: right;">Adjusted</th>
-          </tr>
-        </thead>
-        <tbody>
-          {{range .CommercialReport.RiskOverview.FindingRiskContributions}}
-          <tr>
-            <td><code>{{.FindingID}}</code></td>
-            <td>{{.Title}}</td>
-            <td><span class="badge badge-INFO">{{.RiskType}}</span></td>
-            <td><span class="badge badge-{{.VerificationStatus}}">{{.VerificationStatus}}</span></td>
-            <td><span class="badge badge-{{.Severity}}">{{.Severity}}</span></td>
-            <td style="text-align: right;">{{.Score}}</td>
-            <td style="text-align: right; color: var(--text-muted);">{{printf "%.1fx" .Weight}}</td>
-            <td style="text-align: right; font-weight: 700; color: #6ee7b7;">{{printf "%.2f" .AdjustedScore}} pts</td>
-          </tr>
-          {{end}}
-        </tbody>
-      </table>
-      {{end}}
-      {{end}}
-      {{end}}
     </div>
-    {{end}}
 
-    <!-- 4. Findings & Verification Breakdown Grid -->
+    
     <div class="grid">
       <div class="card">
         <div class="card-lbl">Total Findings</div>
-        <div class="card-val">{{.Summary.TotalFindings}}</div>
+        <div class="card-val">5</div>
       </div>
       <div class="card">
         <div class="card-lbl">Critical</div>
-        <div class="card-val color-CRITICAL">{{.Summary.CriticalCount}}</div>
+        <div class="card-val color-CRITICAL">0</div>
       </div>
       <div class="card">
         <div class="card-lbl">High</div>
-        <div class="card-val color-HIGH">{{.Summary.HighCount}}</div>
+        <div class="card-val color-HIGH">0</div>
       </div>
       <div class="card">
         <div class="card-lbl">Medium</div>
-        <div class="card-val color-MEDIUM">{{.Summary.MediumCount}}</div>
+        <div class="card-val color-MEDIUM">0</div>
       </div>
       <div class="card">
         <div class="card-lbl">Low & Info</div>
-        <div class="card-val color-LOW">{{add .Summary.LowCount .Summary.InfoCount}}</div>
+        <div class="card-val color-LOW">5</div>
       </div>
     </div>
 
@@ -619,258 +526,461 @@ const htmlReportTemplate = `<!DOCTYPE html>
     <div class="grid">
       <div class="card">
         <div class="card-lbl">Verified Exposures</div>
-        <div class="card-val" style="color: #6ee7b7;">{{.Summary.VerifiedCount}}</div>
+        <div class="card-val" style="color: #6ee7b7;">5</div>
       </div>
       <div class="card">
         <div class="card-lbl">Detected Candidates</div>
-        <div class="card-val" style="color: #fde047;">{{.Summary.DetectedCount}}</div>
+        <div class="card-val" style="color: #fde047;">0</div>
       </div>
       <div class="card">
         <div class="card-lbl">Observed Inventory</div>
-        <div class="card-val" style="color: #93c5fd;">{{.Summary.ObservedCount}}</div>
+        <div class="card-val" style="color: #93c5fd;">0</div>
       </div>
       <div class="card">
         <div class="card-lbl">Defended / Protected</div>
-        <div class="card-val" style="color: #5eead4;">{{.Summary.NotExposedCount}}</div>
+        <div class="card-val" style="color: #5eead4;">0</div>
       </div>
     </div>
   </section>
 
-  <!-- 5. Investigate First -->
-  {{if .TopPriorities}}
+  
+  
   <section>
     <h2>Investigate First (Actionable Priorities)</h2>
-    {{range .TopPriorities}}
+    
     <div class="item-card">
       <div class="item-header">
-        <div class="item-title">{{.Title}}</div>
+        <div class="item-title">Missing Content-Security-Policy (CSP) defense-in-depth header</div>
         <div style="display: flex; gap: 0.4rem; flex-wrap: wrap;">
-          <span class="badge badge-{{.Severity}}">{{.Severity}}</span>
-          <span class="badge badge-INFO">Conf: {{.Confidence}}</span>
-          {{if .Verification.Status}}
-          <span class="badge badge-{{.Verification.Status}}">{{.Verification.Status}}</span>
-          {{end}}
+          <span class="badge badge-LOW">LOW</span>
+          <span class="badge badge-INFO">Conf: HIGH</span>
+          
+          <span class="badge badge-VERIFIED">VERIFIED</span>
+          
         </div>
       </div>
       <div class="item-meta">
-        <strong>Location:</strong> {{if .EvidenceDetails.Location}}{{.EvidenceDetails.Location}}{{else}}{{.Endpoint}}{{end}} ({{.Method}})
-        &bull; <strong>Detection Method:</strong> {{if .EvidenceDetails.DetectionMethod}}{{.EvidenceDetails.DetectionMethod}}{{else}}{{.Source}}{{end}}
-        &bull; <strong>Category:</strong> {{.Category}}
+        <strong>Location:</strong> https://www.google.com/ (GET)
+        &bull; <strong>Detection Method:</strong> header_inspection
+        &bull; <strong>Category:</strong> missing-csp
       </div>
-      <div class="item-desc">{{.Description}}</div>
+      <div class="item-desc">Missing Content-Security-Policy (CSP) defense-in-depth header</div>
 
-      {{if .Verification.Result}}
+      
       <div class="verification-block">
-        <strong>Verification Status ({{.Verification.Status}}):</strong> {{.Verification.Result}}
-        {{if .Verification.PolicyID}}<span style="font-size:0.8rem; color:#93c5fd; margin-left:0.5rem;">[{{.Verification.PolicyID}}]</span>{{end}}
+        <strong>Verification Status (VERIFIED):</strong> Evaluated server HTTP response headers; missing-csp defense-in-depth header was not present.
+        
       </div>
-      {{end}}
+      
 
-      {{if .Verification.SafeCurlCommand}}
-      <div style="margin-bottom: 0.85rem;">
-        <span style="font-size: 0.8rem; color: #a3a3a3; font-weight: 600;">Safe Reproduction:</span>
-        <div class="code-snippet" style="margin-top: 0.25rem;">{{.Verification.SafeCurlCommand}}</div>
-      </div>
-      {{end}}
+      
 
-      {{if .EvidenceDetails.NegativeEvidence}}
+      
       <div class="negative-block negative-evidence-box">
-        <strong>Negative Evidence / Safety Verification:</strong> {{.EvidenceDetails.NegativeEvidence}}
+        <strong>Negative Evidence / Safety Verification:</strong> Informational hardening observation; does not constitute an exploitable vulnerability by itself.
       </div>
-      {{end}}
+      
 
       <div class="remediation-block">
-        <strong>Action:</strong> {{.Remediation}}
+        <strong>Action:</strong> Deploy a robust Content-Security-Policy (CSP) header restricting script execution, styles, and object embeds to trusted sources. Begin with `Content-Security-Policy-Report-Only` during staging.
       </div>
     </div>
-    {{end}}
-  </section>
-  {{end}}
-
-  <!-- 6. Correlated Security Stories -->
-  {{if .SecurityStories}}
-  <section>
-    <h2>Correlated Security Stories ({{len .SecurityStories}})</h2>
-    {{range .SecurityStories}}
-    <div class="story-card">
+    
+    <div class="item-card">
       <div class="item-header">
-        <div class="item-title">{{.Title}}</div>
-        <div style="display: flex; gap: 0.4rem; align-items: center;">
-          {{if .RiskContribution}}<span class="badge badge-INFO">+{{.RiskContribution}} Risk Pts</span>{{end}}
-          <span class="badge badge-{{.Severity}}">{{.Severity}}</span>
+        <div class="item-title">Missing HTTP Strict-Transport-Security (HSTS) header on HTTPS endpoint</div>
+        <div style="display: flex; gap: 0.4rem; flex-wrap: wrap;">
+          <span class="badge badge-LOW">LOW</span>
+          <span class="badge badge-INFO">Conf: HIGH</span>
+          
+          <span class="badge badge-VERIFIED">VERIFIED</span>
+          
         </div>
       </div>
-      {{if .Summary}}
-      <p style="margin-bottom: 0.5rem; font-size: 0.95rem; font-weight: 600; color: #f5f5f5;">{{.Summary}}</p>
-      {{end}}
-      <p style="margin-bottom: 0.75rem; font-size: 0.9rem; color: #d4d4d4;">{{.Description}}</p>
-
-      <div style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 0.25rem;">Correlated Signals & Evidence:</div>
-      <ul class="story-list">
-        {{range .Evidence}}
-        <li>{{.}}</li>
-        {{end}}
-      </ul>
-
-      <div style="font-size: 0.85rem; font-weight: 600; color: #fca5a5; margin-bottom: 0.25rem;">Security Impact:</div>
-      <p style="font-size: 0.9rem; margin-bottom: 0.85rem; color: #fecaca;">{{.Impact}}</p>
-
-      {{if .InvestigateFirst}}
-      <div class="investigate-block">
-        <strong>Investigate First:</strong> {{.InvestigateFirst}}
-      </div>
-      {{end}}
-
-      <div class="remediation-block">
-        <strong>Remediation Guidance:</strong> {{.Remediation}}
-      </div>
-    </div>
-    {{end}}
-  </section>
-  {{end}}
-
-  <!-- Correlated Attack Paths -->
-  {{if .AttackPaths}}
-  <section>
-    <h2>Correlated Attack Paths ({{len .AttackPaths}})</h2>
-    {{range .AttackPaths}}
-    <div class="story-card" style="border-left-color: {{if eq .Status "VERIFIED"}}#10b981{{else if eq .Status "CANDIDATE"}}#f59e0b{{else}}#6b7280{{end}};">
-      <div class="item-header">
-        <div class="item-title">{{if .SyntheticFixture}}<span class="badge badge-INFO">[SYNTHETIC FIXTURE]</span> {{end}}{{.Title}}</div>
-        <div style="display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap;">
-          <span class="badge badge-{{.Status}}">{{.Status}}</span>
-          <span class="badge badge-{{.CombinedRiskLevel}}">{{.CombinedRiskLevel}} ({{.CombinedRiskScore}}/100)</span>
-          <span class="badge badge-INFO">Conf: {{.Confidence}}</span>
-        </div>
-      </div>
-
       <div class="item-meta">
-        <strong>Target Asset:</strong> {{.TargetAsset}}
-        {{if .EntryPoint}}&bull; <strong>Entry Point:</strong> {{.EntryPoint}}{{end}}
-        &bull; <strong>Primary Weakness:</strong> {{.PrimaryWeakness}}
+        <strong>Location:</strong> https://www.google.com/ (GET)
+        &bull; <strong>Detection Method:</strong> header_inspection
+        &bull; <strong>Category:</strong> missing-hsts
       </div>
+      <div class="item-desc">Missing HTTP Strict-Transport-Security (HSTS) header on HTTPS endpoint</div>
 
-      <div style="font-size: 0.85rem; font-weight: 600; color: #fca5a5; margin-bottom: 0.25rem;">Terminal Impact:</div>
-      <p style="font-size: 0.9rem; margin-bottom: 0.75rem; color: #fecaca;">{{.TerminalImpact}}</p>
-
-      {{if .RiskRationale}}
-      <p style="font-size: 0.88rem; color: #d4d4d4; margin-bottom: 0.75rem;"><strong>Risk Rationale:</strong> {{.RiskRationale}}</p>
-      {{end}}
-
-      {{if .Transitions}}
-      <div style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 0.25rem;">Validated Transition Sequence:</div>
-      <ul class="story-list">
-        {{range .Transitions}}
-        <li>{{.}}</li>
-        {{end}}
-      </ul>
-      {{end}}
-
-      {{if .Assumptions}}
-      <div style="font-size: 0.85rem; font-weight: 600; color: #fde047; margin-bottom: 0.25rem;">Preconditions & Assumptions:</div>
-      <ul class="story-list">
-        {{range .Assumptions}}
-        <li>{{.}}</li>
-        {{end}}
-      </ul>
-      {{end}}
-
-      {{if .MissingEvidence}}
-      <div class="negative-block" style="margin-bottom: 0.75rem;">
-        <strong>Missing Evidence / Verification Gaps:</strong>
-        <ul style="padding-left: 1.25rem; margin-top: 0.25rem;">
-          {{range .MissingEvidence}}
-          <li>{{.}}</li>
-          {{end}}
-        </ul>
+      
+      <div class="verification-block">
+        <strong>Verification Status (VERIFIED):</strong> Evaluated server HTTP response headers; missing-hsts defense-in-depth header was not present.
+        
       </div>
-      {{end}}
+      
 
-      {{if .Remediation}}
+      
+
+      
+      <div class="negative-block negative-evidence-box">
+        <strong>Negative Evidence / Safety Verification:</strong> Endpoint is served over HTTPS but does not mandate persistent transport security.
+      </div>
+      
+
       <div class="remediation-block">
-        <strong>Choke Point Remediation:</strong> {{.Remediation}}
+        <strong>Action:</strong> Enable HTTP Strict-Transport-Security (HSTS) with a directive such as `Strict-Transport-Security: max-age=31536000; includeSubDomains; preload` on all HTTPS responses.
       </div>
-      {{end}}
     </div>
-    {{end}}
+    
+    <div class="item-card">
+      <div class="item-header">
+        <div class="item-title">Missing Permissions-Policy header (browser feature gating)</div>
+        <div style="display: flex; gap: 0.4rem; flex-wrap: wrap;">
+          <span class="badge badge-INFO">INFO</span>
+          <span class="badge badge-INFO">Conf: HIGH</span>
+          
+          <span class="badge badge-VERIFIED">VERIFIED</span>
+          
+        </div>
+      </div>
+      <div class="item-meta">
+        <strong>Location:</strong> https://www.google.com/ (GET)
+        &bull; <strong>Detection Method:</strong> header_inspection
+        &bull; <strong>Category:</strong> missing-permissions-policy
+      </div>
+      <div class="item-desc">Missing Permissions-Policy header (browser feature gating)</div>
+
+      
+      <div class="verification-block">
+        <strong>Verification Status (VERIFIED):</strong> Evaluated server HTTP response headers; missing-permissions-policy defense-in-depth header was not present.
+        
+      </div>
+      
+
+      
+
+      
+      <div class="negative-block negative-evidence-box">
+        <strong>Negative Evidence / Safety Verification:</strong> Browser feature delegation policy not explicitly configured.
+      </div>
+      
+
+      <div class="remediation-block">
+        <strong>Action:</strong> Configure a `Permissions-Policy` header explicitly disabling unnecessary browser capabilities (e.g. `camera=(), microphone=(), geolocation=()`).
+      </div>
+    </div>
+    
+    <div class="item-card">
+      <div class="item-header">
+        <div class="item-title">Missing Referrer-Policy defense-in-depth header</div>
+        <div style="display: flex; gap: 0.4rem; flex-wrap: wrap;">
+          <span class="badge badge-INFO">INFO</span>
+          <span class="badge badge-INFO">Conf: HIGH</span>
+          
+          <span class="badge badge-VERIFIED">VERIFIED</span>
+          
+        </div>
+      </div>
+      <div class="item-meta">
+        <strong>Location:</strong> https://www.google.com/ (GET)
+        &bull; <strong>Detection Method:</strong> header_inspection
+        &bull; <strong>Category:</strong> missing-referrer-policy
+      </div>
+      <div class="item-desc">Missing Referrer-Policy defense-in-depth header</div>
+
+      
+      <div class="verification-block">
+        <strong>Verification Status (VERIFIED):</strong> Evaluated server HTTP response headers; missing-referrer-policy defense-in-depth header was not present.
+        
+      </div>
+      
+
+      
+
+      
+      <div class="negative-block negative-evidence-box">
+        <strong>Negative Evidence / Safety Verification:</strong> Referrer policy is not explicitly declared; browser fallback applies.
+      </div>
+      
+
+      <div class="remediation-block">
+        <strong>Action:</strong> Review the observed endpoint and asset configurations, adhere to principle of least privilege, and restrict unauthorized access.
+      </div>
+    </div>
+    
+    <div class="item-card">
+      <div class="item-header">
+        <div class="item-title">Missing or incomplete X-Content-Type-Options: nosniff header</div>
+        <div style="display: flex; gap: 0.4rem; flex-wrap: wrap;">
+          <span class="badge badge-INFO">INFO</span>
+          <span class="badge badge-INFO">Conf: HIGH</span>
+          
+          <span class="badge badge-VERIFIED">VERIFIED</span>
+          
+        </div>
+      </div>
+      <div class="item-meta">
+        <strong>Location:</strong> https://www.google.com/ (GET)
+        &bull; <strong>Detection Method:</strong> header_inspection
+        &bull; <strong>Category:</strong> missing-x-content-type-options
+      </div>
+      <div class="item-desc">Missing or incomplete X-Content-Type-Options: nosniff header</div>
+
+      
+      <div class="verification-block">
+        <strong>Verification Status (VERIFIED):</strong> Evaluated server HTTP response headers; missing-x-content-type-options defense-in-depth header was not present.
+        
+      </div>
+      
+
+      
+
+      
+      <div class="negative-block negative-evidence-box">
+        <strong>Negative Evidence / Safety Verification:</strong> MIME sniffing protection not explicitly declared.
+      </div>
+      
+
+      <div class="remediation-block">
+        <strong>Action:</strong> Add `X-Content-Type-Options: nosniff` header across all responses to prevent browser MIME-type sniffing.
+      </div>
+    </div>
+    
   </section>
-  {{end}}
+  
 
-  <!-- 7. Detailed Findings Inventory -->
+  
+  
+
+  
+  
+
+  
   <section>
-    <h2>Detailed Findings Inventory ({{len .Findings}})</h2>
+    <h2>Detailed Findings Inventory (5)</h2>
 
-    <!-- Interactive Filters -->
+    
     <div class="filter-bar">
-      <button class="filter-btn active" onclick="filterFindings('all')">All ({{len .Findings}})</button>
-      <button class="filter-btn" onclick="filterFindings('CRITICAL')">Critical ({{.Summary.CriticalCount}})</button>
-      <button class="filter-btn" onclick="filterFindings('HIGH')">High ({{.Summary.HighCount}})</button>
-      <button class="filter-btn" onclick="filterFindings('MEDIUM')">Medium ({{.Summary.MediumCount}})</button>
-      <button class="filter-btn" onclick="filterFindings('LOW')">Low ({{.Summary.LowCount}})</button>
-      <button class="filter-btn" onclick="filterFindings('INFO')">Info ({{.Summary.InfoCount}})</button>
-      <button class="filter-btn" onclick="filterFindings('VERIFIED')">Verified ({{.Summary.VerifiedCount}})</button>
+      <button class="filter-btn active" onclick="filterFindings('all')">All (5)</button>
+      <button class="filter-btn" onclick="filterFindings('CRITICAL')">Critical (0)</button>
+      <button class="filter-btn" onclick="filterFindings('HIGH')">High (0)</button>
+      <button class="filter-btn" onclick="filterFindings('MEDIUM')">Medium (0)</button>
+      <button class="filter-btn" onclick="filterFindings('LOW')">Low (2)</button>
+      <button class="filter-btn" onclick="filterFindings('INFO')">Info (3)</button>
+      <button class="filter-btn" onclick="filterFindings('VERIFIED')">Verified (5)</button>
       <input type="text" class="search-box" id="findingSearch" placeholder="Search findings..." onkeyup="searchFindings()">
     </div>
 
     <div id="findingsContainer">
-      {{if not .Findings}}
-      <div class="card" style="text-align: center; padding: 2.5rem; color: var(--text-secondary);">
-        No security findings detected on this target.
-      </div>
-      {{end}}
+      
 
-      {{range .Findings}}
-      <div class="item-card finding-item" data-severity="{{.Severity}}" data-verification="{{.Verification.Status}}">
+      
+      <div class="item-card finding-item" data-severity="LOW" data-verification="VERIFIED">
         <div class="item-header">
-          <div class="item-title">[{{.ID}}] {{.Title}}</div>
+          <div class="item-title">[API-bd9aa948] Missing Content-Security-Policy (CSP) defense-in-depth header</div>
           <div style="display: flex; gap: 0.4rem; flex-wrap: wrap;">
-            <span class="badge badge-{{.Severity}}">{{.Severity}}</span>
-            <span class="badge badge-INFO">Conf: {{.Confidence}}</span>
-            {{if .Verification.Status}}
-            <span class="badge badge-{{.Verification.Status}}">{{.Verification.Status}}</span>
-            {{end}}
+            <span class="badge badge-LOW">LOW</span>
+            <span class="badge badge-INFO">Conf: HIGH</span>
+            
+            <span class="badge badge-VERIFIED">VERIFIED</span>
+            
           </div>
         </div>
         <div class="item-meta">
-          <strong>Location:</strong> {{if .EvidenceDetails.Location}}{{.EvidenceDetails.Location}}{{else}}{{.Endpoint}}{{end}} ({{.Method}})
-          &bull; <strong>Detection:</strong> {{if .EvidenceDetails.DetectionMethod}}{{.EvidenceDetails.DetectionMethod}}{{else}}{{.Source}}{{end}}
-          &bull; <strong>Category:</strong> {{.Category}}
+          <strong>Location:</strong> https://www.google.com/ (GET)
+          &bull; <strong>Detection:</strong> header_inspection
+          &bull; <strong>Category:</strong> missing-csp
         </div>
-        <div class="item-desc">{{.Description}}</div>
+        <div class="item-desc">Missing Content-Security-Policy (CSP) defense-in-depth header</div>
 
-        {{if .Verification.Result}}
+        
         <div class="verification-block">
-          <strong>Verification Status ({{.Verification.Status}}):</strong> {{.Verification.Result}}
-          {{if .Verification.PolicyID}}<span style="font-size:0.8rem; color:#93c5fd; margin-left:0.5rem;">[{{.Verification.PolicyID}}]</span>{{end}}
+          <strong>Verification Status (VERIFIED):</strong> Evaluated server HTTP response headers; missing-csp defense-in-depth header was not present.
+          
         </div>
-        {{end}}
+        
 
-        {{if .Verification.SafeCurlCommand}}
-        <div style="margin-bottom: 0.85rem;">
-          <span style="font-size: 0.8rem; color: #a3a3a3; font-weight: 600;">Safe Reproduction:</span>
-          <div class="code-snippet" style="margin-top: 0.25rem;">{{.Verification.SafeCurlCommand}}</div>
-        </div>
-        {{end}}
+        
 
-        {{if .Evidence}}
-        <div class="code-snippet">{{.Evidence}}</div>
-        {{end}}
+        
+        <div class="code-snippet">Response headers do not include Content-Security-Policy.</div>
+        
 
-        {{if .EvidenceDetails.NegativeEvidence}}
+        
         <div class="negative-block negative-evidence-box">
-          <strong>Negative Evidence / Safety Verification:</strong> {{.EvidenceDetails.NegativeEvidence}}
+          <strong>Negative Evidence / Safety Verification:</strong> Informational hardening observation; does not constitute an exploitable vulnerability by itself.
         </div>
-        {{end}}
+        
 
         <div class="remediation-block">
-          <strong>Remediation:</strong> {{.Remediation}}
+          <strong>Remediation:</strong> Deploy a robust Content-Security-Policy (CSP) header restricting script execution, styles, and object embeds to trusted sources. Begin with `Content-Security-Policy-Report-Only` during staging.
         </div>
       </div>
-      {{end}}
+      
+      <div class="item-card finding-item" data-severity="LOW" data-verification="VERIFIED">
+        <div class="item-header">
+          <div class="item-title">[API-65534c31] Missing HTTP Strict-Transport-Security (HSTS) header on HTTPS endpoint</div>
+          <div style="display: flex; gap: 0.4rem; flex-wrap: wrap;">
+            <span class="badge badge-LOW">LOW</span>
+            <span class="badge badge-INFO">Conf: HIGH</span>
+            
+            <span class="badge badge-VERIFIED">VERIFIED</span>
+            
+          </div>
+        </div>
+        <div class="item-meta">
+          <strong>Location:</strong> https://www.google.com/ (GET)
+          &bull; <strong>Detection:</strong> header_inspection
+          &bull; <strong>Category:</strong> missing-hsts
+        </div>
+        <div class="item-desc">Missing HTTP Strict-Transport-Security (HSTS) header on HTTPS endpoint</div>
+
+        
+        <div class="verification-block">
+          <strong>Verification Status (VERIFIED):</strong> Evaluated server HTTP response headers; missing-hsts defense-in-depth header was not present.
+          
+        </div>
+        
+
+        
+
+        
+        <div class="code-snippet">HTTPS response headers do not include Strict-Transport-Security.</div>
+        
+
+        
+        <div class="negative-block negative-evidence-box">
+          <strong>Negative Evidence / Safety Verification:</strong> Endpoint is served over HTTPS but does not mandate persistent transport security.
+        </div>
+        
+
+        <div class="remediation-block">
+          <strong>Remediation:</strong> Enable HTTP Strict-Transport-Security (HSTS) with a directive such as `Strict-Transport-Security: max-age=31536000; includeSubDomains; preload` on all HTTPS responses.
+        </div>
+      </div>
+      
+      <div class="item-card finding-item" data-severity="INFO" data-verification="VERIFIED">
+        <div class="item-header">
+          <div class="item-title">[API-8536c535] Missing Permissions-Policy header (browser feature gating)</div>
+          <div style="display: flex; gap: 0.4rem; flex-wrap: wrap;">
+            <span class="badge badge-INFO">INFO</span>
+            <span class="badge badge-INFO">Conf: HIGH</span>
+            
+            <span class="badge badge-VERIFIED">VERIFIED</span>
+            
+          </div>
+        </div>
+        <div class="item-meta">
+          <strong>Location:</strong> https://www.google.com/ (GET)
+          &bull; <strong>Detection:</strong> header_inspection
+          &bull; <strong>Category:</strong> missing-permissions-policy
+        </div>
+        <div class="item-desc">Missing Permissions-Policy header (browser feature gating)</div>
+
+        
+        <div class="verification-block">
+          <strong>Verification Status (VERIFIED):</strong> Evaluated server HTTP response headers; missing-permissions-policy defense-in-depth header was not present.
+          
+        </div>
+        
+
+        
+
+        
+        <div class="code-snippet">Response headers do not include Permissions-Policy.</div>
+        
+
+        
+        <div class="negative-block negative-evidence-box">
+          <strong>Negative Evidence / Safety Verification:</strong> Browser feature delegation policy not explicitly configured.
+        </div>
+        
+
+        <div class="remediation-block">
+          <strong>Remediation:</strong> Configure a `Permissions-Policy` header explicitly disabling unnecessary browser capabilities (e.g. `camera=(), microphone=(), geolocation=()`).
+        </div>
+      </div>
+      
+      <div class="item-card finding-item" data-severity="INFO" data-verification="VERIFIED">
+        <div class="item-header">
+          <div class="item-title">[API-eaadbe75] Missing Referrer-Policy defense-in-depth header</div>
+          <div style="display: flex; gap: 0.4rem; flex-wrap: wrap;">
+            <span class="badge badge-INFO">INFO</span>
+            <span class="badge badge-INFO">Conf: HIGH</span>
+            
+            <span class="badge badge-VERIFIED">VERIFIED</span>
+            
+          </div>
+        </div>
+        <div class="item-meta">
+          <strong>Location:</strong> https://www.google.com/ (GET)
+          &bull; <strong>Detection:</strong> header_inspection
+          &bull; <strong>Category:</strong> missing-referrer-policy
+        </div>
+        <div class="item-desc">Missing Referrer-Policy defense-in-depth header</div>
+
+        
+        <div class="verification-block">
+          <strong>Verification Status (VERIFIED):</strong> Evaluated server HTTP response headers; missing-referrer-policy defense-in-depth header was not present.
+          
+        </div>
+        
+
+        
+
+        
+        <div class="code-snippet">Response headers do not include Referrer-Policy (browser default applies).</div>
+        
+
+        
+        <div class="negative-block negative-evidence-box">
+          <strong>Negative Evidence / Safety Verification:</strong> Referrer policy is not explicitly declared; browser fallback applies.
+        </div>
+        
+
+        <div class="remediation-block">
+          <strong>Remediation:</strong> Review the observed endpoint and asset configurations, adhere to principle of least privilege, and restrict unauthorized access.
+        </div>
+      </div>
+      
+      <div class="item-card finding-item" data-severity="INFO" data-verification="VERIFIED">
+        <div class="item-header">
+          <div class="item-title">[API-2558c243] Missing or incomplete X-Content-Type-Options: nosniff header</div>
+          <div style="display: flex; gap: 0.4rem; flex-wrap: wrap;">
+            <span class="badge badge-INFO">INFO</span>
+            <span class="badge badge-INFO">Conf: HIGH</span>
+            
+            <span class="badge badge-VERIFIED">VERIFIED</span>
+            
+          </div>
+        </div>
+        <div class="item-meta">
+          <strong>Location:</strong> https://www.google.com/ (GET)
+          &bull; <strong>Detection:</strong> header_inspection
+          &bull; <strong>Category:</strong> missing-x-content-type-options
+        </div>
+        <div class="item-desc">Missing or incomplete X-Content-Type-Options: nosniff header</div>
+
+        
+        <div class="verification-block">
+          <strong>Verification Status (VERIFIED):</strong> Evaluated server HTTP response headers; missing-x-content-type-options defense-in-depth header was not present.
+          
+        </div>
+        
+
+        
+
+        
+        <div class="code-snippet">X-Content-Type-Options observed: &#34;&#34; (expected &#39;nosniff&#39;).</div>
+        
+
+        
+        <div class="negative-block negative-evidence-box">
+          <strong>Negative Evidence / Safety Verification:</strong> MIME sniffing protection not explicitly declared.
+        </div>
+        
+
+        <div class="remediation-block">
+          <strong>Remediation:</strong> Add `X-Content-Type-Options: nosniff` header across all responses to prevent browser MIME-type sniffing.
+        </div>
+      </div>
+      
     </div>
   </section>
 
-  <!-- 8. Technical Details & Scope -->
+  
   <section>
     <h2>Assessment Methodology & Technical Scope</h2>
 
@@ -909,7 +1019,7 @@ const htmlReportTemplate = `<!DOCTYPE html>
     </details>
   </section>
 
-  <!-- Footer -->
+  
   <footer>
     <p>Generated by <strong>Felix Security Auditor</strong> &bull; Professional, evidence-first web security auditing.</p>
   </footer>
@@ -943,36 +1053,4 @@ const htmlReportTemplate = `<!DOCTYPE html>
   }
 </script>
 </body>
-</html>`
-
-// GenerateHTML renders the sanitized audit report into a standalone, offline HTML document.
-func GenerateHTML(rep Report) (string, error) {
-	sanitized := SanitizeReport(rep)
-
-	funcMap := template.FuncMap{
-		"add": func(a, b int) int {
-			return a + b
-		},
-	}
-
-	tmpl, err := template.New("felix-report").Funcs(funcMap).Parse(htmlReportTemplate)
-	if err != nil {
-		return "", err
-	}
-
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, sanitized); err != nil {
-		return "", err
-	}
-
-	return buf.String(), nil
-}
-
-// WriteHTML writes the self-contained HTML report to disk.
-func WriteHTML(rep Report, filePath string) error {
-	content, err := GenerateHTML(rep)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filePath, []byte(content), 0644)
-}
+</html>

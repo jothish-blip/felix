@@ -1,0 +1,2388 @@
+{
+  "version": "1.0.0",
+  "target": "http://127.0.0.1:3000",
+  "targets": [
+    "http://127.0.0.1:3000"
+  ],
+  "timestamp": "2026-10-10T17:19:05Z",
+  "duration": "2.026s",
+  "duration_ms": 2025,
+  "request_count": 29,
+  "risk_score": 20,
+  "risk_level": "LOW",
+  "summary": {
+    "total_findings": 23,
+    "critical_count": 0,
+    "high_count": 0,
+    "medium_count": 0,
+    "low_count": 2,
+    "info_count": 21,
+    "verified_count": 3,
+    "detected_count": 0,
+    "observed_count": 14,
+    "not_verified_count": 0,
+    "not_exposed_count": 6,
+    "attempted_count": 9,
+    "verification_rate_attempted": 33.3,
+    "verification_rate_total": 13,
+    "by_source": {
+      "api": 23
+    }
+  },
+  "top_priorities": [
+    {
+      "id": "API-12c25a80",
+      "title": "Missing Content-Security-Policy (CSP) defense-in-depth header",
+      "category": "missing-csp",
+      "severity": "LOW",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:3000",
+      "endpoint": "http://127.0.0.1:3000",
+      "method": "GET",
+      "description": "Missing Content-Security-Policy (CSP) defense-in-depth header",
+      "evidence_summary": "Response headers do not include Content-Security-Policy.",
+      "evidence": {
+        "observation": "Response headers do not include Content-Security-Policy.",
+        "location": "http://127.0.0.1:3000",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "header_inspection",
+        "detection_status": "DETECTED",
+        "negative_evidence": "Informational hardening observation; does not constitute an exploitable vulnerability by itself.",
+        "details": {
+          "category": "missing-csp",
+          "header": "Content-Security-Policy",
+          "observed": "absent"
+        }
+      },
+      "verification": {
+        "status": "VERIFIED",
+        "detection_status": "DETECTED",
+        "result": "Evaluated server HTTP response headers; missing-csp defense-in-depth header was not present."
+      },
+      "remediation": "Deploy a robust Content-Security-Policy (CSP) header restricting script execution, styles, and object embeds to trusted sources. Begin with `Content-Security-Policy-Report-Only` during staging.",
+      "source": "api",
+      "fingerprint": "12c25a80e98b967bbbab4ccc33185dc09b282f20134dfd48750379ab2bed3aec",
+      "score": 5
+    },
+    {
+      "id": "API-44eda87b",
+      "title": "Missing Permissions-Policy header (browser feature gating)",
+      "category": "missing-permissions-policy",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:3000",
+      "endpoint": "http://127.0.0.1:3000",
+      "method": "GET",
+      "description": "Missing Permissions-Policy header (browser feature gating)",
+      "evidence_summary": "Response headers do not include Permissions-Policy.",
+      "evidence": {
+        "observation": "Response headers do not include Permissions-Policy.",
+        "location": "http://127.0.0.1:3000",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "header_inspection",
+        "detection_status": "DETECTED",
+        "negative_evidence": "Browser feature delegation policy not explicitly configured.",
+        "details": {
+          "category": "missing-permissions-policy",
+          "header": "Permissions-Policy",
+          "observed": "absent"
+        }
+      },
+      "verification": {
+        "status": "VERIFIED",
+        "detection_status": "DETECTED",
+        "result": "Evaluated server HTTP response headers; missing-permissions-policy defense-in-depth header was not present."
+      },
+      "remediation": "Configure a `Permissions-Policy` header explicitly disabling unnecessary browser capabilities (e.g. `camera=(), microphone=(), geolocation=()`).",
+      "source": "api",
+      "fingerprint": "44eda87bdeed1e6c10b9be21e4a673108e6e5a11174e113b5cd83fdad41508e2",
+      "score": 1
+    },
+    {
+      "id": "API-8dae2604",
+      "title": "Missing Referrer-Policy defense-in-depth header",
+      "category": "missing-referrer-policy",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:3000",
+      "endpoint": "http://127.0.0.1:3000",
+      "method": "GET",
+      "description": "Missing Referrer-Policy defense-in-depth header",
+      "evidence_summary": "Response headers do not include Referrer-Policy (browser default applies).",
+      "evidence": {
+        "observation": "Response headers do not include Referrer-Policy (browser default applies).",
+        "location": "http://127.0.0.1:3000",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "header_inspection",
+        "detection_status": "DETECTED",
+        "negative_evidence": "Referrer policy is not explicitly declared; browser fallback applies.",
+        "details": {
+          "category": "missing-referrer-policy",
+          "header": "Referrer-Policy",
+          "observed": "absent"
+        }
+      },
+      "verification": {
+        "status": "VERIFIED",
+        "detection_status": "DETECTED",
+        "result": "Evaluated server HTTP response headers; missing-referrer-policy defense-in-depth header was not present."
+      },
+      "remediation": "Review the observed endpoint and asset configurations, adhere to principle of least privilege, and restrict unauthorized access.",
+      "source": "api",
+      "fingerprint": "8dae260423a6ad3c544b2b3baf1e4d9c7791f67ee9f9d13acd84725c0dc41ea2",
+      "score": 1
+    },
+    {
+      "id": "API-4b0b86f9",
+      "title": "Public application telemetry and operational metrics endpoint",
+      "category": "metrics-exposure",
+      "severity": "LOW",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:3000",
+      "endpoint": "http://127.0.0.1:3000/metrics",
+      "method": "GET",
+      "description": "Public application telemetry and operational metrics endpoint",
+      "evidence_summary": "HTTP 200 OK. Metrics endpoint observed (380 metric lines). Metric values redacted.",
+      "evidence": {
+        "observation": "HTTP 200 OK. Metrics endpoint observed (380 metric lines). Metric values redacted.",
+        "location": "http://127.0.0.1:3000/metrics",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "active_probe",
+        "detection_status": "OBSERVED",
+        "negative_evidence": "Standard service health/metrics data; no administrative credential access demonstrated.",
+        "details": {
+          "category": "metrics-exposure"
+        }
+      },
+      "verification": {
+        "status": "OBSERVED",
+        "detection_status": "OBSERVED",
+        "result": "Operational monitoring telemetry endpoint responded with HTTP 200 OK."
+      },
+      "remediation": "Restrict access to internal monitoring endpoints (/actuator, /metrics). Place them on private network interfaces or behind strict administrative authentication.",
+      "source": "api",
+      "fingerprint": "4b0b86f98d39c7ca1eb566e6994b8c4134b9f42bd4b8c4c26a05bc55baca74a9",
+      "score": 2
+    },
+    {
+      "id": "API-ac28b1c6",
+      "title": "Publicly accessible API documentation / OpenAPI specification",
+      "category": "api-docs-exposure",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:3000",
+      "endpoint": "http://127.0.0.1:3000/api-docs",
+      "method": "GET",
+      "description": "Publicly accessible API documentation / OpenAPI specification",
+      "evidence_summary": "HTTP 200 OK. Public API documentation discovered at /api-docs.",
+      "evidence": {
+        "observation": "HTTP 200 OK. Public API documentation discovered at /api-docs.",
+        "location": "http://127.0.0.1:3000/api-docs",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "active_probe",
+        "detection_status": "OBSERVED",
+        "negative_evidence": "Informational API documentation disclosure; no unauthorized endpoints or administrative bypass demonstrated.",
+        "details": {
+          "category": "api-docs-exposure"
+        }
+      },
+      "verification": {
+        "status": "OBSERVED",
+        "detection_status": "OBSERVED",
+        "result": "Public OpenAPI / Swagger specification discovered and accessible."
+      },
+      "remediation": "Determine whether API specifications (/swagger.json, /openapi.json) are intended for public consumers. If internal, place documentation behind authentication and restrict route access.",
+      "source": "api",
+      "fingerprint": "ac28b1c6fb0c5721616cfddfb0c60825d56788df84e484f8a9ad7a97621259b2",
+      "score": 0
+    }
+  ],
+  "findings": [
+    {
+      "id": "API-12c25a80",
+      "title": "Missing Content-Security-Policy (CSP) defense-in-depth header",
+      "category": "missing-csp",
+      "severity": "LOW",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:3000",
+      "endpoint": "http://127.0.0.1:3000",
+      "method": "GET",
+      "description": "Missing Content-Security-Policy (CSP) defense-in-depth header",
+      "evidence_summary": "Response headers do not include Content-Security-Policy.",
+      "evidence": {
+        "observation": "Response headers do not include Content-Security-Policy.",
+        "location": "http://127.0.0.1:3000",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "header_inspection",
+        "detection_status": "DETECTED",
+        "negative_evidence": "Informational hardening observation; does not constitute an exploitable vulnerability by itself.",
+        "details": {
+          "category": "missing-csp",
+          "header": "Content-Security-Policy",
+          "observed": "absent"
+        }
+      },
+      "verification": {
+        "status": "VERIFIED",
+        "detection_status": "DETECTED",
+        "result": "Evaluated server HTTP response headers; missing-csp defense-in-depth header was not present."
+      },
+      "remediation": "Deploy a robust Content-Security-Policy (CSP) header restricting script execution, styles, and object embeds to trusted sources. Begin with `Content-Security-Policy-Report-Only` during staging.",
+      "source": "api",
+      "fingerprint": "12c25a80e98b967bbbab4ccc33185dc09b282f20134dfd48750379ab2bed3aec",
+      "score": 5
+    },
+    {
+      "id": "API-44eda87b",
+      "title": "Missing Permissions-Policy header (browser feature gating)",
+      "category": "missing-permissions-policy",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:3000",
+      "endpoint": "http://127.0.0.1:3000",
+      "method": "GET",
+      "description": "Missing Permissions-Policy header (browser feature gating)",
+      "evidence_summary": "Response headers do not include Permissions-Policy.",
+      "evidence": {
+        "observation": "Response headers do not include Permissions-Policy.",
+        "location": "http://127.0.0.1:3000",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "header_inspection",
+        "detection_status": "DETECTED",
+        "negative_evidence": "Browser feature delegation policy not explicitly configured.",
+        "details": {
+          "category": "missing-permissions-policy",
+          "header": "Permissions-Policy",
+          "observed": "absent"
+        }
+      },
+      "verification": {
+        "status": "VERIFIED",
+        "detection_status": "DETECTED",
+        "result": "Evaluated server HTTP response headers; missing-permissions-policy defense-in-depth header was not present."
+      },
+      "remediation": "Configure a `Permissions-Policy` header explicitly disabling unnecessary browser capabilities (e.g. `camera=(), microphone=(), geolocation=()`).",
+      "source": "api",
+      "fingerprint": "44eda87bdeed1e6c10b9be21e4a673108e6e5a11174e113b5cd83fdad41508e2",
+      "score": 1
+    },
+    {
+      "id": "API-8dae2604",
+      "title": "Missing Referrer-Policy defense-in-depth header",
+      "category": "missing-referrer-policy",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:3000",
+      "endpoint": "http://127.0.0.1:3000",
+      "method": "GET",
+      "description": "Missing Referrer-Policy defense-in-depth header",
+      "evidence_summary": "Response headers do not include Referrer-Policy (browser default applies).",
+      "evidence": {
+        "observation": "Response headers do not include Referrer-Policy (browser default applies).",
+        "location": "http://127.0.0.1:3000",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "header_inspection",
+        "detection_status": "DETECTED",
+        "negative_evidence": "Referrer policy is not explicitly declared; browser fallback applies.",
+        "details": {
+          "category": "missing-referrer-policy",
+          "header": "Referrer-Policy",
+          "observed": "absent"
+        }
+      },
+      "verification": {
+        "status": "VERIFIED",
+        "detection_status": "DETECTED",
+        "result": "Evaluated server HTTP response headers; missing-referrer-policy defense-in-depth header was not present."
+      },
+      "remediation": "Review the observed endpoint and asset configurations, adhere to principle of least privilege, and restrict unauthorized access.",
+      "source": "api",
+      "fingerprint": "8dae260423a6ad3c544b2b3baf1e4d9c7791f67ee9f9d13acd84725c0dc41ea2",
+      "score": 1
+    },
+    {
+      "id": "API-4b0b86f9",
+      "title": "Public application telemetry and operational metrics endpoint",
+      "category": "metrics-exposure",
+      "severity": "LOW",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:3000",
+      "endpoint": "http://127.0.0.1:3000/metrics",
+      "method": "GET",
+      "description": "Public application telemetry and operational metrics endpoint",
+      "evidence_summary": "HTTP 200 OK. Metrics endpoint observed (380 metric lines). Metric values redacted.",
+      "evidence": {
+        "observation": "HTTP 200 OK. Metrics endpoint observed (380 metric lines). Metric values redacted.",
+        "location": "http://127.0.0.1:3000/metrics",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "active_probe",
+        "detection_status": "OBSERVED",
+        "negative_evidence": "Standard service health/metrics data; no administrative credential access demonstrated.",
+        "details": {
+          "category": "metrics-exposure"
+        }
+      },
+      "verification": {
+        "status": "OBSERVED",
+        "detection_status": "OBSERVED",
+        "result": "Operational monitoring telemetry endpoint responded with HTTP 200 OK."
+      },
+      "remediation": "Restrict access to internal monitoring endpoints (/actuator, /metrics). Place them on private network interfaces or behind strict administrative authentication.",
+      "source": "api",
+      "fingerprint": "4b0b86f98d39c7ca1eb566e6994b8c4134b9f42bd4b8c4c26a05bc55baca74a9",
+      "score": 2
+    },
+    {
+      "id": "API-ac28b1c6",
+      "title": "Publicly accessible API documentation / OpenAPI specification",
+      "category": "api-docs-exposure",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:3000",
+      "endpoint": "http://127.0.0.1:3000/api-docs",
+      "method": "GET",
+      "description": "Publicly accessible API documentation / OpenAPI specification",
+      "evidence_summary": "HTTP 200 OK. Public API documentation discovered at /api-docs.",
+      "evidence": {
+        "observation": "HTTP 200 OK. Public API documentation discovered at /api-docs.",
+        "location": "http://127.0.0.1:3000/api-docs",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "active_probe",
+        "detection_status": "OBSERVED",
+        "negative_evidence": "Informational API documentation disclosure; no unauthorized endpoints or administrative bypass demonstrated.",
+        "details": {
+          "category": "api-docs-exposure"
+        }
+      },
+      "verification": {
+        "status": "OBSERVED",
+        "detection_status": "OBSERVED",
+        "result": "Public OpenAPI / Swagger specification discovered and accessible."
+      },
+      "remediation": "Determine whether API specifications (/swagger.json, /openapi.json) are intended for public consumers. If internal, place documentation behind authentication and restrict route access.",
+      "source": "api",
+      "fingerprint": "ac28b1c6fb0c5721616cfddfb0c60825d56788df84e484f8a9ad7a97621259b2",
+      "score": 0
+    },
+    {
+      "id": "API-c26a4c55",
+      "title": "CORS policy permits wildcard (*) origin",
+      "category": "cors-wildcard",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:3000",
+      "endpoint": "http://127.0.0.1:3000",
+      "method": "GET",
+      "description": "CORS policy permits wildcard (*) origin",
+      "evidence_summary": "Supplied Origin: https://felix.invalid. Response returned Access-Control-Allow-Origin: * (HTTP 200 GET). Rationale: Wildcard origin permits unauthenticated cross-origin resource sharing.",
+      "evidence": {
+        "observation": "Supplied Origin: https://felix.invalid. Response returned Access-Control-Allow-Origin: * (HTTP 200 GET). Rationale: Wildcard origin permits unauthenticated cross-origin resource sharing.",
+        "location": "http://127.0.0.1:3000",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "header_inspection",
+        "detection_status": "OBSERVED",
+        "negative_evidence": "Access-Control-Allow-Credentials header was absent. Credentialed cross-origin exposure was not demonstrated.",
+        "details": {
+          "acac": "",
+          "acao": "*",
+          "category": "cors-wildcard",
+          "method": "GET",
+          "origin": "https://felix.invalid"
+        }
+      },
+      "verification": {
+        "status": "OBSERVED",
+        "detection_status": "OBSERVED",
+        "result": "Wildcard CORS origin observed on public endpoint; credential reflection not present."
+      },
+      "remediation": "Verify whether the resource is intended for public consumption. Do not use wildcard `*` origins on endpoints returning sensitive or tenant-specific data.",
+      "source": "api",
+      "fingerprint": "c26a4c550ac5e28d357e832c23895eeceacda70f57c07fc3f48269b3489c75e9",
+      "score": 0
+    },
+    {
+      "id": "API-fab6703f",
+      "title": "CORS policy permits wildcard (*) origin",
+      "category": "cors-wildcard",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:3000",
+      "endpoint": "http://127.0.0.1:3000/api/Challenges",
+      "method": "GET",
+      "description": "CORS policy permits wildcard (*) origin",
+      "evidence_summary": "Supplied Origin: https://felix.invalid. Response returned Access-Control-Allow-Origin: * (HTTP 200 GET). Rationale: Wildcard origin permits unauthenticated cross-origin resource sharing.",
+      "evidence": {
+        "observation": "Supplied Origin: https://felix.invalid. Response returned Access-Control-Allow-Origin: * (HTTP 200 GET). Rationale: Wildcard origin permits unauthenticated cross-origin resource sharing.",
+        "location": "http://127.0.0.1:3000/api/Challenges",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "header_inspection",
+        "detection_status": "OBSERVED",
+        "negative_evidence": "Access-Control-Allow-Credentials header was absent. Credentialed cross-origin exposure was not demonstrated.",
+        "details": {
+          "acac": "",
+          "acao": "*",
+          "category": "cors-wildcard",
+          "method": "GET",
+          "origin": "https://felix.invalid"
+        }
+      },
+      "verification": {
+        "status": "OBSERVED",
+        "detection_status": "OBSERVED",
+        "result": "Wildcard CORS origin observed on public endpoint; credential reflection not present."
+      },
+      "remediation": "Verify whether the resource is intended for public consumption. Do not use wildcard `*` origins on endpoints returning sensitive or tenant-specific data.",
+      "source": "api",
+      "fingerprint": "fab6703f6c5582df28fdad8d4f95d7e70e4646346c6efae736aec71e8bbcefa5",
+      "score": 0
+    },
+    {
+      "id": "API-2ffb8bd1",
+      "title": "CORS policy permits wildcard (*) origin",
+      "category": "cors-wildcard",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:3000",
+      "endpoint": "http://127.0.0.1:3000/api/Feedbacks",
+      "method": "GET",
+      "description": "CORS policy permits wildcard (*) origin",
+      "evidence_summary": "Supplied Origin: https://felix.invalid. Response returned Access-Control-Allow-Origin: * (HTTP 200 GET). Rationale: Wildcard origin permits unauthenticated cross-origin resource sharing.",
+      "evidence": {
+        "observation": "Supplied Origin: https://felix.invalid. Response returned Access-Control-Allow-Origin: * (HTTP 200 GET). Rationale: Wildcard origin permits unauthenticated cross-origin resource sharing.",
+        "location": "http://127.0.0.1:3000/api/Feedbacks",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "header_inspection",
+        "detection_status": "OBSERVED",
+        "negative_evidence": "Access-Control-Allow-Credentials header was absent. Credentialed cross-origin exposure was not demonstrated.",
+        "details": {
+          "acac": "",
+          "acao": "*",
+          "category": "cors-wildcard",
+          "method": "GET",
+          "origin": "https://felix.invalid"
+        }
+      },
+      "verification": {
+        "status": "OBSERVED",
+        "detection_status": "OBSERVED",
+        "result": "Wildcard CORS origin observed on public endpoint; credential reflection not present."
+      },
+      "remediation": "Verify whether the resource is intended for public consumption. Do not use wildcard `*` origins on endpoints returning sensitive or tenant-specific data.",
+      "source": "api",
+      "fingerprint": "2ffb8bd18bbb70b3c2741ad9b184f106c4ecc18b980292907b07369ade983303",
+      "score": 0
+    },
+    {
+      "id": "API-8875fc3b",
+      "title": "CORS policy permits wildcard (*) origin",
+      "category": "cors-wildcard",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:3000",
+      "endpoint": "http://127.0.0.1:3000/api/Users",
+      "method": "GET",
+      "description": "CORS policy permits wildcard (*) origin",
+      "evidence_summary": "Supplied Origin: https://felix.invalid. Response returned Access-Control-Allow-Origin: * (HTTP 401 GET). Rationale: Wildcard origin permits unauthenticated cross-origin resource sharing.",
+      "evidence": {
+        "observation": "Supplied Origin: https://felix.invalid. Response returned Access-Control-Allow-Origin: * (HTTP 401 GET). Rationale: Wildcard origin permits unauthenticated cross-origin resource sharing.",
+        "location": "http://127.0.0.1:3000/api/Users",
+        "http_method": "GET",
+        "http_status": 401,
+        "detection_method": "header_inspection",
+        "detection_status": "OBSERVED",
+        "negative_evidence": "Access-Control-Allow-Credentials header was absent. Credentialed cross-origin exposure was not demonstrated.",
+        "details": {
+          "acac": "",
+          "acao": "*",
+          "category": "cors-wildcard",
+          "method": "GET",
+          "origin": "https://felix.invalid"
+        }
+      },
+      "verification": {
+        "status": "OBSERVED",
+        "detection_status": "OBSERVED",
+        "result": "Wildcard CORS origin observed on public endpoint; credential reflection not present."
+      },
+      "remediation": "Verify whether the resource is intended for public consumption. Do not use wildcard `*` origins on endpoints returning sensitive or tenant-specific data.",
+      "source": "api",
+      "fingerprint": "8875fc3be23e1c408a66c991011e63caa26844cea2f01f809b2dcc04e3ca38dd",
+      "score": 0
+    },
+    {
+      "id": "API-22acdf5d",
+      "title": "Discovered API endpoint: /api/Challenges (PUBLIC)",
+      "category": "endpoint-discovered",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:3000",
+      "endpoint": "http://127.0.0.1:3000/api/Challenges",
+      "method": "GET",
+      "description": "Discovered API endpoint: /api/Challenges (PUBLIC)",
+      "evidence_summary": "Endpoint responded with HTTP 200 OK without requiring authentication.",
+      "evidence": {
+        "observation": "Endpoint responded with HTTP 200 OK without requiring authentication.",
+        "location": "http://127.0.0.1:3000/api/Challenges",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "template_literal",
+        "detection_status": "OBSERVED",
+        "negative_evidence": "Informational endpoint inventory observation; no vulnerability or unauthorized exposure.",
+        "details": {
+          "auth_state": "PUBLIC",
+          "category": "endpoint-discovered",
+          "classification": "API",
+          "line_number": "1",
+          "mechanism": "template_literal",
+          "source_asset": "http://127.0.0.1:3000/main.js"
+        }
+      },
+      "verification": {
+        "status": "OBSERVED",
+        "detection_status": "OBSERVED",
+        "result": "Endpoint http://127.0.0.1:3000/api/Challenges (GET) discovered in client assets [API]."
+      },
+      "remediation": "Review the observed endpoint and asset configurations, adhere to principle of least privilege, and restrict unauthorized access.",
+      "source": "api",
+      "fingerprint": "22acdf5da59fe6e5524ef4d8468093c90586bff45ff2306a8673162cc3afd29f",
+      "score": 0
+    },
+    {
+      "id": "API-54ce5af7",
+      "title": "Discovered API endpoint: /api/Deliverys (PUBLIC)",
+      "category": "endpoint-discovered",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:3000",
+      "endpoint": "http://127.0.0.1:3000/api/Deliverys",
+      "method": "GET",
+      "description": "Discovered API endpoint: /api/Deliverys (PUBLIC)",
+      "evidence_summary": "Endpoint responded with HTTP 200 OK without requiring authentication.",
+      "evidence": {
+        "observation": "Endpoint responded with HTTP 200 OK without requiring authentication.",
+        "location": "http://127.0.0.1:3000/api/Deliverys",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "template_literal",
+        "detection_status": "OBSERVED",
+        "negative_evidence": "Informational endpoint inventory observation; no vulnerability or unauthorized exposure.",
+        "details": {
+          "auth_state": "PUBLIC",
+          "category": "endpoint-discovered",
+          "classification": "API",
+          "line_number": "6504",
+          "mechanism": "template_literal",
+          "source_asset": "http://127.0.0.1:3000/main.js"
+        }
+      },
+      "verification": {
+        "status": "OBSERVED",
+        "detection_status": "OBSERVED",
+        "result": "Endpoint http://127.0.0.1:3000/api/Deliverys (GET) discovered in client assets [API]."
+      },
+      "remediation": "Review the observed endpoint and asset configurations, adhere to principle of least privilege, and restrict unauthorized access.",
+      "source": "api",
+      "fingerprint": "54ce5af78ee11acde1035eec351a041643d060f0c96f57e4de8ea384a56e86e4",
+      "score": 0
+    },
+    {
+      "id": "API-e031fb8a",
+      "title": "Discovered API endpoint: /api/Feedbacks (PUBLIC)",
+      "category": "endpoint-discovered",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:3000",
+      "endpoint": "http://127.0.0.1:3000/api/Feedbacks",
+      "method": "GET",
+      "description": "Discovered API endpoint: /api/Feedbacks (PUBLIC)",
+      "evidence_summary": "Endpoint responded with HTTP 200 OK without requiring authentication.",
+      "evidence": {
+        "observation": "Endpoint responded with HTTP 200 OK without requiring authentication.",
+        "location": "http://127.0.0.1:3000/api/Feedbacks",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "template_literal",
+        "detection_status": "OBSERVED",
+        "negative_evidence": "Informational endpoint inventory observation; no vulnerability or unauthorized exposure.",
+        "details": {
+          "auth_state": "PUBLIC",
+          "category": "endpoint-discovered",
+          "classification": "API",
+          "line_number": "1",
+          "mechanism": "template_literal",
+          "source_asset": "http://127.0.0.1:3000/main.js"
+        }
+      },
+      "verification": {
+        "status": "OBSERVED",
+        "detection_status": "OBSERVED",
+        "result": "Endpoint http://127.0.0.1:3000/api/Feedbacks (GET) discovered in client assets [API]."
+      },
+      "remediation": "Review the observed endpoint and asset configurations, adhere to principle of least privilege, and restrict unauthorized access.",
+      "source": "api",
+      "fingerprint": "e031fb8ae84f5c0dfe2261f6b1844806a0729cd1d7fd548e904ca2b53fae8174",
+      "score": 0
+    },
+    {
+      "id": "API-36574f10",
+      "title": "Discovered API endpoint: /api/Hints (PUBLIC)",
+      "category": "endpoint-discovered",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:3000",
+      "endpoint": "http://127.0.0.1:3000/api/Hints",
+      "method": "GET",
+      "description": "Discovered API endpoint: /api/Hints (PUBLIC)",
+      "evidence_summary": "Endpoint responded with HTTP 200 OK without requiring authentication.",
+      "evidence": {
+        "observation": "Endpoint responded with HTTP 200 OK without requiring authentication.",
+        "location": "http://127.0.0.1:3000/api/Hints",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "template_literal",
+        "detection_status": "OBSERVED",
+        "negative_evidence": "Informational endpoint inventory observation; no vulnerability or unauthorized exposure.",
+        "details": {
+          "auth_state": "PUBLIC",
+          "category": "endpoint-discovered",
+          "classification": "API",
+          "line_number": "6552",
+          "mechanism": "template_literal",
+          "source_asset": "http://127.0.0.1:3000/main.js"
+        }
+      },
+      "verification": {
+        "status": "OBSERVED",
+        "detection_status": "OBSERVED",
+        "result": "Endpoint http://127.0.0.1:3000/api/Hints (GET) discovered in client assets [API]."
+      },
+      "remediation": "Review the observed endpoint and asset configurations, adhere to principle of least privilege, and restrict unauthorized access.",
+      "source": "api",
+      "fingerprint": "36574f1017a6ad0d68ffaad91b7771a3dc7e6bc5c323ead31a75bbe003224828",
+      "score": 0
+    },
+    {
+      "id": "API-9434eb2e",
+      "title": "Discovered API endpoint: /api/Products (PUBLIC)",
+      "category": "endpoint-discovered",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:3000",
+      "endpoint": "http://127.0.0.1:3000/api/Products",
+      "method": "GET",
+      "description": "Discovered API endpoint: /api/Products (PUBLIC)",
+      "evidence_summary": "Endpoint responded with HTTP 200 OK without requiring authentication.",
+      "evidence": {
+        "observation": "Endpoint responded with HTTP 200 OK without requiring authentication.",
+        "location": "http://127.0.0.1:3000/api/Products",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "template_literal",
+        "detection_status": "OBSERVED",
+        "negative_evidence": "Informational endpoint inventory observation; no vulnerability or unauthorized exposure.",
+        "details": {
+          "auth_state": "PUBLIC",
+          "category": "endpoint-discovered",
+          "classification": "API",
+          "line_number": "6396",
+          "mechanism": "template_literal",
+          "source_asset": "http://127.0.0.1:3000/main.js"
+        }
+      },
+      "verification": {
+        "status": "OBSERVED",
+        "detection_status": "OBSERVED",
+        "result": "Endpoint http://127.0.0.1:3000/api/Products (GET) discovered in client assets [API]."
+      },
+      "remediation": "Review the observed endpoint and asset configurations, adhere to principle of least privilege, and restrict unauthorized access.",
+      "source": "api",
+      "fingerprint": "9434eb2e3e83374d44c750394d975898bd90e161eeef4e02bfbb9e898f8326bd",
+      "score": 0
+    },
+    {
+      "id": "API-2a4da84b",
+      "title": "Discovered API endpoint: /api/Quantitys (PUBLIC)",
+      "category": "endpoint-discovered",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:3000",
+      "endpoint": "http://127.0.0.1:3000/api/Quantitys",
+      "method": "GET",
+      "description": "Discovered API endpoint: /api/Quantitys (PUBLIC)",
+      "evidence_summary": "Endpoint responded with HTTP 200 OK without requiring authentication.",
+      "evidence": {
+        "observation": "Endpoint responded with HTTP 200 OK without requiring authentication.",
+        "location": "http://127.0.0.1:3000/api/Quantitys",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "template_literal",
+        "detection_status": "OBSERVED",
+        "negative_evidence": "Informational endpoint inventory observation; no vulnerability or unauthorized exposure.",
+        "details": {
+          "auth_state": "PUBLIC",
+          "category": "endpoint-discovered",
+          "classification": "API",
+          "line_number": "6424",
+          "mechanism": "template_literal",
+          "source_asset": "http://127.0.0.1:3000/main.js"
+        }
+      },
+      "verification": {
+        "status": "OBSERVED",
+        "detection_status": "OBSERVED",
+        "result": "Endpoint http://127.0.0.1:3000/api/Quantitys (GET) discovered in client assets [API]."
+      },
+      "remediation": "Review the observed endpoint and asset configurations, adhere to principle of least privilege, and restrict unauthorized access.",
+      "source": "api",
+      "fingerprint": "2a4da84b50da64d69a30ba3e04b1ec33bb800e07593fc195615d9e7e2100805b",
+      "score": 0
+    },
+    {
+      "id": "API-924170e6",
+      "title": "Discovered API endpoint: /api/Recycles (PUBLIC)",
+      "category": "endpoint-discovered",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:3000",
+      "endpoint": "http://127.0.0.1:3000/api/Recycles",
+      "method": "GET",
+      "description": "Discovered API endpoint: /api/Recycles (PUBLIC)",
+      "evidence_summary": "Endpoint responded with HTTP 200 OK without requiring authentication.",
+      "evidence": {
+        "observation": "Endpoint responded with HTTP 200 OK without requiring authentication.",
+        "location": "http://127.0.0.1:3000/api/Recycles",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "template_literal",
+        "detection_status": "OBSERVED",
+        "negative_evidence": "Informational endpoint inventory observation; no vulnerability or unauthorized exposure.",
+        "details": {
+          "auth_state": "PUBLIC",
+          "category": "endpoint-discovered",
+          "classification": "API",
+          "line_number": "3181",
+          "mechanism": "template_literal",
+          "source_asset": "http://127.0.0.1:3000/main.js"
+        }
+      },
+      "verification": {
+        "status": "OBSERVED",
+        "detection_status": "OBSERVED",
+        "result": "Endpoint http://127.0.0.1:3000/api/Recycles (GET) discovered in client assets [API]."
+      },
+      "remediation": "Review the observed endpoint and asset configurations, adhere to principle of least privilege, and restrict unauthorized access.",
+      "source": "api",
+      "fingerprint": "924170e6524ce2466d9b4a18408ef3a1d8fdb8594c0ee0035cbf4b00c52fb5cb",
+      "score": 0
+    },
+    {
+      "id": "API-7b6bf46f",
+      "title": "Discovered API endpoint: /api/SecurityQuestions (PUBLIC)",
+      "category": "endpoint-discovered",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:3000",
+      "endpoint": "http://127.0.0.1:3000/api/SecurityQuestions",
+      "method": "GET",
+      "description": "Discovered API endpoint: /api/SecurityQuestions (PUBLIC)",
+      "evidence_summary": "Endpoint responded with HTTP 200 OK without requiring authentication.",
+      "evidence": {
+        "observation": "Endpoint responded with HTTP 200 OK without requiring authentication.",
+        "location": "http://127.0.0.1:3000/api/SecurityQuestions",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "template_literal",
+        "detection_status": "OBSERVED",
+        "negative_evidence": "Informational endpoint inventory observation; no vulnerability or unauthorized exposure.",
+        "details": {
+          "auth_state": "PUBLIC",
+          "category": "endpoint-discovered",
+          "classification": "API",
+          "line_number": "6412",
+          "mechanism": "template_literal",
+          "source_asset": "http://127.0.0.1:3000/main.js"
+        }
+      },
+      "verification": {
+        "status": "OBSERVED",
+        "detection_status": "OBSERVED",
+        "result": "Endpoint http://127.0.0.1:3000/api/SecurityQuestions (GET) discovered in client assets [API]."
+      },
+      "remediation": "Review the observed endpoint and asset configurations, adhere to principle of least privilege, and restrict unauthorized access.",
+      "source": "api",
+      "fingerprint": "7b6bf46f445149c9426a4f07a027b6b61e2660f0e6fbbf04c57180b0a2c6517f",
+      "score": 0
+    },
+    {
+      "id": "API-0aadb813",
+      "title": "Discovered API endpoint: /api/Addresss (AUTH_REQUIRED)",
+      "category": "endpoint-discovered",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:3000",
+      "endpoint": "http://127.0.0.1:3000/api/Addresss",
+      "method": "GET",
+      "description": "Discovered API endpoint: /api/Addresss (AUTH_REQUIRED)",
+      "evidence_summary": "Authentication challenge returned (HTTP 401); protected boundary active.",
+      "evidence": {
+        "observation": "Authentication challenge returned (HTTP 401); protected boundary active.",
+        "location": "http://127.0.0.1:3000/api/Addresss",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "template_literal",
+        "detection_status": "OBSERVED",
+        "negative_evidence": "Authentication or authorization barrier active (AUTH_REQUIRED); unauthenticated access not permitted.",
+        "details": {
+          "auth_state": "AUTH_REQUIRED",
+          "category": "endpoint-discovered",
+          "classification": "API",
+          "line_number": "3177",
+          "mechanism": "template_literal",
+          "source_asset": "http://127.0.0.1:3000/main.js"
+        }
+      },
+      "verification": {
+        "status": "NOT_EXPOSED",
+        "detection_status": "OBSERVED",
+        "result": "Endpoint http://127.0.0.1:3000/api/Addresss (GET) discovered in client assets [API]."
+      },
+      "remediation": "Review the observed endpoint and asset configurations, adhere to principle of least privilege, and restrict unauthorized access.",
+      "source": "api",
+      "fingerprint": "0aadb813c69cbdf194770f6b04bf06f792b1f3872a1c468f15690d81bf75515c",
+      "score": 0
+    },
+    {
+      "id": "API-f7be22a5",
+      "title": "Discovered API endpoint: /api/BasketItems (AUTH_REQUIRED)",
+      "category": "endpoint-discovered",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:3000",
+      "endpoint": "http://127.0.0.1:3000/api/BasketItems",
+      "method": "GET",
+      "description": "Discovered API endpoint: /api/BasketItems (AUTH_REQUIRED)",
+      "evidence_summary": "Authentication challenge returned (HTTP 401); protected boundary active.",
+      "evidence": {
+        "observation": "Authentication challenge returned (HTTP 401); protected boundary active.",
+        "location": "http://127.0.0.1:3000/api/BasketItems",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "template_literal",
+        "detection_status": "OBSERVED",
+        "negative_evidence": "Authentication or authorization barrier active (AUTH_REQUIRED); unauthenticated access not permitted.",
+        "details": {
+          "auth_state": "AUTH_REQUIRED",
+          "category": "endpoint-discovered",
+          "classification": "API",
+          "line_number": "3510",
+          "mechanism": "template_literal",
+          "source_asset": "http://127.0.0.1:3000/main.js"
+        }
+      },
+      "verification": {
+        "status": "NOT_EXPOSED",
+        "detection_status": "OBSERVED",
+        "result": "Endpoint http://127.0.0.1:3000/api/BasketItems (GET) discovered in client assets [API]."
+      },
+      "remediation": "Review the observed endpoint and asset configurations, adhere to principle of least privilege, and restrict unauthorized access.",
+      "source": "api",
+      "fingerprint": "f7be22a5cdeb32eaa979c736280308c2569751a5479b141a82b63f2c30f1ef10",
+      "score": 0
+    },
+    {
+      "id": "API-a79e6f0f",
+      "title": "Discovered API endpoint: /api/Cards (AUTH_REQUIRED)",
+      "category": "endpoint-discovered",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:3000",
+      "endpoint": "http://127.0.0.1:3000/api/Cards",
+      "method": "GET",
+      "description": "Discovered API endpoint: /api/Cards (AUTH_REQUIRED)",
+      "evidence_summary": "Authentication challenge returned (HTTP 401); protected boundary active.",
+      "evidence": {
+        "observation": "Authentication challenge returned (HTTP 401); protected boundary active.",
+        "location": "http://127.0.0.1:3000/api/Cards",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "template_literal",
+        "detection_status": "OBSERVED",
+        "negative_evidence": "Authentication or authorization barrier active (AUTH_REQUIRED); unauthenticated access not permitted.",
+        "details": {
+          "auth_state": "AUTH_REQUIRED",
+          "category": "endpoint-discovered",
+          "classification": "API",
+          "line_number": "6504",
+          "mechanism": "template_literal",
+          "source_asset": "http://127.0.0.1:3000/main.js"
+        }
+      },
+      "verification": {
+        "status": "NOT_EXPOSED",
+        "detection_status": "OBSERVED",
+        "result": "Endpoint http://127.0.0.1:3000/api/Cards (GET) discovered in client assets [API]."
+      },
+      "remediation": "Review the observed endpoint and asset configurations, adhere to principle of least privilege, and restrict unauthorized access.",
+      "source": "api",
+      "fingerprint": "a79e6f0f3f879074f7bcba0607554726ad5b5927f21bdfdb8c6a20969650ca78",
+      "score": 0
+    },
+    {
+      "id": "API-9b01fed9",
+      "title": "Discovered API endpoint: /api/Complaints (AUTH_REQUIRED)",
+      "category": "endpoint-discovered",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:3000",
+      "endpoint": "http://127.0.0.1:3000/api/Complaints",
+      "method": "GET",
+      "description": "Discovered API endpoint: /api/Complaints (AUTH_REQUIRED)",
+      "evidence_summary": "Authentication challenge returned (HTTP 401); protected boundary active.",
+      "evidence": {
+        "observation": "Authentication challenge returned (HTTP 401); protected boundary active.",
+        "location": "http://127.0.0.1:3000/api/Complaints",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "template_literal",
+        "detection_status": "OBSERVED",
+        "negative_evidence": "Authentication or authorization barrier active (AUTH_REQUIRED); unauthenticated access not permitted.",
+        "details": {
+          "auth_state": "AUTH_REQUIRED",
+          "category": "endpoint-discovered",
+          "classification": "API",
+          "line_number": "6460",
+          "mechanism": "template_literal",
+          "source_asset": "http://127.0.0.1:3000/main.js"
+        }
+      },
+      "verification": {
+        "status": "NOT_EXPOSED",
+        "detection_status": "OBSERVED",
+        "result": "Endpoint http://127.0.0.1:3000/api/Complaints (GET) discovered in client assets [API]."
+      },
+      "remediation": "Review the observed endpoint and asset configurations, adhere to principle of least privilege, and restrict unauthorized access.",
+      "source": "api",
+      "fingerprint": "9b01fed9c8844f9f444715644db9b1b0149964ce547b0b079da39935ee0fbf2c",
+      "score": 0
+    },
+    {
+      "id": "API-d3967022",
+      "title": "Discovered API endpoint: /api/SecurityAnswers (AUTH_REQUIRED)",
+      "category": "endpoint-discovered",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:3000",
+      "endpoint": "http://127.0.0.1:3000/api/SecurityAnswers",
+      "method": "GET",
+      "description": "Discovered API endpoint: /api/SecurityAnswers (AUTH_REQUIRED)",
+      "evidence_summary": "Authentication challenge returned (HTTP 401); protected boundary active.",
+      "evidence": {
+        "observation": "Authentication challenge returned (HTTP 401); protected boundary active.",
+        "location": "http://127.0.0.1:3000/api/SecurityAnswers",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "template_literal",
+        "detection_status": "OBSERVED",
+        "negative_evidence": "Authentication or authorization barrier active (AUTH_REQUIRED); unauthenticated access not permitted.",
+        "details": {
+          "auth_state": "AUTH_REQUIRED",
+          "category": "endpoint-discovered",
+          "classification": "API",
+          "line_number": "6412",
+          "mechanism": "template_literal",
+          "source_asset": "http://127.0.0.1:3000/main.js"
+        }
+      },
+      "verification": {
+        "status": "NOT_EXPOSED",
+        "detection_status": "OBSERVED",
+        "result": "Endpoint http://127.0.0.1:3000/api/SecurityAnswers (GET) discovered in client assets [API]."
+      },
+      "remediation": "Review the observed endpoint and asset configurations, adhere to principle of least privilege, and restrict unauthorized access.",
+      "source": "api",
+      "fingerprint": "d39670228d6c46b89dee187a75a266e96b6dfa2905b62b8c741996991bbf93d8",
+      "score": 0
+    },
+    {
+      "id": "API-750da222",
+      "title": "Discovered USER endpoint: /api/Users (AUTH_REQUIRED)",
+      "category": "endpoint-discovered",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:3000",
+      "endpoint": "http://127.0.0.1:3000/api/Users",
+      "method": "GET",
+      "description": "Discovered USER endpoint: /api/Users (AUTH_REQUIRED)",
+      "evidence_summary": "Authentication challenge returned (HTTP 401); protected boundary active.",
+      "evidence": {
+        "observation": "Authentication challenge returned (HTTP 401); protected boundary active.",
+        "location": "http://127.0.0.1:3000/api/Users",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "template_literal",
+        "detection_status": "OBSERVED",
+        "negative_evidence": "Authentication or authorization barrier active (AUTH_REQUIRED); unauthenticated access not permitted.",
+        "details": {
+          "auth_state": "AUTH_REQUIRED",
+          "category": "endpoint-discovered",
+          "classification": "USER",
+          "line_number": "2758",
+          "mechanism": "template_literal",
+          "source_asset": "http://127.0.0.1:3000/main.js"
+        }
+      },
+      "verification": {
+        "status": "NOT_EXPOSED",
+        "detection_status": "OBSERVED",
+        "result": "Endpoint http://127.0.0.1:3000/api/Users (GET) discovered in client assets [USER]."
+      },
+      "remediation": "Review the observed endpoint and asset configurations, adhere to principle of least privilege, and restrict unauthorized access.",
+      "source": "api",
+      "fingerprint": "750da222230541db185d2eb0cc5c9f50972574a6f2cbc753d1fa0564e2891461",
+      "score": 0
+    }
+  ],
+  "security_stories": [
+    {
+      "id": "STORY-DOC-http://1",
+      "title": "Public API Documentation Disclosed Alongside Active Endpoints",
+      "summary": "Public OpenAPI / Swagger specification discovered alongside referenced client API routes, mapping attack surface.",
+      "description": "Public API schema specification at http://127.0.0.1:3000/api-docs was discovered alongside 18 referenced client API route(s).",
+      "evidence": [
+        "Public specification endpoint: http://127.0.0.1:3000/api-docs",
+        "Referenced client API endpoints identified: 18 route(s)"
+      ],
+      "impact": "Publicly exposed API specifications disclose internal parameter definitions, schemas, and endpoint semantics.",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "risk_contribution": 1,
+      "investigate_first": "Verify whether the OpenAPI documentation endpoint is intended for public consumption or should be placed behind authentication.",
+      "remediation": "Determine whether API specifications (/swagger.json, /openapi.json) are intended for public consumers. If internal, place documentation behind authentication and restrict route access.",
+      "related_finding_ids": [
+        "API-ac28b1c6"
+      ]
+    }
+  ],
+  "commercial_report": {
+    "schema_version": "2.0.0",
+    "report_id": "REP-ASM-03986737",
+    "generated_at": "2026-10-10T17:19:05Z",
+    "executive_summary": {
+      "assessment_id": "ASM-03986737",
+      "target": "http://127.0.0.1:3000",
+      "targets": [
+        "http://127.0.0.1:3000"
+      ],
+      "timestamp": "2026-10-10T17:19:05Z",
+      "scope_summary": "Authorized web security evaluation of http://127.0.0.1:3000 spanning 1 targets.",
+      "completion_status": "COMPLETED",
+      "assets_discovered_count": 17,
+      "findings_detected_count": 0,
+      "findings_verified_count": 3,
+      "findings_unverified_count": 0,
+      "observations_count": 14,
+      "inconclusive_checks_count": 0,
+      "not_assessed_checks_count": 0,
+      "severity_distribution": {
+        "CRITICAL": 0,
+        "HIGH": 0,
+        "INFO": 21,
+        "LOW": 2,
+        "MEDIUM": 0
+      },
+      "risk_score": 20,
+      "risk_level": "LOW",
+      "attack_surface_highlights": [
+        "17 total assets identified across 3 endpoint/route categories.",
+        "15 API endpoints cataloged."
+      ],
+      "key_concerns": [
+        "No Critical or High severity exposures were verified during assessment execution."
+      ],
+      "assessment_limitations": [
+        "Assessment strictly enforced authorized, non-destructive black-box audit boundaries.",
+        "No invasive privilege mutation, destructive payloads, or credential stuffing attacks were executed."
+      ],
+      "posture_statement": "Felix confirmed 3 verified findings and 0 detected findings, resulting in a deterministic risk score of 20/100 (LOW). High-priority verified findings represent immediate actionable exposures."
+    },
+    "assessment_scope": {
+      "in_scope_domains": [
+        "127.0.0.1"
+      ],
+      "in_scope_urls": [
+        "http://127.0.0.1:3000"
+      ],
+      "discovered_endpoints_count": 17,
+      "assessed_endpoints_count": 9,
+      "api_services": [
+        "http://127.0.0.1:3000/api-docs",
+        "http://127.0.0.1:3000/api/Addresss",
+        "http://127.0.0.1:3000/api/BasketItems",
+        "http://127.0.0.1:3000/api/Cards",
+        "http://127.0.0.1:3000/api/Challenges",
+        "http://127.0.0.1:3000/api/Complaints",
+        "http://127.0.0.1:3000/api/Deliverys",
+        "http://127.0.0.1:3000/api/Feedbacks",
+        "http://127.0.0.1:3000/api/Hints",
+        "http://127.0.0.1:3000/api/Products",
+        "http://127.0.0.1:3000/api/Quantitys",
+        "http://127.0.0.1:3000/api/Recycles",
+        "http://127.0.0.1:3000/api/SecurityAnswers",
+        "http://127.0.0.1:3000/api/SecurityQuestions",
+        "http://127.0.0.1:3000/api/Users"
+      ],
+      "cloud_resources": null,
+      "authentication_contexts": [
+        "Unauthenticated Baseline"
+      ],
+      "started_at": "2026-10-10T17:19:05Z",
+      "completed_at": "2026-10-10T17:19:05Z",
+      "duration": "2.026s",
+      "engines_executed": [
+        "felix-crawler",
+        "felix-secrets",
+        "felix-cloud",
+        "felix-api",
+        "felix-webvuln",
+        "felix-authz",
+        "felix-sessionsec",
+        "felix-businesslogic",
+        "felix-correlation",
+        "felix-verification"
+      ],
+      "engines_skipped": null,
+      "completed_checks_count": 9,
+      "incomplete_checks_count": 0,
+      "inconclusive_checks_count": 0,
+      "explicit_restrictions": null,
+      "excluded_targets": null,
+      "provenance": "LIVE",
+      "synthetic_fixture": false
+    },
+    "attack_surface": {
+      "total_assets": 17,
+      "assets_by_type": {
+        "API_ENDPOINT": 15,
+        "DOMAIN": 1,
+        "WEB_ROUTE": 1
+      },
+      "assets": [
+        {
+          "asset_id": "AST-http://1",
+          "url": "http://127.0.0.1:3000/api-docs",
+          "asset_type": "API_ENDPOINT",
+          "discovery_source": "api",
+          "assessment_state": "DISCOVERED_ONLY",
+          "authentication_context": "Unknown",
+          "associated_finding_ids": [
+            "API-ac28b1c6"
+          ],
+          "exposure_info": "Observed via api (api-docs-exposure)",
+          "http_status": 200
+        },
+        {
+          "asset_id": "AST-http://1",
+          "url": "http://127.0.0.1:3000/api/Addresss",
+          "asset_type": "API_ENDPOINT",
+          "discovery_source": "api",
+          "assessment_state": "ASSESSED",
+          "authentication_context": "Unauthenticated (Authentication Required)",
+          "associated_finding_ids": [
+            "API-0aadb813"
+          ],
+          "exposure_info": "Observed via api (endpoint-discovered)",
+          "http_status": 200
+        },
+        {
+          "asset_id": "AST-http://1",
+          "url": "http://127.0.0.1:3000/api/BasketItems",
+          "asset_type": "API_ENDPOINT",
+          "discovery_source": "api",
+          "assessment_state": "ASSESSED",
+          "authentication_context": "Unauthenticated (Authentication Required)",
+          "associated_finding_ids": [
+            "API-f7be22a5"
+          ],
+          "exposure_info": "Observed via api (endpoint-discovered)",
+          "http_status": 200
+        },
+        {
+          "asset_id": "AST-http://1",
+          "url": "http://127.0.0.1:3000/api/Cards",
+          "asset_type": "API_ENDPOINT",
+          "discovery_source": "api",
+          "assessment_state": "ASSESSED",
+          "authentication_context": "Unauthenticated (Authentication Required)",
+          "associated_finding_ids": [
+            "API-a79e6f0f"
+          ],
+          "exposure_info": "Observed via api (endpoint-discovered)",
+          "http_status": 200
+        },
+        {
+          "asset_id": "AST-http://1",
+          "url": "http://127.0.0.1:3000/api/Challenges",
+          "asset_type": "API_ENDPOINT",
+          "discovery_source": "api",
+          "assessment_state": "DISCOVERED_ONLY",
+          "authentication_context": "Unknown",
+          "associated_finding_ids": [
+            "API-fab6703f",
+            "API-22acdf5d"
+          ],
+          "exposure_info": "Observed via api (cors-wildcard)",
+          "http_status": 200
+        },
+        {
+          "asset_id": "AST-http://1",
+          "url": "http://127.0.0.1:3000/api/Complaints",
+          "asset_type": "API_ENDPOINT",
+          "discovery_source": "api",
+          "assessment_state": "ASSESSED",
+          "authentication_context": "Unauthenticated (Authentication Required)",
+          "associated_finding_ids": [
+            "API-9b01fed9"
+          ],
+          "exposure_info": "Observed via api (endpoint-discovered)",
+          "http_status": 200
+        },
+        {
+          "asset_id": "AST-http://1",
+          "url": "http://127.0.0.1:3000/api/Deliverys",
+          "asset_type": "API_ENDPOINT",
+          "discovery_source": "api",
+          "assessment_state": "DISCOVERED_ONLY",
+          "authentication_context": "Unauthenticated (Public Route)",
+          "associated_finding_ids": [
+            "API-54ce5af7"
+          ],
+          "exposure_info": "Observed via api (endpoint-discovered)",
+          "http_status": 200
+        },
+        {
+          "asset_id": "AST-http://1",
+          "url": "http://127.0.0.1:3000/api/Feedbacks",
+          "asset_type": "API_ENDPOINT",
+          "discovery_source": "api",
+          "assessment_state": "DISCOVERED_ONLY",
+          "authentication_context": "Unknown",
+          "associated_finding_ids": [
+            "API-2ffb8bd1",
+            "API-e031fb8a"
+          ],
+          "exposure_info": "Observed via api (cors-wildcard)",
+          "http_status": 200
+        },
+        {
+          "asset_id": "AST-http://1",
+          "url": "http://127.0.0.1:3000/api/Hints",
+          "asset_type": "API_ENDPOINT",
+          "discovery_source": "api",
+          "assessment_state": "DISCOVERED_ONLY",
+          "authentication_context": "Unauthenticated (Public Route)",
+          "associated_finding_ids": [
+            "API-36574f10"
+          ],
+          "exposure_info": "Observed via api (endpoint-discovered)",
+          "http_status": 200
+        },
+        {
+          "asset_id": "AST-http://1",
+          "url": "http://127.0.0.1:3000/api/Products",
+          "asset_type": "API_ENDPOINT",
+          "discovery_source": "api",
+          "assessment_state": "DISCOVERED_ONLY",
+          "authentication_context": "Unauthenticated (Public Route)",
+          "associated_finding_ids": [
+            "API-9434eb2e"
+          ],
+          "exposure_info": "Observed via api (endpoint-discovered)",
+          "http_status": 200
+        },
+        {
+          "asset_id": "AST-http://1",
+          "url": "http://127.0.0.1:3000/api/Quantitys",
+          "asset_type": "API_ENDPOINT",
+          "discovery_source": "api",
+          "assessment_state": "DISCOVERED_ONLY",
+          "authentication_context": "Unauthenticated (Public Route)",
+          "associated_finding_ids": [
+            "API-2a4da84b"
+          ],
+          "exposure_info": "Observed via api (endpoint-discovered)",
+          "http_status": 200
+        },
+        {
+          "asset_id": "AST-http://1",
+          "url": "http://127.0.0.1:3000/api/Recycles",
+          "asset_type": "API_ENDPOINT",
+          "discovery_source": "api",
+          "assessment_state": "DISCOVERED_ONLY",
+          "authentication_context": "Unauthenticated (Public Route)",
+          "associated_finding_ids": [
+            "API-924170e6"
+          ],
+          "exposure_info": "Observed via api (endpoint-discovered)",
+          "http_status": 200
+        },
+        {
+          "asset_id": "AST-http://1",
+          "url": "http://127.0.0.1:3000/api/SecurityAnswers",
+          "asset_type": "API_ENDPOINT",
+          "discovery_source": "api",
+          "assessment_state": "ASSESSED",
+          "authentication_context": "Unauthenticated (Authentication Required)",
+          "associated_finding_ids": [
+            "API-d3967022"
+          ],
+          "exposure_info": "Observed via api (endpoint-discovered)",
+          "http_status": 200
+        },
+        {
+          "asset_id": "AST-http://1",
+          "url": "http://127.0.0.1:3000/api/SecurityQuestions",
+          "asset_type": "API_ENDPOINT",
+          "discovery_source": "api",
+          "assessment_state": "DISCOVERED_ONLY",
+          "authentication_context": "Unauthenticated (Public Route)",
+          "associated_finding_ids": [
+            "API-7b6bf46f"
+          ],
+          "exposure_info": "Observed via api (endpoint-discovered)",
+          "http_status": 200
+        },
+        {
+          "asset_id": "AST-http://1",
+          "url": "http://127.0.0.1:3000/api/Users",
+          "asset_type": "API_ENDPOINT",
+          "discovery_source": "api",
+          "assessment_state": "DISCOVERED_ONLY",
+          "authentication_context": "Unauthenticated",
+          "associated_finding_ids": [
+            "API-8875fc3b",
+            "API-750da222"
+          ],
+          "exposure_info": "Observed via api (cors-wildcard)",
+          "http_status": 401
+        },
+        {
+          "asset_id": "AST-http://1",
+          "url": "http://127.0.0.1:3000",
+          "asset_type": "DOMAIN",
+          "discovery_source": "assessment_target_configuration",
+          "assessment_state": "ASSESSED",
+          "authentication_context": "Configured Assessment Target",
+          "associated_finding_ids": [
+            "API-12c25a80",
+            "API-44eda87b",
+            "API-8dae2604",
+            "API-c26a4c55"
+          ],
+          "exposure_info": "Primary authorized target boundary",
+          "http_status": 200
+        },
+        {
+          "asset_id": "AST-http://1",
+          "url": "http://127.0.0.1:3000/metrics",
+          "asset_type": "WEB_ROUTE",
+          "discovery_source": "api",
+          "assessment_state": "DISCOVERED_ONLY",
+          "authentication_context": "Unknown",
+          "associated_finding_ids": [
+            "API-4b0b86f9"
+          ],
+          "exposure_info": "Observed via api (metrics-exposure)",
+          "http_status": 200
+        }
+      ]
+    },
+    "risk_overview": {
+      "risk_score": 20,
+      "risk_level": "LOW",
+      "scoring_model_description": "Felix Deterministic Risk Model (0–100): Weighted empirical verification, multi-exposure diminishing returns, hardening caps (max 20 pts), and correlated story bonuses (max +15 pts). This metric reflects demonstrable exposure and is deliberately distinct from standalone CVSS base scoring.",
+      "severity_distribution": {
+        "CRITICAL": 0,
+        "HIGH": 0,
+        "INFO": 21,
+        "LOW": 2,
+        "MEDIUM": 0
+      },
+      "verified_counts_by_severity": {
+        "INFO": 2,
+        "LOW": 1
+      },
+      "detected_counts_by_severity": {},
+      "finding_risk_contributions": [
+        {
+          "finding_id": "API-12c25a80",
+          "title": "Missing Content-Security-Policy (CSP) defense-in-depth header",
+          "severity": "LOW",
+          "verification_status": "VERIFIED",
+          "score": 5,
+          "model": "felix_deterministic_v1",
+          "risk_type": "HARDENING_DEFENSE_IN_DEPTH",
+          "rationale": "Calculated risk score 5/40 weighted by severity (LOW), confidence (HIGH), and verification status (VERIFIED).",
+          "is_available": true
+        },
+        {
+          "finding_id": "API-44eda87b",
+          "title": "Missing Permissions-Policy header (browser feature gating)",
+          "severity": "INFO",
+          "verification_status": "VERIFIED",
+          "score": 1,
+          "model": "felix_deterministic_v1",
+          "risk_type": "HARDENING_DEFENSE_IN_DEPTH",
+          "rationale": "Calculated risk score 1/40 weighted by severity (INFO), confidence (HIGH), and verification status (VERIFIED).",
+          "is_available": true
+        },
+        {
+          "finding_id": "API-8dae2604",
+          "title": "Missing Referrer-Policy defense-in-depth header",
+          "severity": "INFO",
+          "verification_status": "VERIFIED",
+          "score": 1,
+          "model": "felix_deterministic_v1",
+          "risk_type": "HARDENING_DEFENSE_IN_DEPTH",
+          "rationale": "Calculated risk score 1/40 weighted by severity (INFO), confidence (HIGH), and verification status (VERIFIED).",
+          "is_available": true
+        }
+      ],
+      "security_stories": [
+        {
+          "id": "STORY-DOC-http://1",
+          "title": "Public API Documentation Disclosed Alongside Active Endpoints",
+          "summary": "Public OpenAPI / Swagger specification discovered alongside referenced client API routes, mapping attack surface.",
+          "description": "Public API schema specification at http://127.0.0.1:3000/api-docs was discovered alongside 18 referenced client API route(s).",
+          "evidence": [
+            "Public specification endpoint: http://127.0.0.1:3000/api-docs",
+            "Referenced client API endpoints identified: 18 route(s)"
+          ],
+          "impact": "Publicly exposed API specifications disclose internal parameter definitions, schemas, and endpoint semantics.",
+          "severity": "INFO",
+          "confidence": "HIGH",
+          "risk_contribution": 1,
+          "investigate_first": "Verify whether the OpenAPI documentation endpoint is intended for public consumption or should be placed behind authentication.",
+          "remediation": "Determine whether API specifications (/swagger.json, /openapi.json) are intended for public consumers. If internal, place documentation behind authentication and restrict route access.",
+          "related_finding_ids": [
+            "API-ac28b1c6"
+          ]
+        }
+      ],
+      "risk_concentrations": [
+        {
+          "component": "127.0.0.1:3000",
+          "risk_level": "LOW",
+          "score": 7,
+          "count": 3
+        }
+      ],
+      "risk_limitations": [
+        "Risk score reflects non-destructive black-box evaluation and does not calculate likelihood of zero-day attacks or internal network penetration.",
+        "Hardening findings (e.g. defense-in-depth headers) are strictly capped at 20 points maximum to prevent artificial score inflation on otherwise secure targets.",
+        "Candidate attack paths without empirical confirmation contribute zero unverified risk to the primary score."
+      ]
+    },
+    "verified_findings": [
+      {
+        "id": "API-12c25a80",
+        "title": "Missing Content-Security-Policy (CSP) defense-in-depth header",
+        "description": "Missing Content-Security-Policy (CSP) defense-in-depth header",
+        "affected_asset": "http://127.0.0.1:3000",
+        "asset_location": "http://127.0.0.1:3000",
+        "severity": "LOW",
+        "confidence": {
+          "detection_confidence": "HIGH",
+          "verification_confidence": "HIGH",
+          "overall_confidence": "HIGH",
+          "confidence_score": 90,
+          "rationale": "Detection confidence HIGH based on api; verification empirical confidence HIGH."
+        },
+        "authentication_state": "Unknown",
+        "detection_method": "header_inspection",
+        "verification": {
+          "status": "VERIFIED",
+          "method_or_policy": "POL-MISSING-CSP-01",
+          "criteria_satisfied": [
+            "Resource reachability verified",
+            "Response content criteria satisfied"
+          ],
+          "preconditions": [
+            "Authorized assessment target within defined scope boundaries"
+          ],
+          "limitations": [
+            "Verification establishes tested condition only; non-destructive bounds enforced."
+          ],
+          "result_summary": "Evaluated server HTTP response headers; missing-csp defense-in-depth header was not present."
+        },
+        "evidence": {
+          "observation": "Response headers do not include Content-Security-Policy.",
+          "location": "http://127.0.0.1:3000",
+          "http_method": "GET",
+          "http_status": 200,
+          "sanitized_excerpt": "Response headers do not include Content-Security-Policy.",
+          "evidence_summary": "Response headers do not include Content-Security-Policy.",
+          "negative_evidence": "Informational hardening observation; does not constitute an exploitable vulnerability by itself.",
+          "evidence_references": [
+            "http://127.0.0.1:3000"
+          ],
+          "provenance": "LIVE",
+          "timestamp": "2026-10-10T17:19:05Z",
+          "is_available": true
+        },
+        "security_impact": {
+          "demonstrated_impact": "Server HTTP response headers lack standard defense-in-depth protection directives.",
+          "plausible_impact": "In the event of an independent injection flaw, browser-side defensive mitigations would be absent.",
+          "unverified_impact": "No active injection, cross-site scripting, or framing condition was demonstrated.",
+          "summary": "Absence of hardening headers reduces defense-in-depth protection against secondary attacks."
+        },
+        "risk_contribution": {
+          "finding_id": "API-12c25a80",
+          "title": "Missing Content-Security-Policy (CSP) defense-in-depth header",
+          "severity": "LOW",
+          "verification_status": "VERIFIED",
+          "score": 5,
+          "model": "felix_deterministic_v1",
+          "risk_type": "HARDENING_DEFENSE_IN_DEPTH",
+          "rationale": "Calculated risk score 5/40 weighted by severity (LOW), confidence (HIGH), and verification status (VERIFIED).",
+          "is_available": true
+        },
+        "category": "missing-csp",
+        "source": "api"
+      },
+      {
+        "id": "API-44eda87b",
+        "title": "Missing Permissions-Policy header (browser feature gating)",
+        "description": "Missing Permissions-Policy header (browser feature gating)",
+        "affected_asset": "http://127.0.0.1:3000",
+        "asset_location": "http://127.0.0.1:3000",
+        "severity": "INFO",
+        "confidence": {
+          "detection_confidence": "HIGH",
+          "verification_confidence": "HIGH",
+          "overall_confidence": "HIGH",
+          "confidence_score": 90,
+          "rationale": "Detection confidence HIGH based on api; verification empirical confidence HIGH."
+        },
+        "authentication_state": "Unknown",
+        "detection_method": "header_inspection",
+        "verification": {
+          "status": "VERIFIED",
+          "method_or_policy": "POL-MISSING-PERMISSIONS-POLICY-01",
+          "criteria_satisfied": [
+            "Resource reachability verified",
+            "Response content criteria satisfied"
+          ],
+          "preconditions": [
+            "Authorized assessment target within defined scope boundaries"
+          ],
+          "limitations": [
+            "Verification establishes tested condition only; non-destructive bounds enforced."
+          ],
+          "result_summary": "Evaluated server HTTP response headers; missing-permissions-policy defense-in-depth header was not present."
+        },
+        "evidence": {
+          "observation": "Response headers do not include Permissions-Policy.",
+          "location": "http://127.0.0.1:3000",
+          "http_method": "GET",
+          "http_status": 200,
+          "sanitized_excerpt": "Response headers do not include Permissions-Policy.",
+          "evidence_summary": "Response headers do not include Permissions-Policy.",
+          "negative_evidence": "Browser feature delegation policy not explicitly configured.",
+          "evidence_references": [
+            "http://127.0.0.1:3000"
+          ],
+          "provenance": "LIVE",
+          "timestamp": "2026-10-10T17:19:05Z",
+          "is_available": true
+        },
+        "security_impact": {
+          "demonstrated_impact": "Server HTTP response headers lack standard defense-in-depth protection directives.",
+          "plausible_impact": "In the event of an independent injection flaw, browser-side defensive mitigations would be absent.",
+          "unverified_impact": "No active injection, cross-site scripting, or framing condition was demonstrated.",
+          "summary": "Absence of hardening headers reduces defense-in-depth protection against secondary attacks."
+        },
+        "risk_contribution": {
+          "finding_id": "API-44eda87b",
+          "title": "Missing Permissions-Policy header (browser feature gating)",
+          "severity": "INFO",
+          "verification_status": "VERIFIED",
+          "score": 1,
+          "model": "felix_deterministic_v1",
+          "risk_type": "HARDENING_DEFENSE_IN_DEPTH",
+          "rationale": "Calculated risk score 1/40 weighted by severity (INFO), confidence (HIGH), and verification status (VERIFIED).",
+          "is_available": true
+        },
+        "category": "missing-permissions-policy",
+        "source": "api"
+      },
+      {
+        "id": "API-8dae2604",
+        "title": "Missing Referrer-Policy defense-in-depth header",
+        "description": "Missing Referrer-Policy defense-in-depth header",
+        "affected_asset": "http://127.0.0.1:3000",
+        "asset_location": "http://127.0.0.1:3000",
+        "severity": "INFO",
+        "confidence": {
+          "detection_confidence": "HIGH",
+          "verification_confidence": "HIGH",
+          "overall_confidence": "HIGH",
+          "confidence_score": 90,
+          "rationale": "Detection confidence HIGH based on api; verification empirical confidence HIGH."
+        },
+        "authentication_state": "Unknown",
+        "detection_method": "header_inspection",
+        "verification": {
+          "status": "VERIFIED",
+          "method_or_policy": "POL-MISSING-REFERRER-POLICY-01",
+          "criteria_satisfied": [
+            "Resource reachability verified",
+            "Response content criteria satisfied"
+          ],
+          "preconditions": [
+            "Authorized assessment target within defined scope boundaries"
+          ],
+          "limitations": [
+            "Verification establishes tested condition only; non-destructive bounds enforced."
+          ],
+          "result_summary": "Evaluated server HTTP response headers; missing-referrer-policy defense-in-depth header was not present."
+        },
+        "evidence": {
+          "observation": "Response headers do not include Referrer-Policy (browser default applies).",
+          "location": "http://127.0.0.1:3000",
+          "http_method": "GET",
+          "http_status": 200,
+          "sanitized_excerpt": "Response headers do not include Referrer-Policy (browser default applies).",
+          "evidence_summary": "Response headers do not include Referrer-Policy (browser default applies).",
+          "negative_evidence": "Referrer policy is not explicitly declared; browser fallback applies.",
+          "evidence_references": [
+            "http://127.0.0.1:3000"
+          ],
+          "provenance": "LIVE",
+          "timestamp": "2026-10-10T17:19:05Z",
+          "is_available": true
+        },
+        "security_impact": {
+          "demonstrated_impact": "Server HTTP response headers lack standard defense-in-depth protection directives.",
+          "plausible_impact": "In the event of an independent injection flaw, browser-side defensive mitigations would be absent.",
+          "unverified_impact": "No active injection, cross-site scripting, or framing condition was demonstrated.",
+          "summary": "Absence of hardening headers reduces defense-in-depth protection against secondary attacks."
+        },
+        "risk_contribution": {
+          "finding_id": "API-8dae2604",
+          "title": "Missing Referrer-Policy defense-in-depth header",
+          "severity": "INFO",
+          "verification_status": "VERIFIED",
+          "score": 1,
+          "model": "felix_deterministic_v1",
+          "risk_type": "HARDENING_DEFENSE_IN_DEPTH",
+          "rationale": "Calculated risk score 1/40 weighted by severity (INFO), confidence (HIGH), and verification status (VERIFIED).",
+          "is_available": true
+        },
+        "category": "missing-referrer-policy",
+        "source": "api"
+      }
+    ],
+    "detected_findings": null,
+    "observations": [
+      {
+        "observation_id": "OBS-API-22ac",
+        "title": "Discovered API endpoint: /api/Challenges (PUBLIC)",
+        "description": "Discovered API endpoint: /api/Challenges (PUBLIC)",
+        "affected_asset": "http://127.0.0.1:3000/api/Challenges",
+        "observation_source": "api",
+        "evidence": "Endpoint responded with HTTP 200 OK without requiring authentication.",
+        "assessment_context": "Discovered and cataloged during baseline inventory and discovery crawl.",
+        "limitations": [
+          "Observation reflects informational asset cataloging; does not represent a verified vulnerability or security failure."
+        ],
+        "observation_type": "INFORMATIONAL_SIGNAL",
+        "category": "endpoint-discovered"
+      },
+      {
+        "observation_id": "OBS-API-2a4d",
+        "title": "Discovered API endpoint: /api/Quantitys (PUBLIC)",
+        "description": "Discovered API endpoint: /api/Quantitys (PUBLIC)",
+        "affected_asset": "http://127.0.0.1:3000/api/Quantitys",
+        "observation_source": "api",
+        "evidence": "Endpoint responded with HTTP 200 OK without requiring authentication.",
+        "assessment_context": "Discovered and cataloged during baseline inventory and discovery crawl.",
+        "limitations": [
+          "Observation reflects informational asset cataloging; does not represent a verified vulnerability or security failure."
+        ],
+        "observation_type": "INFORMATIONAL_SIGNAL",
+        "category": "endpoint-discovered"
+      },
+      {
+        "observation_id": "OBS-API-2ffb",
+        "title": "CORS policy permits wildcard (*) origin",
+        "description": "CORS policy permits wildcard (*) origin",
+        "affected_asset": "http://127.0.0.1:3000/api/Feedbacks",
+        "observation_source": "api",
+        "evidence": "Supplied Origin: https://felix.invalid. Response returned Access-Control-Allow-Origin: * (HTTP 200 GET). Rationale: Wildcard origin permits unauthenticated cross-origin resource sharing.",
+        "assessment_context": "Discovered and cataloged during baseline inventory and discovery crawl.",
+        "limitations": [
+          "Observation reflects informational asset cataloging; does not represent a verified vulnerability or security failure."
+        ],
+        "observation_type": "INFORMATIONAL_SIGNAL",
+        "category": "cors-wildcard"
+      },
+      {
+        "observation_id": "OBS-API-3657",
+        "title": "Discovered API endpoint: /api/Hints (PUBLIC)",
+        "description": "Discovered API endpoint: /api/Hints (PUBLIC)",
+        "affected_asset": "http://127.0.0.1:3000/api/Hints",
+        "observation_source": "api",
+        "evidence": "Endpoint responded with HTTP 200 OK without requiring authentication.",
+        "assessment_context": "Discovered and cataloged during baseline inventory and discovery crawl.",
+        "limitations": [
+          "Observation reflects informational asset cataloging; does not represent a verified vulnerability or security failure."
+        ],
+        "observation_type": "INFORMATIONAL_SIGNAL",
+        "category": "endpoint-discovered"
+      },
+      {
+        "observation_id": "OBS-API-4b0b",
+        "title": "Public application telemetry and operational metrics endpoint",
+        "description": "Public application telemetry and operational metrics endpoint",
+        "affected_asset": "http://127.0.0.1:3000/metrics",
+        "observation_source": "api",
+        "evidence": "HTTP 200 OK. Metrics endpoint observed (380 metric lines). Metric values redacted.",
+        "assessment_context": "Discovered and cataloged during baseline inventory and discovery crawl.",
+        "limitations": [
+          "Observation reflects informational asset cataloging; does not represent a verified vulnerability or security failure."
+        ],
+        "observation_type": "INFORMATIONAL_SIGNAL",
+        "category": "metrics-exposure"
+      },
+      {
+        "observation_id": "OBS-API-54ce",
+        "title": "Discovered API endpoint: /api/Deliverys (PUBLIC)",
+        "description": "Discovered API endpoint: /api/Deliverys (PUBLIC)",
+        "affected_asset": "http://127.0.0.1:3000/api/Deliverys",
+        "observation_source": "api",
+        "evidence": "Endpoint responded with HTTP 200 OK without requiring authentication.",
+        "assessment_context": "Discovered and cataloged during baseline inventory and discovery crawl.",
+        "limitations": [
+          "Observation reflects informational asset cataloging; does not represent a verified vulnerability or security failure."
+        ],
+        "observation_type": "INFORMATIONAL_SIGNAL",
+        "category": "endpoint-discovered"
+      },
+      {
+        "observation_id": "OBS-API-7b6b",
+        "title": "Discovered API endpoint: /api/SecurityQuestions (PUBLIC)",
+        "description": "Discovered API endpoint: /api/SecurityQuestions (PUBLIC)",
+        "affected_asset": "http://127.0.0.1:3000/api/SecurityQuestions",
+        "observation_source": "api",
+        "evidence": "Endpoint responded with HTTP 200 OK without requiring authentication.",
+        "assessment_context": "Discovered and cataloged during baseline inventory and discovery crawl.",
+        "limitations": [
+          "Observation reflects informational asset cataloging; does not represent a verified vulnerability or security failure."
+        ],
+        "observation_type": "INFORMATIONAL_SIGNAL",
+        "category": "endpoint-discovered"
+      },
+      {
+        "observation_id": "OBS-API-8875",
+        "title": "CORS policy permits wildcard (*) origin",
+        "description": "CORS policy permits wildcard (*) origin",
+        "affected_asset": "http://127.0.0.1:3000/api/Users",
+        "observation_source": "api",
+        "evidence": "Supplied Origin: https://felix.invalid. Response returned Access-Control-Allow-Origin: * (HTTP 401 GET). Rationale: Wildcard origin permits unauthenticated cross-origin resource sharing.",
+        "assessment_context": "Discovered and cataloged during baseline inventory and discovery crawl.",
+        "limitations": [
+          "Observation reflects informational asset cataloging; does not represent a verified vulnerability or security failure."
+        ],
+        "observation_type": "INFORMATIONAL_SIGNAL",
+        "category": "cors-wildcard"
+      },
+      {
+        "observation_id": "OBS-API-9241",
+        "title": "Discovered API endpoint: /api/Recycles (PUBLIC)",
+        "description": "Discovered API endpoint: /api/Recycles (PUBLIC)",
+        "affected_asset": "http://127.0.0.1:3000/api/Recycles",
+        "observation_source": "api",
+        "evidence": "Endpoint responded with HTTP 200 OK without requiring authentication.",
+        "assessment_context": "Discovered and cataloged during baseline inventory and discovery crawl.",
+        "limitations": [
+          "Observation reflects informational asset cataloging; does not represent a verified vulnerability or security failure."
+        ],
+        "observation_type": "INFORMATIONAL_SIGNAL",
+        "category": "endpoint-discovered"
+      },
+      {
+        "observation_id": "OBS-API-9434",
+        "title": "Discovered API endpoint: /api/Products (PUBLIC)",
+        "description": "Discovered API endpoint: /api/Products (PUBLIC)",
+        "affected_asset": "http://127.0.0.1:3000/api/Products",
+        "observation_source": "api",
+        "evidence": "Endpoint responded with HTTP 200 OK without requiring authentication.",
+        "assessment_context": "Discovered and cataloged during baseline inventory and discovery crawl.",
+        "limitations": [
+          "Observation reflects informational asset cataloging; does not represent a verified vulnerability or security failure."
+        ],
+        "observation_type": "INFORMATIONAL_SIGNAL",
+        "category": "endpoint-discovered"
+      },
+      {
+        "observation_id": "OBS-API-ac28",
+        "title": "Publicly accessible API documentation / OpenAPI specification",
+        "description": "Publicly accessible API documentation / OpenAPI specification",
+        "affected_asset": "http://127.0.0.1:3000/api-docs",
+        "observation_source": "api",
+        "evidence": "HTTP 200 OK. Public API documentation discovered at /api-docs.",
+        "assessment_context": "Discovered and cataloged during baseline inventory and discovery crawl.",
+        "limitations": [
+          "Observation reflects informational asset cataloging; does not represent a verified vulnerability or security failure."
+        ],
+        "observation_type": "INFORMATIONAL_SIGNAL",
+        "category": "api-docs-exposure"
+      },
+      {
+        "observation_id": "OBS-API-c26a",
+        "title": "CORS policy permits wildcard (*) origin",
+        "description": "CORS policy permits wildcard (*) origin",
+        "affected_asset": "http://127.0.0.1:3000",
+        "observation_source": "api",
+        "evidence": "Supplied Origin: https://felix.invalid. Response returned Access-Control-Allow-Origin: * (HTTP 200 GET). Rationale: Wildcard origin permits unauthenticated cross-origin resource sharing.",
+        "assessment_context": "Discovered and cataloged during baseline inventory and discovery crawl.",
+        "limitations": [
+          "Observation reflects informational asset cataloging; does not represent a verified vulnerability or security failure."
+        ],
+        "observation_type": "INFORMATIONAL_SIGNAL",
+        "category": "cors-wildcard"
+      },
+      {
+        "observation_id": "OBS-API-e031",
+        "title": "Discovered API endpoint: /api/Feedbacks (PUBLIC)",
+        "description": "Discovered API endpoint: /api/Feedbacks (PUBLIC)",
+        "affected_asset": "http://127.0.0.1:3000/api/Feedbacks",
+        "observation_source": "api",
+        "evidence": "Endpoint responded with HTTP 200 OK without requiring authentication.",
+        "assessment_context": "Discovered and cataloged during baseline inventory and discovery crawl.",
+        "limitations": [
+          "Observation reflects informational asset cataloging; does not represent a verified vulnerability or security failure."
+        ],
+        "observation_type": "INFORMATIONAL_SIGNAL",
+        "category": "endpoint-discovered"
+      },
+      {
+        "observation_id": "OBS-API-fab6",
+        "title": "CORS policy permits wildcard (*) origin",
+        "description": "CORS policy permits wildcard (*) origin",
+        "affected_asset": "http://127.0.0.1:3000/api/Challenges",
+        "observation_source": "api",
+        "evidence": "Supplied Origin: https://felix.invalid. Response returned Access-Control-Allow-Origin: * (HTTP 200 GET). Rationale: Wildcard origin permits unauthenticated cross-origin resource sharing.",
+        "assessment_context": "Discovered and cataloged during baseline inventory and discovery crawl.",
+        "limitations": [
+          "Observation reflects informational asset cataloging; does not represent a verified vulnerability or security failure."
+        ],
+        "observation_type": "INFORMATIONAL_SIGNAL",
+        "category": "cors-wildcard"
+      }
+    ],
+    "technical_appendix": {
+      "assessment_metadata": {
+        "duration": "2.026s",
+        "engine_version": "5.0.0",
+        "engines": [
+          "felix-crawler",
+          "felix-secrets",
+          "felix-cloud",
+          "felix-api",
+          "felix-report"
+        ],
+        "request_count": 29,
+        "scanner": "Felix",
+        "target": "http://127.0.0.1:3000"
+      },
+      "engine_execution_summary": [
+        {
+          "engine_name": "felix-crawler",
+          "version": "2.0.0",
+          "status": "EXECUTED",
+          "assets_analyzed": 23,
+          "findings_count": 0
+        },
+        {
+          "engine_name": "felix-secrets",
+          "version": "2.0.0",
+          "status": "EXECUTED",
+          "assets_analyzed": 23,
+          "findings_count": 0
+        },
+        {
+          "engine_name": "felix-cloud",
+          "version": "2.0.0",
+          "status": "EXECUTED",
+          "assets_analyzed": 23,
+          "findings_count": 0
+        },
+        {
+          "engine_name": "felix-api",
+          "version": "2.0.0",
+          "status": "EXECUTED",
+          "assets_analyzed": 23,
+          "findings_count": 23
+        },
+        {
+          "engine_name": "felix-verification",
+          "version": "2.0.0",
+          "status": "EXECUTED",
+          "assets_analyzed": 9,
+          "findings_count": 3
+        },
+        {
+          "engine_name": "felix-correlation",
+          "version": "2.0.0",
+          "status": "EXECUTED",
+          "assets_analyzed": 23,
+          "findings_count": 0
+        }
+      ],
+      "discovery_and_detection_stats": {
+        "attack_paths_total": 0,
+        "attempted_checks": 9,
+        "critical_count": 0,
+        "high_count": 0,
+        "info_count": 21,
+        "low_count": 2,
+        "medium_count": 0,
+        "stories_total": 1,
+        "total_findings": 23
+      },
+      "verification_status_counts": {
+        "BLOCKED": 0,
+        "DETECTED": 0,
+        "INCONCLUSIVE": 0,
+        "NOT_EXPOSED": 6,
+        "NOT_VERIFIED": 0,
+        "OBSERVED": 14,
+        "SYNTHETIC": 0,
+        "VERIFIED": 3
+      },
+      "negative_verification_outcomes": [
+        {
+          "finding_id": "API-0aadb813",
+          "target_url": "http://127.0.0.1:3000",
+          "endpoint": "http://127.0.0.1:3000/api/Addresss",
+          "policy_id": "POL-DEFENSE-BOUNDARY",
+          "result_summary": "Endpoint http://127.0.0.1:3000/api/Addresss (GET) discovered in client assets [API].",
+          "evidence": "Authentication challenge returned (HTTP 401); protected boundary active.",
+          "limitations": [
+            "Status code confirms tested boundary under evaluated conditions; does not prove entire application or account is secure."
+          ]
+        },
+        {
+          "finding_id": "API-f7be22a5",
+          "target_url": "http://127.0.0.1:3000",
+          "endpoint": "http://127.0.0.1:3000/api/BasketItems",
+          "policy_id": "POL-DEFENSE-BOUNDARY",
+          "result_summary": "Endpoint http://127.0.0.1:3000/api/BasketItems (GET) discovered in client assets [API].",
+          "evidence": "Authentication challenge returned (HTTP 401); protected boundary active.",
+          "limitations": [
+            "Status code confirms tested boundary under evaluated conditions; does not prove entire application or account is secure."
+          ]
+        },
+        {
+          "finding_id": "API-a79e6f0f",
+          "target_url": "http://127.0.0.1:3000",
+          "endpoint": "http://127.0.0.1:3000/api/Cards",
+          "policy_id": "POL-DEFENSE-BOUNDARY",
+          "result_summary": "Endpoint http://127.0.0.1:3000/api/Cards (GET) discovered in client assets [API].",
+          "evidence": "Authentication challenge returned (HTTP 401); protected boundary active.",
+          "limitations": [
+            "Status code confirms tested boundary under evaluated conditions; does not prove entire application or account is secure."
+          ]
+        },
+        {
+          "finding_id": "API-9b01fed9",
+          "target_url": "http://127.0.0.1:3000",
+          "endpoint": "http://127.0.0.1:3000/api/Complaints",
+          "policy_id": "POL-DEFENSE-BOUNDARY",
+          "result_summary": "Endpoint http://127.0.0.1:3000/api/Complaints (GET) discovered in client assets [API].",
+          "evidence": "Authentication challenge returned (HTTP 401); protected boundary active.",
+          "limitations": [
+            "Status code confirms tested boundary under evaluated conditions; does not prove entire application or account is secure."
+          ]
+        },
+        {
+          "finding_id": "API-d3967022",
+          "target_url": "http://127.0.0.1:3000",
+          "endpoint": "http://127.0.0.1:3000/api/SecurityAnswers",
+          "policy_id": "POL-DEFENSE-BOUNDARY",
+          "result_summary": "Endpoint http://127.0.0.1:3000/api/SecurityAnswers (GET) discovered in client assets [API].",
+          "evidence": "Authentication challenge returned (HTTP 401); protected boundary active.",
+          "limitations": [
+            "Status code confirms tested boundary under evaluated conditions; does not prove entire application or account is secure."
+          ]
+        },
+        {
+          "finding_id": "API-750da222",
+          "target_url": "http://127.0.0.1:3000",
+          "endpoint": "http://127.0.0.1:3000/api/Users",
+          "policy_id": "POL-DEFENSE-BOUNDARY",
+          "result_summary": "Endpoint http://127.0.0.1:3000/api/Users (GET) discovered in client assets [USER].",
+          "evidence": "Authentication challenge returned (HTTP 401); protected boundary active.",
+          "limitations": [
+            "Status code confirms tested boundary under evaluated conditions; does not prove entire application or account is secure."
+          ]
+        }
+      ],
+      "finding_index": [
+        {
+          "finding_id": "API-0aadb813",
+          "title": "Discovered API endpoint: /api/Addresss (AUTH_REQUIRED)",
+          "source_engine": "api",
+          "category": "endpoint-discovered",
+          "detection_method": "template_literal",
+          "policy_or_rule_id": "POL-ENDPOINT-DISCOVERED",
+          "evidence_references": "http://127.0.0.1:3000/api/Addresss",
+          "provenance": "LIVE",
+          "authentication_state": "Unauthenticated (Authentication Required)",
+          "canonical_status": "NOT_EXPOSED",
+          "severity": "INFO"
+        },
+        {
+          "finding_id": "API-12c25a80",
+          "title": "Missing Content-Security-Policy (CSP) defense-in-depth header",
+          "source_engine": "api",
+          "category": "missing-csp",
+          "detection_method": "header_inspection",
+          "policy_or_rule_id": "POL-MISSING-CSP",
+          "evidence_references": "http://127.0.0.1:3000",
+          "provenance": "LIVE",
+          "authentication_state": "Unknown",
+          "canonical_status": "VERIFIED",
+          "severity": "LOW"
+        },
+        {
+          "finding_id": "API-22acdf5d",
+          "title": "Discovered API endpoint: /api/Challenges (PUBLIC)",
+          "source_engine": "api",
+          "category": "endpoint-discovered",
+          "detection_method": "template_literal",
+          "policy_or_rule_id": "POL-ENDPOINT-DISCOVERED",
+          "evidence_references": "http://127.0.0.1:3000/api/Challenges",
+          "provenance": "LIVE",
+          "authentication_state": "Unauthenticated (Public Route)",
+          "canonical_status": "OBSERVED",
+          "severity": "INFO"
+        },
+        {
+          "finding_id": "API-2a4da84b",
+          "title": "Discovered API endpoint: /api/Quantitys (PUBLIC)",
+          "source_engine": "api",
+          "category": "endpoint-discovered",
+          "detection_method": "template_literal",
+          "policy_or_rule_id": "POL-ENDPOINT-DISCOVERED",
+          "evidence_references": "http://127.0.0.1:3000/api/Quantitys",
+          "provenance": "LIVE",
+          "authentication_state": "Unauthenticated (Public Route)",
+          "canonical_status": "OBSERVED",
+          "severity": "INFO"
+        },
+        {
+          "finding_id": "API-2ffb8bd1",
+          "title": "CORS policy permits wildcard (*) origin",
+          "source_engine": "api",
+          "category": "cors-wildcard",
+          "detection_method": "header_inspection",
+          "policy_or_rule_id": "POL-CORS-WILDCARD",
+          "evidence_references": "http://127.0.0.1:3000/api/Feedbacks",
+          "provenance": "LIVE",
+          "authentication_state": "Unknown",
+          "canonical_status": "OBSERVED",
+          "severity": "INFO"
+        },
+        {
+          "finding_id": "API-36574f10",
+          "title": "Discovered API endpoint: /api/Hints (PUBLIC)",
+          "source_engine": "api",
+          "category": "endpoint-discovered",
+          "detection_method": "template_literal",
+          "policy_or_rule_id": "POL-ENDPOINT-DISCOVERED",
+          "evidence_references": "http://127.0.0.1:3000/api/Hints",
+          "provenance": "LIVE",
+          "authentication_state": "Unauthenticated (Public Route)",
+          "canonical_status": "OBSERVED",
+          "severity": "INFO"
+        },
+        {
+          "finding_id": "API-44eda87b",
+          "title": "Missing Permissions-Policy header (browser feature gating)",
+          "source_engine": "api",
+          "category": "missing-permissions-policy",
+          "detection_method": "header_inspection",
+          "policy_or_rule_id": "POL-MISSING-PERMISSIONS-POLICY",
+          "evidence_references": "http://127.0.0.1:3000",
+          "provenance": "LIVE",
+          "authentication_state": "Unknown",
+          "canonical_status": "VERIFIED",
+          "severity": "INFO"
+        },
+        {
+          "finding_id": "API-4b0b86f9",
+          "title": "Public application telemetry and operational metrics endpoint",
+          "source_engine": "api",
+          "category": "metrics-exposure",
+          "detection_method": "active_probe",
+          "policy_or_rule_id": "POL-METRICS-EXPOSURE",
+          "evidence_references": "http://127.0.0.1:3000/metrics",
+          "provenance": "LIVE",
+          "authentication_state": "Unknown",
+          "canonical_status": "OBSERVED",
+          "severity": "LOW"
+        },
+        {
+          "finding_id": "API-54ce5af7",
+          "title": "Discovered API endpoint: /api/Deliverys (PUBLIC)",
+          "source_engine": "api",
+          "category": "endpoint-discovered",
+          "detection_method": "template_literal",
+          "policy_or_rule_id": "POL-ENDPOINT-DISCOVERED",
+          "evidence_references": "http://127.0.0.1:3000/api/Deliverys",
+          "provenance": "LIVE",
+          "authentication_state": "Unauthenticated (Public Route)",
+          "canonical_status": "OBSERVED",
+          "severity": "INFO"
+        },
+        {
+          "finding_id": "API-750da222",
+          "title": "Discovered USER endpoint: /api/Users (AUTH_REQUIRED)",
+          "source_engine": "api",
+          "category": "endpoint-discovered",
+          "detection_method": "template_literal",
+          "policy_or_rule_id": "POL-ENDPOINT-DISCOVERED",
+          "evidence_references": "http://127.0.0.1:3000/api/Users",
+          "provenance": "LIVE",
+          "authentication_state": "Unauthenticated (Authentication Required)",
+          "canonical_status": "NOT_EXPOSED",
+          "severity": "INFO"
+        },
+        {
+          "finding_id": "API-7b6bf46f",
+          "title": "Discovered API endpoint: /api/SecurityQuestions (PUBLIC)",
+          "source_engine": "api",
+          "category": "endpoint-discovered",
+          "detection_method": "template_literal",
+          "policy_or_rule_id": "POL-ENDPOINT-DISCOVERED",
+          "evidence_references": "http://127.0.0.1:3000/api/SecurityQuestions",
+          "provenance": "LIVE",
+          "authentication_state": "Unauthenticated (Public Route)",
+          "canonical_status": "OBSERVED",
+          "severity": "INFO"
+        },
+        {
+          "finding_id": "API-8875fc3b",
+          "title": "CORS policy permits wildcard (*) origin",
+          "source_engine": "api",
+          "category": "cors-wildcard",
+          "detection_method": "header_inspection",
+          "policy_or_rule_id": "POL-CORS-WILDCARD",
+          "evidence_references": "http://127.0.0.1:3000/api/Users",
+          "provenance": "LIVE",
+          "authentication_state": "Unauthenticated",
+          "canonical_status": "OBSERVED",
+          "severity": "INFO"
+        },
+        {
+          "finding_id": "API-8dae2604",
+          "title": "Missing Referrer-Policy defense-in-depth header",
+          "source_engine": "api",
+          "category": "missing-referrer-policy",
+          "detection_method": "header_inspection",
+          "policy_or_rule_id": "POL-MISSING-REFERRER-POLICY",
+          "evidence_references": "http://127.0.0.1:3000",
+          "provenance": "LIVE",
+          "authentication_state": "Unknown",
+          "canonical_status": "VERIFIED",
+          "severity": "INFO"
+        },
+        {
+          "finding_id": "API-924170e6",
+          "title": "Discovered API endpoint: /api/Recycles (PUBLIC)",
+          "source_engine": "api",
+          "category": "endpoint-discovered",
+          "detection_method": "template_literal",
+          "policy_or_rule_id": "POL-ENDPOINT-DISCOVERED",
+          "evidence_references": "http://127.0.0.1:3000/api/Recycles",
+          "provenance": "LIVE",
+          "authentication_state": "Unauthenticated (Public Route)",
+          "canonical_status": "OBSERVED",
+          "severity": "INFO"
+        },
+        {
+          "finding_id": "API-9434eb2e",
+          "title": "Discovered API endpoint: /api/Products (PUBLIC)",
+          "source_engine": "api",
+          "category": "endpoint-discovered",
+          "detection_method": "template_literal",
+          "policy_or_rule_id": "POL-ENDPOINT-DISCOVERED",
+          "evidence_references": "http://127.0.0.1:3000/api/Products",
+          "provenance": "LIVE",
+          "authentication_state": "Unauthenticated (Public Route)",
+          "canonical_status": "OBSERVED",
+          "severity": "INFO"
+        },
+        {
+          "finding_id": "API-9b01fed9",
+          "title": "Discovered API endpoint: /api/Complaints (AUTH_REQUIRED)",
+          "source_engine": "api",
+          "category": "endpoint-discovered",
+          "detection_method": "template_literal",
+          "policy_or_rule_id": "POL-ENDPOINT-DISCOVERED",
+          "evidence_references": "http://127.0.0.1:3000/api/Complaints",
+          "provenance": "LIVE",
+          "authentication_state": "Unauthenticated (Authentication Required)",
+          "canonical_status": "NOT_EXPOSED",
+          "severity": "INFO"
+        },
+        {
+          "finding_id": "API-a79e6f0f",
+          "title": "Discovered API endpoint: /api/Cards (AUTH_REQUIRED)",
+          "source_engine": "api",
+          "category": "endpoint-discovered",
+          "detection_method": "template_literal",
+          "policy_or_rule_id": "POL-ENDPOINT-DISCOVERED",
+          "evidence_references": "http://127.0.0.1:3000/api/Cards",
+          "provenance": "LIVE",
+          "authentication_state": "Unauthenticated (Authentication Required)",
+          "canonical_status": "NOT_EXPOSED",
+          "severity": "INFO"
+        },
+        {
+          "finding_id": "API-ac28b1c6",
+          "title": "Publicly accessible API documentation / OpenAPI specification",
+          "source_engine": "api",
+          "category": "api-docs-exposure",
+          "detection_method": "active_probe",
+          "policy_or_rule_id": "POL-API-DOCS-EXPOSURE",
+          "evidence_references": "http://127.0.0.1:3000/api-docs",
+          "provenance": "LIVE",
+          "authentication_state": "Unknown",
+          "canonical_status": "OBSERVED",
+          "severity": "INFO"
+        },
+        {
+          "finding_id": "API-c26a4c55",
+          "title": "CORS policy permits wildcard (*) origin",
+          "source_engine": "api",
+          "category": "cors-wildcard",
+          "detection_method": "header_inspection",
+          "policy_or_rule_id": "POL-CORS-WILDCARD",
+          "evidence_references": "http://127.0.0.1:3000",
+          "provenance": "LIVE",
+          "authentication_state": "Unknown",
+          "canonical_status": "OBSERVED",
+          "severity": "INFO"
+        },
+        {
+          "finding_id": "API-d3967022",
+          "title": "Discovered API endpoint: /api/SecurityAnswers (AUTH_REQUIRED)",
+          "source_engine": "api",
+          "category": "endpoint-discovered",
+          "detection_method": "template_literal",
+          "policy_or_rule_id": "POL-ENDPOINT-DISCOVERED",
+          "evidence_references": "http://127.0.0.1:3000/api/SecurityAnswers",
+          "provenance": "LIVE",
+          "authentication_state": "Unauthenticated (Authentication Required)",
+          "canonical_status": "NOT_EXPOSED",
+          "severity": "INFO"
+        },
+        {
+          "finding_id": "API-e031fb8a",
+          "title": "Discovered API endpoint: /api/Feedbacks (PUBLIC)",
+          "source_engine": "api",
+          "category": "endpoint-discovered",
+          "detection_method": "template_literal",
+          "policy_or_rule_id": "POL-ENDPOINT-DISCOVERED",
+          "evidence_references": "http://127.0.0.1:3000/api/Feedbacks",
+          "provenance": "LIVE",
+          "authentication_state": "Unauthenticated (Public Route)",
+          "canonical_status": "OBSERVED",
+          "severity": "INFO"
+        },
+        {
+          "finding_id": "API-f7be22a5",
+          "title": "Discovered API endpoint: /api/BasketItems (AUTH_REQUIRED)",
+          "source_engine": "api",
+          "category": "endpoint-discovered",
+          "detection_method": "template_literal",
+          "policy_or_rule_id": "POL-ENDPOINT-DISCOVERED",
+          "evidence_references": "http://127.0.0.1:3000/api/BasketItems",
+          "provenance": "LIVE",
+          "authentication_state": "Unauthenticated (Authentication Required)",
+          "canonical_status": "NOT_EXPOSED",
+          "severity": "INFO"
+        },
+        {
+          "finding_id": "API-fab6703f",
+          "title": "CORS policy permits wildcard (*) origin",
+          "source_engine": "api",
+          "category": "cors-wildcard",
+          "detection_method": "header_inspection",
+          "policy_or_rule_id": "POL-CORS-WILDCARD",
+          "evidence_references": "http://127.0.0.1:3000/api/Challenges",
+          "provenance": "LIVE",
+          "authentication_state": "Unknown",
+          "canonical_status": "OBSERVED",
+          "severity": "INFO"
+        }
+      ],
+      "correlation_rules_evaluated": [
+        "COR-01: Entry Point to Vulnerable Resource (WSTG-INFO-01 / CWE-200)",
+        "COR-02: Authentication to Authorization (WSTG-ATHN-01 / CWE-287)",
+        "COR-03: BOLA and Sensitive Data Exposure (WSTG-ATHZ-04 / CWE-639)",
+        "COR-04: Public Exposure to Sensitive Resource (WSTG-CONF-04 / CWE-552)",
+        "COR-05: Privilege Escalation (WSTG-ATHZ-03 / CWE-269)",
+        "COR-06: Business Logic Chains (WSTG-BUSL-01 / CWE-840)",
+        "COR-07: Session and Identity Dependencies (WSTG-SESS-06 / CWE-613)",
+        "COR-08: Cloud and Application Dependencies (WSTG-INPV-12 / CWE-918)",
+        "COR-09: Common Root Cause (WSTG-CONF-01 / CWE-657)",
+        "COR-10: Impact Amplification (WSTG-CLNT-07 / CWE-942)"
+      ],
+      "errors_and_coverage_gaps": null,
+      "synthetic_fixture_indicators": null,
+      "risk_model_metadata": {
+        "algorithm": "felix_deterministic_v1",
+        "diminishing_weights": [
+          1,
+          0.5,
+          0.3,
+          0.2,
+          0.1
+        ],
+        "hardening_cap": 20,
+        "range": "0-100",
+        "story_bonus_cap": 15
+      },
+      "report_generated_at": "2026-10-10T17:19:05Z",
+      "report_schema_version": "2.0.0"
+    }
+  },
+  "metadata": {
+    "engine_version": "5.0.0",
+    "engines": [
+      "felix-crawler",
+      "felix-secrets",
+      "felix-cloud",
+      "felix-api",
+      "felix-report"
+    ],
+    "scanner": "Felix"
+  }
+}

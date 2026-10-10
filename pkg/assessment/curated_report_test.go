@@ -230,8 +230,8 @@ func TestCuratedReport_RejectedFindingsCompletelyExcluded(t *testing.T) {
 	if cr.RiskOverview.RiskScore >= 80 || cr.RiskOverview.RiskLevel == "CRITICAL" {
 		t.Errorf("risk score includes rejected critical finding! Got score %d, level %s", cr.RiskOverview.RiskScore, cr.RiskOverview.RiskLevel)
 	}
-	if cr.RiskOverview.RiskScore != 60 || cr.RiskOverview.RiskLevel != "HIGH" {
-		t.Errorf("expected report risk score 60 (HIGH) for approved High finding, got score %d, level %s", cr.RiskOverview.RiskScore, cr.RiskOverview.RiskLevel)
+	if cr.RiskOverview.RiskScore != 25 || cr.RiskOverview.RiskLevel != "HIGH" {
+		t.Errorf("expected report risk score 25 (HIGH) for approved High finding, got score %d, level %s", cr.RiskOverview.RiskScore, cr.RiskOverview.RiskLevel)
 	}
 
 	// Invariant: Original finding in database remains completely unmodified!

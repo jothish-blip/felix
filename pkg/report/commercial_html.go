@@ -336,8 +336,13 @@ const commercialHTMLReportTemplate = `<!DOCTYPE html>
       </div>
     </div>
     <div class="score-card">
+      {{if or (eq .ExecutiveSummary.CompletionStatus "BLOCKED") (eq .ExecutiveSummary.CompletionStatus "FAILED") (eq .RiskOverview.RiskLevel "UNAVAILABLE")}}
+      <div class="score-val" style="color: #ef4444;">N/A</div>
+      <div class="score-lbl">ASSESSMENT {{if eq .ExecutiveSummary.CompletionStatus "BLOCKED"}}BLOCKED{{else if eq .ExecutiveSummary.CompletionStatus "FAILED"}}FAILED{{else}}UNAVAILABLE{{end}}</div>
+      {{else}}
       <div class="score-val color-{{.RiskOverview.RiskLevel}}">{{.RiskOverview.RiskScore}}</div>
       <div class="score-lbl">Felix Risk Score ({{.RiskOverview.RiskLevel}})</div>
+      {{end}}
     </div>
   </header>
 
@@ -359,6 +364,15 @@ const commercialHTMLReportTemplate = `<!DOCTYPE html>
   <!-- 1. Executive Summary -->
   <section id="section-exec-summary">
     <h2>1. Executive Summary</h2>
+    {{if eq .ExecutiveSummary.CompletionStatus "BLOCKED"}}
+    <div style="background: #200808; border: 1px solid #7f1d1d; border-radius: 0.5rem; padding: 1.25rem 1.5rem; margin-bottom: 1.5rem; color: #fca5a5;">
+      <strong style="color: #ef4444; font-size: 1.05rem;">ASSESSMENT BLOCKED:</strong> Target presented access controls or automated challenge barriers (HTTP 403 / Cloudflare). Under Felix safe authorized audit rules, probes were halted. Security posture could not be evaluated.
+    </div>
+    {{else if eq .ExecutiveSummary.CompletionStatus "FAILED"}}
+    <div style="background: #200808; border: 1px solid #7f1d1d; border-radius: 0.5rem; padding: 1.25rem 1.5rem; margin-bottom: 1.5rem; color: #fca5a5;">
+      <strong style="color: #ef4444; font-size: 1.05rem;">ASSESSMENT FAILED:</strong> Target reachability could not be established due to network, transport, or server errors. Security posture could not be evaluated.
+    </div>
+    {{end}}
     <div class="narrative-box">
       <p><strong>Assessment Status:</strong> {{.ExecutiveSummary.CompletionStatus}} &bull; <strong>Scope:</strong> {{.ExecutiveSummary.ScopeSummary}}</p>
       <p>{{.ExecutiveSummary.PostureStatement}}</p>
@@ -382,10 +396,22 @@ const commercialHTMLReportTemplate = `<!DOCTYPE html>
         <div class="card-val" style="color: #93c5fd;">{{.ExecutiveSummary.ObservationsCount}}</div>
       </div>
       <div class="card">
+        <div class="card-lbl">Defended / Protected</div>
+        <div class="card-val" style="color: #5eead4;">{{.ExecutiveSummary.NotExposedChecksCount}}</div>
+      </div>
+      <div class="card">
         <div class="card-lbl">Inconclusive Checks</div>
         <div class="card-val" style="color: #cbd5e1;">{{.ExecutiveSummary.InconclusiveChecksCount}}</div>
       </div>
     </div>
+
+    {{if or .ExecutiveSummary.FrontendAssetsCount .ExecutiveSummary.APIEndpointsCount .ExecutiveSummary.WebRoutesCount}}
+    <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1.25rem; display: flex; flex-wrap: wrap; gap: 1rem;">
+      {{if .ExecutiveSummary.FrontendAssetsCount}}<span>Frontend Assets Crawled: <strong>{{.ExecutiveSummary.FrontendAssetsCount}}</strong></span>{{end}}
+      {{if .ExecutiveSummary.APIEndpointsCount}}<span>API Endpoints Cataloged: <strong>{{.ExecutiveSummary.APIEndpointsCount}}</strong></span>{{end}}
+      {{if .ExecutiveSummary.WebRoutesCount}}<span>Web Routes Cataloged: <strong>{{.ExecutiveSummary.WebRoutesCount}}</strong></span>{{end}}
+    </div>
+    {{end}}
 
     <h3>Severity Distribution</h3>
     <div class="grid">
@@ -523,6 +549,66 @@ const commercialHTMLReportTemplate = `<!DOCTYPE html>
         {{.RiskOverview.ScoringModelDescription}}
       </p>
     </div>
+
+    <h3>Mathematical Risk Score Attribution</h3>
+    <div class="sub-box" style="margin-bottom: 1.25rem;">
+      <div style="font-size: 0.9rem; font-weight: 700; color: #f1f5f9; margin-bottom: 0.35rem;">Formula Reconciliation</div>
+      <code style="font-size: 0.88rem; color: #38bdf8;">{{.RiskOverview.ScoreBreakdown.Formula}}</code>
+      <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.35rem;">
+        Deterministic diminishing returns weights: 1.0&times; (1st), 0.5&times; (2nd), 0.3&times; (3rd), 0.2&times; (4th), 0.1&times; (subsequent). Hardening subtotal capped at 20.0 max. Correlated story bonuses capped at +15 max.
+      </div>
+    </div>
+
+    {{if .RiskOverview.FindingRiskContributions}}
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Finding Ref</th>
+          <th>Title</th>
+          <th>Type</th>
+          <th>Status</th>
+          <th>Severity</th>
+          <th style="text-align: right;">Raw Score</th>
+          <th style="text-align: right;">Weight</th>
+          <th style="text-align: right;">Adjusted Contribution</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .RiskOverview.FindingRiskContributions}}
+        <tr>
+          <td><code>{{.FindingID}}</code></td>
+          <td>{{.Title}}</td>
+          <td><span class="badge badge-INFO">{{.RiskType}}</span></td>
+          <td><span class="badge badge-{{.VerificationStatus}}">{{.VerificationStatus}}</span></td>
+          <td><span class="badge badge-{{.Severity}}">{{.Severity}}</span></td>
+          <td style="text-align: right; font-weight: 600;">{{.Score}}</td>
+          <td style="text-align: right; color: var(--text-secondary);">{{printf "%.1fx" .Weight}}</td>
+          <td style="text-align: right; font-weight: 700; color: #6ee7b7;">{{printf "%.2f" .AdjustedScore}} pts</td>
+        </tr>
+        {{end}}
+      </tbody>
+      <tfoot>
+        <tr style="font-weight: 700; background: var(--bg-surface-elevated);">
+          <td colspan="7" style="text-align: right;">Exposure Subtotal:</td>
+          <td style="text-align: right; color: #6ee7b7;">{{printf "%.2f" .RiskOverview.ScoreBreakdown.ExposureSubtotal}} pts</td>
+        </tr>
+        <tr style="font-weight: 700; background: var(--bg-surface-elevated);">
+          <td colspan="7" style="text-align: right;">Hardening Subtotal (capped at 20):</td>
+          <td style="text-align: right; color: #6ee7b7;">{{printf "%.2f" .RiskOverview.ScoreBreakdown.HardeningSubtotal}} pts</td>
+        </tr>
+        {{if gt .RiskOverview.ScoreBreakdown.StoryBonus 0.0}}
+        <tr style="font-weight: 700; background: var(--bg-surface-elevated);">
+          <td colspan="7" style="text-align: right;">Correlated Story Bonus:</td>
+          <td style="text-align: right; color: #38bdf8;">+{{printf "%.2f" .RiskOverview.ScoreBreakdown.StoryBonus}} pts</td>
+        </tr>
+        {{end}}
+        <tr style="font-weight: 800; font-size: 1rem; background: var(--bg-surface-subtle); border-top: 2px solid var(--border-default);">
+          <td colspan="7" style="text-align: right;">Final Reconciled Score:</td>
+          <td style="text-align: right; color: #ffffff;">{{.RiskOverview.ScoreBreakdown.TotalScore}} / 100</td>
+        </tr>
+      </tfoot>
+    </table>
+    {{end}}
 
     {{if .RiskOverview.AttackPaths}}
     <h3>Correlated Attack Paths ({{len .RiskOverview.AttackPaths}})</h3>

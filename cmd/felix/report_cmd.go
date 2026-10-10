@@ -93,6 +93,9 @@ func runReport(args []string) int {
 		return 2
 	}
 
+	// Recalculate risk score and risk level to reflect current deterministic scoring model
+	report.RecalculateReportRisk(&rep)
+
 	// Export HTML if requested
 	var exported []string
 	if htmlPath != "" {
@@ -216,13 +219,20 @@ func printReportSummary(rep report.Report, verbose bool) {
 	if rep.Target != "" {
 		fmt.Printf("Target:     %s\n", rep.Target)
 	}
+	if rep.CompletionStatus != "" {
+		fmt.Printf("Status:     %s\n", rep.CompletionStatus)
+	}
 	if rep.Timestamp != "" {
 		fmt.Printf("Timestamp:  %s\n", rep.Timestamp)
 	}
 	if rep.Duration != "" {
 		fmt.Printf("Duration:   %s\n", rep.Duration)
 	}
-	fmt.Printf("Risk Score: %d/100 (%s)\n\n", rep.RiskScore, rep.RiskLevel)
+	if rep.CompletionStatus == "BLOCKED" || rep.CompletionStatus == "FAILED" || !rep.RiskScoreAvailable || rep.RiskLevel == "UNAVAILABLE" {
+		fmt.Printf("Risk Score: N/A (%s)\n\n", rep.RiskLevel)
+	} else {
+		fmt.Printf("Risk Score: %d/100 (%s)\n\n", rep.RiskScore, rep.RiskLevel)
+	}
 
 	fmt.Println("Findings Summary:")
 	fmt.Printf("  CRITICAL  %d\n", rep.Summary.CriticalCount)
@@ -367,8 +377,11 @@ func printReportSummary(rep report.Report, verbose bool) {
 // determineExitCode returns:
 // 0: Clean scan / INFO only findings
 // 1: Actionable findings requiring attention (Low, Medium, High, Critical)
-// 2: Handled upstream on runtime / usage error
+// 2: Handled upstream on runtime / usage error, or assessment BLOCKED/FAILED
 func determineExitCode(rep report.Report) int {
+	if rep.CompletionStatus == "BLOCKED" || rep.CompletionStatus == "FAILED" {
+		return 2
+	}
 	if rep.Summary.CriticalCount > 0 || rep.Summary.HighCount > 0 || rep.Summary.MediumCount > 0 || rep.Summary.LowCount > 0 {
 		return 1
 	}

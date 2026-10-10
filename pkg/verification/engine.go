@@ -166,7 +166,7 @@ func ApplyVerificationToFindings(findings []report.Finding, results []Verificati
 		}
 
 		fCopy.Confidence = res.OverallConfidence
-		fCopy.Score = res.ConfidenceScore
+		fCopy.Score = report.CalculateFindingScore(fCopy)
 		updated[i] = fCopy
 	}
 

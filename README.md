@@ -14,6 +14,7 @@ Felix is an evidence-first, non-destructive web security auditing platform writt
 
 ## Documentation Map
 
+- **[CLI Learning Guide (docs/cli/)](docs/cli/README.md)** — Comprehensive command-by-command learning, testing, and flag verification guide.
 - **[Architecture Guide](ARCHITECTURE.md)** — Deep dive into system components, data flow, concurrency, and pipeline design.
 - **[Operator Usage Guide](USAGE.md)** — CLI command reference, flag syntax, examples, shell completions, and configuration.
 - **[Detection & Verification Model](DETECTION-MODEL.md)** — The 5-stage evidence model, pattern registries, heuristic filters, and verification states.
@@ -77,6 +78,60 @@ Report
 | Verifies public cloud configurations using safe, read-only GET/HEAD checks | Transmit discovered client credentials to external administrative APIs |
 | Records negative evidence (e.g. 401/403/404) to prevent false positives | Attempt to bypass authentication gates or escalate privileges |
 | Produces deterministic, explainable risk scores and correlated stories | Guarantee the total absence of vulnerabilities across an application |
+
+---
+
+## Platform Support & Verification Status
+
+Felix is engineered as a pure-Go application (`CGO_ENABLED=0`) with zero external C dependencies, utilizing a pure-Go SQLite engine (`modernc.org/sqlite`). To ensure strict engineering honesty, Felix distinguishes between **compilation verification**, **automated CI testing**, and **native host runtime verification**:
+
+| Platform | Architecture | Compilation | Automated CI Tests | Native Runtime Verification |
+| :--- | :--- | :---: | :---: | :---: |
+| **Windows** | x86_64 (`amd64`) | **Verified** | **Verified** (22 suites passing) | **Verified** (Local testing & live targets) |
+| **Linux** | x86_64 (`amd64`) | **Verified** (ELF binary) | **Verified** (GitHub Actions `ubuntu-latest`) | **Pending Native Host Testing** |
+| **Linux** | ARM64 (`aarch64`) | **Verified** (ELF binary) | Cross-compiled | **Pending Native Host Testing** |
+| **macOS** | Apple Silicon (`arm64`)| **Verified** (Mach-O binary) | Cross-compiled | **Pending Native Host Testing** |
+| **macOS** | Intel (`amd64`) | **Verified** (Mach-O binary) | Cross-compiled | **Pending Native Host Testing** |
+
+> [!NOTE]
+> **Portability Architecture**: Because Felix contains zero CGO dependencies and zero platform-specific build tags, cross-compilation produces fully functional standalone native binaries. Native Linux and macOS host validation is scheduled for subsequent controlled testing phases.
+
+---
+
+## Build from Source
+
+You can build Felix from source on any platform with Go 1.22+ installed. Zero external C compilers or development headers are required.
+
+### 1. Prerequisites
+- **Go Toolchain:** Go 1.22 or higher (developed and verified on Go 1.27.0).
+- **CGO:** Disabled (`CGO_ENABLED=0`).
+- **Git:** For cloning the source repository.
+
+### 2. Native Build (Current Host)
+```bash
+git clone https://github.com/jothish-blip/felix.git
+cd felix
+go build -trimpath -ldflags="-s -w" -o bin/felix ./cmd/felix
+```
+
+### 3. Cross-Compilation Commands
+Because Felix is 100% pure Go, you can compile for any supported target directly from your current machine:
+
+```powershell
+# Windows PowerShell -> Linux amd64
+$env:GOOS="linux"; $env:GOARCH="amd64"; $env:CGO_ENABLED="0"; go build -trimpath -ldflags="-s -w" -o bin/felix-linux-amd64 ./cmd/felix; $env:GOOS="windows"
+
+# Windows PowerShell -> macOS Apple Silicon (arm64)
+$env:GOOS="darwin"; $env:GOARCH="arm64"; $env:CGO_ENABLED="0"; go build -trimpath -ldflags="-s -w" -o bin/felix-darwin-arm64 ./cmd/felix; $env:GOOS="windows"
+```
+
+```bash
+# Linux / macOS (POSIX) -> Windows amd64
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o bin/felix.exe ./cmd/felix
+
+# Linux / macOS (POSIX) -> Linux arm64
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o bin/felix-linux-arm64 ./cmd/felix
+```
 
 ---
 
@@ -354,24 +409,42 @@ Top Priorities:
 | `felix report <result.json> [flags]` | Generate HTML or JSON reports from saved results (**zero network requests**). |
 | `felix client <subcommand> [flags]` | Manage clients and organizations for structured security auditing. |
 | `felix assessment <subcommand> [flags]` | Manage client-authorized security assessment projects, scopes, runs, and findings. |
+| `felix operator [options]` | Launch the browser-based curation console on strict loopback (`127.0.0.1`). |
 | `felix config [subcommand]` | View and manage persistent defaults in `~/.felix/config.json`. |
-| `felix doctor` | Validate binary integrity, Go runtime, network stack, and permissions. |
+| `felix doctor [options]` | Validate binary integrity, Go runtime, network stack, and permissions. |
 | `felix version` | Display Felix version, platform architecture, and compiler details. |
-| `felix completion [shell]` | Generate native shell autocompletion (PowerShell, Bash, Zsh, Fish). |
+| `felix update [options]` | Check for or install verified updates from official GitHub releases. |
 | `felix install` | Register the Felix executable in the user system PATH. |
 | `felix uninstall` | Remove the Felix executable from the user system PATH. |
+| `felix completion [shell]` | Generate native shell autocompletion (PowerShell, Bash, Zsh, Fish). |
 | `felix help [command]` | Display usage instructions and flag options. |
 
+> For comprehensive command-by-command instructions, detailed flag references, and hands-on testing exercises, see the **[CLI Learning Guide](docs/cli/README.md)**.
+
 ### Scan Controls
-- `--timeout <duration>`: Request timeout per target (e.g. `10s`, `30s`, `1m`).
-- `--concurrency <int>`: Number of concurrent workers (positive integer).
-- `--scope <mode>`: Scope boundary (`same-origin`, `subdomains`, `explicit`).
-- `--max-assets <int>`: Enforce an upper bound on assets processed.
-- `--max-response-size <size>`: Maximum response byte limit (e.g. `5MB`, `10MB`, `512KB`).
-- `--export <file>`: Output assessment report (`report.html` or `report.json`).
+- `--timeout, -t <duration>`: Request timeout per target (e.g. `10s`, `30s`, `1m`) [default: `10s`].
+- `--concurrency, -c <int>`: Number of concurrent workers [default: `10`].
+- `--scope <mode>`: Scope boundary (`same-origin`, `subdomains`, `explicit`) [default: `same-origin`].
+- `--max-assets <int>`: Upper bound on assets crawled/ingested.
+- `--max-response-size <size>`: Maximum response byte limit (e.g. `5MB`, `10MB`, `512KB`) [default: `10MB`].
+- `--export <file>`: Output assessment report (`report.html`, `report.json`, or `report.sarif`).
 - `--json [file]`: Save or output machine-readable scan result.
-- `--quiet, -q`: Suppress human-readable progress and banners.
-- `--verbose, -v`: Display operational scan parameters and assets inventory safely.
+- `--sarif [file]`: Export OASIS SARIF 2.1.0 standard report for CI/CD security scanning.
+- `--user-agent <string>`: Custom HTTP User-Agent header string.
+- `-l <file>`: Read target URLs from a line-separated file.
+- `--quiet, -q, --silent, -s`: Suppress progress output and ASCII banners.
+- `--verbose, -v`: Display operational scan parameters and discovered asset inventory.
+
+---
+
+## Assessment States & Reachability Handling
+
+FELIX deterministically classifies every assessment into one of four states:
+
+- **`COMPLETED`**: Target and discovered assets were successfully audited without fatal error. Overall Risk Score (0–100) is fully computed and attributed.
+- **`PARTIAL`**: Primary target was reachable, but secondary asset fetches encountered non-fatal errors (e.g. 404, timeouts on individual bundles). Findings and risk score reflect completed analysis.
+- **`BLOCKED`**: Target is unreachable due to deterministic environmental errors (DNS failure, TCP connection refused, TLS handshake failure). Assessment halts immediately; Risk Score is reported as **`N/A`** (`--`); Exit code: `2`.
+- **`FAILED`**: Target request failed due to total network timeout or connection reset. Assessment halts immediately; Risk Score is reported as **`N/A`** (`--`); Exit code: `2`.
 
 ---
 
@@ -381,7 +454,7 @@ Felix enforces deterministic Unix exit codes suitable for automation and CI/CD p
 
 - **`0` (Clean / Informational):** Scan completed successfully with zero actionable findings (or informational observations only).
 - **`1` (Actionable Findings):** Scan identified security conditions requiring review (Low, Medium, High, or Critical severity).
-- **`2` (Usage / Runtime Error):** CLI syntax error, invalid arguments, conflicting flags, or unreachable target.
+- **`2` (Usage / Runtime Error):** CLI syntax error, invalid arguments, conflicting flags (`--quiet` + `--verbose`), or unreachable target.
 
 ---
 

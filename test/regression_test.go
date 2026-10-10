@@ -1598,7 +1598,7 @@ func TestRegression_PhaseD_ReportingAndRisk(t *testing.T) {
 		}
 
 		// Real-world baseline test: Target with solely missing/weak defense-in-depth headers
-		// must preserve exact 20/100 LOW baseline without inflation.
+		// produces its genuine accumulated score (9/100) and LOW risk level band without artificial 20 floor.
 		hardeningFindings := []report.Finding{
 			{Category: "missing-csp", Severity: report.SeverityLow, Confidence: report.ConfidenceHigh, Verification: report.VerificationRecord{Status: report.VerificationVerified}},
 			{Category: "missing-hsts", Severity: report.SeverityLow, Confidence: report.ConfidenceHigh, Verification: report.VerificationRecord{Status: report.VerificationVerified}},
@@ -1609,18 +1609,18 @@ func TestRegression_PhaseD_ReportingAndRisk(t *testing.T) {
 		}
 
 		score, level := report.CalculateReportRisk(hardeningFindings, nil)
-		if score != 20 || level != "LOW" {
-			t.Errorf("hardening headers alone must produce exact 20/100 LOW baseline, got score=%d level=%s", score, level)
+		if score != 9 || level != "LOW" {
+			t.Errorf("hardening headers alone must produce genuine accumulated score 9 and LOW level, got score=%d level=%s", score, level)
 		}
 
 		// Hardening cap: even with 10 duplicate hardening findings, score must NOT exceed 20
 		manyHardening := append(hardeningFindings, hardeningFindings...)
 		scoreMany, levelMany := report.CalculateReportRisk(manyHardening, nil)
-		if scoreMany != 20 || levelMany != "LOW" {
-			t.Errorf("hardening cap violated: expected 20/100 LOW, got score=%d level=%s", scoreMany, levelMany)
+		if scoreMany > 20 || scoreMany != 12 || levelMany != "LOW" {
+			t.Errorf("hardening cap violated or unexpected score: expected 12 (<= 20) and LOW, got score=%d level=%s", scoreMany, levelMany)
 		}
 
-		// Verified Critical exposure correctly anchors to CRITICAL (>= 80)
+		// Verified Critical exposure yields genuine score 40 and anchors risk level to CRITICAL
 		critVerified := report.Finding{
 			Category:     "supabase-service-key",
 			Severity:     report.SeverityCritical,
@@ -1628,8 +1628,8 @@ func TestRegression_PhaseD_ReportingAndRisk(t *testing.T) {
 			Verification: report.VerificationRecord{Status: report.VerificationVerified},
 		}
 		scoreCrit, levelCrit := report.CalculateReportRisk([]report.Finding{critVerified}, nil)
-		if scoreCrit < 80 || levelCrit != "CRITICAL" {
-			t.Errorf("verified critical exposure must yield >= 80 CRITICAL, got score=%d level=%s", scoreCrit, levelCrit)
+		if scoreCrit != 40 || levelCrit != "CRITICAL" {
+			t.Errorf("verified critical exposure must yield genuine score 40 and CRITICAL level, got score=%d level=%s", scoreCrit, levelCrit)
 		}
 	})
 

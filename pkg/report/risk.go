@@ -1,6 +1,7 @@
 package report
 
 import (
+	"fmt"
 	"math"
 	"sort"
 	"strings"
@@ -11,7 +12,10 @@ import (
 // observed, or confirmed non-exposures (defensive boundaries) receive reduced or zero weight.
 func CalculateFindingScore(f Finding) int {
 	// Defended / boundary confirmed findings contribute 0 risk
-	if f.Verification.Status == VerificationNotExposed {
+	if NormalizeVerificationStatus(f.Verification.Status) == VerificationNotExposed {
+		return 0
+	}
+	if strings.EqualFold(f.EvidenceDetails.DetectionStatus, "NOT_EXPOSED") {
 		return 0
 	}
 	if f.EvidenceDetails.Details != nil {
@@ -100,96 +104,193 @@ func isHardeningCategory(cat string) bool {
 // CalculateReportRisk evaluates all findings and correlated security stories
 // to produce a bounded (0-100) Felix Risk Score and categorical risk band.
 //
-// The scoring model is deterministic, explainable, and deliberately not CVSS:
-// - Top verified findings anchor the primary risk band.
-// - Additional independent exposures provide bounded diminishing contributions.
-// - Hardening/defense-in-depth header findings are strictly capped at max 20 points
-//   to prevent false risk inflation on otherwise secure targets.
-// - Correlated security stories add targeted threat escalation bonuses.
-func CalculateReportRisk(findings []Finding, stories []SecurityStory) (int, string) {
+// The scoring model is deterministic, explainable, and deliberately distinct from CVSS:
+// - Numerical score is the genuine accumulated, weighted evidence across exposures,
+//   hardening defense-in-depth findings (capped at 20), and correlated story bonuses (capped at 15).
+// - Risk level band is derived from the accumulated score, anchored by the highest eligible
+//   confirmed finding severity to prevent high-severity exposures from appearing low-risk.
+// - Defended boundaries (NOT_EXPOSED) and passive observations contribute zero risk and
+//   cannot trigger severity escalation.
+// CalculateRiskBreakdown evaluates all findings and correlated security stories
+// using the Felix deterministic scoring model, producing both the overall risk assessment
+// and full mathematical reconciliation artifacts (individual weights, adjusted contributions,
+// subtotals, and formula).
+func CalculateRiskBreakdown(findings []Finding, stories []SecurityStory) ([]CommercialRiskContribution, CommercialScoreBreakdown, string) {
 	if len(findings) == 0 {
-		return 0, "INFORMATIONAL"
+		return nil, CommercialScoreBreakdown{
+			Formula: "0 (no findings)",
+		}, "INFORMATIONAL"
 	}
 
-	var exposureScores []int
-	var hardeningScores []int
+	type scoredFinding struct {
+		finding Finding
+		score   int
+	}
 
-	topExposureScore := 0
-	topExposureSeverity := ""
-	topExposureConfidence := ""
+	var exposureFindings []scoredFinding
+	var hardeningFindings []scoredFinding
 
-	hasAnyLow := false
-	hasAnyHighConf := false
+	maxEligibleSeverityRank := 0
+	maxEligibleSeverity := ""
 
 	for _, f := range findings {
+		// Defended / boundary confirmed findings contribute 0 risk and do not escalate risk level
+		if NormalizeVerificationStatus(f.Verification.Status) == VerificationNotExposed {
+			continue
+		}
+		if strings.EqualFold(f.EvidenceDetails.DetectionStatus, "NOT_EXPOSED") {
+			continue
+		}
+		if f.EvidenceDetails.Details != nil {
+			auth := strings.ToUpper(f.EvidenceDetails.Details["auth_state"])
+			if auth == "AUTH_REQUIRED" || auth == "FORBIDDEN" || auth == "NOT_FOUND" {
+				continue
+			}
+		}
+
 		s := f.Score
-		if f.Verification.Status == VerificationNotExposed {
-			s = 0
-		} else if s == 0 {
+		if s <= 0 || s > 40 {
 			s = CalculateFindingScore(f)
 		}
-
-		if NormalizeSeverity(f.Severity) == SeverityLow {
-			hasAnyLow = true
-		}
-		if NormalizeConfidence(f.Confidence) == ConfidenceHigh {
-			hasAnyHighConf = true
+		if s <= 0 {
+			continue
 		}
 
+		// Track highest eligible confirmed severity for risk-level classification.
+		// Eligible findings must be VERIFIED, have positive score, and non-low confidence.
+		// Unverified candidates (DETECTED, NOT_VERIFIED), passive observations (OBSERVED),
+		// and defended boundaries (NOT_EXPOSED) cannot anchor the severity level.
+		// Explicit evidence of verification is mandatory to anchor the categorical risk level.
+		// Canonical verification status must be VERIFIED.
+		// Documented legacy fallback: when VerificationRecord is unpopulated (legacy schema),
+		// require explicit detection-level verification status "VERIFIED".
+		normStatus := NormalizeVerificationStatus(f.Verification.Status)
+		isConfirmedVerified := false
+		if f.Verification.Status != "" {
+			isConfirmedVerified = normStatus == VerificationVerified
+		} else if strings.EqualFold(f.EvidenceDetails.DetectionStatus, "VERIFIED") {
+			isConfirmedVerified = true
+		}
+
+		if isConfirmedVerified {
+			sevNorm := NormalizeSeverity(f.Severity)
+			rank := SeverityRank(sevNorm)
+			confNorm := NormalizeConfidence(f.Confidence)
+			if confNorm != ConfidenceLow && rank > maxEligibleSeverityRank {
+				maxEligibleSeverityRank = rank
+				maxEligibleSeverity = sevNorm
+			}
+		}
+
+		sf := scoredFinding{finding: f, score: s}
 		if isHardeningCategory(f.Category) {
-			if s > 0 {
-				hardeningScores = append(hardeningScores, s)
-			}
+			hardeningFindings = append(hardeningFindings, sf)
 		} else {
-			if s > 0 {
-				exposureScores = append(exposureScores, s)
-				if s > topExposureScore {
-					topExposureScore = s
-					topExposureSeverity = NormalizeSeverity(f.Severity)
-					topExposureConfidence = NormalizeConfidence(f.Confidence)
-				}
-			}
+			exposureFindings = append(exposureFindings, sf)
 		}
 	}
 
-	// Sort descending
-	sort.Slice(exposureScores, func(i, j int) bool {
-		return exposureScores[i] > exposureScores[j]
+	// Sort descending for deterministic diminishing returns.
+	// Deterministic tie-breaking on finding ID.
+	sort.Slice(exposureFindings, func(i, j int) bool {
+		if exposureFindings[i].score != exposureFindings[j].score {
+			return exposureFindings[i].score > exposureFindings[j].score
+		}
+		return exposureFindings[i].finding.ID < exposureFindings[j].finding.ID
 	})
-	sort.Slice(hardeningScores, func(i, j int) bool {
-		return hardeningScores[i] > hardeningScores[j]
+	sort.Slice(hardeningFindings, func(i, j int) bool {
+		if hardeningFindings[i].score != hardeningFindings[j].score {
+			return hardeningFindings[i].score > hardeningFindings[j].score
+		}
+		return hardeningFindings[i].finding.ID < hardeningFindings[j].finding.ID
 	})
 
-	// Diminishing returns accumulator for true exposures
-	var exposureAccum float64
 	weights := []float64{1.0, 0.5, 0.3, 0.2}
-	for i, s := range exposureScores {
+	var contributions []CommercialRiskContribution
+
+	var exposureAccum float64
+	for i, sf := range exposureFindings {
+		weight := 0.1
 		if i < len(weights) {
-			exposureAccum += float64(s) * weights[i]
-		} else {
-			exposureAccum += float64(s) * 0.1
+			weight = weights[i]
 		}
+		adj := math.Round(float64(sf.score)*weight*100) / 100
+		exposureAccum += float64(sf.score) * weight
+
+		verStatus := string(sf.finding.Verification.Status)
+		if verStatus == "" {
+			verStatus = sf.finding.EvidenceDetails.DetectionStatus
+		}
+		if verStatus == "" {
+			verStatus = "DETECTED"
+		}
+
+		contributions = append(contributions, CommercialRiskContribution{
+			FindingID:          sf.finding.ID,
+			Title:              SanitizeEvidence(sf.finding.Title),
+			Severity:           NormalizeSeverity(sf.finding.Severity),
+			VerificationStatus: verStatus,
+			Score:              sf.score,
+			Weight:             weight,
+			AdjustedScore:      adj,
+			Model:              "felix_deterministic_v1",
+			RiskType:           "EXPOSURE",
+			Rationale:          fmt.Sprintf("Raw score %d/40 (weight %.1fx, adjusted %.2f) weighted by severity (%s), confidence (%s), and verification status (%s).", sf.score, weight, adj, sf.finding.Severity, sf.finding.Confidence, verStatus),
+			IsAvailable:        true,
+		})
 	}
 
-	// Hardening scores accumulator (capped at 20.0 max)
 	var hardeningAccum float64
-	for i, s := range hardeningScores {
+	for i, sf := range hardeningFindings {
+		weight := 0.1
 		if i < len(weights) {
-			hardeningAccum += float64(s) * weights[i]
-		} else {
-			hardeningAccum += float64(s) * 0.1
+			weight = weights[i]
 		}
+		adj := math.Round(float64(sf.score)*weight*100) / 100
+		hardeningAccum += float64(sf.score) * weight
+
+		verStatus := string(sf.finding.Verification.Status)
+		if verStatus == "" {
+			verStatus = sf.finding.EvidenceDetails.DetectionStatus
+		}
+		if verStatus == "" {
+			verStatus = "DETECTED"
+		}
+
+		contributions = append(contributions, CommercialRiskContribution{
+			FindingID:          sf.finding.ID,
+			Title:              SanitizeEvidence(sf.finding.Title),
+			Severity:           NormalizeSeverity(sf.finding.Severity),
+			VerificationStatus: verStatus,
+			Score:              sf.score,
+			Weight:             weight,
+			AdjustedScore:      adj,
+			Model:              "felix_deterministic_v1",
+			RiskType:           "HARDENING_DEFENSE_IN_DEPTH",
+			Rationale:          fmt.Sprintf("Raw score %d/40 (weight %.1fx, adjusted %.2f) defense-in-depth header finding under hardening cap (max 20 pts).", sf.score, weight, adj),
+			IsAvailable:        true,
+		})
 	}
+
+	rawHardeningAccum := hardeningAccum
 	if hardeningAccum > 20.0 {
 		hardeningAccum = 20.0
 	}
 
-	// Story bonus: sum of story RiskContributions, capped at +15
+	// Story bonus: sum of unique story RiskContributions, capped at +15
+	seenStoryIDs := make(map[string]bool)
 	var storyBonus float64
 	for _, st := range stories {
+		storyID := strings.TrimSpace(st.ID)
+		if storyID != "" {
+			if seenStoryIDs[storyID] {
+				continue
+			}
+			seenStoryIDs[storyID] = true
+		}
 		contrib := st.RiskContribution
-		if contrib <= 0 {
-			contrib = 5
+		if contrib < 0 {
+			contrib = 0
 		}
 		storyBonus += float64(contrib)
 	}
@@ -198,35 +299,6 @@ func CalculateReportRisk(findings []Finding, stories []SecurityStory) (int, stri
 	}
 
 	totalScore := int(math.Round(exposureAccum + hardeningAccum + storyBonus))
-
-	// Floor alignment based on highest confirmed vulnerability
-	if topExposureScore >= 40 && topExposureConfidence == ConfidenceHigh {
-		if totalScore < 80 {
-			totalScore = 80
-		}
-	} else if topExposureScore >= 25 && topExposureConfidence == ConfidenceHigh {
-		if totalScore < 60 {
-			totalScore = 60
-		}
-	} else if topExposureSeverity == SeverityMedium && topExposureConfidence == ConfidenceHigh {
-		if totalScore < 40 {
-			totalScore = 40
-		}
-	} else if hasAnyLow && hasAnyHighConf {
-		// When target has verified Low severity defense-in-depth issues (e.g. missing CSP)
-		// with High confidence, align floor to 20 (LOW band baseline).
-		if totalScore < 20 {
-			totalScore = 20
-		}
-		// If there are no Medium/High/Critical exposures, score should not exceed 20.
-		if topExposureSeverity != SeverityCritical && topExposureSeverity != SeverityHigh && topExposureSeverity != SeverityMedium {
-			if totalScore > 20 {
-				totalScore = 20
-			}
-		}
-	}
-
-	// Cap at [0, 100]
 	if totalScore > 100 {
 		totalScore = 100
 	}
@@ -234,8 +306,59 @@ func CalculateReportRisk(findings []Finding, stories []SecurityStory) (int, stri
 		totalScore = 0
 	}
 
-	level := RiskLevelBand(totalScore)
-	return totalScore, level
+	scoreBandLevel := RiskLevelBand(totalScore)
+	level := scoreBandLevel
+
+	if maxEligibleSeverityRank > 0 {
+		anchorLevel := "INFORMATIONAL"
+		switch maxEligibleSeverity {
+		case SeverityCritical:
+			anchorLevel = "CRITICAL"
+		case SeverityHigh:
+			anchorLevel = "HIGH"
+		case SeverityMedium:
+			anchorLevel = "MEDIUM"
+		case SeverityLow:
+			anchorLevel = "LOW"
+		default:
+			anchorLevel = "INFORMATIONAL"
+		}
+
+		if SeverityRank(anchorLevel) > SeverityRank(scoreBandLevel) {
+			level = anchorLevel
+		}
+	}
+
+	expSub := math.Round(exposureAccum*100) / 100
+	hardSub := math.Round(hardeningAccum*100) / 100
+	storySub := math.Round(storyBonus*100) / 100
+
+	formula := fmt.Sprintf("round(%.2f exposure + %.2f hardening + %.2f story bonus) = %d", expSub, hardSub, storySub, totalScore)
+	if rawHardeningAccum > 20.0 {
+		formula = fmt.Sprintf("round(%.2f exposure + 20.00 hardening [capped from %.2f] + %.2f story bonus) = %d", expSub, rawHardeningAccum, storySub, totalScore)
+	}
+
+	breakdown := CommercialScoreBreakdown{
+		ExposureSubtotal:  expSub,
+		HardeningSubtotal: hardSub,
+		StoryBonus:        storySub,
+		TotalScore:        totalScore,
+		Formula:           formula,
+	}
+
+	return contributions, breakdown, level
+}
+
+// CalculateReportRisk evaluates all findings and correlated security stories
+// to produce a bounded (0-100) Felix Risk Score and categorical risk band.
+// It delegates directly to CalculateRiskBreakdown to ensure risk calculation and
+// commercial attribution use the identical mathematical engine.
+func CalculateReportRisk(findings []Finding, stories []SecurityStory) (int, string) {
+	if len(findings) == 0 {
+		return 0, "INFORMATIONAL"
+	}
+	_, breakdown, level := CalculateRiskBreakdown(findings, stories)
+	return breakdown.TotalScore, level
 }
 
 // RiskLevelBand maps an integer score (0-100) to its standardized risk level label.

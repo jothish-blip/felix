@@ -18,9 +18,11 @@ import (
 
 // Result holds the extracted assets and metadata for a given target.
 type Result struct {
-	Target  string               `json:"target"`
-	Scripts []string             `json:"scripts"` // Discovered script URLs (for backward compatibility)
-	Assets  []Asset              `json:"assets"`  // Full inventory of discovered and processed assets
+	Target           string                  `json:"target"`
+	StatusCode       int                     `json:"status_code,omitempty"`
+	Diagnostic       *ReachabilityDiagnostic `json:"diagnostic,omitempty"`
+	Scripts          []string                `json:"scripts"` // Discovered script URLs (for backward compatibility)
+	Assets           []Asset                 `json:"assets"`  // Full inventory of discovered and processed assets
 	HTML             []byte                  `json:"-"`       // Raw HTML body of target page
 	Header           http.Header             `json:"-"`       // HTTP response headers from target page
 	TLS              *tls.ConnectionState    `json:"-"`       // TLS handshake state if HTTPS
@@ -120,12 +122,14 @@ func (c *Crawler) ExtractScripts(ctx context.Context, rawURL string) ([]string, 
 
 	resp, err := targetClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+		diag := ClassifyNetworkError(err, rawURL)
+		return nil, diag
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		diag := ClassifyHTTPResponse(resp, rawURL)
+		return nil, diag
 	}
 
 	return parseScriptTags(resp.Body, parsedBase)
@@ -205,13 +209,21 @@ func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
 
 	resp, err := targetClient.Do(req)
 	if err != nil {
-		res.Err = fmt.Errorf("request failed: %w", err)
+		diag := ClassifyNetworkError(err, rawTarget)
+		res.Diagnostic = diag
+		res.Err = diag
 		return res
 	}
 	defer resp.Body.Close()
 
+	diag := ClassifyHTTPResponse(resp, rawTarget)
+	res.Diagnostic = diag
+	res.StatusCode = resp.StatusCode
+	res.Header = resp.Header
+	res.TLS = resp.TLS
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
-		res.Err = fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		res.Err = diag
 		return res
 	}
 

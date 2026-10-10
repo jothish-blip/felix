@@ -2,13 +2,16 @@ package crawler
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -900,6 +903,175 @@ func TestCrawler_ScopedRedirectEnforcement(t *testing.T) {
 	_, err = client.Get(primary.URL + "/excluded")
 	if err == nil {
 		t.Errorf("expected redirect to excluded path to be blocked")
+	}
+}
+
+func TestReachabilityClassification_HTTPResponses(t *testing.T) {
+	// 1. Success 200 OK
+	tsOK := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Server", "nginx/1.24")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "<html><body>Hello</body></html>")
+	}))
+	defer tsOK.Close()
+
+	c := New(Config{Timeout: 2 * time.Second})
+	resOK := c.Crawl(context.Background(), tsOK.URL)
+	if resOK.Err != nil {
+		t.Fatalf("expected successful crawl, got: %v", resOK.Err)
+	}
+	if resOK.Diagnostic == nil || resOK.Diagnostic.Category != ReachabilitySuccess {
+		t.Errorf("expected ReachabilitySuccess, got: %+v", resOK.Diagnostic)
+	}
+	if resOK.Diagnostic.Server != "nginx/1.24" {
+		t.Errorf("expected server nginx/1.24, got %q", resOK.Diagnostic.Server)
+	}
+
+	// 2. HTTP 403 Standard Forbidden
+	ts403 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Server", "Apache/2.4")
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, "Access Denied")
+	}))
+	defer ts403.Close()
+
+	res403 := c.Crawl(context.Background(), ts403.URL)
+	if res403.Err == nil {
+		t.Fatalf("expected error on 403, got nil")
+	}
+	if res403.Diagnostic == nil || res403.Diagnostic.Category != ReachabilityHTTP403Forbidden {
+		t.Errorf("expected ReachabilityHTTP403Forbidden, got: %+v", res403.Diagnostic)
+	}
+	if !res403.Diagnostic.IsBlocked() {
+		t.Errorf("expected IsBlocked() to be true for 403 Forbidden")
+	}
+	if res403.StatusCode != 403 {
+		t.Errorf("expected StatusCode 403, got %d", res403.StatusCode)
+	}
+	if res403.Header == nil || res403.Header.Get("Server") != "Apache/2.4" {
+		t.Errorf("expected preserved header Server: Apache/2.4")
+	}
+
+	// 3. HTTP 403 Cloudflare Challenge
+	tsChallenge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Server", "cloudflare")
+		w.Header().Set("Cf-Mitigated", "challenge")
+		w.Header().Set("CF-RAY", "8f123456789abcde-IAD")
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, "Cloudflare Challenge")
+	}))
+	defer tsChallenge.Close()
+
+	resChl := c.Crawl(context.Background(), tsChallenge.URL)
+	if resChl.Err == nil {
+		t.Fatalf("expected error on 403 challenge, got nil")
+	}
+	if resChl.Diagnostic == nil || resChl.Diagnostic.Category != ReachabilityHTTP403Challenge {
+		t.Errorf("expected ReachabilityHTTP403Challenge, got: %+v", resChl.Diagnostic)
+	}
+	if !resChl.Diagnostic.IsBlocked() {
+		t.Errorf("expected IsBlocked() to be true for 403 Challenge")
+	}
+	if resChl.Diagnostic.CfMitigated != "challenge" {
+		t.Errorf("expected CfMitigated challenge, got %q", resChl.Diagnostic.CfMitigated)
+	}
+	if resChl.Diagnostic.CfRay != "8f123456789abcde-IAD" {
+		t.Errorf("expected CfRay 8f123456789abcde-IAD, got %q", resChl.Diagnostic.CfRay)
+	}
+
+	// 4. HTTP 404 Not Found
+	ts404 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts404.Close()
+
+	res404 := c.Crawl(context.Background(), ts404.URL)
+	if res404.Err == nil || res404.Diagnostic == nil || res404.Diagnostic.Category != ReachabilityHTTP404NotFound {
+		t.Errorf("expected ReachabilityHTTP404NotFound, got: %+v", res404.Diagnostic)
+	}
+	if !res404.Diagnostic.IsFailed() {
+		t.Errorf("expected IsFailed() to be true for 404")
+	}
+
+	// 5. HTTP 429 Rate Limited with Retry-After
+	ts429 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "120")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer ts429.Close()
+
+	res429 := c.Crawl(context.Background(), ts429.URL)
+	if res429.Err == nil || res429.Diagnostic == nil || res429.Diagnostic.Category != ReachabilityHTTP429RateLimit {
+		t.Errorf("expected ReachabilityHTTP429RateLimit, got: %+v", res429.Diagnostic)
+	}
+	if res429.Diagnostic.RetryAfter != "120" {
+		t.Errorf("expected RetryAfter 120, got %q", res429.Diagnostic.RetryAfter)
+	}
+
+	// 6. HTTP 500 Server Error
+	ts500 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer ts500.Close()
+
+	res500 := c.Crawl(context.Background(), ts500.URL)
+	if res500.Err == nil || res500.Diagnostic == nil || res500.Diagnostic.Category != ReachabilityHTTP5xxServer {
+		t.Errorf("expected ReachabilityHTTP5xxServer, got: %+v", res500.Diagnostic)
+	}
+	if !res500.Diagnostic.IsFailed() {
+		t.Errorf("expected IsFailed() to be true for 500")
+	}
+}
+
+func TestReachabilityClassification_NetworkErrors(t *testing.T) {
+	// 1. DNS error
+	dnsErr := &net.DNSError{Err: "no such host", Name: "invalid.domain.felix.test"}
+	diagDNS := ClassifyNetworkError(dnsErr, "http://invalid.domain.felix.test")
+	if diagDNS.Category != ReachabilityDNSFailure {
+		t.Errorf("expected ReachabilityDNSFailure, got %s", diagDNS.Category)
+	}
+	if !diagDNS.IsFailed() {
+		t.Errorf("expected IsFailed() to be true for DNS failure")
+	}
+
+	// 2. TCP connection refused
+	diagConn := ClassifyNetworkError(syscall.ECONNREFUSED, "http://127.0.0.1:9")
+	if diagConn.Category != ReachabilityConnectionRefused {
+		t.Errorf("expected ReachabilityConnectionRefused, got %s", diagConn.Category)
+	}
+
+	// 3. Timeout
+	diagTimeout := ClassifyNetworkError(context.DeadlineExceeded, "http://example.com")
+	if diagTimeout.Category != ReachabilityTimeout {
+		t.Errorf("expected ReachabilityTimeout, got %s", diagTimeout.Category)
+	}
+
+	// 4. TLS Error
+	diagTLS := ClassifyNetworkError(x509.CertificateInvalidError{}, "https://badcert.example.com")
+	if diagTLS.Category != ReachabilityTLSFailure {
+		t.Errorf("expected ReachabilityTLSFailure, got %s", diagTLS.Category)
+	}
+}
+
+func TestReachabilitySanitization(t *testing.T) {
+	// Ray ID
+	ray := SanitizeRayID("8f123456789abcde-IAD")
+	if ray != "8f123456789abcde-IAD" {
+		t.Errorf("expected clean ray ID, got %s", ray)
+	}
+	dirtyRay := SanitizeRayID("8f123<bad>stuff")
+	if strings.Contains(dirtyRay, "<") || strings.Contains(dirtyRay, ">") {
+		t.Errorf("ray ID must not contain angle brackets, got %s", dirtyRay)
+	}
+
+	// URL query parameter redaction
+	rawURL := "https://api.example.com/v1/auth?token=supersecret123&user_key=mykey456&public_id=99"
+	sanitized := SanitizeURLString(rawURL)
+	if strings.Contains(sanitized, "supersecret123") || strings.Contains(sanitized, "mykey456") {
+		t.Errorf("sanitized URL leaked sensitive tokens: %s", sanitized)
+	}
+	if !strings.Contains(sanitized, "public_id=99") {
+		t.Errorf("sanitized URL should preserve non-sensitive params: %s", sanitized)
 	}
 }
 

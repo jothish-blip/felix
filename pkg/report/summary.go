@@ -184,9 +184,90 @@ func BuildMultiTargetReport(targets []string, rawFindings []Finding) Report {
 			},
 		},
 	}
-	cr := BuildCommercialReport(rep)
+	rep.RiskScoreAvailable = true
+	rep.Summary.ScoreAvailable = true
+	cr := BuildCommercialReport(rep, WithCompletionStatus("COMPLETED"))
 	rep.CommercialReport = &cr
 	return rep
+}
+
+// RecalculateReportRisk reconciles and recomputes the report's risk score, risk level,
+// and commercial presentation model using the authoritative deterministic scoring engine.
+// It is strictly idempotent, preserves verified attack path escalation, prevents unverified
+// candidate inflation, and guarantees scan-time and report-time calculations perfectly agree.
+func RecalculateReportRisk(rep *Report) {
+	if rep == nil {
+		return
+	}
+
+	if rep.CompletionStatus == "BLOCKED" || rep.CompletionStatus == "FAILED" || rep.RiskLevel == "UNAVAILABLE" {
+		rep.RiskScore = 0
+		rep.RiskLevel = "UNAVAILABLE"
+		rep.RiskScoreAvailable = false
+		rep.Summary.ScoreAvailable = false
+		cr := BuildCommercialReport(*rep, WithCompletionStatus(rep.CompletionStatus))
+		rep.CommercialReport = &cr
+		return
+	}
+
+	rep.RiskScoreAvailable = true
+	rep.Summary.ScoreAvailable = true
+
+	score, level := CalculateReportRisk(rep.Findings, rep.SecurityStories)
+	rep.RiskScore = score
+	rep.RiskLevel = level
+
+	// Only verified attack paths with non-low confidence are eligible to escalate risk.
+	// Candidate or hypothesis paths contribute zero unverified risk to primary score.
+	for _, p := range rep.AttackPaths {
+		if !strings.EqualFold(p.Status, "VERIFIED") || NormalizeConfidence(p.Confidence) == ConfidenceLow {
+			continue
+		}
+
+		// Validate, sanitize, and clamp attack path score to valid [0, 100] bounds.
+		// Malformed saved reports cannot inflate numerical scores beyond the model ceiling.
+		pathScore := p.CombinedRiskScore
+		if pathScore < 0 {
+			pathScore = 0
+		} else if pathScore > 100 {
+			pathScore = 100
+		}
+
+		if pathScore > rep.RiskScore {
+			rep.RiskScore = pathScore
+		}
+
+		// Sanitize attack path risk level to prevent malformed saved report strings from inflating category
+		pathLevel := NormalizeSeverity(p.CombinedRiskLevel)
+		scoreBand := RiskLevelBand(pathScore)
+		// If level was omitted, unrecognized non-informational string, or inflated beyond the score band, clamp to scoreBand
+		if p.CombinedRiskLevel == "" || (pathLevel == SeverityInfo && !isExplicitInfoLevel(p.CombinedRiskLevel)) || SeverityRank(pathLevel) > SeverityRank(scoreBand) {
+			pathLevel = scoreBand
+		}
+
+		if SeverityRank(pathLevel) > SeverityRank(rep.RiskLevel) {
+			rep.RiskLevel = pathLevel
+		}
+	}
+
+	// Final bounds check on assessment risk score
+	if rep.RiskScore > 100 {
+		rep.RiskScore = 100
+	} else if rep.RiskScore < 0 {
+		rep.RiskScore = 0
+	}
+
+	statusOpt := WithCompletionStatus(rep.CompletionStatus)
+	if rep.CompletionStatus == "" {
+		statusOpt = WithCompletionStatus("COMPLETED")
+	}
+	cr := BuildCommercialReport(*rep, statusOpt)
+	rep.CommercialReport = &cr
+}
+
+func isExplicitInfoLevel(raw string) bool {
+	s := strings.ToUpper(strings.TrimSpace(raw))
+	return s == SeverityInfo || s == "INFORMATIONAL" || s == "NOTE"
 }
 
 // AttachAttackPaths associates correlated attack paths with the audit report,
@@ -196,22 +277,7 @@ func AttachAttackPaths(rep *Report, paths []AttackPathSummary) {
 		return
 	}
 	rep.AttackPaths = paths
-
-	// Check if any attack path reflects higher combined risk
-	maxPathScore := rep.RiskScore
-	maxPathLevel := rep.RiskLevel
-	for _, p := range paths {
-		if p.CombinedRiskScore > maxPathScore {
-			maxPathScore = p.CombinedRiskScore
-			maxPathLevel = p.CombinedRiskLevel
-		}
-	}
-	if maxPathScore > rep.RiskScore {
-		rep.RiskScore = maxPathScore
-		rep.RiskLevel = maxPathLevel
-	}
-	cr := BuildCommercialReport(*rep)
-	rep.CommercialReport = &cr
+	RecalculateReportRisk(rep)
 }
 
 // AttachSecurityStories replaces correlated security stories on the report.
@@ -220,6 +286,5 @@ func AttachSecurityStories(rep *Report, stories []SecurityStory) {
 		return
 	}
 	rep.SecurityStories = stories
-	cr := BuildCommercialReport(*rep)
-	rep.CommercialReport = &cr
+	RecalculateReportRisk(rep)
 }

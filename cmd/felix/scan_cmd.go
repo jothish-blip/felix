@@ -399,10 +399,32 @@ func runScan(args []string) int {
 	totalAPIFindings := 0
 	var allReportFindings []report.Finding
 	hasNetworkSuccess := false
+	blockedCount := 0
+	failedCount := 0
 
 	for res := range results {
 		if res.Err != nil {
-			fmt.Fprintf(os.Stderr, "[-] [%s] Error: %v\n\n", res.Target, res.Err)
+			if res.Diagnostic != nil && res.Diagnostic.IsBlocked() {
+				blockedCount++
+				fmt.Fprintf(os.Stderr, "[-] [%s] Target responded, but access was blocked:\n", res.Target)
+				fmt.Fprintf(os.Stderr, "    Reason:     %s\n", res.Diagnostic.SafeSummary)
+				if res.Diagnostic.Server != "" {
+					fmt.Fprintf(os.Stderr, "    Server:     %s\n", res.Diagnostic.Server)
+				}
+				if res.Diagnostic.CfMitigated != "" {
+					fmt.Fprintf(os.Stderr, "    Mitigation: %s\n", res.Diagnostic.CfMitigated)
+				}
+				if res.Diagnostic.CfRay != "" {
+					fmt.Fprintf(os.Stderr, "    Ray ID:     %s\n", res.Diagnostic.CfRay)
+				}
+				fmt.Fprintf(os.Stderr, "    State:      BLOCKED (Access boundaries respected; probes halted)\n\n")
+			} else if res.Diagnostic != nil {
+				failedCount++
+				fmt.Fprintf(os.Stderr, "[-] [%s] Reachability failure: %s\n\n", res.Target, res.Diagnostic.SafeSummary)
+			} else {
+				failedCount++
+				fmt.Fprintf(os.Stderr, "[-] [%s] Error: %v\n\n", res.Target, res.Err)
+			}
 			continue
 		}
 		hasNetworkSuccess = true
@@ -579,9 +601,44 @@ func runScan(args []string) int {
 		totalDiscovered += len(res.Assets)
 	}
 
+	assessmentState := "COMPLETED"
 	if !hasNetworkSuccess && len(targets) > 0 {
-		fmt.Fprintf(os.Stderr, "[-] Failed to reach target(s).\n")
+		if blockedCount > 0 && failedCount == 0 {
+			assessmentState = "BLOCKED"
+			fmt.Fprintf(os.Stderr, "[-] Assessment status: BLOCKED (Target access denied or challenge presented; security posture unevaluated).\n")
+		} else {
+			assessmentState = "FAILED"
+			fmt.Fprintf(os.Stderr, "[-] Assessment status: FAILED (Target(s) could not be reached).\n")
+		}
+
+		if outStr != "" || jsonPath != "" || htmlStr != "" || sarifPath != "" {
+			duration := time.Since(startTime)
+			rep := report.BuildMultiTargetReport(targets, nil)
+			rep.Duration = duration.Round(time.Millisecond).String()
+			rep.DurationMs = duration.Milliseconds()
+			rep.CompletionStatus = assessmentState
+			rep.RiskScore = 0
+			rep.RiskLevel = "UNAVAILABLE"
+			rep.RiskScoreAvailable = false
+			rep.Summary.ScoreAvailable = false
+			report.RecalculateReportRisk(&rep)
+
+			if outStr != "" {
+				_ = report.WriteJSON(rep, outStr)
+			}
+			if jsonPath != "" {
+				_ = report.WriteJSON(rep, jsonPath)
+			}
+			if htmlStr != "" {
+				_ = report.WriteHTML(rep, htmlStr)
+			}
+			if sarifPath != "" {
+				_ = report.WriteSARIF(rep, sarifPath)
+			}
+		}
 		return 2
+	} else if blockedCount > 0 || failedCount > 0 {
+		assessmentState = "PARTIAL"
 	}
 
 	duration := time.Since(startTime)
@@ -591,6 +648,12 @@ func runScan(args []string) int {
 	rep.Duration = duration.Round(time.Millisecond).String()
 	rep.DurationMs = duration.Milliseconds()
 	rep.RequestCount = totalDiscovered + totalEndpointsAudited
+	rep.CompletionStatus = assessmentState
+	if rep.Metadata == nil {
+		rep.Metadata = make(map[string]any)
+	}
+	rep.Metadata["crawled_assets_count"] = totalDiscovered
+	report.RecalculateReportRisk(&rep)
 
 	var exported []string
 
@@ -676,8 +739,13 @@ func runScan(args []string) int {
 			fmt.Println()
 		}
 
-		fmt.Printf("[*] Assessment complete in %s. %d asset(s) ingested, %d finding(s) discovered across %d target(s).\n",
-			rep.Duration, totalDiscovered, len(rep.Findings), len(targets))
+		if rep.CommercialReport != nil && rep.CommercialReport.AttackSurface.TotalAssets > 0 {
+			fmt.Printf("[*] Assessment complete in %s. %d frontend asset(s) crawled, %d attack-surface resource(s) cataloged, %d finding(s) discovered across %d target(s).\n",
+				rep.Duration, totalDiscovered, rep.CommercialReport.AttackSurface.TotalAssets, len(rep.Findings), len(targets))
+		} else {
+			fmt.Printf("[*] Assessment complete in %s. %d frontend asset(s) crawled, %d finding(s) discovered across %d target(s).\n",
+				rep.Duration, totalDiscovered, len(rep.Findings), len(targets))
+		}
 	}
 
 	return determineExitCode(rep)

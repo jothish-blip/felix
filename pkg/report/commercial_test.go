@@ -2,6 +2,7 @@ package report
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -784,4 +785,372 @@ func TestCommercialReport_20_AllEightSectionsPresentAndPopulated(t *testing.T) {
 	if cr.TechnicalAppendix.ReportSchemaVersion == "" || len(cr.TechnicalAppendix.FindingIndex) != 3 {
 		t.Errorf("Section 8 (Technical Appendix) missing schema version or incomplete index")
 	}
+}
+
+// 21. Regression tests for report consistency: Score attribution, Asset counts, Verification semantics, Attack path omitempty
+func TestCommercialReport_RiskScoreAttributionAndReconciliation(t *testing.T) {
+	// Baseline findings matching Juice Shop pattern:
+	// 3 hardening headers (verified), 1 metrics exposure (observed), 1 story
+	findings := []Finding{
+		{
+			ID:           "API-12c25a80",
+			Title:        "Missing CSP header",
+			Category:     "missing-csp",
+			Severity:     SeverityLow,
+			Confidence:   ConfidenceHigh,
+			Verification: VerificationRecord{Status: VerificationVerified},
+			Score:        5,
+		},
+		{
+			ID:           "API-44eda87b",
+			Title:        "Missing Permissions-Policy",
+			Category:     "missing-permissions-policy",
+			Severity:     SeverityInfo,
+			Confidence:   ConfidenceHigh,
+			Verification: VerificationRecord{Status: VerificationVerified},
+			Score:        1,
+		},
+		{
+			ID:           "API-8dae2604",
+			Title:        "Missing Referrer-Policy",
+			Category:     "missing-referrer-policy",
+			Severity:     SeverityInfo,
+			Confidence:   ConfidenceHigh,
+			Verification: VerificationRecord{Status: VerificationVerified},
+			Score:        1,
+		},
+		{
+			ID:           "API-4b0b86f9",
+			Title:        "Public metrics endpoint",
+			Category:     "metrics-exposure",
+			Severity:     SeverityLow,
+			Confidence:   ConfidenceHigh,
+			Verification: VerificationRecord{Status: VerificationObserved},
+			Score:        2,
+		},
+	}
+
+	stories := []SecurityStory{
+		{
+			ID:               "STORY-DOC-01",
+			Title:            "Public API Documentation",
+			RiskContribution: 1,
+		},
+	}
+
+	rep := BuildReport("http://127.0.0.1:3000", findings)
+	rep.SecurityStories = stories
+	RecalculateReportRisk(&rep)
+
+	// Issue 1: Risk score attribution reconciliation
+	// Exposure: 2 * 1.0 = 2.0
+	// Hardening: 5 * 1.0 + 1 * 0.5 + 1 * 0.3 = 5.8
+	// Story: 1.0
+	// Total: round(2.0 + 5.8 + 1.0) = round(8.8) = 9
+	if rep.RiskScore != 9 || rep.RiskLevel != "LOW" {
+		t.Fatalf("expected risk score 9 (LOW), got score=%d level=%s", rep.RiskScore, rep.RiskLevel)
+	}
+
+	cr := *rep.CommercialReport
+	ro := cr.RiskOverview
+
+	// Check that ALL 4 contributing findings appear in FindingRiskContributions
+	if len(ro.FindingRiskContributions) != 4 {
+		t.Fatalf("expected 4 finding risk contributions (including metrics exposure), got %d", len(ro.FindingRiskContributions))
+	}
+
+	contribMap := make(map[string]CommercialRiskContribution)
+	for _, c := range ro.FindingRiskContributions {
+		contribMap[c.FindingID] = c
+	}
+
+	// Verify metrics exposure (API-4b0b86f9) contribution
+	metricsContrib, ok := contribMap["API-4b0b86f9"]
+	if !ok {
+		t.Fatalf("observed metrics exposure API-4b0b86f9 must be included in finding risk contributions")
+	}
+	if metricsContrib.Score != 2 || metricsContrib.Weight != 1.0 || metricsContrib.AdjustedScore != 2.0 {
+		t.Errorf("metrics exposure contribution incorrect: score=%d weight=%.1f adjusted=%.2f",
+			metricsContrib.Score, metricsContrib.Weight, metricsContrib.AdjustedScore)
+	}
+
+	// Verify CSP contribution
+	cspContrib := contribMap["API-12c25a80"]
+	if cspContrib.Score != 5 || cspContrib.Weight != 1.0 || cspContrib.AdjustedScore != 5.0 {
+		t.Errorf("CSP contribution incorrect: score=%d weight=%.1f adjusted=%.2f",
+			cspContrib.Score, cspContrib.Weight, cspContrib.AdjustedScore)
+	}
+
+	// Verify ScoreBreakdown subtotals
+	bd := ro.ScoreBreakdown
+	if bd.ExposureSubtotal != 2.0 {
+		t.Errorf("expected ExposureSubtotal 2.0, got %.2f", bd.ExposureSubtotal)
+	}
+	if bd.HardeningSubtotal != 5.8 {
+		t.Errorf("expected HardeningSubtotal 5.8, got %.2f", bd.HardeningSubtotal)
+	}
+	if bd.StoryBonus != 1.0 {
+		t.Errorf("expected StoryBonus 1.0, got %.2f", bd.StoryBonus)
+	}
+	if bd.TotalScore != 9 {
+		t.Errorf("expected TotalScore 9, got %d", bd.TotalScore)
+	}
+	if !strings.Contains(bd.Formula, "= 9") {
+		t.Errorf("expected formula to reconcile to 9, got %s", bd.Formula)
+	}
+}
+
+func TestCommercialReport_AssetCountDefinitions(t *testing.T) {
+	// Target with 1 base domain, 2 API endpoints, 1 route, and metadata crawled assets
+	findings := []Finding{
+		{ID: "F1", Endpoint: "http://target.com/api/v1/users", Severity: SeverityInfo, Verification: VerificationRecord{Status: VerificationObserved}},
+		{ID: "F2", Endpoint: "http://target.com/api/v1/posts", Severity: SeverityInfo, Verification: VerificationRecord{Status: VerificationObserved}},
+		{ID: "F3", Endpoint: "http://target.com/about", Severity: SeverityInfo, Verification: VerificationRecord{Status: VerificationObserved}},
+	}
+
+	rep := BuildReport("http://target.com", findings)
+	rep.Metadata = map[string]any{
+		"crawled_assets_count": 4,
+	}
+	RecalculateReportRisk(&rep)
+
+	cr := *rep.CommercialReport
+
+	// Issue 2: Distinct asset count definitions
+	// Total attack-surface resources = target + 2 API + 1 route = 4
+	if cr.AttackSurface.TotalAssets != 4 {
+		t.Errorf("expected 4 total attack surface resources, got %d", cr.AttackSurface.TotalAssets)
+	}
+	if cr.AttackSurface.FrontendAssetsCount != 4 {
+		t.Errorf("expected 4 frontend crawled assets from metadata, got %d", cr.AttackSurface.FrontendAssetsCount)
+	}
+	if cr.AttackSurface.APIEndpointsCount != 2 {
+		t.Errorf("expected 2 API endpoints, got %d", cr.AttackSurface.APIEndpointsCount)
+	}
+	if cr.AttackSurface.WebRoutesCount != 2 { // target domain (1) + /about (1)
+		t.Errorf("expected 2 web routes/domain, got %d", cr.AttackSurface.WebRoutesCount)
+	}
+
+	// Check consistency in Executive Summary
+	es := cr.ExecutiveSummary
+	if es.AssetsDiscoveredCount != 4 || es.FrontendAssetsCount != 4 || es.APIEndpointsCount != 2 || es.WebRoutesCount != 2 {
+		t.Errorf("executive summary asset counts inconsistent: discovered=%d frontend=%d api=%d routes=%d",
+			es.AssetsDiscoveredCount, es.FrontendAssetsCount, es.APIEndpointsCount, es.WebRoutesCount)
+	}
+
+	// Check consistency in Assessment Scope
+	as := cr.AssessmentScope
+	if as.DiscoveredEndpointsCount != 4 || as.FrontendAssetsCount != 4 || as.APIEndpointsCount != 2 || as.WebRoutesCount != 2 {
+		t.Errorf("assessment scope asset counts inconsistent: discovered=%d frontend=%d api=%d routes=%d",
+			as.DiscoveredEndpointsCount, as.FrontendAssetsCount, as.APIEndpointsCount, as.WebRoutesCount)
+	}
+}
+
+func TestCommercialReport_VerificationSummarySemantics(t *testing.T) {
+	// 3 VERIFIED, 0 DETECTED, 14 OBSERVED, 6 NOT_EXPOSED, 0 NOT_VERIFIED = 23 total findings
+	var findings []Finding
+	for i := 0; i < 3; i++ {
+		findings = append(findings, Finding{
+			ID:           fmt.Sprintf("V%d", i),
+			Endpoint:     fmt.Sprintf("http://target.com/verified/%d", i),
+			Severity:     SeverityLow,
+			Verification: VerificationRecord{Status: VerificationVerified},
+		})
+	}
+	for i := 0; i < 14; i++ {
+		findings = append(findings, Finding{
+			ID:           fmt.Sprintf("O%d", i),
+			Endpoint:     fmt.Sprintf("http://target.com/observed/%d", i),
+			Severity:     SeverityInfo,
+			Verification: VerificationRecord{Status: VerificationObserved},
+		})
+	}
+	for i := 0; i < 6; i++ {
+		findings = append(findings, Finding{
+			ID:           fmt.Sprintf("NE%d", i),
+			Endpoint:     fmt.Sprintf("http://target.com/defended/%d", i),
+			Severity:     SeverityInfo,
+			Verification: VerificationRecord{Status: VerificationNotExposed},
+		})
+	}
+
+	rep := BuildReport("http://target.com", findings)
+	cr := *rep.CommercialReport
+	es := cr.ExecutiveSummary
+
+	// Issue 3: Verification semantics distinction
+	if es.FindingsVerifiedCount != 3 {
+		t.Errorf("expected 3 verified findings, got %d", es.FindingsVerifiedCount)
+	}
+	if es.FindingsDetectedCount != 0 {
+		t.Errorf("expected 0 detected findings, got %d", es.FindingsDetectedCount)
+	}
+	if es.FindingsUnverifiedCount != 0 {
+		t.Errorf("expected 0 unverified findings, got %d", es.FindingsUnverifiedCount)
+	}
+	if es.ObservationsCount != 14 {
+		t.Errorf("expected 14 observations, got %d", es.ObservationsCount)
+	}
+	if es.NotExposedChecksCount != 6 {
+		t.Errorf("expected 6 defended/not-exposed checks, got %d", es.NotExposedChecksCount)
+	}
+
+	// Check Posture statement explicitly articulates all tiers
+	if !strings.Contains(es.PostureStatement, "3 verified") ||
+		!strings.Contains(es.PostureStatement, "14 observations") ||
+		!strings.Contains(es.PostureStatement, "6 defended checks") {
+		t.Errorf("posture statement does not articulate all verification categories: %s", es.PostureStatement)
+	}
+}
+
+func TestCommercialReport_AttackPathsOmitempty(t *testing.T) {
+	// Issue 4: AttackPaths schema omitempty invariant
+	findings := []Finding{
+		{ID: "F1", Severity: SeverityInfo, Verification: VerificationRecord{Status: VerificationObserved}},
+	}
+	rep := BuildReport("http://target.com", findings)
+	RecalculateReportRisk(&rep)
+
+	jsonBytes, err := GenerateJSON(rep)
+	if err != nil {
+		t.Fatalf("failed to generate JSON: %v", err)
+	}
+	jsonStr := string(jsonBytes)
+
+	// When AttackPaths is empty/nil, attack_paths key MUST be omitted from JSON
+	if strings.Contains(jsonStr, `"attack_paths":`) {
+		t.Errorf("expected attack_paths to be omitted via omitempty when empty, but found in JSON")
+	}
+
+	// Now attach a verified attack path and verify it appears
+	path := AttackPathSummary{
+		ID:                "AP-01",
+		Title:             "Test Path",
+		Status:            "VERIFIED",
+		CombinedRiskLevel: "HIGH",
+		CombinedRiskScore: 65,
+		Confidence:        ConfidenceHigh,
+	}
+	AttachAttackPaths(&rep, []AttackPathSummary{path})
+
+	jsonBytesWithPaths, err := GenerateJSON(rep)
+	if err != nil {
+		t.Fatalf("failed to generate JSON with paths: %v", err)
+	}
+	if !strings.Contains(string(jsonBytesWithPaths), `"attack_paths":`) {
+		t.Errorf("expected attack_paths to be present when paths exist")
+	}
+}
+
+func TestAssessmentStates_RiskScoreIntegrityAndPresentation(t *testing.T) {
+	// 1. BLOCKED Assessment State
+	t.Run("BLOCKED_State", func(t *testing.T) {
+		rep := BuildReport("https://blocked-target.example.com", nil)
+		rep.CompletionStatus = "BLOCKED"
+		RecalculateReportRisk(&rep)
+
+		if rep.RiskScore != 0 {
+			t.Errorf("expected risk score 0 for BLOCKED state, got %d", rep.RiskScore)
+		}
+		if rep.RiskLevel != "UNAVAILABLE" {
+			t.Errorf("expected risk level UNAVAILABLE for BLOCKED state, got %s", rep.RiskLevel)
+		}
+		if rep.RiskScoreAvailable {
+			t.Errorf("expected RiskScoreAvailable false for BLOCKED state")
+		}
+		if rep.Summary.ScoreAvailable {
+			t.Errorf("expected Summary.ScoreAvailable false for BLOCKED state")
+		}
+		if rep.CommercialReport == nil {
+			t.Fatalf("expected commercial report to be built")
+		}
+		if rep.CommercialReport.ExecutiveSummary.CompletionStatus != "BLOCKED" {
+			t.Errorf("expected CommercialReport CompletionStatus BLOCKED, got %s", rep.CommercialReport.ExecutiveSummary.CompletionStatus)
+		}
+		if rep.CommercialReport.ExecutiveSummary.RiskLevel != "UNAVAILABLE" {
+			t.Errorf("expected CommercialReport RiskLevel UNAVAILABLE, got %s", rep.CommercialReport.ExecutiveSummary.RiskLevel)
+		}
+		if rep.CommercialReport.ExecutiveSummary.RiskScoreAvailable {
+			t.Errorf("expected CommercialReport RiskScoreAvailable false")
+		}
+
+		// Standard HTML presentation
+		htmlBytes, err := GenerateHTML(rep)
+		if err != nil {
+			t.Fatalf("failed to generate HTML: %v", err)
+		}
+		htmlStr := string(htmlBytes)
+		if !strings.Contains(htmlStr, "ASSESSMENT BLOCKED") {
+			t.Errorf("expected HTML report to contain ASSESSMENT BLOCKED banner")
+		}
+		if !strings.Contains(htmlStr, "N/A") {
+			t.Errorf("expected HTML report to display N/A for risk score")
+		}
+
+		// Commercial HTML presentation
+		commHTMLBytes, err := GenerateCommercialHTML(*rep.CommercialReport)
+		if err != nil {
+			t.Fatalf("failed to generate commercial HTML: %v", err)
+		}
+		commHTMLStr := string(commHTMLBytes)
+		if !strings.Contains(commHTMLStr, "ASSESSMENT BLOCKED") {
+			t.Errorf("expected commercial HTML report to contain ASSESSMENT BLOCKED banner")
+		}
+		if !strings.Contains(commHTMLStr, "N/A") {
+			t.Errorf("expected commercial HTML report to display N/A for risk score")
+		}
+	})
+
+	// 2. FAILED Assessment State
+	t.Run("FAILED_State", func(t *testing.T) {
+		rep := BuildReport("https://failed-target.example.com", nil)
+		rep.CompletionStatus = "FAILED"
+		RecalculateReportRisk(&rep)
+
+		if rep.RiskScore != 0 {
+			t.Errorf("expected risk score 0 for FAILED state, got %d", rep.RiskScore)
+		}
+		if rep.RiskLevel != "UNAVAILABLE" {
+			t.Errorf("expected risk level UNAVAILABLE for FAILED state, got %s", rep.RiskLevel)
+		}
+		if rep.RiskScoreAvailable {
+			t.Errorf("expected RiskScoreAvailable false for FAILED state")
+		}
+
+		htmlBytes, err := GenerateHTML(rep)
+		if err != nil {
+			t.Fatalf("failed to generate HTML: %v", err)
+		}
+		if !strings.Contains(string(htmlBytes), "ASSESSMENT FAILED") {
+			t.Errorf("expected HTML report to contain ASSESSMENT FAILED banner")
+		}
+	})
+
+	// 3. COMPLETED State with Normal Scoring
+	t.Run("COMPLETED_State", func(t *testing.T) {
+		findings := []Finding{
+			{
+				ID:          "API-01",
+				Title:       "Missing CSP",
+				Category:    "missing-csp",
+				Severity:    SeverityLow,
+				Confidence:  ConfidenceHigh,
+				Score:       5,
+				Verification: VerificationRecord{Status: VerificationVerified},
+			},
+		}
+		rep := BuildReport("https://completed-target.example.com", findings)
+		rep.CompletionStatus = "COMPLETED"
+		RecalculateReportRisk(&rep)
+
+		if rep.RiskScore <= 0 {
+			t.Errorf("expected positive risk score for completed assessment, got %d", rep.RiskScore)
+		}
+		if !rep.RiskScoreAvailable {
+			t.Errorf("expected RiskScoreAvailable true for completed assessment")
+		}
+		if rep.RiskLevel == "UNAVAILABLE" {
+			t.Errorf("expected valid categorical risk level, got %s", rep.RiskLevel)
+		}
+	})
 }

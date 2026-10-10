@@ -152,6 +152,7 @@ type Summary struct {
 	SyntheticCount            int            `json:"synthetic_count,omitempty"`
 	VerificationRateAttempted float64        `json:"verification_rate_attempted,omitempty"`
 	VerificationRateTotal     float64        `json:"verification_rate_total,omitempty"`
+	ScoreAvailable            bool           `json:"score_available"`
 	BySource                  map[string]int `json:"by_source"`
 }
 
@@ -164,6 +165,8 @@ type Report struct {
 	Duration            string              `json:"duration,omitempty"`
 	DurationMs          int64               `json:"duration_ms,omitempty"`
 	RequestCount        int                 `json:"request_count,omitempty"`
+	CompletionStatus    string              `json:"completion_status,omitempty"`
+	RiskScoreAvailable  bool                `json:"risk_score_available"`
 	RiskScore           int                 `json:"risk_score"`
 	RiskLevel           string              `json:"risk_level"`
 	Summary             Summary             `json:"summary"`
@@ -433,14 +436,14 @@ func FromAPIFinding(target string, f api.APIFinding) Finding {
 		detMethod = "header_inspection"
 		detStatus = "DETECTED"
 		verStatus = VerificationVerified
-		verResult = fmt.Sprintf("Evaluated server HTTP response headers; %s defense-in-depth header was not present.", cat)
+		verResult = fmt.Sprintf("Evaluated server HTTP response headers; confirmed absence of %s defense-in-depth header (configuration state, not an independently exploitable vulnerability).", cat)
 		negEvidence = "No defense-in-depth security header was returned by the web server."
 
 	case strings.HasPrefix(cat, "weak-"):
 		detMethod = "header_inspection"
 		detStatus = "DETECTED"
 		verStatus = VerificationVerified
-		verResult = fmt.Sprintf("Evaluated server HTTP response headers; weak configuration detected in %s.", cat)
+		verResult = fmt.Sprintf("Evaluated server HTTP response headers; weak configuration detected in %s (configuration state, not an independently exploitable vulnerability).", cat)
 		negEvidence = "Defense-in-depth posture observation; exploitability requires an independent injection vector."
 
 	case cat == "api-docs-exposure":

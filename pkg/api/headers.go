@@ -47,6 +47,22 @@ func parseHSTSMaxAge(hsts string) int {
 	return -1
 }
 
+// getHeaderValues returns all non-empty trimmed values for a header, case-insensitively.
+func getHeaderValues(h http.Header, name string) []string {
+	var results []string
+	for k, vals := range h {
+		if strings.EqualFold(k, name) {
+			for _, v := range vals {
+				v = strings.TrimSpace(v)
+				if v != "" {
+					results = append(results, v)
+				}
+			}
+		}
+	}
+	return results
+}
+
 // AuditSecurityHeaders inspects HTTP response headers on a target URL for recommended defense-in-depth protections.
 func AuditSecurityHeaders(ctx context.Context, client *Client, targetURL string) []APIFinding {
 	var findings []APIFinding
@@ -66,26 +82,60 @@ func AuditSecurityHeaders(ctx context.Context, client *Client, targetURL string)
 	statusCode := resp.StatusCode
 
 	// 1. Content-Security-Policy Analysis
-	cspHeader := headers.Get("Content-Security-Policy")
-	if cspHeader == "" {
-		findings = append(findings, APIFinding{
-			Category:         CategoryMissingCSP,
-			Endpoint:         targetURL,
-			Method:           http.MethodGet,
-			Description:      "Missing Content-Security-Policy (CSP) defense-in-depth header",
-			Evidence:         "Response headers do not include Content-Security-Policy.",
-			Severity:         SeverityLow,
-			Confidence:       ConfidenceHigh,
-			HTTPStatus:       statusCode,
-			NegativeEvidence: "Informational hardening observation; does not constitute an exploitable vulnerability by itself.",
-			Details: map[string]string{
-				"header":   "Content-Security-Policy",
-				"observed": "absent",
-			},
-			Fingerprint: GenerateFingerprint(CategoryMissingCSP, targetURL, http.MethodGet),
-		})
+	cspValues := getHeaderValues(headers, "Content-Security-Policy")
+	cspReportOnlyValues := getHeaderValues(headers, "Content-Security-Policy-Report-Only")
+
+	var cspHeader string
+	if len(cspValues) > 0 {
+		cspHeader = strings.Join(cspValues, "; ")
+	}
+
+	if len(cspValues) == 0 {
+		if len(cspReportOnlyValues) > 0 {
+			// Case B: Report-Only CSP present without enforcing CSP
+			reportOnlyStr := strings.Join(cspReportOnlyValues, "; ")
+			findings = append(findings, APIFinding{
+				Category:         CategoryMissingCSP,
+				Endpoint:         targetURL,
+				Method:           http.MethodGet,
+				Description:      "Missing enforcing Content-Security-Policy (CSP) header (Report-Only CSP detected)",
+				Evidence:         fmt.Sprintf("Content-Security-Policy-Report-Only observed (%q), but enforcing Content-Security-Policy header is absent.", reportOnlyStr),
+				Severity:         SeverityLow,
+				Confidence:       ConfidenceHigh,
+				HTTPStatus:       statusCode,
+				NegativeEvidence: "Target web server evaluates CSP in report-only mode; policy restrictions are not enforced by the browser.",
+				Details: map[string]string{
+					"header":               "Content-Security-Policy",
+					"observed":             "absent",
+					"enforcing":            "absent",
+					"report_only":          "present",
+					"report_only_observed": reportOnlyStr,
+				},
+				Fingerprint: GenerateFingerprint(CategoryMissingCSP, targetURL, http.MethodGet),
+			})
+		} else {
+			// Case D: Neither enforcing nor report-only CSP present
+			findings = append(findings, APIFinding{
+				Category:         CategoryMissingCSP,
+				Endpoint:         targetURL,
+				Method:           http.MethodGet,
+				Description:      "Missing Content-Security-Policy (CSP) defense-in-depth header",
+				Evidence:         "Response headers do not include Content-Security-Policy.",
+				Severity:         SeverityLow,
+				Confidence:       ConfidenceHigh,
+				HTTPStatus:       statusCode,
+				NegativeEvidence: "Informational hardening observation; does not constitute an exploitable vulnerability by itself.",
+				Details: map[string]string{
+					"header":      "Content-Security-Policy",
+					"observed":    "absent",
+					"enforcing":   "absent",
+					"report_only": "absent",
+				},
+				Fingerprint: GenerateFingerprint(CategoryMissingCSP, targetURL, http.MethodGet),
+			})
+		}
 	} else {
-		// Deep directive inspection
+		// Case A & C: Enforcing CSP present - evaluate directives
 		directives := parseCSPDirectives(cspHeader)
 		var weakDirectives []string
 
@@ -107,6 +157,16 @@ func AuditSecurityHeaders(ctx context.Context, client *Client, targetURL string)
 		}
 
 		if len(weakDirectives) > 0 {
+			det := map[string]string{
+				"header":    "Content-Security-Policy",
+				"observed":  cspHeader,
+				"issues":    strings.Join(weakDirectives, "; "),
+				"enforcing": "present",
+			}
+			if len(cspReportOnlyValues) > 0 {
+				det["report_only"] = "present"
+				det["report_only_observed"] = strings.Join(cspReportOnlyValues, "; ")
+			}
 			findings = append(findings, APIFinding{
 				Category:         CategoryWeakCSP,
 				Endpoint:         targetURL,
@@ -117,12 +177,8 @@ func AuditSecurityHeaders(ctx context.Context, client *Client, targetURL string)
 				Confidence:       ConfidenceHigh,
 				HTTPStatus:       statusCode,
 				NegativeEvidence: "Defense-in-depth posture observation; exploitability requires an independent injection vector.",
-				Details: map[string]string{
-					"header":   "Content-Security-Policy",
-					"observed": cspHeader,
-					"issues":   strings.Join(weakDirectives, "; "),
-				},
-				Fingerprint: GenerateFingerprint(CategoryWeakCSP, targetURL, http.MethodGet),
+				Details:          det,
+				Fingerprint:      GenerateFingerprint(CategoryWeakCSP, targetURL, http.MethodGet),
 			})
 		}
 	}
@@ -130,8 +186,8 @@ func AuditSecurityHeaders(ctx context.Context, client *Client, targetURL string)
 	// 2. Strict-Transport-Security (HSTS)
 	// IMPORTANT: Only evaluate HSTS meaningfully when target is HTTPS
 	if isHTTPS {
-		hstsHeader := headers.Get("Strict-Transport-Security")
-		if hstsHeader == "" {
+		hstsValues := getHeaderValues(headers, "Strict-Transport-Security")
+		if len(hstsValues) == 0 {
 			findings = append(findings, APIFinding{
 				Category:         CategoryMissingHSTS,
 				Endpoint:         targetURL,
@@ -149,6 +205,7 @@ func AuditSecurityHeaders(ctx context.Context, client *Client, targetURL string)
 				Fingerprint: GenerateFingerprint(CategoryMissingHSTS, targetURL, http.MethodGet),
 			})
 		} else {
+			hstsHeader := strings.Join(hstsValues, "; ")
 			maxAge := parseHSTSMaxAge(hstsHeader)
 			if maxAge >= 0 && maxAge < 10368000 {
 				findings = append(findings, APIFinding{
@@ -173,9 +230,9 @@ func AuditSecurityHeaders(ctx context.Context, client *Client, targetURL string)
 	}
 
 	// 3. X-Frame-Options & Modern frame-ancestors Equivalence
-	xfo := headers.Get("X-Frame-Options")
+	xfoValues := getHeaderValues(headers, "X-Frame-Options")
 	hasFrameAncestors := strings.Contains(strings.ToLower(cspHeader), "frame-ancestors")
-	if xfo == "" && !hasFrameAncestors {
+	if len(xfoValues) == 0 && !hasFrameAncestors {
 		findings = append(findings, APIFinding{
 			Category:         CategoryMissingXFrameOptions,
 			Endpoint:         targetURL,
@@ -195,29 +252,42 @@ func AuditSecurityHeaders(ctx context.Context, client *Client, targetURL string)
 	}
 
 	// 4. X-Content-Type-Options
-	xcto := headers.Get("X-Content-Type-Options")
-	if !strings.EqualFold(strings.TrimSpace(xcto), "nosniff") {
+	xctoValues := getHeaderValues(headers, "X-Content-Type-Options")
+	hasNosniff := false
+	for _, v := range xctoValues {
+		for _, part := range strings.Split(v, ",") {
+			if strings.EqualFold(strings.TrimSpace(part), "nosniff") {
+				hasNosniff = true
+				break
+			}
+		}
+	}
+	if !hasNosniff {
+		observed := "absent"
+		if len(xctoValues) > 0 {
+			observed = strings.Join(xctoValues, ", ")
+		}
 		findings = append(findings, APIFinding{
 			Category:         CategoryMissingXContentType,
 			Endpoint:         targetURL,
 			Method:           http.MethodGet,
 			Description:      "Missing or incomplete X-Content-Type-Options: nosniff header",
-			Evidence:         fmt.Sprintf("X-Content-Type-Options observed: %q (expected 'nosniff').", xcto),
+			Evidence:         fmt.Sprintf("X-Content-Type-Options observed: %q (expected 'nosniff').", observed),
 			Severity:         SeverityInfo,
 			Confidence:       ConfidenceHigh,
 			HTTPStatus:       statusCode,
 			NegativeEvidence: "MIME sniffing protection not explicitly declared.",
 			Details: map[string]string{
 				"header":   "X-Content-Type-Options",
-				"observed": xcto,
+				"observed": observed,
 			},
 			Fingerprint: GenerateFingerprint(CategoryMissingXContentType, targetURL, http.MethodGet),
 		})
 	}
 
 	// 5. Permissions-Policy
-	permPolicy := headers.Get("Permissions-Policy")
-	if permPolicy == "" {
+	permValues := getHeaderValues(headers, "Permissions-Policy")
+	if len(permValues) == 0 {
 		findings = append(findings, APIFinding{
 			Category:         CategoryMissingPermissions,
 			Endpoint:         targetURL,
@@ -237,8 +307,8 @@ func AuditSecurityHeaders(ctx context.Context, client *Client, targetURL string)
 	}
 
 	// 6. Referrer-Policy Analysis
-	refPolicy := strings.TrimSpace(headers.Get("Referrer-Policy"))
-	if refPolicy == "" {
+	refValues := getHeaderValues(headers, "Referrer-Policy")
+	if len(refValues) == 0 {
 		findings = append(findings, APIFinding{
 			Category:         CategoryMissingReferrerPolicy,
 			Endpoint:         targetURL,
@@ -255,23 +325,34 @@ func AuditSecurityHeaders(ctx context.Context, client *Client, targetURL string)
 			},
 			Fingerprint: GenerateFingerprint(CategoryMissingReferrerPolicy, targetURL, http.MethodGet),
 		})
-	} else if strings.EqualFold(refPolicy, "unsafe-url") {
-		findings = append(findings, APIFinding{
-			Category:         CategoryWeakReferrerPolicy,
-			Endpoint:         targetURL,
-			Method:           http.MethodGet,
-			Description:      "Weak Referrer-Policy header allows full URL leakage",
-			Evidence:         "Referrer-Policy is configured as 'unsafe-url', transmitting full request URLs with paths and query parameters cross-origin.",
-			Severity:         SeverityLow,
-			Confidence:       ConfidenceHigh,
-			HTTPStatus:       statusCode,
-			NegativeEvidence: "Weak referrer policy configured; sensitive parameters in URLs may be leaked cross-origin.",
-			Details: map[string]string{
-				"header":   "Referrer-Policy",
-				"observed": refPolicy,
-			},
-			Fingerprint: GenerateFingerprint(CategoryWeakReferrerPolicy, targetURL, http.MethodGet),
-		})
+	} else {
+		hasUnsafe := false
+		for _, v := range refValues {
+			for _, part := range strings.Split(v, ",") {
+				if strings.EqualFold(strings.TrimSpace(part), "unsafe-url") {
+					hasUnsafe = true
+					break
+				}
+			}
+		}
+		if hasUnsafe {
+			findings = append(findings, APIFinding{
+				Category:         CategoryWeakReferrerPolicy,
+				Endpoint:         targetURL,
+				Method:           http.MethodGet,
+				Description:      "Weak Referrer-Policy header allows full URL leakage",
+				Evidence:         "Referrer-Policy is configured as 'unsafe-url', transmitting full request URLs with paths and query parameters cross-origin.",
+				Severity:         SeverityLow,
+				Confidence:       ConfidenceHigh,
+				HTTPStatus:       statusCode,
+				NegativeEvidence: "Weak referrer policy configured; sensitive parameters in URLs may be leaked cross-origin.",
+				Details: map[string]string{
+					"header":   "Referrer-Policy",
+					"observed": strings.Join(refValues, ", "),
+				},
+				Fingerprint: GenerateFingerprint(CategoryWeakReferrerPolicy, targetURL, http.MethodGet),
+			})
+		}
 	}
 
 	return findings

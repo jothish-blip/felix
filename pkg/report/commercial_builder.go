@@ -120,6 +120,13 @@ func BuildCommercialReport(rep Report, opts ...CommercialReportOption) Commercia
 		}
 	}
 
+	// Authoritative risk contributions breakdown
+	contributions, _, _ := CalculateRiskBreakdown(sanitizedRep.Findings, sanitizedRep.SecurityStories)
+	findingContribMap := make(map[string]CommercialRiskContribution)
+	for _, c := range contributions {
+		findingContribMap[c.FindingID] = c
+	}
+
 	// Process findings deterministically
 	for _, f := range sanitizedRep.Findings {
 		isSynth := f.Verification.SyntheticFixture ||
@@ -134,11 +141,11 @@ func BuildCommercialReport(rep Report, opts ...CommercialReportOption) Commercia
 
 		switch canonicalStatus {
 		case VerificationVerified:
-			cf := buildCommercialFinding(f, sanitizedRep, findingStoryMap, findingPathMap, isSynth, timestamp)
+			cf := buildCommercialFinding(f, sanitizedRep, findingStoryMap, findingPathMap, findingContribMap, isSynth, timestamp)
 			verifiedFindings = append(verifiedFindings, cf)
 
 		case VerificationDetected, VerificationNotVerified:
-			cf := buildCommercialFinding(f, sanitizedRep, findingStoryMap, findingPathMap, isSynth, timestamp)
+			cf := buildCommercialFinding(f, sanitizedRep, findingStoryMap, findingPathMap, findingContribMap, isSynth, timestamp)
 			detectedFindings = append(detectedFindings, cf)
 
 		case VerificationObserved:
@@ -167,7 +174,7 @@ func BuildCommercialReport(rep Report, opts ...CommercialReportOption) Commercia
 		default:
 			// Fallback: If detection status is DETECTED, keep as detected finding; else observation
 			if strings.EqualFold(f.EvidenceDetails.DetectionStatus, "DETECTED") {
-				cf := buildCommercialFinding(f, sanitizedRep, findingStoryMap, findingPathMap, isSynth, timestamp)
+				cf := buildCommercialFinding(f, sanitizedRep, findingStoryMap, findingPathMap, findingContribMap, isSynth, timestamp)
 				detectedFindings = append(detectedFindings, cf)
 			} else {
 				obs := buildCommercialObservation(f, isSynth)
@@ -223,6 +230,7 @@ func buildCommercialFinding(
 	rep Report,
 	storyMap map[string][]string,
 	pathMap map[string][]string,
+	contribMap map[string]CommercialRiskContribution,
 	synthetic bool,
 	timestamp string,
 ) CommercialFinding {
@@ -253,7 +261,7 @@ func buildCommercialFinding(
 	verification := buildVerificationDetail(f)
 	evidence := buildEvidenceDetail(f, synthetic, timestamp)
 	impact := buildSecurityImpact(f)
-	riskContrib := buildRiskContribution(f, storyMap[f.ID], pathMap[f.ID])
+	riskContrib := buildRiskContribution(f, storyMap[f.ID], pathMap[f.ID], contribMap[f.ID])
 
 	desc := SanitizeEvidence(f.Description)
 	if desc == "" {
@@ -580,7 +588,7 @@ func buildSecurityImpact(f Finding) CommercialSecurityImpact {
 	}
 }
 
-func buildRiskContribution(f Finding, storyIDs, pathIDs []string) CommercialRiskContribution {
+func buildRiskContribution(f Finding, storyIDs, pathIDs []string, contrib CommercialRiskContribution) CommercialRiskContribution {
 	score := f.Score
 	if score == 0 {
 		score = CalculateFindingScore(f)
@@ -595,8 +603,16 @@ func buildRiskContribution(f Finding, storyIDs, pathIDs []string) CommercialRisk
 		riskType = "HARDENING_DEFENSE_IN_DEPTH"
 	}
 
-	rationale := fmt.Sprintf("Calculated risk score %d/40 weighted by severity (%s), confidence (%s), and verification status (%s).",
-		score, f.Severity, f.Confidence, f.Verification.Status)
+	weight := contrib.Weight
+	adjScore := contrib.AdjustedScore
+	if contrib.RiskType != "" {
+		riskType = contrib.RiskType
+	}
+	rationale := contrib.Rationale
+	if rationale == "" {
+		rationale = fmt.Sprintf("Calculated risk score %d/40 weighted by severity (%s), confidence (%s), and verification status (%s).",
+			score, f.Severity, f.Confidence, f.Verification.Status)
+	}
 
 	return CommercialRiskContribution{
 		FindingID:          f.ID,
@@ -604,6 +620,8 @@ func buildRiskContribution(f Finding, storyIDs, pathIDs []string) CommercialRisk
 		Severity:           f.Severity,
 		VerificationStatus: string(f.Verification.Status),
 		Score:              score,
+		Weight:             weight,
+		AdjustedScore:      adjScore,
 		Model:              "felix_deterministic_v1",
 		RiskType:           riskType,
 		CorrelatedStoryIDs: storyIDs,
@@ -731,10 +749,35 @@ func buildAttackSurface(rep Report) CommercialAttackSurface {
 		return assets[i].URL < assets[j].URL
 	})
 
+	frontendCount := byType["CLIENT_ASSET"]
+	if rep.Metadata != nil {
+		if raw, ok := rep.Metadata["crawled_assets_count"]; ok {
+			switch v := raw.(type) {
+			case int:
+				frontendCount = v
+			case float64:
+				frontendCount = int(v)
+			}
+		}
+	}
+	if frontendCount == 0 && rep.CommercialReport != nil {
+		if rep.CommercialReport.ExecutiveSummary.FrontendAssetsCount > 0 {
+			frontendCount = rep.CommercialReport.ExecutiveSummary.FrontendAssetsCount
+		} else if rep.CommercialReport.AttackSurface.FrontendAssetsCount > 0 {
+			frontendCount = rep.CommercialReport.AttackSurface.FrontendAssetsCount
+		}
+	}
+
+	apiEndpointsCount := byType["API_ENDPOINT"] + byType["AUTH_ENTRYPOINT"]
+	webRoutesCount := byType["WEB_ROUTE"] + byType["DOMAIN"]
+
 	return CommercialAttackSurface{
-		TotalAssets:  len(assets),
-		AssetsByType: byType,
-		Assets:       assets,
+		TotalAssets:         len(assets),
+		FrontendAssetsCount: frontendCount,
+		APIEndpointsCount:   apiEndpointsCount,
+		WebRoutesCount:      webRoutesCount,
+		AssetsByType:        byType,
+		Assets:              assets,
 	}
 }
 
@@ -830,6 +873,9 @@ func buildAssessmentScope(
 		InScopeURLs:              urls,
 		DiscoveredEndpointsCount: attackSurface.TotalAssets,
 		AssessedEndpointsCount:   rep.Summary.AttemptedCount,
+		FrontendAssetsCount:      attackSurface.FrontendAssetsCount,
+		APIEndpointsCount:        attackSurface.APIEndpointsCount,
+		WebRoutesCount:           attackSurface.WebRoutesCount,
 		APIServices:              dedupStringSlice(apiServices),
 		CloudResources:           dedupStringSlice(cloudResources),
 		AuthenticationContexts:   authContexts,
@@ -876,12 +922,13 @@ func buildRiskOverview(
 		detBySev[df.Severity]++
 	}
 
-	var contributions []CommercialRiskContribution
-	for _, vf := range verified {
-		contributions = append(contributions, vf.RiskContribution)
-	}
-	for _, df := range detected {
-		contributions = append(contributions, df.RiskContribution)
+	contributions, breakdown, _ := CalculateRiskBreakdown(rep.Findings, rep.SecurityStories)
+
+	// If attack paths escalated the primary report risk score, reconcile breakdown
+	if rep.RiskScore > breakdown.TotalScore {
+		breakdown.AttackPathScore = rep.RiskScore
+		breakdown.TotalScore = rep.RiskScore
+		breakdown.Formula = fmt.Sprintf("max(%s, %d verified attack path) = %d", breakdown.Formula, rep.RiskScore, rep.RiskScore)
 	}
 
 	// Calculate concentrations by component
@@ -913,6 +960,30 @@ func buildRiskOverview(
 
 	modelDesc := "Felix Deterministic Risk Model (0–100): Weighted empirical verification, multi-exposure diminishing returns, hardening caps (max 20 pts), and correlated story bonuses (max +15 pts). This metric reflects demonstrable exposure and is deliberately distinct from standalone CVSS base scoring."
 
+	status := rep.CompletionStatus
+	isAvailable := rep.RiskScoreAvailable
+	if status == "BLOCKED" || status == "FAILED" {
+		isAvailable = false
+	} else if status != "" {
+		isAvailable = true
+	} else if rep.RiskLevel == "UNAVAILABLE" {
+		isAvailable = false
+	} else {
+		isAvailable = true
+	}
+
+	riskScore := rep.RiskScore
+	riskLevel := rep.RiskLevel
+	if !isAvailable {
+		riskScore = 0
+		riskLevel = "UNAVAILABLE"
+		modelDesc = "Risk scoring is unavailable because the assessment was blocked or failed before targets could be evaluated."
+		breakdown = CommercialScoreBreakdown{
+			Formula: "N/A (assessment blocked or failed before evaluation)",
+		}
+		contributions = nil
+	}
+
 	limitations := []string{
 		"Risk score reflects non-destructive black-box evaluation and does not calculate likelihood of zero-day attacks or internal network penetration.",
 		"Hardening findings (e.g. defense-in-depth headers) are strictly capped at 20 points maximum to prevent artificial score inflation on otherwise secure targets.",
@@ -920,13 +991,15 @@ func buildRiskOverview(
 	}
 
 	return CommercialRiskOverview{
-		RiskScore:                rep.RiskScore,
-		RiskLevel:                rep.RiskLevel,
+		RiskScore:                riskScore,
+		RiskScoreAvailable:       isAvailable,
+		RiskLevel:                riskLevel,
 		ScoringModelDescription:  modelDesc,
 		SeverityDistribution:     sevDist,
 		VerifiedCountsBySeverity: verBySev,
 		DetectedCountsBySeverity: detBySev,
 		FindingRiskContributions: contributions,
+		ScoreBreakdown:           breakdown,
 		SecurityStories:          rep.SecurityStories,
 		AttackPaths:              rep.AttackPaths,
 		RiskConcentrations:       concentrations,
@@ -960,6 +1033,26 @@ func buildExecutiveSummary(
 	}
 	if cfg.completionStatus != "" {
 		status = cfg.completionStatus
+	} else if rep.CompletionStatus != "" {
+		status = rep.CompletionStatus
+	}
+
+	isScoreAvailable := rep.RiskScoreAvailable
+	if status == "BLOCKED" || status == "FAILED" {
+		isScoreAvailable = false
+	} else if status != "" {
+		isScoreAvailable = true
+	} else if rep.RiskLevel == "UNAVAILABLE" {
+		isScoreAvailable = false
+	} else {
+		isScoreAvailable = true
+	}
+
+	riskScore := rep.RiskScore
+	riskLevel := rep.RiskLevel
+	if !isScoreAvailable {
+		riskScore = 0
+		riskLevel = "UNAVAILABLE"
 	}
 
 	sevDist := map[string]int{
@@ -971,10 +1064,16 @@ func buildExecutiveSummary(
 	}
 
 	var highlights []string
-	highlights = append(highlights, fmt.Sprintf("%d total assets identified across %d endpoint/route categories.",
+	highlights = append(highlights, fmt.Sprintf("%d total attack-surface resources cataloged across %d endpoint/route categories.",
 		attackSurface.TotalAssets, len(attackSurface.AssetsByType)))
-	if count, ok := attackSurface.AssetsByType["API_ENDPOINT"]; ok && count > 0 {
+	if attackSurface.FrontendAssetsCount > 0 {
+		highlights = append(highlights, fmt.Sprintf("%d frontend assets crawled and analyzed.", attackSurface.FrontendAssetsCount))
+	}
+	if count := attackSurface.APIEndpointsCount; count > 0 {
 		highlights = append(highlights, fmt.Sprintf("%d API endpoints cataloged.", count))
+	}
+	if count := attackSurface.WebRoutesCount; count > 0 {
+		highlights = append(highlights, fmt.Sprintf("%d web routes cataloged.", count))
 	}
 	if count, ok := attackSurface.AssetsByType["CLOUD_RESOURCE"]; ok && count > 0 {
 		highlights = append(highlights, fmt.Sprintf("%d cloud backend or storage resources cataloged.", count))
@@ -1003,19 +1102,28 @@ func buildExecutiveSummary(
 		"Assessment strictly enforced authorized, non-destructive black-box audit boundaries.",
 		"No invasive privilege mutation, destructive payloads, or credential stuffing attacks were executed.",
 	}
+	if status == "BLOCKED" {
+		limitations = append(limitations, "Target endpoints presented access controls or automated challenges; assessment halted without evaluation.")
+	} else if status == "FAILED" {
+		limitations = append(limitations, "Target endpoints could not be reached; dynamic crawler and audit engines could not execute.")
+	}
 	if len(cfg.enginesSkipped) > 0 {
 		limitations = append(limitations, fmt.Sprintf("Engines skipped: %s.", strings.Join(cfg.enginesSkipped, ", ")))
 	}
 
 	var posture string
-	if len(verified) == 0 && len(detected) == 0 {
+	if status == "BLOCKED" {
+		posture = "Assessment was BLOCKED by target access controls or bot detection mechanisms (HTTP 403 / challenge). Felix respected access boundaries and did not attempt challenge bypasses or automated circumvention. Security posture could not be evaluated."
+	} else if status == "FAILED" {
+		posture = "Assessment FAILED due to network reachability or transport errors. Felix could not connect to target endpoints. Security posture could not be evaluated."
+	} else if len(verified) == 0 && len(detected) == 0 {
 		posture = "No security findings were identified within the evaluated scope. Important note: The absence of verified findings does not guarantee that the target is completely secure against unassessed attack classes, authenticated privilege boundaries, or internal network vulnerabilities."
 	} else if len(verified) == 0 {
-		posture = fmt.Sprintf("Felix recorded %d detected findings and %d observations, but zero findings reached empirical verification. The overall risk score is %d/100 (%s). Unverified detections remain hypotheses pending manual engineering review.",
-			len(detected), len(observations), rep.RiskScore, rep.RiskLevel)
+		posture = fmt.Sprintf("Felix recorded %d detected findings, %d observations, and %d defended checks, but zero findings reached empirical verification. The overall risk score is %d/100 (%s). Unverified detections remain hypotheses pending manual engineering review.",
+			rep.Summary.DetectedCount, rep.Summary.ObservedCount, rep.Summary.NotExposedCount, riskScore, riskLevel)
 	} else {
-		posture = fmt.Sprintf("Felix confirmed %d verified findings and %d detected findings, resulting in a deterministic risk score of %d/100 (%s). High-priority verified findings represent immediate actionable exposures.",
-			len(verified), len(detected), rep.RiskScore, rep.RiskLevel)
+		posture = fmt.Sprintf("Felix confirmed %d verified findings, %d detected findings, %d observations, and %d defended checks, resulting in a deterministic risk score of %d/100 (%s). High-priority verified findings represent immediate actionable exposures.",
+			rep.Summary.VerifiedCount, rep.Summary.DetectedCount, rep.Summary.ObservedCount, rep.Summary.NotExposedCount, riskScore, riskLevel)
 	}
 
 	return CommercialExecutiveSummary{
@@ -1026,15 +1134,20 @@ func buildExecutiveSummary(
 		ScopeSummary:            fmt.Sprintf("Authorized web security evaluation of %s spanning %d targets.", target, len(rep.Targets)),
 		CompletionStatus:        status,
 		AssetsDiscoveredCount:   attackSurface.TotalAssets,
-		FindingsDetectedCount:   len(detected),
-		FindingsVerifiedCount:   len(verified),
-		FindingsUnverifiedCount: len(detected),
-		ObservationsCount:       len(observations),
+		FrontendAssetsCount:     attackSurface.FrontendAssetsCount,
+		APIEndpointsCount:       attackSurface.APIEndpointsCount,
+		WebRoutesCount:          attackSurface.WebRoutesCount,
+		FindingsDetectedCount:   rep.Summary.DetectedCount,
+		FindingsVerifiedCount:   rep.Summary.VerifiedCount,
+		FindingsUnverifiedCount: rep.Summary.NotVerifiedCount,
+		ObservationsCount:       rep.Summary.ObservedCount,
+		NotExposedChecksCount:   rep.Summary.NotExposedCount,
 		InconclusiveChecksCount: rep.Summary.InconclusiveCount,
 		NotAssessedChecksCount:  rep.Summary.NotVerifiedCount,
 		SeverityDistribution:    sevDist,
-		RiskScore:               rep.RiskScore,
-		RiskLevel:               rep.RiskLevel,
+		RiskScore:               riskScore,
+		RiskScoreAvailable:      isScoreAvailable,
+		RiskLevel:               riskLevel,
 		AttackSurfaceHighlights: highlights,
 		KeyConcerns:             keyConcerns,
 		AssessmentLimitations:   limitations,

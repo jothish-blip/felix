@@ -45,6 +45,9 @@
         "title": "Supabase Service Role Key",
         "severity": "CRITICAL",
         "confidence": "HIGH",
+        "verification": {
+          "status": "VERIFIED"
+        },
         "target": "https://example.com",
         "endpoint": "https://example.com/bundle.js",
         "source": "secrets"
@@ -74,6 +77,9 @@
         "title": "Open Firebase Realtime Database",
         "severity": "HIGH",
         "confidence": "HIGH",
+        "verification": {
+          "status": "VERIFIED"
+        },
         "target": "https://example.com",
         "endpoint": "https://project.firebaseio.com",
         "source": "cloud"
@@ -94,6 +100,9 @@
         "title": "Exposed Environment Configuration (.env)",
         "severity": "CRITICAL",
         "confidence": "HIGH",
+        "verification": {
+          "status": "VERIFIED"
+        },
         "target": "https://example.com",
         "endpoint": "https://example.com/.env",
         "source": "api"
@@ -124,6 +133,9 @@
         "title": "CORS Origin Reflection with Credentials",
         "severity": "HIGH",
         "confidence": "HIGH",
+        "verification": {
+          "status": "VERIFIED"
+        },
         "target": "https://example.com",
         "endpoint": "https://example.com/api/login",
         "source": "api"
