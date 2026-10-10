@@ -33,6 +33,7 @@ func runScan(args []string) int {
 		jsonBare       bool
 		htmlStr        string
 		outStr         string
+		sarifPath      string
 		quiet          bool
 		verbose        bool
 		inputFile      string
@@ -201,6 +202,21 @@ func runScan(args []string) int {
 		}
 		if strings.HasPrefix(arg, "--json=") {
 			jsonPath = strings.TrimPrefix(arg, "--json=")
+			continue
+		}
+
+		// --sarif [optional file path]
+		if arg == "--sarif" {
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") && !strings.Contains(args[i+1], "://") && (strings.HasSuffix(strings.ToLower(args[i+1]), ".sarif") || strings.HasSuffix(strings.ToLower(args[i+1]), ".json")) {
+				i++
+				sarifPath = args[i]
+			} else {
+				sarifPath = "scan-result.sarif"
+			}
+			continue
+		}
+		if strings.HasPrefix(arg, "--sarif=") {
+			sarifPath = strings.TrimPrefix(arg, "--sarif=")
 			continue
 		}
 
@@ -603,7 +619,16 @@ func runScan(args []string) int {
 		exported = append(exported, fmt.Sprintf("  HTML Report:        %s", htmlStr))
 	}
 
-	// 3. Export via canonical --export flag (single or comma-separated HTML/JSON)
+	// 3. Export SARIF if requested via --sarif
+	if sarifPath != "" {
+		if err := report.WriteSARIF(rep, sarifPath); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Failed to export SARIF report to %s: %v\n", sarifPath, err)
+			return 2
+		}
+		exported = append(exported, fmt.Sprintf("  SARIF Report:       %s", sarifPath))
+	}
+
+	// 4. Export via canonical --export flag (single or comma-separated HTML/JSON/SARIF)
 	if exportStr != "" {
 		files := strings.Split(exportStr, ",")
 		for _, f := range files {
@@ -611,12 +636,19 @@ func runScan(args []string) int {
 			if f == "" {
 				continue
 			}
-			if strings.HasSuffix(strings.ToLower(f), ".html") {
+			lowerF := strings.ToLower(f)
+			if strings.HasSuffix(lowerF, ".html") {
 				if err := report.WriteHTML(rep, f); err != nil {
 					fmt.Fprintf(os.Stderr, "[-] Failed to export HTML to %s: %v\n", f, err)
 					return 2
 				}
 				exported = append(exported, fmt.Sprintf("  HTML Report:        %s", f))
+			} else if strings.HasSuffix(lowerF, ".sarif") {
+				if err := report.WriteSARIF(rep, f); err != nil {
+					fmt.Fprintf(os.Stderr, "[-] Failed to export SARIF to %s: %v\n", f, err)
+					return 2
+				}
+				exported = append(exported, fmt.Sprintf("  SARIF Report:       %s", f))
 			} else {
 				if err := report.WriteJSON(rep, f); err != nil {
 					fmt.Fprintf(os.Stderr, "[-] Failed to export JSON to %s: %v\n", f, err)
@@ -662,8 +694,9 @@ func printScanHelp() {
 	fmt.Println("  --scope <mode>              Crawl scope mode (same-origin, subdomains, explicit) [default: same-origin]")
 	fmt.Println("  --max-assets <int>          Maximum number of assets to process/discover")
 	fmt.Println("  --max-response-size <size>  Maximum asset response size (e.g. 10MB, 512KB) [default: 10MB]")
-	fmt.Println("  --export <file>             Export assessment report to HTML or JSON file")
+	fmt.Println("  --export <file>             Export assessment report to HTML, JSON, or SARIF file")
 	fmt.Println("  --json [file]               Save machine-readable scan result as JSON (or output to stdout)")
+	fmt.Println("  --sarif [file]              Export assessment report to SARIF 2.1.0 format")
 	fmt.Println("  --quiet, -q                 Suppress normal terminal output and banners")
 	fmt.Println("  --verbose, -v               Enable detailed operational output")
 	fmt.Println("  -l <file>                   Path to file containing target URLs (one per line)")

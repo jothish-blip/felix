@@ -18,6 +18,7 @@ func runReport(args []string) int {
 	var (
 		htmlPath   string
 		jsonPath   string
+		sarifPath  string
 		verbose    bool
 		silent     bool
 		commercial bool
@@ -25,6 +26,7 @@ func runReport(args []string) int {
 
 	fs.StringVar(&htmlPath, "html", "", "Export report to HTML file")
 	fs.StringVar(&jsonPath, "json", "", "Export report to JSON file")
+	fs.StringVar(&sarifPath, "sarif", "", "Export report to SARIF 2.1.0 file")
 	fs.BoolVar(&verbose, "v", false, "Verbose terminal output")
 	fs.BoolVar(&verbose, "verbose", false, "Verbose terminal output")
 	fs.BoolVar(&silent, "s", false, "Silent / minimal terminal output")
@@ -49,7 +51,7 @@ func runReport(args []string) int {
 			if !strings.Contains(arg, "=") && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
 				flagName := strings.TrimLeft(arg, "-")
 				switch flagName {
-				case "html", "json":
+				case "html", "json", "sarif":
 					i++
 					flagArgs = append(flagArgs, args[i])
 				}
@@ -108,6 +110,15 @@ func runReport(args []string) int {
 			return 2
 		}
 		exported = append(exported, fmt.Sprintf("  JSON: %s", jsonPath))
+	}
+
+	// Export SARIF if requested
+	if sarifPath != "" {
+		if err := report.WriteSARIF(rep, sarifPath); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Failed to write SARIF report to %s: %v\n", sarifPath, err)
+			return 2
+		}
+		exported = append(exported, fmt.Sprintf("  SARIF 2.1.0: %s", sarifPath))
 	}
 
 	// Print terminal output unless silent
