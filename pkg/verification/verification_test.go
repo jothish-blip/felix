@@ -66,16 +66,21 @@ func TestVerification_StatusCorrectnessAllFiveStatuses(t *testing.T) {
 			expectedStatus: StatusVerified,
 		},
 		{
-			name: "Not Exposed: Access denied by authorization boundary (HTTP 401)",
+			name: "Not Exposed: Specifically tested unauthenticated bypass disproved with negative evidence",
 			finding: report.Finding{
 				ID:       "FND-04",
-				Title:    "Protected Admin Endpoint",
+				Title:    "Unauthenticated Access Bypass on Admin Endpoint",
 				Category: "AUTH",
 				Target:   "https://example.com",
 				Endpoint: "https://example.com/admin/settings",
 				EvidenceDetails: report.EvidenceDetails{
-					HTTPStatus:  401,
-					Observation: "Access denied by authentication",
+					HTTPStatus:       401,
+					Observation:      "Access denied by authentication",
+					NegativeEvidence: "Direct unauthenticated request to /admin/settings returned HTTP 401 Unauthorized",
+					Details: map[string]string{
+						"unauth_bypass_tested": "true",
+						"caller_identity":      "anonymous",
+					},
 				},
 			},
 			expectedStatus: StatusNotExposed,
@@ -416,12 +421,17 @@ func TestVerification_SummaryAndRateCalculations(t *testing.T) {
 		},
 		{
 			ID:       "F-3",
-			Title:    "Admin Route 401",
+			Title:    "Unauthenticated Access Bypass on Admin Endpoint",
 			Category: "AUTH",
 			Target:   "https://example.com",
 			Endpoint: "https://example.com/admin",
 			EvidenceDetails: report.EvidenceDetails{
-				HTTPStatus: 401,
+				HTTPStatus:       401,
+				NegativeEvidence: "Direct unauthenticated request to /admin returned HTTP 401 Unauthorized",
+				Details: map[string]string{
+					"unauth_bypass_tested": "true",
+					"caller_identity":      "anonymous",
+				},
 			},
 		},
 	}
@@ -445,4 +455,389 @@ func TestVerification_SummaryAndRateCalculations(t *testing.T) {
 	if summary.VerificationRateTotal <= 0 {
 		t.Fatalf("expected positive VerificationRateTotal, got %f", summary.VerificationRateTotal)
 	}
+}
+
+func TestVerification_ClaimSpecificNegativeProofRegressions(t *testing.T) {
+	ctx := context.Background()
+	checker := NewSafetyChecker(SafetyOptions{
+		IsAuthorized: true,
+		InScopeFunc:  func(s string) bool { return true },
+	})
+	engine := NewEngine(checker)
+
+	// 1. A generic 401 does not automatically produce NOT_EXPOSED
+	t.Run("1. Generic 401 does not produce NOT_EXPOSED", func(t *testing.T) {
+		f := report.Finding{
+			ID:       "REG-401-01",
+			Title:    "Discovered Protected Route",
+			Category: "DISCOVERY",
+			Target:   "https://example.com",
+			Endpoint: "https://example.com/api/admin",
+			EvidenceDetails: report.EvidenceDetails{
+				HTTPStatus: 401, // Generic 401 without specific tested negative claim
+			},
+		}
+		res := engine.VerifyFinding(ctx, f)
+		if res.Status == StatusNotExposed {
+			t.Fatalf("VIOLATION: generic 401 produced NOT_EXPOSED!")
+		}
+		if res.Status != StatusNotVerified {
+			t.Fatalf("expected NOT_VERIFIED, got %s", res.Status)
+		}
+
+		// Also test under AUTH category
+		fAuth := report.Finding{
+			ID:       "REG-401-02",
+			Title:    "Authentication Endpoint Observed",
+			Category: "AUTH",
+			Target:   "https://example.com",
+			Endpoint: "https://example.com/login",
+			EvidenceDetails: report.EvidenceDetails{
+				HTTPStatus: 401, // Generic 401 without unauth-bypass claim or negative evidence
+			},
+		}
+		resAuth := engine.VerifyFinding(ctx, fAuth)
+		if resAuth.Status == StatusNotExposed {
+			t.Fatalf("VIOLATION: generic 401 in AUTH produced NOT_EXPOSED!")
+		}
+		if resAuth.Status != StatusNotVerified {
+			t.Fatalf("expected NOT_VERIFIED, got %s", resAuth.Status)
+		}
+	})
+
+	// 2. A generic 403 does not automatically produce NOT_EXPOSED
+	t.Run("2. Generic 403 does not produce NOT_EXPOSED", func(t *testing.T) {
+		f := report.Finding{
+			ID:       "REG-403-01",
+			Title:    "Restricted Resource",
+			Category: "DISCOVERY",
+			Target:   "https://example.com",
+			Endpoint: "https://example.com/internal",
+			EvidenceDetails: report.EvidenceDetails{
+				HTTPStatus: 403,
+			},
+		}
+		res := engine.VerifyFinding(ctx, f)
+		if res.Status == StatusNotExposed {
+			t.Fatalf("VIOLATION: generic 403 produced NOT_EXPOSED!")
+		}
+		if res.Status != StatusNotVerified {
+			t.Fatalf("expected NOT_VERIFIED, got %s", res.Status)
+		}
+
+		// In BOLA category without comparative evidence:
+		fAuthz := report.Finding{
+			ID:       "REG-403-02",
+			Title:    "BOLA Candidate Resource",
+			Category: "BOLA",
+			Target:   "https://example.com",
+			Endpoint: "https://example.com/api/v1/orders/99",
+			EvidenceDetails: report.EvidenceDetails{
+				HTTPStatus: 403, // Generic 403 without comparative tenant evidence
+			},
+		}
+		resAuthz := engine.VerifyFinding(ctx, fAuthz)
+		if resAuthz.Status == StatusNotExposed {
+			t.Fatalf("VIOLATION: generic 403 in BOLA produced NOT_EXPOSED!")
+		}
+		if resAuthz.Status != StatusNotVerified {
+			t.Fatalf("expected NOT_VERIFIED, got %s", resAuthz.Status)
+		}
+	})
+
+	// 3. A 404 does not automatically disprove a vulnerability
+	t.Run("3. HTTP 404 does not automatically disprove a vulnerability", func(t *testing.T) {
+		fTraversal := report.Finding{
+			ID:       "REG-404-01",
+			Title:    "Directory Traversal Probe",
+			Category: "TRAVERSAL",
+			Target:   "https://example.com",
+			Endpoint: "https://example.com/files?path=../../etc/passwd",
+			EvidenceDetails: report.EvidenceDetails{
+				HTTPStatus: 404, // 404 Not Found
+			},
+		}
+		res := engine.VerifyFinding(ctx, fTraversal)
+		if res.Status == StatusNotExposed {
+			t.Fatalf("VIOLATION: 404 produced NOT_EXPOSED on web vulnerability!")
+		}
+		if res.Status != StatusNotVerified {
+			t.Fatalf("expected NOT_VERIFIED, got %s", res.Status)
+		}
+
+		// Also on discovery exposure
+		fExposure := report.Finding{
+			ID:       "REG-404-02",
+			Title:    "Public .env Config Claim",
+			Category: "EXPOSURE",
+			Target:   "https://example.com",
+			Endpoint: "https://example.com/.env",
+			EvidenceDetails: report.EvidenceDetails{
+				HTTPStatus: 404,
+			},
+		}
+		resExposure := engine.VerifyFinding(ctx, fExposure)
+		if resExposure.Status == StatusNotExposed {
+			t.Fatalf("VIOLATION: 404 produced NOT_EXPOSED on configuration exposure claim!")
+		}
+		if resExposure.Status != StatusNotVerified {
+			t.Fatalf("expected NOT_VERIFIED, got %s", resExposure.Status)
+		}
+	})
+
+	// 4. A cloud storage access-denied response cannot establish that the entire resource is secure
+	t.Run("4. Cloud access-denied cannot establish entire resource is secure", func(t *testing.T) {
+		// Generic 403 without specific anonymous bucket listing verification
+		fGenericCloud := report.Finding{
+			ID:       "REG-CLOUD-01",
+			Title:    "Cloud IAM Policy Inspection",
+			Category: "CLOUD_STORAGE",
+			Target:   "https://example.com",
+			Endpoint: "https://mybucket.s3.amazonaws.com/private/file.txt",
+			Evidence: "AccessDenied (HTTP 403)",
+			EvidenceDetails: report.EvidenceDetails{
+				HTTPStatus: 403,
+			},
+		}
+		res := engine.VerifyFinding(ctx, fGenericCloud)
+		if res.Status == StatusNotExposed {
+			t.Fatalf("VIOLATION: generic cloud access-denied produced NOT_EXPOSED!")
+		}
+		if res.Status != StatusNotVerified {
+			t.Fatalf("expected NOT_VERIFIED, got %s", res.Status)
+		}
+
+		// Even when claim-specific anonymous listing IS verified as denied:
+		fSpecificBucket := report.Finding{
+			ID:       "REG-CLOUD-02",
+			Title:    "Anonymous Public Bucket Listing",
+			Category: "CLOUD_STORAGE",
+			Target:   "https://example.com",
+			Endpoint: "https://mybucket.s3.amazonaws.com/?list-type=2",
+			Evidence: "AccessDenied",
+			EvidenceDetails: report.EvidenceDetails{
+				HTTPStatus:       403,
+				NegativeEvidence: "Anonymous GET / returned 403 AccessDenied",
+				Details: map[string]string{
+					"access_denied_confirmed": "true",
+				},
+			},
+		}
+		resSpecific := engine.VerifyFinding(ctx, fSpecificBucket)
+		if resSpecific.Status != StatusNotExposed {
+			t.Fatalf("expected NOT_EXPOSED for properly scoped bucket listing claim, got %s", resSpecific.Status)
+		}
+		// Invariant: MUST record limitations stating whole bucket/account is not proven secure
+		if len(resSpecific.Limitations) == 0 {
+			t.Fatalf("expected limitations explaining narrow scope of cloud negative proof")
+		}
+		limitationFound := false
+		for _, lim := range resSpecific.Limitations {
+			if strings.Contains(strings.ToLower(lim), "strictly limited") || strings.Contains(strings.ToLower(lim), "other bucket permissions") {
+				limitationFound = true
+				break
+			}
+		}
+		if !limitationFound {
+			t.Fatalf("expected limitation stating cloud verification is strictly limited to tested request: %v", resSpecific.Limitations)
+		}
+	})
+
+	// 5. Missing comparative authorization evidence results in NOT_VERIFIED
+	t.Run("5. Missing comparative authorization evidence results in NOT_VERIFIED", func(t *testing.T) {
+		fMissingBaseline := report.Finding{
+			ID:       "REG-BOLA-01",
+			Title:    "Broken Object Level Authorization",
+			Category: "BOLA",
+			Target:   "https://example.com",
+			Endpoint: "https://example.com/api/v1/documents/456",
+			Evidence: `{"doc_id": 456}`,
+			EvidenceDetails: report.EvidenceDetails{
+				HTTPStatus: 200,
+				Details: map[string]string{
+					"resource_id": "456",
+					// Missing owner_identity and baseline_accessible!
+					"caller_identity": "attacker_user",
+				},
+			},
+		}
+		res := engine.VerifyFinding(ctx, fMissingBaseline)
+		if res.Status == StatusVerified {
+			t.Fatalf("VIOLATION: missing comparative evidence produced VERIFIED!")
+		}
+		if res.Status != StatusNotVerified {
+			t.Fatalf("expected NOT_VERIFIED, got %s", res.Status)
+		}
+		if !strings.Contains(res.FailureReason, "Missing comparative") {
+			t.Fatalf("expected failure reason mentioning comparative evidence, got %s", res.FailureReason)
+		}
+	})
+
+	// 6. A properly scoped negative verification can still return NOT_EXPOSED when its required criteria pass
+	t.Run("6. Properly scoped negative verification returns NOT_EXPOSED", func(t *testing.T) {
+		fAuth := report.Finding{
+			ID:       "REG-SCOPED-01",
+			Title:    "Unauthenticated Access Bypass on Internal API",
+			Category: "AUTH",
+			Target:   "https://example.com",
+			Endpoint: "https://example.com/api/internal/metrics",
+			EvidenceDetails: report.EvidenceDetails{
+				HTTPStatus:       401,
+				Observation:      "Authentication barrier enforced",
+				NegativeEvidence: "Anonymous request denied: HTTP 401 Unauthorized",
+				Details: map[string]string{
+					"unauth_bypass_tested": "true",
+					"caller_identity":      "anonymous",
+				},
+			},
+		}
+		resAuth := engine.VerifyFinding(ctx, fAuth)
+		if resAuth.Status != StatusNotExposed {
+			t.Fatalf("expected NOT_EXPOSED for scoped negative auth check, got %s", resAuth.Status)
+		}
+
+		// Also properly scoped comparative BOLA negative verification
+		fAuthz := report.Finding{
+			ID:       "REG-SCOPED-02",
+			Title:    "BOLA / Cross-Tenant Access Attempt",
+			Category: "BOLA",
+			Target:   "https://example.com",
+			Endpoint: "https://example.com/api/v1/invoices/inv-001",
+			EvidenceDetails: report.EvidenceDetails{
+				HTTPStatus:       403,
+				NegativeEvidence: "Tenant B denied access to Tenant A's invoice: HTTP 403 Forbidden",
+				Details: map[string]string{
+					"resource_id":           "inv-001",
+					"owner_identity":        "tenant_a",
+					"baseline_accessible":   "true",
+					"unauthorized_identity": "tenant_b",
+					"isolation_verified":    "true",
+				},
+			},
+		}
+		resAuthz := engine.VerifyFinding(ctx, fAuthz)
+		if resAuthz.Status != StatusNotExposed {
+			t.Fatalf("expected NOT_EXPOSED for comparative negative BOLA check, got %s", resAuthz.Status)
+		}
+	})
+
+	// 7. Contradictory evidence without conclusive negative proof results in NOT_VERIFIED
+	t.Run("7. Contradictory evidence without conclusive negative proof produces NOT_VERIFIED", func(t *testing.T) {
+		f := report.Finding{
+			ID:       "REG-CONTRA-01",
+			Title:    "Publicly Accessible Configuration",
+			Category: "EXPOSURE",
+			Target:   "https://example.com",
+			Endpoint: "https://example.com/config.json",
+			Evidence: "Claimed exposed",
+			EvidenceDetails: report.EvidenceDetails{
+				HTTPStatus:  404, // Contradicts claim of exposure
+				Observation: "Endpoint returned 404 Not Found",
+			},
+		}
+		res := engine.VerifyFinding(ctx, f)
+		if res.Status == StatusNotExposed {
+			t.Fatalf("VIOLATION: contradictory evidence alone produced NOT_EXPOSED!")
+		}
+		if res.Status != StatusNotVerified {
+			t.Fatalf("expected NOT_VERIFIED, got %s", res.Status)
+		}
+	})
+
+	// 8. Only evidence satisfying all mandatory criteria can produce VERIFIED
+	t.Run("8. Only evidence satisfying all mandatory criteria produces VERIFIED", func(t *testing.T) {
+		// Finding claiming BOLA where resource leak is unconfirmed
+		f := report.Finding{
+			ID:       "REG-MAND-01",
+			Title:    "BOLA with Incomplete Criteria",
+			Category: "BOLA",
+			Target:   "https://example.com",
+			Endpoint: "https://example.com/api/v1/users/10",
+			Evidence: "", // Empty evidence!
+			EvidenceDetails: report.EvidenceDetails{
+				HTTPStatus: 200,
+				Details: map[string]string{
+					"resource_id":           "10",
+					"owner_identity":        "user_1",
+					"baseline_accessible":   "true",
+					"unauthorized_identity": "user_2",
+					// "cross_tenant_data_confirmed" is missing!
+				},
+			},
+		}
+		res := engine.VerifyFinding(ctx, f)
+		if res.Status == StatusVerified {
+			t.Fatalf("CRITICAL INVARIANT VIOLATION: incomplete mandatory criteria produced VERIFIED!")
+		}
+		if res.Status != StatusNotVerified {
+			t.Fatalf("expected NOT_VERIFIED, got %s", res.Status)
+		}
+	})
+
+	// 9. Confidence penalties alone cannot change the verification status
+	t.Run("9. Confidence penalties alone cannot change verification status", func(t *testing.T) {
+		// Test ComputeConfidence directly: contradiction penalty halves score but does not change status
+		confRes := ComputeConfidence(
+			report.ConfidenceHigh,
+			ConfidenceLow,
+			StatusNotVerified,
+			true, // Contradiction!
+			false,
+			false,
+		)
+		if confRes.Score >= 50 {
+			t.Fatalf("expected penalized score < 50, got %d", confRes.Score)
+		}
+		if confRes.OverallConfidence != ConfidenceLow {
+			t.Fatalf("expected overall confidence LOW due to penalty, got %s", confRes.OverallConfidence)
+		}
+		// The status supplied to ComputeConfidence was StatusNotVerified; score penalty did not force NOT_EXPOSED or VERIFIED
+	})
+
+	// 10. Existing synthetic-fixture labels, evidence provenance, and scope enforcement remain intact
+	t.Run("10. Synthetic fixture labels, provenance, and scope enforcement intact", func(t *testing.T) {
+		// Scope block
+		checkerScoped := NewSafetyChecker(SafetyOptions{
+			IsAuthorized: true,
+			InScopeFunc:  func(u string) bool { return strings.Contains(u, "allowed.com") },
+		})
+		engineScoped := NewEngine(checkerScoped)
+		fOutOfScope := report.Finding{
+			ID:       "REG-SCOPE-01",
+			Title:    "Out of Scope Endpoint",
+			Category: "AUTH",
+			Target:   "https://forbidden.org",
+			Endpoint: "https://forbidden.org/api",
+		}
+		resScope := engineScoped.VerifyFinding(ctx, fOutOfScope)
+		if resScope.SafetyDecision != DecisionBlocked {
+			t.Fatalf("expected BLOCKED, got %s", resScope.SafetyDecision)
+		}
+		if resScope.Status != StatusNotVerified {
+			t.Fatalf("expected NOT_VERIFIED for scope-blocked finding, got %s", resScope.Status)
+		}
+
+		// Synthetic fixture marker
+		fSynthetic := report.Finding{
+			ID:       "REG-SYNTH-01",
+			Title:    "Synthetic Test Finding",
+			Category: "EXPOSURE",
+			Target:   "https://allowed.com",
+			Endpoint: "https://allowed.com/.env",
+			Evidence: "[SYNTHETIC FIXTURE] DB_PASS=test",
+			EvidenceDetails: report.EvidenceDetails{
+				HTTPStatus: 200,
+			},
+			Verification: report.VerificationRecord{
+				SyntheticFixture: true,
+			},
+		}
+		resSynth := engineScoped.VerifyFinding(ctx, fSynthetic)
+		if !resSynth.SyntheticFixture {
+			t.Fatalf("expected SyntheticFixture=true on verification result")
+		}
+		if !strings.Contains(resSynth.ConfidenceRationale, "[SYNTHETIC FIXTURE") {
+			t.Fatalf("expected [SYNTHETIC FIXTURE] in confidence rationale: %s", resSynth.ConfidenceRationale)
+		}
+	})
 }

@@ -61,11 +61,42 @@ func (bp *BasePolicy) createResult(
 		}
 	}
 
-	hasContradiction := false
+	// Status invariants:
+	// 1. VERIFIED strictly requires all mandatory criteria to pass
+	if status == StatusVerified && !mandatoryPassed {
+		status = StatusNotVerified
+		if failureReason == "" {
+			failureReason = "Mandatory proof criteria not satisfied"
+		}
+	}
+
+	// 2. NOT_EXPOSED strictly requires applicable negative criteria to pass
+	negativePassed := false
 	for _, c := range criteria {
 		if strings.Contains(c.CriterionID, "NEG") && c.Status == CriterionPassed {
-			hasContradiction = true
+			negativePassed = true
 			break
+		}
+	}
+	if status == StatusNotExposed && !negativePassed {
+		status = StatusNotVerified
+		if failureReason == "" {
+			failureReason = "Claim-specific negative criteria not satisfied"
+		}
+	}
+
+	// 3. Contradiction detection:
+	// Evidence contradicts original positive claim, but does not establish conclusive negative proof
+	hasContradiction := false
+	if status != StatusNotExposed {
+		if f.EvidenceDetails.HTTPStatus == 404 || (f.EvidenceDetails.HTTPStatus >= 400 && f.EvidenceDetails.HTTPStatus <= 403 && status != StatusVerified) {
+			hasContradiction = true
+		}
+		for _, c := range criteria {
+			if c.Status == CriterionFailed && strings.Contains(strings.ToLower(c.Rationale), "contradict") {
+				hasContradiction = true
+				break
+			}
 		}
 	}
 
@@ -200,23 +231,77 @@ func (p *DiscoveryExposurePolicy) Verify(ctx context.Context, f report.Finding, 
 		), nil
 	}
 
-	// Case 2: Negative evidence (HTTP 401/403 or RLS enforced)
-	if f.EvidenceDetails.HTTPStatus == 401 || f.EvidenceDetails.HTTPStatus == 403 ||
-		strings.Contains(strings.ToLower(f.EvidenceDetails.Observation), "access denied") {
+	// Case 2: Claim-specific negative verification
+	// NOT_EXPOSED is valid ONLY when:
+	// a) The finding specifically claimed public unauthenticated access to an exact file/endpoint
+	// b) The probe specifically tested that claim under anonymous/unauthenticated conditions
+	// c) Documented negative evidence confirms access was denied (401/403)
+	isPublicExposureClaim := strings.Contains(strings.ToLower(f.Title), "public") ||
+		strings.Contains(strings.ToLower(f.Title), "exposed") ||
+		strings.Contains(strings.ToLower(f.Category), "exposure")
+	hasDocumentedNegativeEvidence := f.EvidenceDetails.NegativeEvidence != "" ||
+		(f.EvidenceDetails.Details != nil && f.EvidenceDetails.Details["negative_proof"] == "true")
+	hasAccessDeniedStatus := f.EvidenceDetails.HTTPStatus == 401 || f.EvidenceDetails.HTTPStatus == 403
+
+	if isPublicExposureClaim && hasDocumentedNegativeEvidence && hasAccessDeniedStatus {
 		criteria = append(criteria, CriterionResult{
 			CriterionID: "CRIT-NEG-AUTH-DENIED",
-			Name:        "Access Control Boundary Enforced",
+			Name:        "Specific Resource Access Control Enforced",
 			Status:      CriterionPassed,
-			Evidence:    fmt.Sprintf("HTTP %d received", f.EvidenceDetails.HTTPStatus),
-			Rationale:   "Probe confirmed target denies anonymous unauthenticated access",
+			Evidence:    fmt.Sprintf("HTTP %d received for tested resource", f.EvidenceDetails.HTTPStatus),
+			Rationale:   fmt.Sprintf("Specific unauthenticated access claim for %s was disproved: target returned HTTP %d", f.Endpoint, f.EvidenceDetails.HTTPStatus),
 		})
 
 		return p.createResult(
 			f, StatusNotExposed, "active_probe_boundary_check", true,
 			report.ConfidenceHigh, ConfidenceHigh, criteria,
-			"Access denied by authentication or authorization boundary",
-			fmt.Sprintf("Access denied (HTTP %d)", f.EvidenceDetails.HTTPStatus),
-			nil, nil, "", "",
+			"Access denied by authentication or authorization boundary for tested resource",
+			fmt.Sprintf("Access denied (HTTP %d) on tested endpoint; does not prove overall application is secure", f.EvidenceDetails.HTTPStatus),
+			[]string{"Anonymous HTTP probe against specific endpoint"},
+			[]string{"Verification strictly limited to tested resource and unauthenticated caller; other endpoints and roles not tested"},
+			"", "",
+			safety, synthetic, start,
+		), nil
+	}
+
+	// Case 3: Contradictory evidence (e.g. 404 Not Found, connection reset)
+	// Contradicts claim of exposure, but HTTP 404 does NOT prove vulnerability is absent or site is secure!
+	if f.EvidenceDetails.HTTPStatus == 404 {
+		criteria = append(criteria, CriterionResult{
+			CriterionID: "CRIT-EXPOSURE-404-CONTRADICTION",
+			Name:        "Endpoint Not Found",
+			Status:      CriterionFailed,
+			Evidence:    "HTTP 404 Not Found",
+			Rationale:   "HTTP 404 contradicts positive exposure claim but does not conclusively disprove vulnerability under negative policy; recorded as NOT_VERIFIED",
+		})
+		return p.createResult(
+			f, StatusNotVerified, "active_get_probe", true,
+			f.Confidence, ConfidenceLow, criteria,
+			"Resource reachable with HTTP 200",
+			"HTTP 404 Not Found returned (contradicts exposure hypothesis without proving negative security)",
+			nil, []string{"Target returned 404; route may be moved, protected, or virtual-host dependent"},
+			"Endpoint returned 404; exposure unverified", "Contradictory response without conclusive negative proof",
+			safety, synthetic, start,
+		), nil
+	}
+
+	// Case 4: Generic 401/403 without specific claim-matching negative criteria
+	// A generic status code alone must NEVER prove an application is secure!
+	if hasAccessDeniedStatus {
+		criteria = append(criteria, CriterionResult{
+			CriterionID: "CRIT-GENERIC-STATUS-INCONCLUSIVE",
+			Name:        "Generic Status Code Evaluation",
+			Status:      CriterionInconclusive,
+			Evidence:    fmt.Sprintf("HTTP %d received", f.EvidenceDetails.HTTPStatus),
+			Rationale:   fmt.Sprintf("HTTP %d observed, but generic status code alone does not disprove exposure claim without documented negative verification criteria", f.EvidenceDetails.HTTPStatus),
+		})
+		return p.createResult(
+			f, StatusNotVerified, "status_inspection", true,
+			f.Confidence, ConfidenceLow, criteria,
+			"Documented negative verification criteria satisfying claim disproof",
+			fmt.Sprintf("Generic HTTP %d observed without documented claim-specific negative evidence", f.EvidenceDetails.HTTPStatus),
+			nil, []string{"Generic status code cannot establish that resource or application is secure"},
+			"Generic status code lacks claim-specific negative proof", "Inconclusive negative evidence",
 			safety, synthetic, start,
 		), nil
 	}
@@ -323,26 +408,8 @@ func (p *AuthenticationPolicy) Verify(ctx context.Context, f report.Finding, che
 
 	var criteria []CriterionResult
 
-	// Negative evidence: access denied (401/403)
-	if f.EvidenceDetails.HTTPStatus == 401 || f.EvidenceDetails.HTTPStatus == 403 {
-		criteria = append(criteria, CriterionResult{
-			CriterionID: "CRIT-NEG-AUTHN-ENFORCED",
-			Name:        "Authentication Barrier Enforced",
-			Status:      CriterionPassed,
-			Evidence:    fmt.Sprintf("HTTP %d returned on protected route", f.EvidenceDetails.HTTPStatus),
-			Rationale:   "Target correctly enforces authentication boundary against unauthenticated requests",
-		})
-		return p.createResult(
-			f, StatusNotExposed, "auth_barrier_check", true,
-			report.ConfidenceHigh, ConfidenceHigh, criteria,
-			"Authentication barrier enforced",
-			fmt.Sprintf("Authentication enforced with HTTP %d", f.EvidenceDetails.HTTPStatus),
-			nil, nil, "", "",
-			safety, synthetic, start,
-		), nil
-	}
-
 	// Cookie attribute gap (e.g. HttpOnly / Secure missing on session cookie)
+	// Evaluated FIRST so cookie flaws are never obscured by an authentication response code
 	isCookieFlaw := strings.Contains(strings.ToLower(f.Title), "cookie") &&
 		(strings.Contains(strings.ToLower(f.Title), "httponly") || strings.Contains(strings.ToLower(f.Title), "samesite") || strings.Contains(strings.ToLower(f.Title), "secure"))
 	if isCookieFlaw && f.EvidenceDetails.Details != nil && f.EvidenceDetails.Details["cookie_name"] != "" {
@@ -360,6 +427,59 @@ func (p *AuthenticationPolicy) Verify(ctx context.Context, f report.Finding, che
 			"Cookie missing required security attributes",
 			[]string{"Response header inspection"}, nil,
 			"", "",
+			safety, synthetic, start,
+		), nil
+	}
+
+	// Claim-specific negative evidence:
+	// A 401/403 proves NOT_EXPOSED ONLY IF:
+	// 1) The finding specifically claimed unauthenticated access bypass on that route
+	// 2) Documented unauthenticated identity context was tested
+	// 3) Documented negative evidence confirms access was denied
+	isUnauthBypassClaim := (strings.Contains(strings.ToLower(f.Title), "unauthenticated") ||
+		strings.Contains(strings.ToLower(f.Title), "bypass") ||
+		strings.Contains(strings.ToLower(f.Category), "unauthenticated")) &&
+		!strings.Contains(strings.ToLower(f.Title), "cookie")
+	hasNegativeEvidence := f.EvidenceDetails.NegativeEvidence != "" ||
+		(f.EvidenceDetails.Details != nil && (f.EvidenceDetails.Details["unauth_bypass_tested"] == "true" || f.EvidenceDetails.Details["auth_enforced"] == "true"))
+	hasAccessDenied := f.EvidenceDetails.HTTPStatus == 401 || f.EvidenceDetails.HTTPStatus == 403
+
+	if isUnauthBypassClaim && hasNegativeEvidence && hasAccessDenied {
+		criteria = append(criteria, CriterionResult{
+			CriterionID: "CRIT-NEG-AUTHN-DISPROVED",
+			Name:        "Authentication Barrier Enforced on Tested Route",
+			Status:      CriterionPassed,
+			Evidence:    fmt.Sprintf("HTTP %d returned on protected route", f.EvidenceDetails.HTTPStatus),
+			Rationale:   fmt.Sprintf("Unauthenticated access bypass claim for %s disproved: target returned HTTP %d", f.Endpoint, f.EvidenceDetails.HTTPStatus),
+		})
+		return p.createResult(
+			f, StatusNotExposed, "auth_barrier_check", true,
+			report.ConfidenceHigh, ConfidenceHigh, criteria,
+			"Authentication barrier enforced on tested endpoint",
+			fmt.Sprintf("Authentication enforced with HTTP %d for unauthenticated caller; does not establish overall authentication system is defect-free", f.EvidenceDetails.HTTPStatus),
+			[]string{"Anonymous/unauthenticated HTTP probe against protected endpoint"},
+			[]string{"Negative verification strictly limited to tested endpoint; other endpoints, credential strength, and token handling not tested"},
+			"", "",
+			safety, synthetic, start,
+		), nil
+	}
+
+	// Generic 401 or 403 without specific unauthenticated bypass claim & negative proof -> NOT_VERIFIED
+	if hasAccessDenied {
+		criteria = append(criteria, CriterionResult{
+			CriterionID: "CRIT-GENERIC-AUTH-STATUS",
+			Name:        "Generic Authentication Status Evaluation",
+			Status:      CriterionInconclusive,
+			Evidence:    fmt.Sprintf("HTTP %d returned", f.EvidenceDetails.HTTPStatus),
+			Rationale:   "HTTP 401/403 observed, but status code alone does not prove authentication system is secure or disprove other auth weaknesses",
+		})
+		return p.createResult(
+			f, StatusNotVerified, "auth_barrier_check", true,
+			f.Confidence, ConfidenceLow, criteria,
+			"Claim-specific negative proof establishing authentication security",
+			fmt.Sprintf("Generic HTTP %d observed without documented unauthenticated bypass disproof", f.EvidenceDetails.HTTPStatus),
+			nil, []string{"Generic status code cannot establish that overall authentication system is secure"},
+			"Generic 401/403 status code does not disprove vulnerability", "Inconclusive authentication status",
 			safety, synthetic, start,
 		), nil
 	}
@@ -450,40 +570,53 @@ func (p *AuthorizationPolicy) Verify(ctx context.Context, f report.Finding, chec
 
 	var criteria []CriterionResult
 
-	// Negative evidence: 403 Forbidden / 401 Unauthorized proves authorization boundary held
-	if f.EvidenceDetails.HTTPStatus == 403 || f.EvidenceDetails.HTTPStatus == 401 {
+	// Check for required comparative differential authorization evidence:
+	// Both negative verification (NOT_EXPOSED) and positive verification (VERIFIED) of BOLA/BFLA
+	// require comparative access evidence establishing:
+	// 1) Target resource identifier
+	// 2) Resource owner identity
+	// 3) Baseline access proof (resource exists and is accessible to owner)
+	// 4) Distinct unauthorized identity context
+	hasResource := f.EvidenceDetails.Details != nil && f.EvidenceDetails.Details["resource_id"] != ""
+	hasOwner := f.EvidenceDetails.Details != nil && (f.EvidenceDetails.Details["owner_identity"] != "" || f.EvidenceDetails.Details["tenant_a"] != "")
+	hasUnauthorizedCaller := f.EvidenceDetails.Details != nil && (f.EvidenceDetails.Details["unauthorized_identity"] != "" || f.EvidenceDetails.Details["tenant_b"] != "" || f.EvidenceDetails.Details["cross_tenant"] == "true")
+	hasBaselineAccess := f.EvidenceDetails.Details != nil && (f.EvidenceDetails.Details["baseline_accessible"] == "true" || f.EvidenceDetails.Details["authorized_status"] == "200")
+
+	hasComparativeEvidence := hasResource && hasOwner && hasUnauthorizedCaller && hasBaselineAccess
+
+	// Case 1: Claim-specific negative verification
+	// Requires FULL comparative differential evidence:
+	// Owner had access, unauthorized caller was specifically denied (403/401), negative evidence documented
+	hasAccessDenied := f.EvidenceDetails.HTTPStatus == 403 || f.EvidenceDetails.HTTPStatus == 401
+	hasNegativeEvidence := f.EvidenceDetails.NegativeEvidence != "" || (f.EvidenceDetails.Details != nil && f.EvidenceDetails.Details["isolation_verified"] == "true")
+
+	if hasComparativeEvidence && hasAccessDenied && hasNegativeEvidence {
 		criteria = append(criteria, CriterionResult{
-			CriterionID: "CRIT-NEG-AUTHZ-DENIED",
-			Name:        "Authorization Boundary Held",
+			CriterionID: "CRIT-NEG-AUTHZ-DIFFERENTIAL-DENIED",
+			Name:        "Differential Authorization Barrier Enforced",
 			Status:      CriterionPassed,
-			Evidence:    fmt.Sprintf("HTTP %d received", f.EvidenceDetails.HTTPStatus),
-			Rationale:   "Target correctly denied unauthorized cross-tenant/cross-role access",
+			Evidence:    fmt.Sprintf("Owner accessed resource; unauthorized caller received HTTP %d", f.EvidenceDetails.HTTPStatus),
+			Rationale:   "Controlled differential test proved unauthorized identity was denied access to existing foreign resource while owner had access",
 		})
 		return p.createResult(
 			f, StatusNotExposed, "differential_authz_probe", true,
 			report.ConfidenceHigh, ConfidenceHigh, criteria,
-			"Access denied (HTTP 403 Forbidden)",
-			fmt.Sprintf("Access denied (HTTP %d)", f.EvidenceDetails.HTTPStatus),
-			nil, nil, "", "",
+			"Access denied (HTTP 403 Forbidden) for unauthorized tenant identity",
+			fmt.Sprintf("Access denied (HTTP %d) for tested unauthorized identity against specific resource; does not prove overall application authorization is defect-free", f.EvidenceDetails.HTTPStatus),
+			[]string{"Controlled differential identity test harness", "Verified resource ownership baseline"},
+			[]string{"Verification strictly limited to tested resource and identity pair; other objects, tenants, or roles not tested"},
+			"", "",
 			safety, synthetic, start,
 		), nil
 	}
 
-	// Mandatory criterion: Comparative differential access
-	// Invariant: BOLA/BFLA requires proof that caller retrieved another tenant's object or exercised unauthorized role
-	hasDifferentialProof := false
-	if f.EvidenceDetails.Details != nil {
-		if f.EvidenceDetails.Details["resource_id"] != "" ||
-			f.EvidenceDetails.Details["cross_tenant"] == "true" ||
-			f.EvidenceDetails.Details["caller_identity"] != "" {
-			hasDifferentialProof = true
-		}
-	}
-	if f.Verification.Status == report.VerificationVerified && f.EvidenceDetails.HTTPStatus == 200 {
-		hasDifferentialProof = true
-	}
+	// Case 2: Positive BOLA/BFLA verification
+	// Requires comparative differential evidence + unauthorized caller accessed foreign object (HTTP 200 + leak)
+	isUnauthorizedAccessSuccess := (f.EvidenceDetails.HTTPStatus == 200 || f.Verification.Status == report.VerificationVerified) &&
+		len(f.Evidence) > 0 &&
+		(f.EvidenceDetails.Details != nil && (f.EvidenceDetails.Details["cross_tenant_data_confirmed"] == "true" || f.EvidenceDetails.Details["cross_tenant"] == "true"))
 
-	if hasDifferentialProof {
+	if hasComparativeEvidence && isUnauthorizedAccessSuccess {
 		criteria = append(criteria, CriterionResult{
 			CriterionID: "CRIT-DIFF-ACCESS",
 			Name:        "Differential Access Demonstration",
@@ -503,28 +636,28 @@ func (p *AuthorizationPolicy) Verify(ctx context.Context, f report.Finding, chec
 			report.ConfidenceHigh, ConfidenceHigh, criteria,
 			"HTTP 403 Forbidden for unauthorized tenant identity",
 			"HTTP 200 OK with cross-tenant object disclosed",
-			[]string{"Differential test identity configured"}, nil,
-			"", "",
+			[]string{"Differential test identity configured", "Resource ownership baseline established"},
+			nil, "", "",
 			safety, synthetic, start,
 		), nil
 	}
 
-	// If missing differential comparison: cannot be VERIFIED! Must be NOT_VERIFIED
+	// Case 3: Missing comparative differential authorization evidence
+	// Invariant: Missing comparative evidence MUST produce NOT_VERIFIED
 	criteria = append(criteria, CriterionResult{
-		CriterionID: "CRIT-DIFF-ACCESS",
-		Name:        "Differential Access Demonstration",
-		Status:      CriterionFailed,
-		Rationale:   "Missing comparative test identity: single request alone cannot prove cross-tenant authorization failure",
+		CriterionID: "CRIT-DIFF-AUTHZ-INCONCLUSIVE",
+		Name:        "Comparative Differential Evidence Audit",
+		Status:      CriterionInconclusive,
+		Evidence:    fmt.Sprintf("HTTP %d received; comparative proof available: %v", f.EvidenceDetails.HTTPStatus, hasComparativeEvidence),
+		Rationale:   "Missing comparative differential authorization evidence (owner baseline, resource ownership, or distinct unauthorized identity); status code alone cannot establish authorization correctness or vulnerability",
 	})
 	return p.createResult(
-		f, StatusNotVerified, "single_probe_evaluation", true,
+		f, StatusNotVerified, "differential_authz_probe", true,
 		f.Confidence, ConfidenceLow, criteria,
-		"Comparative proof showing User A denied access to User B's object",
-		"Only single request observed without comparative identity control",
-		[]string{"Requires two distinct test identities"},
-		[]string{"Controlled secondary test identity not available in current run"},
-		"Lacks comparative tenant authorization proof",
-		"Inconclusive without secondary test identity comparison",
+		"Controlled differential access test with distinct identities and baseline ownership",
+		fmt.Sprintf("Single request response (HTTP %d) without complete comparative differential authorization evidence", f.EvidenceDetails.HTTPStatus),
+		nil, []string{"Comparative test with multi-tenant identity credentials required"},
+		"Missing comparative authorization evidence", "Inconclusive authorization proof",
 		safety, synthetic, start,
 	), nil
 }
@@ -811,6 +944,26 @@ func (p *WebVulnerabilityPolicy) Verify(ctx context.Context, f report.Finding, c
 		), nil
 	}
 
+	// Invariant: HTTP 404 does NOT disprove a web vulnerability!
+	if f.EvidenceDetails.HTTPStatus == 404 {
+		criteria = append(criteria, CriterionResult{
+			CriterionID: "CRIT-WEBVULN-404-INCONCLUSIVE",
+			Name:        "HTTP 404 Status Evaluation",
+			Status:      CriterionFailed,
+			Evidence:    "HTTP 404 Not Found received",
+			Rationale:   "HTTP 404 does not disprove vulnerability; endpoint may be route-dependent or gated; recorded as NOT_VERIFIED",
+		})
+		return p.createResult(
+			f, StatusNotVerified, "webvuln_probe", true,
+			f.Confidence, ConfidenceLow, criteria,
+			"Empirical proof of vulnerability execution",
+			"HTTP 404 Not Found received (does not establish absence of vulnerability)",
+			nil, []string{"Endpoint returned 404; testing inconclusive"},
+			"Endpoint returned 404; vulnerability not disproved", "404 does not disprove vulnerability",
+			safety, synthetic, start,
+		), nil
+	}
+
 	// General fallback for other web vulnerabilities
 	return p.createResult(
 		f, StatusNotVerified, "webvuln_generic_check", true,
@@ -869,23 +1022,79 @@ func (p *CloudSecurityPolicy) Verify(ctx context.Context, f report.Finding, chec
 
 	var criteria []CriterionResult
 
-	// Negative evidence: Access denied (401/403 or RLS enforced)
-	if f.EvidenceDetails.HTTPStatus == 401 || f.EvidenceDetails.HTTPStatus == 403 ||
-		strings.Contains(strings.ToLower(f.Evidence), "access denied") ||
-		strings.Contains(strings.ToLower(f.Category), "access-denied") {
+	// Missing provider credentials or permissions -> Inconclusive (NOT_VERIFIED)
+	if strings.Contains(strings.ToLower(f.Evidence), "missing permissions") ||
+		strings.Contains(strings.ToLower(f.Description), "missing permissions") {
+		criteria = append(criteria, CriterionResult{
+			CriterionID: "CRIT-CLOUD-PERMISSIONS",
+			Name:        "Cloud Audit Permissions",
+			Status:      CriterionInconclusive,
+			Rationale:   "Assessment lacked cloud provider credentials; resource state could not be verified",
+		})
+		return p.createResult(
+			f, StatusNotVerified, "cloud_api_audit", false,
+			f.Confidence, ConfidenceNone, criteria,
+			"Valid cloud audit credentials",
+			"Missing credentials or insufficient IAM permissions",
+			nil, []string{"Cloud provider credentials not configured"},
+			"Missing permissions", "Check inconclusive due to unavailable credentials",
+			safety, synthetic, start,
+		), nil
+	}
+
+	// Claim-specific negative evidence:
+	// A 403 / AccessDenied response proves NOT_EXPOSED ONLY IF:
+	// 1) The finding specifically claimed anonymous public bucket listing or anonymous object exposure on that specific resource
+	// 2) The probe specifically tested anonymous access against that exact resource
+	// 3) Documented negative evidence confirms access was denied (403 AccessDenied)
+	// 4) Narrow scope & limitations explicitly recorded: does NOT prove whole bucket or account is secure!
+	isAnonymousListingClaim := strings.Contains(strings.ToLower(f.Title), "bucket") ||
+		strings.Contains(strings.ToLower(f.Title), "listing") ||
+		strings.Contains(strings.ToLower(f.Title), "public") ||
+		strings.Contains(strings.ToLower(f.Title), "anonymous")
+	hasNegativeEvidence := f.EvidenceDetails.NegativeEvidence != "" ||
+		(f.EvidenceDetails.Details != nil && f.EvidenceDetails.Details["access_denied_confirmed"] == "true")
+	hasAccessDenied := f.EvidenceDetails.HTTPStatus == 403 ||
+		strings.Contains(strings.ToLower(f.Evidence), "accessdenied") ||
+		strings.Contains(strings.ToLower(f.Evidence), "access denied")
+
+	if isAnonymousListingClaim && hasNegativeEvidence && hasAccessDenied {
 		criteria = append(criteria, CriterionResult{
 			CriterionID: "CRIT-NEG-CLOUD-DENIED",
-			Name:        "Cloud Access Barrier Enforced",
+			Name:        "Specific Cloud Resource Access Barrier Enforced",
 			Status:      CriterionPassed,
-			Evidence:    fmt.Sprintf("HTTP %d received", f.EvidenceDetails.HTTPStatus),
-			Rationale:   "Cloud resource access denied by IAM/Bucket policy or Row Level Security",
+			Evidence:    fmt.Sprintf("HTTP 403 AccessDenied received for %s", f.Endpoint),
+			Rationale:   fmt.Sprintf("Anonymous access probe to %s denied by cloud storage policy; specific public listing claim disproved for tested request", f.Endpoint),
 		})
 		return p.createResult(
 			f, StatusNotExposed, "cloud_storage_probe", true,
 			report.ConfidenceHigh, ConfidenceHigh, criteria,
-			"Cloud access denied to anonymous caller",
-			fmt.Sprintf("Access denied (HTTP %d)", f.EvidenceDetails.HTTPStatus),
-			nil, nil, "", "",
+			"Cloud access denied to anonymous caller on tested resource",
+			fmt.Sprintf("Access denied (HTTP 403 AccessDenied) for tested anonymous request to %s; does not establish that all objects, operations, or entire cloud account are secure", f.Endpoint),
+			[]string{"Anonymous read-only cloud storage probe"},
+			[]string{"Negative verification strictly limited to tested request and path; other bucket permissions, ACLs, objects, or authenticated roles may remain exposed"},
+			"", "",
+			safety, synthetic, start,
+		), nil
+	}
+
+	// Generic 401/403 or access-denied without specific claim-matching negative criteria
+	// A cloud storage access-denied response CANNOT establish that the entire resource is secure!
+	if hasAccessDenied {
+		criteria = append(criteria, CriterionResult{
+			CriterionID: "CRIT-GENERIC-CLOUD-STATUS",
+			Name:        "Generic Cloud Access Status Evaluation",
+			Status:      CriterionInconclusive,
+			Evidence:    fmt.Sprintf("Access denied / HTTP %d received", f.EvidenceDetails.HTTPStatus),
+			Rationale:   "Access denied observed on probe, but response alone cannot establish that the entire cloud resource, bucket, or account is secure",
+		})
+		return p.createResult(
+			f, StatusNotVerified, "cloud_storage_probe", true,
+			f.Confidence, ConfidenceLow, criteria,
+			"Claim-specific negative proof establishing cloud resource security",
+			"Access denied observed on single probe; insufficient proof to establish overall cloud resource is secure",
+			nil, []string{"A single access-denied response cannot establish that the entire cloud resource or account is secure"},
+			"Access denied response alone cannot establish resource security", "Inconclusive cloud storage verification",
 			safety, synthetic, start,
 		), nil
 	}
@@ -1075,25 +1284,8 @@ func (p *GenericPolicy) Verify(ctx context.Context, f report.Finding, checker *S
 	synthetic := f.Verification.SyntheticFixture || strings.Contains(f.Evidence, "[SYNTHETIC FIXTURE]")
 	safety := checker.Check(f.Target, f.Endpoint, f.Method, false)
 
-	// If finding was already previously marked NOT_EXPOSED with affirmative negative evidence:
-	if f.Verification.Status == report.VerificationNotExposed {
-		crit := []CriterionResult{
-			{
-				CriterionID: "CRIT-AFFIRMATIVE-DEFENSE",
-				Name:        "Affirmative Protection Documented",
-				Status:      CriterionPassed,
-				Evidence:    f.EvidenceDetails.NegativeEvidence,
-				Rationale:   "Negative evidence proves access control or defensive measure was enforced",
-			},
-		}
-		return p.createResult(
-			f, StatusNotExposed, "defensive_evidence_confirmation", true,
-			report.ConfidenceHigh, ConfidenceHigh, crit,
-			"Protection enforced", "Negative evidence documented",
-			nil, nil, "", "",
-			safety, synthetic, start,
-		), nil
-	}
+	// Generic fallback policy does NOT validate negative claims without a specialized domain policy.
+	// NOT_EXPOSED may be returned only when the specific exposure claim has an applicable negative-verification policy.
 
 	// If finding was already previously verified with direct evidence:
 	if f.Verification.Status == report.VerificationVerified && len(f.Evidence) > 0 {

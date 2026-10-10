@@ -105,10 +105,10 @@ func ComputeConfidence(
 		}
 
 	case StatusNotExposed:
-		// Affirmative negative evidence (e.g. 401/403 or RLS enforced)
-		score = 90
+		// Affirmative negative evidence under claim-specific criteria
+		score = 85
 		overall = ConfidenceHigh
-		rationaleParts = append(rationaleParts, "Status is NOT_EXPOSED: direct probe proved access controls enforced")
+		rationaleParts = append(rationaleParts, "Status is NOT_EXPOSED: specific claim disproved under verified negative criteria")
 
 	case StatusDetected:
 		// Detection without proof: capped at 65, overall cannot be HIGH
