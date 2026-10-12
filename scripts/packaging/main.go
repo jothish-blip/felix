@@ -14,8 +14,13 @@ import (
 
 func main() {
 	version := "2.0.0"
-	if len(os.Args) > 1 && os.Args[1] != "" {
-		version = os.Args[1]
+	linuxAmd64Only := false
+	for _, a := range os.Args[1:] {
+		if a == "--linux-amd64-only" || a == "--linux-only" {
+			linuxAmd64Only = true
+		} else if !strings.HasPrefix(a, "-") && a != "" {
+			version = a
+		}
 	}
 
 	repoRoot, err := findRepoRoot()
@@ -39,22 +44,35 @@ func main() {
 	ldflags := fmt.Sprintf("-s -w -X main.Version=%s -X main.GitCommit=%s -X main.BuildTime=%s -X main.Release=Production", version, commit, buildTime)
 
 	fmt.Println("===========================================================")
-	fmt.Printf(" Building Felix Production Release v%s (%s)\n", version, commit)
+	if linuxAmd64Only {
+		fmt.Printf(" Building Felix Linux amd64 Target v%s (%s)\n", version, commit)
+	} else {
+		fmt.Printf(" Building Felix Production Release v%s (%s)\n", version, commit)
+	}
 	fmt.Println("===========================================================")
 
-	targets := []struct {
+	type target struct {
 		GOOS       string
 		GOARCH     string
 		BinName    string
 		SingleName string
 		Archive    string
 		IsZip      bool
-	}{
-		{"windows", "amd64", "felix.exe", "felix_windows_amd64.exe", fmt.Sprintf("felix_%s_windows_amd64.zip", version), true},
-		{"linux", "amd64", "felix", "felix_linux_amd64", fmt.Sprintf("felix_%s_linux_amd64.tar.gz", version), false},
-		{"linux", "arm64", "felix", "felix_linux_arm64", fmt.Sprintf("felix_%s_linux_arm64.tar.gz", version), false},
-		{"darwin", "amd64", "felix", "felix_darwin_amd64", fmt.Sprintf("felix_%s_darwin_amd64.tar.gz", version), false},
-		{"darwin", "arm64", "felix", "felix_darwin_arm64", fmt.Sprintf("felix_%s_darwin_arm64.tar.gz", version), false},
+	}
+
+	var targets []target
+	if linuxAmd64Only {
+		targets = []target{
+			{"linux", "amd64", "felix", "felix_linux_amd64", fmt.Sprintf("felix_%s_linux_amd64.tar.gz", version), false},
+		}
+	} else {
+		targets = []target{
+			{"windows", "amd64", "felix.exe", "felix_windows_amd64.exe", fmt.Sprintf("felix_%s_windows_amd64.zip", version), true},
+			{"linux", "amd64", "felix", "felix_linux_amd64", fmt.Sprintf("felix_%s_linux_amd64.tar.gz", version), false},
+			{"linux", "arm64", "felix", "felix_linux_arm64", fmt.Sprintf("felix_%s_linux_arm64.tar.gz", version), false},
+			{"darwin", "amd64", "felix", "felix_darwin_amd64", fmt.Sprintf("felix_%s_darwin_amd64.tar.gz", version), false},
+			{"darwin", "arm64", "felix", "felix_darwin_arm64", fmt.Sprintf("felix_%s_darwin_arm64.tar.gz", version), false},
+		}
 	}
 
 	for _, t := range targets {
@@ -126,25 +144,30 @@ func main() {
 	}
 	fmt.Printf("[✓] Created Debian package: %s\n", debAmd64)
 
-	cfgArm64 := DebConfig{
-		Package:      "felix",
-		Version:      version,
-		Architecture: "arm64",
-		Maintainer:   "Jothish <jothishgandham2@gmail.com>",
-		Homepage:     "https://github.com/jothish-blip/felix",
-		Section:      "utils",
-		Priority:     "optional",
-		Description:  "Deterministic web security auditing platform",
-		LongDesc:     "Felix is an evidence-first, non-destructive web security auditing platform written in Go.\nAudits web assets, JavaScript bundles, APIs, and cloud backends without invasive exploits.",
-		BinaryPath:   filepath.Join(distDir, "felix_linux_arm64"),
-		LicensePath:  licensePath,
-		OutputPath:   debArm64,
+	debList := []string{debAmd64}
+
+	if !linuxAmd64Only {
+		cfgArm64 := DebConfig{
+			Package:      "felix",
+			Version:      version,
+			Architecture: "arm64",
+			Maintainer:   "Jothish <jothishgandham2@gmail.com>",
+			Homepage:     "https://github.com/jothish-blip/felix",
+			Section:      "utils",
+			Priority:     "optional",
+			Description:  "Deterministic web security auditing platform",
+			LongDesc:     "Felix is an evidence-first, non-destructive web security auditing platform written in Go.\nAudits web assets, JavaScript bundles, APIs, and cloud backends without invasive exploits.",
+			BinaryPath:   filepath.Join(distDir, "felix_linux_arm64"),
+			LicensePath:  licensePath,
+			OutputPath:   debArm64,
+		}
+		if err := BuildDeb(cfgArm64); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Failed to build arm64 .deb: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("[✓] Created Debian package: %s\n", debArm64)
+		debList = append(debList, debArm64)
 	}
-	if err := BuildDeb(cfgArm64); err != nil {
-		fmt.Fprintf(os.Stderr, "[-] Failed to build arm64 .deb: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("[✓] Created Debian package: %s\n", debArm64)
 
 	// 3. Build APT Repository
 	fmt.Println("\n[*] Building APT Repository & Cryptographic Signatures...")
@@ -157,7 +180,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := BuildAptRepo(aptRepoDir, []string{debAmd64, debArm64}, signer); err != nil {
+	if err := BuildAptRepo(aptRepoDir, debList, signer); err != nil {
 		fmt.Fprintf(os.Stderr, "[-] Failed to build APT repository: %v\n", err)
 		os.Exit(1)
 	}
@@ -183,14 +206,16 @@ func main() {
 	_ = os.WriteFile(filepath.Join(distDir, "SHA256SUMS"), []byte(strings.Join(sumLines, "\n")+"\n"), 0644)
 	fmt.Printf("[✓] SHA256SUMS created with %d artifacts.\n", len(sumLines))
 
-	// 5. Generate Homebrew Formula
-	fmt.Println("\n[*] Generating Homebrew Formula (Formula/felix.rb)...")
-	darwinArm64Hash := hashes[fmt.Sprintf("felix_%s_darwin_arm64.tar.gz", version)]
-	darwinAmd64Hash := hashes[fmt.Sprintf("felix_%s_darwin_amd64.tar.gz", version)]
-	linuxArm64Hash := hashes[fmt.Sprintf("felix_%s_linux_arm64.tar.gz", version)]
 	linuxAmd64Hash := hashes[fmt.Sprintf("felix_%s_linux_amd64.tar.gz", version)]
 
-	brewFormula := fmt.Sprintf(`class Felix < Formula
+	if !linuxAmd64Only {
+		// 5. Generate Homebrew Formula
+		fmt.Println("\n[*] Generating Homebrew Formula (Formula/felix.rb)...")
+		darwinArm64Hash := hashes[fmt.Sprintf("felix_%s_darwin_arm64.tar.gz", version)]
+		darwinAmd64Hash := hashes[fmt.Sprintf("felix_%s_darwin_amd64.tar.gz", version)]
+		linuxArm64Hash := hashes[fmt.Sprintf("felix_%s_linux_arm64.tar.gz", version)]
+
+		brewFormula := fmt.Sprintf(`class Felix < Formula
   desc "Deterministic, non-destructive web security auditing platform"
   homepage "https://github.com/jothish-blip/felix"
   version "%s"
@@ -228,48 +253,49 @@ func main() {
 end
 `, version, version, version, darwinArm64Hash, version, version, darwinAmd64Hash, version, version, linuxArm64Hash, version, version, linuxAmd64Hash, version)
 
-	formulaDir := filepath.Join(distDir, "Formula")
-	_ = os.MkdirAll(formulaDir, 0755)
-	formulaPath := filepath.Join(formulaDir, "felix.rb")
-	_ = os.WriteFile(formulaPath, []byte(brewFormula), 0644)
-	fmt.Printf("[✓] Homebrew formula generated: %s\n", formulaPath)
+		formulaDir := filepath.Join(distDir, "Formula")
+		_ = os.MkdirAll(formulaDir, 0755)
+		formulaPath := filepath.Join(formulaDir, "felix.rb")
+		_ = os.WriteFile(formulaPath, []byte(brewFormula), 0644)
+		fmt.Printf("[✓] Homebrew formula generated: %s\n", formulaPath)
 
-	// Also generate update.json
-	updateJSON := map[string]any{
-		"product": "felix",
-		"channel": "stable",
-		"version": version,
-		"release": fmt.Sprintf("https://github.com/jothish-blip/felix/releases/tag/v%s", version),
-		"assets": map[string]any{
-			"windows-amd64": map[string]any{
-				"archive": fmt.Sprintf("felix_%s_windows_amd64.zip", version),
-				"sha256":  hashes[fmt.Sprintf("felix_%s_windows_amd64.zip", version)],
-				"signed":  false,
+		// Also generate update.json
+		updateJSON := map[string]any{
+			"product": "felix",
+			"channel": "stable",
+			"version": version,
+			"release": fmt.Sprintf("https://github.com/jothish-blip/felix/releases/tag/v%s", version),
+			"assets": map[string]any{
+				"windows-amd64": map[string]any{
+					"archive": fmt.Sprintf("felix_%s_windows_amd64.zip", version),
+					"sha256":  hashes[fmt.Sprintf("felix_%s_windows_amd64.zip", version)],
+					"signed":  false,
+				},
+				"linux-amd64": map[string]any{
+					"archive": fmt.Sprintf("felix_%s_linux_amd64.tar.gz", version),
+					"sha256":  linuxAmd64Hash,
+				},
+				"linux-arm64": map[string]any{
+					"archive": fmt.Sprintf("felix_%s_linux_arm64.tar.gz", version),
+					"sha256":  linuxArm64Hash,
+				},
+				"darwin-amd64": map[string]any{
+					"archive":   fmt.Sprintf("felix_%s_darwin_amd64.tar.gz", version),
+					"sha256":    darwinAmd64Hash,
+					"signed":    false,
+					"notarized": false,
+				},
+				"darwin-arm64": map[string]any{
+					"archive":   fmt.Sprintf("felix_%s_darwin_arm64.tar.gz", version),
+					"sha256":    darwinArm64Hash,
+					"signed":    false,
+					"notarized": false,
+				},
 			},
-			"linux-amd64": map[string]any{
-				"archive": fmt.Sprintf("felix_%s_linux_amd64.tar.gz", version),
-				"sha256":  linuxAmd64Hash,
-			},
-			"linux-arm64": map[string]any{
-				"archive": fmt.Sprintf("felix_%s_linux_arm64.tar.gz", version),
-				"sha256":  linuxArm64Hash,
-			},
-			"darwin-amd64": map[string]any{
-				"archive":   fmt.Sprintf("felix_%s_darwin_amd64.tar.gz", version),
-				"sha256":    darwinAmd64Hash,
-				"signed":    false,
-				"notarized": false,
-			},
-			"darwin-arm64": map[string]any{
-				"archive":   fmt.Sprintf("felix_%s_darwin_arm64.tar.gz", version),
-				"sha256":    darwinArm64Hash,
-				"signed":    false,
-				"notarized": false,
-			},
-		},
+		}
+		updateData, _ := json.MarshalIndent(updateJSON, "", "  ")
+		_ = os.WriteFile(filepath.Join(distDir, "update.json"), updateData, 0644)
 	}
-	updateData, _ := json.MarshalIndent(updateJSON, "", "  ")
-	_ = os.WriteFile(filepath.Join(distDir, "update.json"), updateData, 0644)
 
 	fmt.Println("\n===========================================================")
 	fmt.Printf(" [SUCCESS] Release build v%s complete!\n", version)

@@ -26,6 +26,7 @@ type Config struct {
 	IsAllowed          func(string) bool       `json:"-"`
 	IsExcluded         func(string) bool       `json:"-"`
 	BrowserDiscovery   BrowserDiscoveryOptions `json:"browser_discovery,omitempty"`
+	Progress           func(string)            `json:"-"`
 }
 
 // DefaultConfig provides sensible defaults for web auditing.

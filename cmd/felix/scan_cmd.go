@@ -16,6 +16,7 @@ import (
 	"felix/pkg/crawler"
 	"felix/pkg/report"
 	"felix/pkg/secrets"
+	"felix/pkg/ui"
 )
 
 // runScan executes the "felix scan" subcommand.
@@ -373,6 +374,12 @@ func runScan(args []string) int {
 		}
 	}
 
+	uiProg := ui.New(ui.Options{
+		Writer:   os.Stdout,
+		Quiet:    quiet,
+		JSONMode: jsonBare,
+	})
+
 	// Initialize Crawler & Security Analyzers with validated configuration
 	cConfig := crawler.Config{
 		Concurrency:  concurrencyVal,
@@ -381,6 +388,7 @@ func runScan(args []string) int {
 		MaxAssets:    maxAssetsVal,
 		ScopeMode:    scopeMode,
 		UserAgent:    userAgent,
+		Progress:     uiProg.Callback(),
 	}
 	c := crawler.New(cConfig)
 	detector := secrets.NewDetector()

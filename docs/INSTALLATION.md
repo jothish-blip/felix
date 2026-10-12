@@ -24,14 +24,22 @@ To maintain strict engineering transparency, FELIX tracks the verification state
 
 ## 2. Kali Linux, Debian & Ubuntu Installation (APT)
 
-FELIX distributes signed Debian packages (`.deb`) through the official FELIX APT repository hosted on GitHub Pages:
+FELIX distributes cryptographically signed Debian packages (`.deb`) through the official FELIX APT repository hosted on GitHub Pages:
 - **Repository URL:** `https://jothish-blip.github.io/apt-repo`
 - **Signing Key:** OpenPGP 2048-bit `Felix Security Auditor (Official APT Repository Key)`
-- **Architectures:** `amd64`, `arm64`
+- **Architectures:** `amd64` (and `arm64`)
 
-### Step 1: One-Time Repository Configuration
+### Option A: One-Line Automated Setup (Recommended)
 
-Open your terminal on Kali Linux, Debian, or Ubuntu and execute:
+Run the official repository bootstrap script, which installs the keyring and configures `/etc/apt/sources.list.d/felix.list`:
+
+```bash
+curl -fsSL https://jothish-blip.github.io/apt-repo/setup.sh | sudo bash
+```
+
+### Option B: Manual Step-by-Step Repository Configuration
+
+If you prefer to configure the APT sources manually:
 
 ```bash
 # 1. Ensure prerequisites are installed
@@ -44,29 +52,35 @@ sudo install -m 0755 -d /etc/apt/keyrings
 curl -fsSL https://jothish-blip.github.io/apt-repo/felix-archive-keyring.gpg | sudo tee /etc/apt/keyrings/felix-archive-keyring.gpg > /dev/null
 
 # 4. Set appropriate permissions on the keyring
-sudo chmod a+r /etc/apt/keyrings/felix-archive-keyring.gpg
+sudo chmod 0644 /etc/apt/keyrings/felix-archive-keyring.gpg
 
 # 5. Add the Felix APT source list
-echo "deb [signed-by=/etc/apt/keyrings/felix-archive-keyring.gpg] https://jothish-blip.github.io/apt-repo stable main" | sudo tee /etc/apt/sources.list.d/felix.list > /dev/null
+echo "deb [signed-by=/etc/apt/keyrings/felix-archive-keyring.gpg arch=amd64] https://jothish-blip.github.io/apt-repo stable main" | sudo tee /etc/apt/sources.list.d/felix.list > /dev/null
 ```
 
 ### Step 2: Install FELIX
 
-Once the repository is registered:
+Once the repository is configured:
 
 ```bash
 sudo apt update
 sudo apt install -y felix
 ```
 
-The package installs the binary to `/usr/bin/felix` and registers copyright and manual pages in `/usr/share/doc/felix/`.
+The Debian package automatically installs:
+- Executable binary: `/usr/bin/felix` (mode `0755`)
+- Groff manual page: `/usr/share/man/man1/felix.1.gz`
+- Documentation: `/usr/share/doc/felix/copyright` and `changelog.Debian.gz`
+- Native shell completions:
+  - Bash: `/usr/share/bash-completion/completions/felix`
+  - Zsh: `/usr/share/zsh/vendor-completions/_felix`
+  - Fish: `/usr/share/fish/vendor_completions.d/felix.fish`
 
 ### Step 3: Verify Installation
 
 ```bash
-felix version
-felix --help
-felix scan --help
+felix --version
+felix doctor
 ```
 
 ### Updating FELIX via APT
@@ -75,25 +89,30 @@ Whenever a new version of FELIX is published:
 
 ```bash
 sudo apt update
-sudo apt --only-upgrade install felix
+sudo apt install --only-upgrade felix
 ```
 
-### Uninstalling FELIX via APT
+### Clean Uninstallation & Data Preservation
 
-To remove the package while preserving your scan results:
+FELIX adheres strictly to Debian packaging policy:
+- `sudo apt remove felix` removes system binaries, man pages, and shell completions, but **strictly preserves** your user assessment databases (`~/.felix/assessments.db`), scan reports, and configurations.
+- `sudo apt purge felix` cleans system-level configuration directories (`/etc/felix`) if present.
+
+To completely remove the package and repository configuration:
 
 ```bash
+# Standard removal (user assessment data preserved):
 sudo apt remove felix
-```
 
-To purge the package and remove the source list:
-
-```bash
+# Optional purge and repo cleanup:
 sudo apt purge felix
 sudo rm -f /etc/apt/sources.list.d/felix.list
 sudo rm -f /etc/apt/keyrings/felix-archive-keyring.gpg
 sudo apt update
 ```
+
+> [!NOTE]
+> **Upstream Kali Inclusion**: Immediate installation via bare `sudo apt install felix` on a pristine Kali installation without adding third-party sources requires inclusion in the official Kali package repository (`pkg.kali.org`), which is an upstream distribution submission process. For third-party distribution, the above signed APT repository is the standard Debian approach.
 
 ---
 

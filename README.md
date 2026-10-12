@@ -144,14 +144,16 @@ For full distribution details, APT repository keys, and troubleshooting, see the
 ### Kali Linux, Debian & Ubuntu (APT)
 
 ```bash
-# 1. One-time repository and GPG signing key configuration
-sudo install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://jothish-blip.github.io/apt-repo/felix-archive-keyring.gpg | sudo tee /etc/apt/keyrings/felix-archive-keyring.gpg > /dev/null
-echo "deb [signed-by=/etc/apt/keyrings/felix-archive-keyring.gpg] https://jothish-blip.github.io/apt-repo stable main" | sudo tee /etc/apt/sources.list.d/felix.list > /dev/null
+# Automated setup (installs repository signing key and source list):
+curl -fsSL https://jothish-blip.github.io/apt-repo/setup.sh | sudo bash
 
-# 2. Update and install Felix
+# Install Felix
 sudo apt update
 sudo apt install felix
+
+# Verify installation
+felix --version
+felix doctor
 ```
 
 ### macOS (Homebrew Tap)

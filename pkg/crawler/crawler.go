@@ -207,6 +207,10 @@ func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
 	req.Header.Set("User-Agent", c.config.UserAgent)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 
+	if c.config.Progress != nil {
+		c.config.Progress(fmt.Sprintf("[*] Connecting to target %s...", rawTarget))
+	}
+
 	resp, err := targetClient.Do(req)
 	if err != nil {
 		diag := ClassifyNetworkError(err, rawTarget)
@@ -225,6 +229,10 @@ func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
 		res.Err = diag
 		return res
+	}
+
+	if c.config.Progress != nil {
+		c.config.Progress(fmt.Sprintf("[+] Connected (%d %s) | Ingesting HTML structure...", resp.StatusCode, resp.Status))
 	}
 
 	// Size limit on initial HTML page
@@ -279,6 +287,10 @@ func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
 		toDownload = append(toDownload, da)
 	}
 
+	if c.config.Progress != nil && len(toDownload) > 0 {
+		c.config.Progress(fmt.Sprintf("[*] Ingesting assets (%d discovered across page)...", len(toDownload)))
+	}
+
 	// Phase 1: Download discovered assets
 	for _, da := range toDownload {
 		inScope := scope.IsAllowed(da.URL)
@@ -310,6 +322,10 @@ func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
 
 	wg.Wait()
 
+	if c.config.Progress != nil {
+		c.config.Progress(fmt.Sprintf("[+] Ingested %d asset(s) in scope", len(assets)))
+	}
+
 	// Phase 2: Source map discovery from downloaded JavaScript assets
 	var sourceMapJobs []string
 	if c.config.MaxAssets <= 0 || len(assets) < c.config.MaxAssets {
@@ -333,6 +349,10 @@ func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
 				}
 			}
 		}
+	}
+
+	if c.config.Progress != nil && len(sourceMapJobs) > 0 {
+		c.config.Progress(fmt.Sprintf("[*] Inspecting %d source map reference(s)...", len(sourceMapJobs)))
 	}
 
 	// Download discovered source maps

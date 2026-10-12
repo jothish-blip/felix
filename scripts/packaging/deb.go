@@ -45,23 +45,59 @@ func BuildDeb(cfg DebConfig) error {
 		return fmt.Errorf("reading binary %s: %w", cfg.BinaryPath, err)
 	}
 
-	// Calculate installed size in KB
-	installedSizeKB := (len(binData) + 1023) / 1024
+	now := time.Now().UTC()
+
+	// Copyright doc
+	copyrightContent := []byte(fmt.Sprintf("Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/\nUpstream-Name: %s\nSource: %s\n\nFiles: *\nCopyright: 2026 Jothish\nLicense: MIT\n", cfg.Package, cfg.Homepage))
+	if cfg.LicensePath != "" {
+		if lic, err := os.ReadFile(cfg.LicensePath); err == nil {
+			copyrightContent = append(copyrightContent, lic...)
+		}
+	}
+
+	changelogRaw, changelogGz, err := generateChangelog(cfg.Package, cfg.Version, cfg.Maintainer)
+	if err != nil {
+		return fmt.Errorf("generating changelog: %w", err)
+	}
+
+	manRaw, manGz, err := generateMan1(cfg.Package, cfg.Version)
+	if err != nil {
+		return fmt.Errorf("generating man page: %w", err)
+	}
+
+	bashComp := generateBashCompletion(cfg.Package)
+	zshComp := generateZshCompletion(cfg.Package)
+	fishComp := generateFishCompletion(cfg.Package)
+
+	// Maintainer scripts
+	postinstContent := generatePostinst(cfg.Package)
+	prermContent := generatePrerm()
+	postrmContent := generatePostrm(cfg.Package)
+
+	// Calculate installed size in KB (uncompressed sizes of all packaged files)
+	totalInstalledBytes := len(binData) + len(copyrightContent) + len(changelogRaw) + len(manRaw) + len(bashComp) + len(zshComp) + len(fishComp)
+	installedSizeKB := (totalInstalledBytes + 1023) / 1024
 
 	// 1. Build data.tar.gz
 	var dataBuf bytes.Buffer
 	gwData := gzip.NewWriter(&dataBuf)
 	twData := tar.NewWriter(gwData)
 
-	now := time.Now().UTC()
-
-	// Directories
+	// Standard Debian hierarchy directories
 	dirs := []string{
 		"usr",
 		"usr/bin",
 		"usr/share",
 		"usr/share/doc",
 		"usr/share/doc/" + cfg.Package,
+		"usr/share/man",
+		"usr/share/man/man1",
+		"usr/share/bash-completion",
+		"usr/share/bash-completion/completions",
+		"usr/share/zsh",
+		"usr/share/zsh/vendor-completions",
+		"usr/share/fish",
+		"usr/share/fish/vendor_completions.d",
 	}
 	for _, d := range dirs {
 		hdr := &tar.Header{
@@ -76,42 +112,40 @@ func BuildDeb(cfg DebConfig) error {
 		}
 	}
 
-	// Executable: usr/bin/felix
-	binHdr := &tar.Header{
-		Name:     "./usr/bin/" + cfg.Package,
-		Mode:     0755,
-		Size:     int64(len(binData)),
-		Typeflag: tar.TypeReg,
-		ModTime:  now,
-		Format:   tar.FormatGNU,
-	}
-	if err := twData.WriteHeader(binHdr); err != nil {
-		return err
-	}
-	if _, err := twData.Write(binData); err != nil {
-		return err
+	type dataFileEntry struct {
+		relPath string
+		mode    int64
+		data    []byte
 	}
 
-	// Copyright doc
-	copyrightContent := []byte(fmt.Sprintf("Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/\nUpstream-Name: %s\nSource: %s\n\nFiles: *\nCopyright: 2026 Jothish\nLicense: MIT\n", cfg.Package, cfg.Homepage))
-	if cfg.LicensePath != "" {
-		if lic, err := os.ReadFile(cfg.LicensePath); err == nil {
-			copyrightContent = append(copyrightContent, lic...)
+	dataFiles := []dataFileEntry{
+		{relPath: "usr/bin/" + cfg.Package, mode: 0755, data: binData},
+		{relPath: "usr/share/doc/" + cfg.Package + "/copyright", mode: 0644, data: copyrightContent},
+		{relPath: "usr/share/doc/" + cfg.Package + "/changelog.Debian.gz", mode: 0644, data: changelogGz},
+		{relPath: "usr/share/man/man1/" + cfg.Package + ".1.gz", mode: 0644, data: manGz},
+		{relPath: "usr/share/bash-completion/completions/" + cfg.Package, mode: 0644, data: bashComp},
+		{relPath: "usr/share/zsh/vendor-completions/_" + cfg.Package, mode: 0644, data: zshComp},
+		{relPath: "usr/share/fish/vendor_completions.d/" + cfg.Package + ".fish", mode: 0644, data: fishComp},
+	}
+
+	var md5Lines []string
+	for _, df := range dataFiles {
+		hdr := &tar.Header{
+			Name:     "./" + df.relPath,
+			Mode:     df.mode,
+			Size:     int64(len(df.data)),
+			Typeflag: tar.TypeReg,
+			ModTime:  now,
+			Format:   tar.FormatGNU,
 		}
-	}
-	cpyHdr := &tar.Header{
-		Name:     "./usr/share/doc/" + cfg.Package + "/copyright",
-		Mode:     0644,
-		Size:     int64(len(copyrightContent)),
-		Typeflag: tar.TypeReg,
-		ModTime:  now,
-		Format:   tar.FormatGNU,
-	}
-	if err := twData.WriteHeader(cpyHdr); err != nil {
-		return err
-	}
-	if _, err := twData.Write(copyrightContent); err != nil {
-		return err
+		if err := twData.WriteHeader(hdr); err != nil {
+			return err
+		}
+		if _, err := twData.Write(df.data); err != nil {
+			return err
+		}
+		dfMD5 := md5.Sum(df.data)
+		md5Lines = append(md5Lines, fmt.Sprintf("%x  %s", dfMD5, df.relPath))
 	}
 
 	if err := twData.Close(); err != nil {
@@ -126,11 +160,6 @@ func BuildDeb(cfg DebConfig) error {
 	var controlBuf bytes.Buffer
 	gwCtrl := gzip.NewWriter(&controlBuf)
 	twCtrl := tar.NewWriter(gwCtrl)
-
-	// md5sums
-	binMD5 := md5.Sum(binData)
-	cpyMD5 := md5.Sum(copyrightContent)
-	md5Content := fmt.Sprintf("%x  usr/bin/%s\n%x  usr/share/doc/%s/copyright\n", binMD5, cfg.Package, cpyMD5, cfg.Package)
 
 	// control file
 	controlText := fmt.Sprintf("Package: %s\nVersion: %s\nArchitecture: %s\nMaintainer: %s\nInstalled-Size: %d\nSection: %s\nPriority: %s\nHomepage: %s\nDescription: %s\n%s\n",
@@ -147,34 +176,24 @@ func BuildDeb(cfg DebConfig) error {
 	)
 
 	// write control
-	ctrlHdr := &tar.Header{
-		Name:     "./control",
-		Mode:     0644,
-		Size:     int64(len(controlText)),
-		Typeflag: tar.TypeReg,
-		ModTime:  now,
-		Format:   tar.FormatGNU,
-	}
-	if err := twCtrl.WriteHeader(ctrlHdr); err != nil {
-		return err
-	}
-	if _, err := twCtrl.Write([]byte(controlText)); err != nil {
+	if err := writeTarReg(twCtrl, "./control", 0644, []byte(controlText), now); err != nil {
 		return err
 	}
 
 	// write md5sums
-	md5Hdr := &tar.Header{
-		Name:     "./md5sums",
-		Mode:     0644,
-		Size:     int64(len(md5Content)),
-		Typeflag: tar.TypeReg,
-		ModTime:  now,
-		Format:   tar.FormatGNU,
-	}
-	if err := twCtrl.WriteHeader(md5Hdr); err != nil {
+	md5Content := strings.Join(md5Lines, "\n") + "\n"
+	if err := writeTarReg(twCtrl, "./md5sums", 0644, []byte(md5Content), now); err != nil {
 		return err
 	}
-	if _, err := twCtrl.Write([]byte(md5Content)); err != nil {
+
+	// write maintainer scripts
+	if err := writeTarReg(twCtrl, "./postinst", 0755, postinstContent, now); err != nil {
+		return err
+	}
+	if err := writeTarReg(twCtrl, "./prerm", 0755, prermContent, now); err != nil {
+		return err
+	}
+	if err := writeTarReg(twCtrl, "./postrm", 0755, postrmContent, now); err != nil {
 		return err
 	}
 
@@ -276,6 +295,292 @@ func writeArMember(w io.Writer, name string, data []byte, t time.Time) error {
 	return nil
 }
 
+func writeTarReg(tw *tar.Writer, name string, mode int64, data []byte, t time.Time) error {
+	hdr := &tar.Header{
+		Name:     name,
+		Mode:     mode,
+		Size:     int64(len(data)),
+		Typeflag: tar.TypeReg,
+		ModTime:  t,
+		Format:   tar.FormatGNU,
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		return err
+	}
+	_, err := tw.Write(data)
+	return err
+}
+
+func generateChangelog(pkg, version, maintainer string) ([]byte, []byte, error) {
+	raw := fmt.Sprintf("%s (%s-1) stable; urgency=medium\n\n  * %s release v%s for Debian and Kali Linux.\n  * Shell completions for Bash, Zsh, and Fish.\n  * Standard section 1 manual page.\n  * Preserves user assessment history and databases during package removal.\n\n -- %s  Mon, 12 Oct 2026 12:00:00 +0000\n",
+		pkg, version, pkg, version, maintainer)
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	if _, err := gw.Write([]byte(raw)); err != nil {
+		return nil, nil, err
+	}
+	if err := gw.Close(); err != nil {
+		return nil, nil, err
+	}
+	return []byte(raw), buf.Bytes(), nil
+}
+
+func generateMan1(pkg, version string) ([]byte, []byte, error) {
+	man := fmt.Sprintf(`.TH %s 1 "October 2026" "%s %s" "User Commands"
+.SH NAME
+%s \- deterministic, evidence-first web security auditing platform
+.SH SYNOPSIS
+.B %s
+[\fIcommand\fR] [\fIarguments\fR]
+.br
+.B %s scan
+\fITARGET\fR [\fIoptions\fR]
+.br
+.B %s assessment
+\fIaction\fR [\fIoptions\fR]
+.br
+.B %s doctor
+[\fIoptions\fR]
+.SH DESCRIPTION
+.B %s
+is a deterministic, evidence-backed web security auditing platform written in Go.
+It evaluates web applications, APIs, cloud backends, and JavaScript assets
+using non-destructive safety boundaries and verifiable proof of exposure.
+.SH COMMANDS
+.TP
+.B scan \fITARGET\fR
+Audit target web applications for security exposures, secrets, and API endpoints.
+.TP
+.B report \fIFILE\fR
+Generate assessment reports from existing scan results with zero network calls.
+.TP
+.B assessment \fIaction\fR
+Manage authorized client assessments, scopes, findings, and attack paths.
+.TP
+.B client \fIaction\fR
+Manage client organizations and authorization records.
+.TP
+.B doctor
+Diagnose local runtime health, network stack, and permissions.
+.TP
+.B version
+Display Felix version, git commit, and build environment.
+.TP
+.B update
+Check for or install verified updates from official release channels.
+.TP
+.B completion \fISHELL\fR
+Generate shell autocompletion script (bash, zsh, fish, powershell).
+.SH OPTIONS
+.TP
+.BR \-t ", " \-\-timeout " \fIDURATION\fR"
+Per-request network timeout (default: 10s).
+.TP
+.BR \-c ", " \-\-concurrency " \fICOUNT\fR"
+Worker concurrency limit (default: 10).
+.TP
+.BR \-\-scope " \fIMODE\fR"
+Crawl scope mode: same-origin (default), subdomains, or explicit.
+.TP
+.BR \-\-export " \fIPATH\fR"
+Export assessment report to HTML, JSON, or SARIF file.
+.TP
+.BR \-\-json " [\fIPATH\fR]"
+Export machine-readable JSON assessment results.
+.TP
+.BR \-q ", " \-\-quiet
+Suppress terminal output and banners.
+.TP
+.BR \-v ", " \-\-verbose
+Display detailed diagnostic and crawling messages.
+.SH EXIT STATUS
+.TP
+.B 0
+Clean execution, no high-risk findings, or successful informational command.
+.TP
+.B 1
+Security findings detected, verification failure, or assessment errors.
+.TP
+.B 2
+Invalid CLI flags, bad arguments, or unreachable target error.
+.SH FILES
+.TP
+.I ~/.felix/assessments.db
+Persistent SQLite assessment database, audit logs, and finding stores.
+.TP
+.I ~/.felix/config.json
+CLI configuration file.
+.SH AUTHOR
+Jothish <jothishgandham2@gmail.com>
+.SH COPYRIGHT
+Copyright (c) 2026 Jothish. Released under the MIT License.
+`, strings.ToUpper(pkg), pkg, version, pkg, pkg, pkg, pkg, pkg, pkg)
+
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	if _, err := gw.Write([]byte(man)); err != nil {
+		return nil, nil, err
+	}
+	if err := gw.Close(); err != nil {
+		return nil, nil, err
+	}
+	return []byte(man), buf.Bytes(), nil
+}
+
+func generateBashCompletion(pkg string) []byte {
+	return []byte(fmt.Sprintf(`_%s_completions() {
+    local cur prev commands flags
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+    commands="scan report client assessment operator config doctor version update install uninstall completion help"
+    flags="--export --json --timeout -t --concurrency -c --scope --max-assets --max-response-size --quiet -q --verbose -v -l --user-agent --check --force --dry-run --client --name --target --authorizer --role --reference --valid-days"
+
+    if [[ ${COMP_CWORD} -eq 1 ]]; then
+        COMPREPLY=( $(compgen -W "${commands}" -- ${cur}) )
+        return 0
+    fi
+
+    if [[ ${cur} == -* ]]; then
+        COMPREPLY=( $(compgen -W "${flags}" -- ${cur}) )
+        return 0
+    fi
+}
+complete -F _%s_completions %s
+`, pkg, pkg, pkg))
+}
+
+func generateZshCompletion(pkg string) []byte {
+	return []byte(fmt.Sprintf(`#compdef %s
+
+_%s() {
+    local -a commands
+    commands=(
+        'scan:Perform a web security audit against target'
+        'report:Generate reports from an existing scan result without rescanning'
+        'client:Manage clients and organizations for structured assessments'
+        'assessment:Manage authorized security assessment projects and runs'
+        'operator:Launch local-first operator console'
+        'config:Manage Felix operational settings'
+        'doctor:Diagnose Felix runtime and installation health'
+        'version:Show Felix version and build details'
+        'update:Check for or install verified updates from official releases'
+        'install:Install Felix binary to user environment'
+        'uninstall:Remove Felix binary and user environment settings'
+        'completion:Generate shell autocomplete script'
+        'help:Show help information'
+    )
+    _arguments \
+        '1: :->command' \
+        '*: :->args'
+
+    case $state in
+        command)
+            _describe -t commands '%s commands' commands
+            ;;
+        args)
+            _arguments \
+                '--export[Export assessment report]' \
+                '--json[Save or output JSON result]' \
+                '--timeout[Request timeout]' \
+                '-t[Request timeout]' \
+                '--concurrency[Worker count]' \
+                '-c[Worker count]' \
+                '--scope[Crawl scope]' \
+                '--quiet[Suppress output]' \
+                '-q[Suppress output]' \
+                '--verbose[Detailed output]' \
+                '-v[Detailed output]' \
+                '--check[Check for updates only]' \
+                '--force[Force installation]' \
+                '--client[Client reference or ID]' \
+                '--name[Assessment or client name]'
+            ;;
+    esac
+}
+_%s "$@"
+`, pkg, pkg, pkg, pkg))
+}
+
+func generateFishCompletion(pkg string) []byte {
+	return []byte(fmt.Sprintf(`# Fish completion for %s
+complete -c %s -f
+complete -c %s -n "__fish_use_subcommand" -a "scan" -d "Perform web security audit"
+complete -c %s -n "__fish_use_subcommand" -a "report" -d "Generate report from existing scan result"
+complete -c %s -n "__fish_use_subcommand" -a "client" -d "Manage clients and organizations"
+complete -c %s -n "__fish_use_subcommand" -a "assessment" -d "Manage authorized assessments"
+complete -c %s -n "__fish_use_subcommand" -a "operator" -d "Launch operator console"
+complete -c %s -n "__fish_use_subcommand" -a "config" -d "Manage operational settings"
+complete -c %s -n "__fish_use_subcommand" -a "doctor" -d "Diagnose runtime health"
+complete -c %s -n "__fish_use_subcommand" -a "version" -d "Show version information"
+complete -c %s -n "__fish_use_subcommand" -a "update" -d "Check for or install updates"
+complete -c %s -n "__fish_use_subcommand" -a "completion" -d "Generate shell completion"
+complete -c %s -n "__fish_use_subcommand" -a "help" -d "Show help"
+`, pkg, pkg, pkg, pkg, pkg, pkg, pkg, pkg, pkg, pkg, pkg, pkg, pkg))
+}
+
+func generatePostinst(pkg string) []byte {
+	return []byte(fmt.Sprintf(`#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        if [ -f /usr/bin/%s ]; then
+            chmod 0755 /usr/bin/%s
+        fi
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+    *)
+        ;;
+esac
+
+exit 0
+`, pkg, pkg))
+}
+
+func generatePrerm() []byte {
+	return []byte(`#!/bin/sh
+set -e
+
+case "$1" in
+    remove|upgrade|deconfigure)
+        ;;
+    failed-upgrade)
+        ;;
+    *)
+        ;;
+esac
+
+exit 0
+`)
+}
+
+func generatePostrm(pkg string) []byte {
+	return []byte(fmt.Sprintf(`#!/bin/sh
+set -e
+
+case "$1" in
+    remove)
+        # Note: Debian packaging policy strictly preserves user assessment databases,
+        # configurations, and generated reports located in ~/.felix/
+        ;;
+    purge)
+        # On complete purge, remove system configuration directory if present
+        if [ -d /etc/%s ]; then
+            rm -rf /etc/%s
+        fi
+        ;;
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+    *)
+        ;;
+esac
+
+exit 0
+`, pkg, pkg))
+}
+
 // AptFileHash records hash and size metadata for an APT index entry.
 type AptFileHash struct {
 	RelPath string
@@ -297,10 +602,8 @@ func BuildAptRepo(repoDir string, debFiles []string, signer *openpgp.Entity) err
 		Arch     string
 		Packages bytes.Buffer
 	}
-	archPks := map[string]*ArchPackage{
-		"amd64": {Arch: "amd64"},
-		"arm64": {Arch: "arm64"},
-	}
+	archPks := make(map[string]*ArchPackage)
+	var archList []string
 
 	for _, debPath := range debFiles {
 		data, err := os.ReadFile(debPath)
@@ -318,6 +621,10 @@ func BuildAptRepo(repoDir string, debFiles []string, signer *openpgp.Entity) err
 		arch := "amd64"
 		if strings.Contains(baseName, "arm64") {
 			arch = "arm64"
+		}
+		if _, exists := archPks[arch]; !exists {
+			archPks[arch] = &ArchPackage{Arch: arch}
+			archList = append(archList, arch)
 		}
 
 		// Calculate hashes
@@ -382,7 +689,7 @@ func BuildAptRepo(repoDir string, debFiles []string, signer *openpgp.Entity) err
 	relBuf.WriteString(fmt.Sprintf("Suite: stable\n"))
 	relBuf.WriteString(fmt.Sprintf("Codename: stable\n"))
 	relBuf.WriteString(fmt.Sprintf("Version: 2.0.0\n"))
-	relBuf.WriteString(fmt.Sprintf("Architectures: amd64 arm64\n"))
+	relBuf.WriteString(fmt.Sprintf("Architectures: %s\n", strings.Join(archList, " ")))
 	relBuf.WriteString(fmt.Sprintf("Components: main\n"))
 	relBuf.WriteString(fmt.Sprintf("Description: Official APT repository for Felix Security Auditor\n"))
 	relBuf.WriteString(fmt.Sprintf("Date: %s\n", nowStr))

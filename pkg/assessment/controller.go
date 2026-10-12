@@ -249,6 +249,7 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 		Client:       httpClient,
 		IsAllowed:    scopeVal.IsAllowed,
 		IsExcluded:   func(u string) bool { excluded, _ := scopeVal.IsExcluded(u); return excluded },
+		Progress:     opts.ProgressFunc,
 	}
 	cEng := crawler.New(crawlerCfg)
 	detector := secrets.NewDetector()
