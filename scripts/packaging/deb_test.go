@@ -8,10 +8,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/ProtonMail/go-crypto/openpgp"
+	"github.com/ProtonMail/go-crypto/openpgp/clearsign"
 )
 
 func TestBuildDebAndAptRepo(t *testing.T) {
@@ -188,13 +193,182 @@ func TestBuildDebAndAptRepo(t *testing.T) {
 		t.Errorf("Packages missing SHA256 line, got:\n%s", pkgContent)
 	}
 
-	// Verify InRelease is signed
+	// Verify InRelease is signed and conforms to RFC 4880 MPI specification
 	inRelBytes, err := os.ReadFile(filepath.Join(repoDir, "dists", "stable", "InRelease"))
 	if err != nil {
 		t.Fatalf("reading InRelease: %v", err)
 	}
 	if !strings.Contains(string(inRelBytes), "-----BEGIN PGP SIGNED MESSAGE-----") {
 		t.Errorf("InRelease is not clearsigned, got:\n%s", string(inRelBytes))
+	}
+	if err := VerifyArmoredSignatureRFC4880(string(inRelBytes)); err != nil {
+		t.Errorf("InRelease failed RFC 4880 MPI verification: %v", err)
+	}
+
+	// Verify Release.gpg is detached signed and conforms to RFC 4880 MPI specification
+	relGpgBytes, err := os.ReadFile(filepath.Join(repoDir, "dists", "stable", "Release.gpg"))
+	if err != nil {
+		t.Fatalf("reading Release.gpg: %v", err)
+	}
+	if err := VerifyArmoredSignatureRFC4880(string(relGpgBytes)); err != nil {
+		t.Errorf("Release.gpg failed RFC 4880 MPI verification: %v", err)
+	}
+
+	// Verify public keyring
+	keyringBytes, err := os.ReadFile(filepath.Join(repoDir, "felix-archive-keyring.gpg"))
+	if err != nil {
+		t.Fatalf("reading felix-archive-keyring.gpg: %v", err)
+	}
+	parsedKeyring, err := openpgp.ReadKeyRing(bytes.NewReader(keyringBytes))
+	if err != nil {
+		t.Fatalf("parsing felix-archive-keyring.gpg: %v", err)
+	}
+	if len(parsedKeyring) == 0 {
+		t.Fatalf("felix-archive-keyring.gpg has no entities")
+	}
+	if !bytes.Equal(parsedKeyring[0].PrimaryKey.Fingerprint, signer.PrimaryKey.Fingerprint) {
+		t.Errorf("keyring fingerprint %X != signer fingerprint %X", parsedKeyring[0].PrimaryKey.Fingerprint, signer.PrimaryKey.Fingerprint)
+	}
+}
+
+func TestOpenPGPMPIComplianceRFC4880(t *testing.T) {
+	// Statistically verify that 100 consecutive signatures strictly conform to RFC 4880 §3.2.
+	// In the old golang.org/x/crypto/openpgp, roughly 50% of 2048-bit signatures violated RFC 4880
+	// due to padding with uncanonical leading zero bits and declaring 2048-bit length when the
+	// actual integer length was smaller.
+	signer, err := GenerateGpgSigner("Felix Auditor", "Test", "felix@example.com")
+	if err != nil {
+		t.Fatalf("GenerateGpgSigner failed: %v", err)
+	}
+
+	testPayload := []byte("Origin: Felix\nSuite: stable\nVersion: 2.0.0\n")
+
+	for i := 0; i < 100; i++ {
+		// Test clearsign
+		var inRelBuf bytes.Buffer
+		w, err := clearsign.Encode(&inRelBuf, signer.PrivateKey, nil)
+		if err != nil {
+			t.Fatalf("clearsign run %d failed: %v", i, err)
+		}
+		if _, err := w.Write(testPayload); err != nil {
+			t.Fatalf("clearsign write run %d failed: %v", i, err)
+		}
+		_ = w.Close()
+
+		if err := VerifyArmoredSignatureRFC4880(inRelBuf.String()); err != nil {
+			t.Fatalf("clearsign signature %d violated RFC 4880: %v", i, err)
+		}
+
+		// Test detached sign
+		var detachBuf bytes.Buffer
+		if err := openpgp.ArmoredDetachSignText(&detachBuf, signer, bytes.NewReader(testPayload), nil); err != nil {
+			t.Fatalf("detach sign run %d failed: %v", i, err)
+		}
+		if err := VerifyArmoredSignatureRFC4880(detachBuf.String()); err != nil {
+			t.Fatalf("detached signature %d violated RFC 4880: %v", i, err)
+		}
+	}
+}
+
+func TestLoadPersistentGpgSigner(t *testing.T) {
+	keysDir := filepath.Join("keys")
+	if _, err := os.Stat(filepath.Join(keysDir, "apt-signing-key.priv.asc")); os.IsNotExist(err) {
+		t.Skip("persistent keys directory not found relative to test runner")
+	}
+
+	signer, err := LoadOrCreateGpgSigner(keysDir, "Felix Security Auditor", "Official APT Repository Key", "jothishgandham2@gmail.com")
+	if err != nil {
+		t.Fatalf("LoadOrCreateGpgSigner failed: %v", err)
+	}
+
+	expectedFP := "8ABF68D0253A139577CA06E7154B088FE357A53D"
+	actualFP := fmt.Sprintf("%X", signer.PrimaryKey.Fingerprint)
+	if actualFP != expectedFP {
+		t.Errorf("expected fingerprint %s, got %s", expectedFP, actualFP)
+	}
+
+	// Verify key identity
+	foundIdentity := false
+	for _, id := range signer.Identities {
+		if strings.Contains(id.Name, "Felix Security Auditor") {
+			foundIdentity = true
+			break
+		}
+	}
+	if !foundIdentity {
+		t.Errorf("expected identity 'Felix Security Auditor' in loaded key")
+	}
+}
+
+func TestGpgvVerificationIfAvailable(t *testing.T) {
+	gpgvPath := "gpgv"
+	if _, err := exec.LookPath(gpgvPath); err != nil {
+		// Check Git's standard gpgv on Windows
+		gitGpgv := "C:\\Program Files\\Git\\usr\\bin\\gpgv.exe"
+		if _, err := os.Stat(gitGpgv); err == nil {
+			gpgvPath = gitGpgv
+		} else {
+			t.Skip("gpgv not available on system; skipping external subprocess verification")
+		}
+	}
+
+	tmpDir := t.TempDir()
+	signer, err := GenerateGpgSigner("Felix Subprocess Test", "Test", "test@example.com")
+	if err != nil {
+		t.Fatalf("GenerateGpgSigner failed: %v", err)
+	}
+
+	repoDir := filepath.Join(tmpDir, "repo")
+	dummyDeb := filepath.Join(tmpDir, "dummy_2.0.0_amd64.deb")
+	_ = os.WriteFile(dummyDeb, []byte("!<arch>\ndebian-binary   0           0     0     100644  4         `\n2.0\n"), 0644)
+
+	// Create dummy control file for extraction
+	var dummyCtrlBuf bytes.Buffer
+	gw := gzip.NewWriter(&dummyCtrlBuf)
+	tw := tar.NewWriter(gw)
+	_ = tw.WriteHeader(&tar.Header{Name: "./control", Mode: 0644, Size: 24, Typeflag: tar.TypeReg})
+	_, _ = tw.Write([]byte("Package: felix\nVersion: 2\n"))
+	_ = tw.Close()
+	_ = gw.Close()
+
+	// Rebuild valid deb AR with control.tar.gz
+	var debBuf bytes.Buffer
+	debBuf.WriteString("!<arch>\n")
+	_ = writeArMember(&debBuf, "debian-binary", []byte("2.0\n"), time.Now())
+	_ = writeArMember(&debBuf, "control.tar.gz", dummyCtrlBuf.Bytes(), time.Now())
+	_ = os.WriteFile(dummyDeb, debBuf.Bytes(), 0644)
+
+	if err := BuildAptRepo(repoDir, []string{dummyDeb}, signer); err != nil {
+		t.Fatalf("BuildAptRepo failed: %v", err)
+	}
+
+	keyringPath := filepath.Join(repoDir, "felix-archive-keyring.gpg")
+	inReleasePath := filepath.Join(repoDir, "dists", "stable", "InRelease")
+	releasePath := filepath.Join(repoDir, "dists", "stable", "Release")
+	relGpgPath := filepath.Join(repoDir, "dists", "stable", "Release.gpg")
+
+	// 1. Verify InRelease
+	cmd1 := exec.Command(gpgvPath, "--keyring", filepath.ToSlash(keyringPath), filepath.ToSlash(inReleasePath))
+	out1, err := cmd1.CombinedOutput()
+	if err != nil {
+		t.Errorf("gpgv InRelease verification failed: %v\nOutput: %s", err, string(out1))
+	}
+
+	// 2. Verify Release.gpg + Release
+	cmd2 := exec.Command(gpgvPath, "--keyring", filepath.ToSlash(keyringPath), filepath.ToSlash(relGpgPath), filepath.ToSlash(releasePath))
+	out2, err := cmd2.CombinedOutput()
+	if err != nil {
+		t.Errorf("gpgv Release.gpg verification failed: %v\nOutput: %s", err, string(out2))
+	}
+
+	// 3. Verify that tampered Release fails
+	tamperedRelease := append([]byte("TAMPERED\n"), releasePath...)
+	tamperedPath := filepath.Join(tmpDir, "TamperedRelease")
+	_ = os.WriteFile(tamperedPath, tamperedRelease, 0644)
+
+	cmd3 := exec.Command(gpgvPath, "--keyring", filepath.ToSlash(keyringPath), filepath.ToSlash(relGpgPath), filepath.ToSlash(tamperedPath))
+	if err := cmd3.Run(); err == nil {
+		t.Errorf("gpgv should have failed verification on tampered Release file")
 	}
 }
 

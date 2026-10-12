@@ -174,11 +174,13 @@ func main() {
 	aptRepoDir := filepath.Join(distDir, "apt")
 	_ = os.MkdirAll(aptRepoDir, 0755)
 
-	signer, err := GenerateGpgSigner("Felix Security Auditor", "Official APT Repository Key", "jothishgandham2@gmail.com")
+	keysDir := filepath.Join(repoRoot, "scripts", "packaging", "keys")
+	signer, err := LoadOrCreateGpgSigner(keysDir, "Felix Security Auditor", "Official APT Repository Key", "jothishgandham2@gmail.com")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[-] Failed to generate GPG signing entity: %v\n", err)
+		fmt.Fprintf(os.Stderr, "[-] Failed to load/create GPG signing entity: %v\n", err)
 		os.Exit(1)
 	}
+	fmt.Printf("[*] Repository GPG Key: %X (RFC 4880 compliant)\n", signer.PrimaryKey.Fingerprint)
 
 	if err := BuildAptRepo(aptRepoDir, debList, signer); err != nil {
 		fmt.Fprintf(os.Stderr, "[-] Failed to build APT repository: %v\n", err)

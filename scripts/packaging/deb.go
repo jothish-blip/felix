@@ -8,6 +8,7 @@ import (
 	"crypto/md5"
 	"crypto/sha1"
 	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
@@ -16,10 +17,10 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/crypto/openpgp"
-	"golang.org/x/crypto/openpgp/armor"
-	"golang.org/x/crypto/openpgp/clearsign"
-	"golang.org/x/crypto/openpgp/packet"
+	"github.com/ProtonMail/go-crypto/openpgp"
+	"github.com/ProtonMail/go-crypto/openpgp/armor"
+	"github.com/ProtonMail/go-crypto/openpgp/clearsign"
+	"github.com/ProtonMail/go-crypto/openpgp/packet"
 )
 
 // DebConfig configures a Debian package generation.
@@ -716,13 +717,8 @@ func BuildAptRepo(repoDir string, debFiles []string, signer *openpgp.Entity) err
 	if signer != nil {
 		// Clearsign InRelease
 		inReleasePath := filepath.Join(distStable, "InRelease")
-		inRelFile, err := os.Create(inReleasePath)
-		if err != nil {
-			return err
-		}
-		defer inRelFile.Close()
-
-		clearsignWriter, err := clearsign.Encode(inRelFile, signer.PrivateKey, nil)
+		var inRelBuf bytes.Buffer
+		clearsignWriter, err := clearsign.Encode(&inRelBuf, signer.PrivateKey, nil)
 		if err != nil {
 			return fmt.Errorf("clearsign: %w", err)
 		}
@@ -731,16 +727,26 @@ func BuildAptRepo(repoDir string, debFiles []string, signer *openpgp.Entity) err
 		}
 		_ = clearsignWriter.Close()
 
-		// Detached signature Release.gpg
-		releaseGpgPath := filepath.Join(distStable, "Release.gpg")
-		relGpgFile, err := os.Create(releaseGpgPath)
-		if err != nil {
+		inRelContent := inRelBuf.String()
+		if err := VerifyArmoredSignatureRFC4880(inRelContent); err != nil {
+			return fmt.Errorf("InRelease RFC 4880 validation failed: %w", err)
+		}
+		if err := os.WriteFile(inReleasePath, []byte(inRelContent), 0644); err != nil {
 			return err
 		}
-		defer relGpgFile.Close()
 
-		if err := openpgp.ArmoredDetachSignText(relGpgFile, signer, bytes.NewReader(releaseBytes), nil); err != nil {
+		// Detached signature Release.gpg
+		releaseGpgPath := filepath.Join(distStable, "Release.gpg")
+		var relGpgBuf bytes.Buffer
+		if err := openpgp.ArmoredDetachSignText(&relGpgBuf, signer, bytes.NewReader(releaseBytes), nil); err != nil {
 			return fmt.Errorf("detach sign: %w", err)
+		}
+		relGpgContent := relGpgBuf.String()
+		if err := VerifyArmoredSignatureRFC4880(relGpgContent); err != nil {
+			return fmt.Errorf("Release.gpg RFC 4880 validation failed: %w", err)
+		}
+		if err := os.WriteFile(releaseGpgPath, []byte(relGpgContent), 0644); err != nil {
+			return err
 		}
 
 		// Export public key in both binary (.gpg) and armored (.asc) formats
@@ -846,7 +852,7 @@ func extractControlFromDeb(debData []byte) (string, error) {
 	return "", fmt.Errorf("control file not found in deb")
 }
 
-// GenerateGpgSigner creates or loads an OpenPGP entity for repository signing.
+// GenerateGpgSigner creates an in-memory OpenPGP entity for testing or ephemeral signing.
 func GenerateGpgSigner(name, comment, email string) (*openpgp.Entity, error) {
 	cfg := &packet.Config{
 		DefaultHash:            crypto.SHA256,
@@ -854,4 +860,157 @@ func GenerateGpgSigner(name, comment, email string) (*openpgp.Entity, error) {
 		DefaultCompressionAlgo: packet.CompressionZIP,
 	}
 	return openpgp.NewEntity(name, comment, email, cfg)
+}
+
+// LoadOrCreateGpgSigner loads a persistent OpenPGP signing key or generates one if missing.
+// It searches in order:
+// 1. Environment variable FELIX_APT_SIGNING_KEY (armored private key string)
+// 2. File keysDir/apt-signing-key.priv.asc
+// 3. Generates a new 4096-bit RSA key, writing private and public keys to keysDir.
+func LoadOrCreateGpgSigner(keysDir, name, comment, email string) (*openpgp.Entity, error) {
+	if envKey := strings.TrimSpace(os.Getenv("FELIX_APT_SIGNING_KEY")); envKey != "" {
+		return LoadGpgEntityFromArmored([]byte(envKey))
+	}
+
+	privPath := filepath.Join(keysDir, "apt-signing-key.priv.asc")
+	if data, err := os.ReadFile(privPath); err == nil && len(data) > 0 {
+		return LoadGpgEntityFromArmored(data)
+	}
+
+	// Generate persistent key
+	if err := os.MkdirAll(keysDir, 0755); err != nil {
+		return nil, fmt.Errorf("creating keys directory: %w", err)
+	}
+
+	cfg := &packet.Config{
+		DefaultHash:            crypto.SHA256,
+		DefaultCipher:          packet.CipherAES256,
+		DefaultCompressionAlgo: packet.CompressionZIP,
+		RSABits:                4096,
+	}
+
+	entity, err := openpgp.NewEntity(name, comment, email, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("generating GPG entity: %w", err)
+	}
+
+	// Save armored private key
+	privFile, err := os.Create(privPath)
+	if err != nil {
+		return nil, fmt.Errorf("creating private key file: %w", err)
+	}
+	defer privFile.Close()
+
+	privArm, err := armor.Encode(privFile, openpgp.PrivateKeyType, nil)
+	if err != nil {
+		return nil, err
+	}
+	if err := entity.SerializePrivate(privArm, nil); err != nil {
+		return nil, err
+	}
+	_ = privArm.Close()
+
+	// Save public binary keyring
+	pubGpgPath := filepath.Join(keysDir, "felix-archive-keyring.gpg")
+	pubGpgFile, err := os.Create(pubGpgPath)
+	if err == nil {
+		_ = entity.Serialize(pubGpgFile)
+		_ = pubGpgFile.Close()
+	}
+
+	// Save public armored key
+	pubAscPath := filepath.Join(keysDir, "felix.gpg")
+	pubAscFile, err := os.Create(pubAscPath)
+	if err == nil {
+		if pubArm, err := armor.Encode(pubAscFile, openpgp.PublicKeyType, nil); err == nil {
+			_ = entity.Serialize(pubArm)
+			_ = pubArm.Close()
+		}
+		_ = pubAscFile.Close()
+	}
+
+	return entity, nil
+}
+
+// LoadGpgEntityFromArmored parses an armored OpenPGP private key into an Entity.
+func LoadGpgEntityFromArmored(armoredData []byte) (*openpgp.Entity, error) {
+	block, err := armor.Decode(bytes.NewReader(armoredData))
+	if err != nil {
+		return nil, fmt.Errorf("decoding armored private key: %w", err)
+	}
+	entityList, err := openpgp.ReadKeyRing(block.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading private key ring: %w", err)
+	}
+	if len(entityList) == 0 {
+		return nil, fmt.Errorf("no entities found in private key ring")
+	}
+	return entityList[0], nil
+}
+
+// VerifyArmoredSignatureRFC4880 parses an armored OpenPGP signature and verifies
+// that every RSA MPI in the signature packet strictly satisfies RFC 4880 §3.2:
+// "The leading bit of an MPI MUST be 1."
+// This guarantees that strict OpenPGP verifiers, such as Sequoia PGP (/usr/bin/sqv)
+// employed by Debian and Kali Linux APT, will not fail verification due to
+// uncanonical leading zero bits or mismatched bit length declarations.
+func VerifyArmoredSignatureRFC4880(armored string) error {
+	lines := strings.Split(armored, "\n")
+	var b64Lines []string
+	capture := false
+	for _, l := range lines {
+		l = strings.TrimSpace(l)
+		if l == "-----BEGIN PGP SIGNATURE-----" {
+			capture = true
+			continue
+		}
+		if l == "-----END PGP SIGNATURE-----" {
+			break
+		}
+		if capture && l != "" && !strings.HasPrefix(l, "=") {
+			b64Lines = append(b64Lines, l)
+		}
+	}
+	rawB64 := strings.Join(b64Lines, "")
+	sigBytes, err := base64.StdEncoding.DecodeString(rawB64)
+	if err != nil {
+		return fmt.Errorf("base64 decode: %w", err)
+	}
+
+	if len(sigBytes) < 15 {
+		return fmt.Errorf("signature packet too short: %d bytes", len(sigBytes))
+	}
+
+	version := sigBytes[3]
+	if version != 4 {
+		return fmt.Errorf("expected signature version 4, got %d", version)
+	}
+
+	hashedLen := int(sigBytes[7])<<8 | int(sigBytes[8])
+	offset := 9 + hashedLen
+	if offset+2 > len(sigBytes) {
+		return fmt.Errorf("malformed packet: hashed length %d exceeds packet size", hashedLen)
+	}
+	unhashedLen := int(sigBytes[offset])<<8 | int(sigBytes[offset+1])
+	offset += 2 + unhashedLen
+	offset += 2 // skip 2-byte hash digest prefix
+	if offset+2 > len(sigBytes) {
+		return fmt.Errorf("malformed packet: offset %d exceeds packet size", offset)
+	}
+
+	mpiBitLen := int(sigBytes[offset])<<8 | int(sigBytes[offset+1])
+	mpiBytes := sigBytes[offset+2:]
+	expectedBytes := (mpiBitLen + 7) / 8
+	if len(mpiBytes) != expectedBytes {
+		return fmt.Errorf("MPI payload length mismatch: got %d bytes, expected %d for %d bits", len(mpiBytes), expectedBytes, mpiBitLen)
+	}
+
+	firstByte := mpiBytes[0]
+	expectedLeadingBitPos := (mpiBitLen - 1) % 8
+	bitSet := (firstByte >> expectedLeadingBitPos) & 1
+	if bitSet != 1 {
+		return fmt.Errorf("RFC 4880 §3.2 violation: leading bit (bit %d from LSB) in first byte 0x%02x is 0 (not set)", expectedLeadingBitPos, firstByte)
+	}
+
+	return nil
 }
