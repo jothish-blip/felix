@@ -24,10 +24,24 @@ if [ ! -f "${SOURCE_BIN}" ]; then
     exit 2
 fi
 
-cp -f "${SOURCE_BIN}" "${INSTALL_DIR}/felix"
-chmod 755 "${INSTALL_DIR}/felix"
+TMP_BIN="${INSTALL_DIR}/felix.tmp.$$"
+cp -f "${SOURCE_BIN}" "${TMP_BIN}"
+chmod 755 "${TMP_BIN}"
 
-echo "[+] Installed felix binary to: ${INSTALL_DIR}/felix"
+if [ ! -s "${TMP_BIN}" ]; then
+    echo "[-] Verification failed: staged binary is empty!" >&2
+    rm -f "${TMP_BIN}"
+    exit 2
+fi
+
+mv -f "${TMP_BIN}" "${INSTALL_DIR}/felix"
+echo "[+] Atomically installed felix binary to: ${INSTALL_DIR}/felix"
+
+# Self-verify execution
+if ! "${INSTALL_DIR}/felix" version >/dev/null 2>&1; then
+    echo "[-] Verification failed: installed binary cannot execute!" >&2
+    exit 2
+fi
 
 # PATH guidance
 if [[ ":$PATH:" != *":${INSTALL_DIR}:"* ]]; then

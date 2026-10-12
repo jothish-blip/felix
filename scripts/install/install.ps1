@@ -35,9 +35,11 @@ if (-not (Test-Path $InstallDir)) {
 }
 
 # 2. Source binary resolution
+$TargetTmp = "$TargetExe.tmp"
+
 if ($BinaryPath -ne "" -and (Test-Path $BinaryPath)) {
     Write-Host "[*] Installing from local binary: $BinaryPath"
-    Copy-Item -Path $BinaryPath -Destination $TargetExe -Force
+    Copy-Item -Path $BinaryPath -Destination $TargetTmp -Force
 } else {
     $ReleaseURL = "https://github.com/jothish-blip/felix/releases/download/v${Version}/felix_windows_amd64.exe"
     Write-Host "[*] Downloading Felix v$Version from GitHub Releases..."
@@ -45,19 +47,28 @@ if ($BinaryPath -ne "" -and (Test-Path $BinaryPath)) {
 
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
-        Invoke-WebRequest -Uri $ReleaseURL -OutFile $TargetExe -UseBasicParsing
+        Invoke-WebRequest -Uri $ReleaseURL -OutFile $TargetTmp -UseBasicParsing
     } catch {
         Write-Warning "Could not download from online URL: $_"
         $LocalDist = Join-Path (Get-Location) "dist\felix_windows_amd64.exe"
         if (Test-Path $LocalDist) {
             Write-Host "[*] Using existing local build from dist\felix_windows_amd64.exe..."
-            Copy-Item -Path $LocalDist -Destination $TargetExe -Force
+            Copy-Item -Path $LocalDist -Destination $TargetTmp -Force
         } else {
+            if (Test-Path $TargetTmp) { Remove-Item -Path $TargetTmp -Force -ErrorAction SilentlyContinue }
             Write-Error "Failed to acquire Felix binary. Download URL: $ReleaseURL"
             exit 1
         }
     }
 }
+
+if (-not (Test-Path $TargetTmp) -or (Get-Item $TargetTmp).Length -eq 0) {
+    if (Test-Path $TargetTmp) { Remove-Item -Path $TargetTmp -Force -ErrorAction SilentlyContinue }
+    Write-Error "Acquired binary is invalid or 0 bytes."
+    exit 1
+}
+
+Move-Item -Path $TargetTmp -Destination $TargetExe -Force
 
 if (-not (Test-Path $TargetExe)) {
     Write-Error "Failed to install felix.exe to $TargetExe"

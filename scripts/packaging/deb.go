@@ -526,8 +526,49 @@ set -e
 
 case "$1" in
     configure)
+        # 1. Ensure package binary is executable
         if [ -f /usr/bin/%s ]; then
             chmod 0755 /usr/bin/%s
+        fi
+
+        # 2. Check for and safely remediate shadowing executables in precedence paths
+        # In Debian/Kali/Ubuntu, /usr/local/bin and /usr/local/sbin take precedence over /usr/bin in PATH.
+        # An invalid 0-byte file, broken symlink, or corrupt download at /usr/local/bin will
+        # intercept command resolution and prevent the package-managed binary from executing.
+        for shadow_dir in /usr/local/bin /usr/local/sbin; do
+            shadow_file="${shadow_dir}/%s"
+            if [ -L "${shadow_file}" ]; then
+                target=$(readlink -f "${shadow_file}" 2>/dev/null || true)
+                if [ "${target}" = "/usr/bin/%s" ]; then
+                    :
+                elif [ ! -e "${shadow_file}" ]; then
+                    echo "[i] Removing broken symlink at ${shadow_file}..."
+                    rm -f "${shadow_file}"
+                fi
+            elif [ -f "${shadow_file}" ]; then
+                if [ ! -s "${shadow_file}" ]; then
+                    echo "[i] Detected empty (0-byte) file at ${shadow_file} shadowing package binary."
+                    echo "[i] Safely removing ${shadow_file} to restore command resolution..."
+                    rm -f "${shadow_file}"
+                elif grep -qi "<html>\|<head>\|404: Not Found" "${shadow_file}" 2>/dev/null; then
+                    echo "[i] Detected corrupt HTML download at ${shadow_file} shadowing package binary."
+                    echo "[i] Safely removing ${shadow_file}..."
+                    rm -f "${shadow_file}"
+                else
+                    echo "[!] Notice: Existing non-empty binary found at ${shadow_file}."
+                    echo "[!] Note that ${shadow_file} takes precedence over /usr/bin/%s in standard PATH."
+                fi
+            fi
+        done
+
+        # 3. Clear shell hash table for current subshell
+        hash -r 2>/dev/null || true
+
+        # 4. Self-verify the installed binary
+        if [ -x /usr/bin/%s ]; then
+            if ! /usr/bin/%s version >/dev/null 2>&1; then
+                echo "[-] Warning: Package binary at /usr/bin/%s failed basic self-test." >&2
+            fi
         fi
         ;;
     abort-upgrade|abort-remove|abort-deconfigure)
@@ -537,7 +578,7 @@ case "$1" in
 esac
 
 exit 0
-`, pkg, pkg))
+`, pkg, pkg, pkg, pkg, pkg, pkg, pkg, pkg))
 }
 
 func generatePrerm() []byte {

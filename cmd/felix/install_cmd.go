@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 func getInstallDir() (string, error) {
@@ -60,19 +61,51 @@ func runInstall(args []string) int {
 	}
 	defer srcFile.Close()
 
-	destFile, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	// Atomic copy: write to temporary file, sync, validate, then rename
+	tmpPath := targetPath + fmt.Sprintf(".tmp.%d", time.Now().UnixNano())
+	destFile, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[-] Failed to create target executable: %v\n", err)
-		return 2
-	}
-	defer destFile.Close()
-
-	if _, err := io.Copy(destFile, srcFile); err != nil {
-		fmt.Fprintf(os.Stderr, "[-] Failed to copy executable: %v\n", err)
+		fmt.Fprintf(os.Stderr, "[-] Failed to create temporary target executable: %v\n", err)
 		return 2
 	}
 
-	fmt.Printf("[+] Installed executable to: %s\n", targetPath)
+	copied, copyErr := io.Copy(destFile, srcFile)
+	syncErr := destFile.Sync()
+	closeErr := destFile.Close()
+
+	if copyErr != nil || syncErr != nil || closeErr != nil || copied == 0 {
+		_ = os.Remove(tmpPath)
+		fmt.Fprintf(os.Stderr, "[-] Failed to copy executable data: %v\n", copyErr)
+		return 2
+	}
+
+	// Validate staged binary before replacing target
+	fi, err := os.Stat(tmpPath)
+	if err != nil || fi.Size() == 0 {
+		_ = os.Remove(tmpPath)
+		fmt.Fprintf(os.Stderr, "[-] Validation failed: staged binary is empty or unreadable\n")
+		return 2
+	}
+
+	if runtime.GOOS == "windows" {
+		_ = os.Remove(targetPath)
+	}
+	if err := os.Rename(tmpPath, targetPath); err != nil {
+		_ = os.Remove(tmpPath)
+		fmt.Fprintf(os.Stderr, "[-] Failed to atomically place executable at %s: %v\n", targetPath, err)
+		return 2
+	}
+
+	// Post-install self-verification
+	verCmd := exec.Command(targetPath, "version")
+	verOut, verErr := verCmd.CombinedOutput()
+	if verErr != nil {
+		_ = os.Remove(targetPath)
+		fmt.Fprintf(os.Stderr, "[-] Post-installation self-test failed: %v\nOutput: %s\n", verErr, string(verOut))
+		return 2
+	}
+
+	fmt.Printf("[+] Installed and verified executable at: %s\n", targetPath)
 
 	// Register in PATH
 	if runtime.GOOS == "windows" {
@@ -102,7 +135,7 @@ func runInstall(args []string) int {
 	}
 
 	fmt.Println()
-	fmt.Println("[✓] Felix CLI installation complete. Open a new terminal session and run:")
+	fmt.Println("[✓] Felix CLI installation complete and verified. Open a new terminal session and run:")
 	fmt.Println("    felix version")
 	fmt.Println("    felix doctor")
 	return 0

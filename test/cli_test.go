@@ -53,6 +53,112 @@ func runFelix(t *testing.T, args ...string) (string, int) {
 	return out, 0
 }
 
+// runFelixWithOverrideEnv executes the compiled binary with a full custom environment.
+func runFelixWithOverrideEnv(t *testing.T, env []string, args ...string) (string, int) {
+	binPath := getFelixBinPath(t)
+	cmd := exec.Command(binPath, args...)
+	cmd.Env = env
+	outBytes, err := cmd.CombinedOutput()
+	out := string(outBytes)
+
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return out, exitErr.ExitCode()
+		}
+		return out, -1
+	}
+	return out, 0
+}
+
+func TestCLI_RootUsageNoArgs(t *testing.T) {
+	out, code := runFelix(t)
+	if code != 0 {
+		t.Fatalf("expected exit code 0 when running with no args, got %d, out: %s", code, out)
+	}
+	if !strings.Contains(out, "Web Security Auditing CLI") {
+		t.Errorf("expected banner in root output, got: %s", out)
+	}
+	if !strings.Contains(out, "Commands:") || !strings.Contains(out, "scan") {
+		t.Errorf("expected command listing in root output, got: %s", out)
+	}
+}
+
+func TestCLI_HelpVariants(t *testing.T) {
+	for _, flag := range []string{"--help", "-h", "help"} {
+		out, code := runFelix(t, flag)
+		if code != 0 {
+			t.Errorf("flag %q: expected exit code 0, got %d", flag, code)
+		}
+		if !strings.Contains(out, "Usage:") {
+			t.Errorf("flag %q: expected usage in output, got: %s", flag, out)
+		}
+	}
+}
+
+func TestCLI_VersionVariants(t *testing.T) {
+	for _, flag := range []string{"version", "--version", "-V"} {
+		out, code := runFelix(t, flag)
+		if code != 0 {
+			t.Errorf("flag %q: expected exit code 0, got %d", flag, code)
+		}
+		if !strings.Contains(out, "Felix Security Auditor") || !strings.Contains(out, "2.0.0") {
+			t.Errorf("flag %q: unexpected version output: %s", flag, out)
+		}
+	}
+}
+
+func TestCLI_DoctorShadowingDetectionAndFix(t *testing.T) {
+	binPath := getFelixBinPath(t)
+	binDir := filepath.Dir(binPath)
+	binName := filepath.Base(binPath)
+
+	tmpDir := t.TempDir()
+	shadowDir := filepath.Join(tmpDir, "shadow")
+	_ = os.MkdirAll(shadowDir, 0755)
+
+	shadowFile := filepath.Join(shadowDir, binName)
+	// Create 0-byte corrupt shadowing file
+	if err := os.WriteFile(shadowFile, []byte(""), 0755); err != nil {
+		t.Fatalf("failed to create dummy 0-byte file: %v", err)
+	}
+
+	// Construct PATH where shadowDir comes BEFORE binDir
+	customPath := shadowDir + string(os.PathListSeparator) + binDir
+	var env []string
+	for _, e := range os.Environ() {
+		if !strings.HasPrefix(strings.ToUpper(e), "PATH=") {
+			env = append(env, e)
+		}
+	}
+	env = append(env, "PATH="+customPath)
+
+	// 1. Run doctor: must detect shadowing error
+	out, _ := runFelixWithOverrideEnv(t, env, "doctor")
+	if !strings.Contains(out, "shadow") && !strings.Contains(out, "0-byte") && !strings.Contains(out, "ERROR") {
+		t.Errorf("expected doctor to detect 0-byte shadowing file, got:\n%s", out)
+	}
+
+	// 2. Run doctor --fix: must auto-remediate the 0-byte file
+	outFix, _ := runFelixWithOverrideEnv(t, env, "doctor", "--fix")
+	if !strings.Contains(outFix, "Auto-remediated") && !strings.Contains(outFix, "deleted") && !strings.Contains(outFix, "Fixed") {
+		t.Logf("doctor --fix output: %s", outFix)
+	}
+
+	// Assert the 0-byte file was removed
+	if _, err := os.Stat(shadowFile); !os.IsNotExist(err) {
+		t.Errorf("expected 0-byte shadowing file to be removed by doctor --fix, but it still exists")
+	}
+
+	// 3. Run doctor again: should now be clean!
+	outClean, codeClean := runFelixWithOverrideEnv(t, env, "doctor")
+	if codeClean != 0 {
+		t.Errorf("expected doctor to pass after fix, got code %d:\n%s", codeClean, outClean)
+	}
+	if !strings.Contains(outClean, "directly resolves") && !strings.Contains(outClean, "PASS") {
+		t.Errorf("expected clean resolution in doctor output, got:\n%s", outClean)
+	}
+}
+
 func TestCLI_Version(t *testing.T) {
 	out, code := runFelix(t, "version")
 	if code != 0 {

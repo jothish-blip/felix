@@ -99,15 +99,37 @@ func copyExecutable(src, dst string) error {
 	}
 	defer in.Close()
 
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	tmpDst := dst + fmt.Sprintf(".atomic.%d", time.Now().UnixNano())
+	out, err := os.OpenFile(tmpDst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
 
-	if _, err := io.Copy(out, in); err != nil {
-		return err
+	copied, copyErr := io.Copy(out, in)
+	syncErr := out.Sync()
+	closeErr := out.Close()
+
+	if copyErr != nil || syncErr != nil || closeErr != nil || copied == 0 {
+		_ = os.Remove(tmpDst)
+		if copyErr != nil {
+			return copyErr
+		}
+		return fmt.Errorf("copied 0 bytes during executable staging")
 	}
 
-	return out.Sync()
+	fi, err := os.Stat(tmpDst)
+	if err != nil || fi.Size() == 0 {
+		_ = os.Remove(tmpDst)
+		return fmt.Errorf("staged binary is empty or unreadable")
+	}
+
+	if runtime.GOOS == "windows" {
+		_ = os.Remove(dst)
+	}
+	if err := os.Rename(tmpDst, dst); err != nil {
+		_ = os.Remove(tmpDst)
+		return fmt.Errorf("atomic rename failed: %w", err)
+	}
+
+	return nil
 }

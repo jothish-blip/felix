@@ -101,6 +101,17 @@ func TestBuildDebAndAptRepo(t *testing.T) {
 		}
 	}
 
+	postinstScript := string(ctrlFiles["./postinst"])
+	if !strings.Contains(postinstScript, "/usr/local/bin") {
+		t.Errorf("postinst must inspect /usr/local/bin for shadowing executables")
+	}
+	if !strings.Contains(postinstScript, "! -s") {
+		t.Errorf("postinst must detect and remove 0-byte corrupt files")
+	}
+	if !strings.Contains(postinstScript, "version") {
+		t.Errorf("postinst must perform self-verification of the installed binary")
+	}
+
 	postrmScript := string(ctrlFiles["./postrm"])
 	if !strings.Contains(postrmScript, "purge") || !strings.Contains(postrmScript, "/etc/felix") {
 		t.Errorf("postrm should clean /etc/felix on purge, got:\n%s", postrmScript)
@@ -437,4 +448,95 @@ func parseTarGzWithHeaders(data []byte) (map[string][]byte, map[string]*tar.Head
 		}
 	}
 	return files, headers, nil
+}
+
+func TestPostinstShadowingExecution(t *testing.T) {
+	shPath := findSh()
+	if shPath == "" {
+		t.Skip("sh/bash not available; skipping maintainer script simulation")
+	}
+
+	tmpDir := t.TempDir()
+	mockUsrBin := filepath.Join(tmpDir, "usr", "bin")
+	mockUsrLocalBin := filepath.Join(tmpDir, "usr", "local", "bin")
+	_ = os.MkdirAll(mockUsrBin, 0755)
+	_ = os.MkdirAll(mockUsrLocalBin, 0755)
+
+	mockBin := filepath.Join(mockUsrBin, "felix")
+	_ = os.WriteFile(mockBin, []byte("#!/bin/sh\necho Felix 2.0.0\n"), 0755)
+
+	mockShadow := filepath.Join(mockUsrLocalBin, "felix")
+
+	// Helper to run simulated postinst with mock paths
+	runMockPostinst := func() error {
+		scriptContent := string(generatePostinst("felix"))
+		// Redirect system paths to sandbox paths
+		scriptContent = strings.ReplaceAll(scriptContent, "/usr/bin/felix", filepath.ToSlash(mockBin))
+		scriptContent = strings.ReplaceAll(scriptContent, "/usr/local/bin", filepath.ToSlash(mockUsrLocalBin))
+		scriptContent = strings.ReplaceAll(scriptContent, "/usr/local/sbin", filepath.ToSlash(mockUsrLocalBin))
+
+		scriptPath := filepath.Join(tmpDir, "postinst_test.sh")
+		if err := os.WriteFile(scriptPath, []byte(scriptContent), 0755); err != nil {
+			return err
+		}
+
+		cmd := exec.Command(shPath, filepath.ToSlash(scriptPath), "configure")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("postinst failed: %w, out: %s", err, string(out))
+		}
+		return nil
+	}
+
+	// Case A: 0-byte corrupt shadowing file must be REMOVED
+	if err := os.WriteFile(mockShadow, []byte(""), 0755); err != nil {
+		t.Fatalf("creating 0-byte file: %v", err)
+	}
+	if err := runMockPostinst(); err != nil {
+		t.Fatalf("runMockPostinst failed: %v", err)
+	}
+	if _, err := os.Stat(mockShadow); !os.IsNotExist(err) {
+		t.Errorf("expected 0-byte shadowing file to be removed by postinst, but it still exists")
+	}
+
+	// Case B: Non-empty user binary must be PRESERVED
+	nonEmptyContent := []byte("#!/bin/sh\necho custom-felix\n")
+	if err := os.WriteFile(mockShadow, nonEmptyContent, 0755); err != nil {
+		t.Fatalf("creating non-empty file: %v", err)
+	}
+	if err := runMockPostinst(); err != nil {
+		t.Fatalf("runMockPostinst failed: %v", err)
+	}
+	data, err := os.ReadFile(mockShadow)
+	if err != nil {
+		t.Errorf("expected non-empty user file to be preserved, but read failed: %v", err)
+	} else if string(data) != string(nonEmptyContent) {
+		t.Errorf("non-empty user file content altered")
+	}
+
+	// Case C: Corrupt HTML download must be REMOVED
+	htmlCorrupt := []byte("<html><head><title>404: Not Found</title></head><body>Error</body></html>")
+	if err := os.WriteFile(mockShadow, htmlCorrupt, 0755); err != nil {
+		t.Fatalf("creating HTML corrupt file: %v", err)
+	}
+	if err := runMockPostinst(); err != nil {
+		t.Fatalf("runMockPostinst failed: %v", err)
+	}
+	if _, err := os.Stat(mockShadow); !os.IsNotExist(err) {
+		t.Errorf("expected corrupt HTML file to be removed by postinst, but it still exists")
+	}
+}
+
+func findSh() string {
+	if p, err := exec.LookPath("sh"); err == nil {
+		return p
+	}
+	if p, err := exec.LookPath("bash"); err == nil {
+		return p
+	}
+	gitSh := "C:\\Program Files\\Git\\bin\\sh.exe"
+	if _, err := os.Stat(gitSh); err == nil {
+		return gitSh
+	}
+	return ""
 }

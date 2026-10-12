@@ -17,6 +17,7 @@ import (
 
 func runDoctor(args []string) int {
 	securityMode := false
+	fixMode := false
 	for _, a := range args {
 		if a == "--help" || a == "-h" {
 			printDoctorHelp()
@@ -24,6 +25,9 @@ func runDoctor(args []string) int {
 		}
 		if a == "--security" || a == "-s" {
 			securityMode = true
+		}
+		if a == "--fix" {
+			fixMode = true
 		}
 	}
 
@@ -51,15 +55,6 @@ func runDoctor(args []string) int {
 		}
 	}
 
-	checkWarning := func(name string, fn func() (string, bool)) {
-		detail, warn := fn()
-		if warn {
-			fmt.Printf(" [WARNING] %-32s : %s\n", name, detail)
-			hasWarning = true
-		} else {
-			fmt.Printf(" [PASS]    %-32s : %s\n", name, detail)
-		}
-	}
 
 	checkInfo := func(name string, fn func() string) {
 		detail := fn()
@@ -76,7 +71,10 @@ func runDoctor(args []string) int {
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("%s (%d bytes)", filepath.Base(exe), fi.Size()), nil
+		if fi.Size() == 0 {
+			return "", fmt.Errorf("active executable %s is 0 bytes (empty/corrupted)", exe)
+		}
+		return fmt.Sprintf("%s (%d bytes) at %s", filepath.Base(exe), fi.Size(), exe), nil
 	})
 
 	// 2. Binary Signature check (Windows-aware)
@@ -192,18 +190,86 @@ func runDoctor(args []string) int {
 		return "HTML (Black Mode) & JSON ready", nil
 	})
 
-	// 9. PATH environment notice
-	checkWarning("PATH Availability", func() (string, bool) {
+	// 9. Command Resolution & Shadowing Diagnosis
+	check("Command Resolution", func() (string, error) {
 		exe, err := os.Executable()
 		if err != nil {
-			return "Unable to determine executable location", true
+			return "", fmt.Errorf("unable to determine active executable: %w", err)
 		}
-		exeDir := filepath.Dir(exe)
+		binName := "felix"
+		if runtime.GOOS == "windows" {
+			binName = "felix.exe"
+		}
+
+		realExe, _ := filepath.EvalSymlinks(exe)
 		pathEnv := os.Getenv("PATH")
-		if !containsPath(pathEnv, exeDir) {
-			return fmt.Sprintf("%s is not in system PATH (run 'felix install' or add to PATH)", exeDir), true
+		exeDir := filepath.Dir(exe)
+
+		// A. Scan PATH directories preceding active binary for corrupt or shadowing files
+		for _, dir := range filepath.SplitList(pathEnv) {
+			cleanDir := filepath.Clean(dir)
+			if cleanDir == filepath.Clean(exeDir) {
+				break // reached active binary's directory
+			}
+			candidate := filepath.Join(cleanDir, binName)
+			cfi, cerr := os.Lstat(candidate)
+			if cerr == nil {
+				if cfi.Size() == 0 {
+					if fixMode {
+						if rmErr := os.Remove(candidate); rmErr == nil {
+							return fmt.Sprintf("Auto-remediated: deleted corrupt 0-byte file %s", candidate), nil
+						}
+						return "", fmt.Errorf("0-byte file at %s shadows %s. Fix: run 'sudo rm %s'", candidate, exe, candidate)
+					}
+					return "", fmt.Errorf("0-byte file at %s is shadowing active binary %s! Fix: run 'sudo rm %s' or 'sudo felix doctor --fix'", candidate, exe, candidate)
+				}
+				// Non-empty candidate: notice
+				return fmt.Sprintf("Notice: %s takes precedence over active binary %s in PATH", candidate, exe), nil
+			}
 		}
-		return "Felix directory is registered in PATH", false
+
+		// B. Query shell lookPath resolution
+		lookPath, lookErr := exec.LookPath(binName)
+		if lookErr != nil {
+			if !containsPath(pathEnv, exeDir) {
+				return fmt.Sprintf("%s is not in system PATH (run 'felix install' or add to PATH)", exeDir), nil
+			}
+			return fmt.Sprintf("Active binary in PATH but LookPath returned: %v", lookErr), nil
+		}
+
+		realLook, _ := filepath.EvalSymlinks(lookPath)
+		if filepath.Clean(realLook) != filepath.Clean(realExe) {
+			lfi, lerr := os.Stat(lookPath)
+			if lerr == nil && lfi.Size() == 0 {
+				if fixMode {
+					if rmErr := os.Remove(lookPath); rmErr == nil {
+						return fmt.Sprintf("Auto-remediated: deleted corrupt 0-byte file %s", lookPath), nil
+					}
+					return "", fmt.Errorf("0-byte file at %s shadows %s. Fix: run 'sudo rm %s'", lookPath, exe, lookPath)
+				}
+				return "", fmt.Errorf("0-byte file at %s shadows %s! Fix: run 'sudo rm %s' or 'sudo felix doctor --fix'", lookPath, exe, lookPath)
+			}
+			return fmt.Sprintf("Notice: command 'felix' resolves to %s preceding %s", lookPath, exe), nil
+		}
+
+		return fmt.Sprintf("Clean: 'felix' directly resolves to %s", lookPath), nil
+	})
+
+	// 10. Assessment Storage & Audit State
+	check("Assessment Storage", func() (string, error) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("unable to determine home directory: %w", err)
+		}
+		felixDir := filepath.Join(home, ".felix")
+		if err := os.MkdirAll(felixDir, 0755); err != nil {
+			return "", fmt.Errorf("unable to initialize ~/.felix directory: %w", err)
+		}
+		dbPath := filepath.Join(felixDir, "assessments.db")
+		if _, err := os.Stat(dbPath); err == nil {
+			return fmt.Sprintf("Active database (%s)", dbPath), nil
+		}
+		return fmt.Sprintf("Ready for initialization (%s)", dbPath), nil
 	})
 
 	fmt.Println()
@@ -223,14 +289,16 @@ func printDoctorHelp() {
 	fmt.Println(`Usage:
   felix doctor [options]
 
-Run system diagnostics and runtime readiness checks.
+Run system diagnostics, executable resolution, and runtime readiness checks.
 
 Options:
+  --fix               Automatically remediate safe configuration issues (e.g. remove corrupt 0-byte shadowing binaries)
   --security, -s      Run extended security, code-signing, and trust diagnostics
   --help, -h          Show this help message
 
 Examples:
   felix doctor
+  felix doctor --fix
   felix doctor --security`)
 }
 
