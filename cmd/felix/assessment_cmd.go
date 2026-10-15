@@ -22,6 +22,7 @@ import (
 	"felix/pkg/businesslogic"
 	"felix/pkg/cloudsec"
 	"felix/pkg/correlation"
+	"felix/pkg/crawler"
 	"felix/pkg/report"
 	"felix/pkg/sessionsec"
 	"felix/pkg/verification"
@@ -1979,6 +1980,9 @@ func runAssessmentAuthz(args []string) int {
 		}
 		scopeVal := assessment.NewScopeValidator(asm.ScopeMode, targetURLs, asm.ScopeRules, asm.Exclusions)
 		authzHTTPClient := &http.Client{
+			Transport: crawler.NewSafeTransport(crawler.SafeTransportOptions{
+				Timeout: 15 * time.Second,
+			}),
 			Timeout: 15 * time.Second,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= 10 {
@@ -2374,6 +2378,9 @@ func runAssessmentAPISec(args []string) int {
 			cfg.AllowWriteTests = true
 		}
 		apisecHTTPClient := &http.Client{
+			Transport: crawler.NewSafeTransport(crawler.SafeTransportOptions{
+				Timeout: cfg.Timeout,
+			}),
 			Timeout: cfg.Timeout,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= 10 {
@@ -2817,6 +2824,9 @@ func runAssessmentWebVuln(args []string) int {
 		}
 
 		webvulnHTTPClient := &http.Client{
+			Transport: crawler.NewSafeTransport(crawler.SafeTransportOptions{
+				Timeout: cfg.Timeout,
+			}),
 			Timeout: cfg.Timeout,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= 10 {
@@ -3343,6 +3353,9 @@ func runAssessmentSessionSec(args []string) int {
 
 		cfg := sessionsec.DefaultConfig()
 		sessionHTTPClient := &http.Client{
+			Transport: crawler.NewSafeTransport(crawler.SafeTransportOptions{
+				Timeout: cfg.Timeout,
+			}),
 			Timeout: cfg.Timeout,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= 10 {
@@ -3870,7 +3883,11 @@ func runAssessmentCloudSec(args []string) int {
 		}
 
 		actx.ExecutionID = execID
-		engine := cloudsec.NewEngine(cloudsec.DefaultConfig())
+		cloudCfg := cloudsec.DefaultConfig()
+		cloudCfg.Transport = crawler.NewSafeTransport(crawler.SafeTransportOptions{
+			Timeout: cloudCfg.Timeout,
+		})
+		engine := cloudsec.NewEngine(cloudCfg)
 
 		fmt.Println("================================================================================")
 		fmt.Printf("  EXECUTING CLOUD SECURITY AUDIT: %s (%s)\n", asm.Ref, asm.Name)
@@ -4361,7 +4378,28 @@ func runAssessmentBusinessLogic(args []string) int {
 		actx.ExecutionID = execID
 		cfg := businesslogic.DefaultConfig()
 		cfg.AllowStateChanging = stateChanging
-		engine := businesslogic.NewEngine(nil, cfg)
+		var targetURLs []string
+		for _, t := range asm.Targets {
+			targetURLs = append(targetURLs, t.TargetURL)
+		}
+		scopeVal := assessment.NewScopeValidator(asm.ScopeMode, targetURLs, asm.ScopeRules, asm.Exclusions)
+		blogicHTTPClient := &http.Client{
+			Transport: crawler.NewSafeTransport(crawler.SafeTransportOptions{
+				Timeout: cfg.Timeout,
+			}),
+			Timeout: cfg.Timeout,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 10 {
+					return fmt.Errorf("stopped after 10 redirects")
+				}
+				lastURL := ""
+				if len(via) > 0 {
+					lastURL = via[len(via)-1].URL.String()
+				}
+				return scopeVal.ValidateRedirect(lastURL, req.URL.String())
+			},
+		}
+		engine := businesslogic.NewEngine(blogicHTTPClient, cfg)
 
 		fmt.Println("================================================================================")
 		fmt.Printf("FELIX BUSINESS LOGIC SECURITY ENGINE - ACTIVE EVALUATION\n")

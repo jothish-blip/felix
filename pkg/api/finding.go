@@ -3,8 +3,9 @@ package api
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"regexp"
 	"strings"
+
+	"felix/pkg/secrets"
 )
 
 // Severity and Confidence ratings for API findings.
@@ -74,28 +75,7 @@ func GenerateFingerprint(category, endpoint, method string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-var (
-	sensitiveAssignRegex = regexp.MustCompile(`(?i)(password|secret|key|token|auth|bearer|credential|api_key|private)\s*[:=]\s*["']?([^\s"'` + "`" + `,;]+)`)
-	jwtPatternRegex      = regexp.MustCompile(`\bey[A-Za-z0-9_-]{8,}\.ey[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+\b`)
-)
-
 // RedactEvidence sanitizes evidence strings to prevent leaking credentials or tokens.
 func RedactEvidence(input string) string {
-	// Redact JWT patterns
-	output := jwtPatternRegex.ReplaceAllString(input, "[REDACTED_JWT]")
-
-	// Redact key/secret assignments
-	output = sensitiveAssignRegex.ReplaceAllStringFunc(output, func(m string) string {
-		parts := strings.SplitN(m, "=", 2)
-		if len(parts) == 2 {
-			return parts[0] + "=[REDACTED]"
-		}
-		parts = strings.SplitN(m, ":", 2)
-		if len(parts) == 2 {
-			return parts[0] + ": [REDACTED]"
-		}
-		return "[REDACTED]"
-	})
-
-	return output
+	return secrets.RedactText(input)
 }

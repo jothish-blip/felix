@@ -5,12 +5,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"felix/pkg/crawler"
 )
@@ -441,3 +443,205 @@ func TestConcurrentCloudSafety(t *testing.T) {
 	wg.Wait()
 }
 
+// cloudMockResolver implements crawler.Resolver for deterministic offline DNS resolution tests in cloud auditing.
+type cloudMockResolver struct {
+	hosts map[string][]net.IPAddr
+}
+
+func newCloudMockResolver(entries map[string][]string) *cloudMockResolver {
+	hosts := make(map[string][]net.IPAddr)
+	for h, ipStrs := range entries {
+		var addrs []net.IPAddr
+		for _, ipStr := range ipStrs {
+			ip := net.ParseIP(ipStr)
+			if ip != nil {
+				addrs = append(addrs, net.IPAddr{IP: ip})
+			}
+		}
+		hosts[strings.ToLower(h)] = addrs
+	}
+	return &cloudMockResolver{hosts: hosts}
+}
+
+func (m *cloudMockResolver) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {
+	if addrs, ok := m.hosts[strings.ToLower(host)]; ok {
+		return addrs, nil
+	}
+	return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
+}
+
+// TestCloudDetector_SSRF_ProhibitedHostnamesBlocked proves that production cloud detector request paths
+// cannot reach prohibited destinations (IPv4/IPv6 IMDS, loopback, private) and that ZERO TCP connections occur.
+func TestCloudDetector_SSRF_ProhibitedHostnamesBlocked(t *testing.T) {
+	resolver := newCloudMockResolver(map[string][]string{
+		"imds.attacker.com":     {"169.254.169.254"},
+		"nitro.attacker.com":    {"fd00:ec2::254"},
+		"internal.attacker.com": {"10.0.0.1"},
+		"loopback.attacker.com": {"127.0.0.1"},
+	})
+
+	var tcpDials atomic.Int32
+	mockDialer := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		tcpDials.Add(1)
+		return nil, fmt.Errorf("unexpected TCP connection attempt to prohibited destination %s", addr)
+	}
+
+	safeTransport := crawler.NewSafeTransport(crawler.SafeTransportOptions{
+		Timeout:  2 * time.Second,
+		Resolver: resolver,
+		DialFunc: mockDialer,
+	})
+	safeClient := &http.Client{
+		Transport: safeTransport,
+		Timeout:   2 * time.Second,
+	}
+
+	client := NewClient(ClientOptions{
+		HTTPClient: safeClient,
+	})
+
+	// 1. Audit storage services pointing to prohibited hostnames
+	s3Svc := Service{Provider: ProviderAWS, URL: "https://imds.attacker.com/secret-bucket"}
+	findingsS3 := AuditStorage(context.Background(), client, s3Svc)
+	if len(findingsS3) > 0 {
+		t.Errorf("expected no findings on blocked IMDS storage service, got: %+v", findingsS3)
+	}
+
+	gcsSvc := Service{Provider: ProviderGCP, URL: "https://nitro.attacker.com/secret-bucket"}
+	findingsGCS := AuditStorage(context.Background(), client, gcsSvc)
+	if len(findingsGCS) > 0 {
+		t.Errorf("expected no findings on blocked IPv6 Nitro storage service, got: %+v", findingsGCS)
+	}
+
+	// 2. Audit Supabase pointing to prohibited hostname
+	sbSvc := Service{Provider: ProviderSupabase, URL: "https://internal.attacker.com"}
+	findingsSB := AuditSupabase(context.Background(), client, sbSvc, []string{"users"}, "", "")
+	if len(findingsSB) > 0 {
+		t.Errorf("expected no findings on blocked internal Supabase service, got: %+v", findingsSB)
+	}
+
+	// 3. Audit Firebase pointing to prohibited hostname
+	fbSvc := Service{Provider: ProviderFirebase, URL: "https://loopback.attacker.com"}
+	findingsFB := AuditFirebase(context.Background(), client, fbSvc)
+	if len(findingsFB) > 0 {
+		t.Errorf("expected no findings on blocked loopback Firebase service, got: %+v", findingsFB)
+	}
+
+	// 4. Critical assertion: EXACTLY ZERO TCP connections occurred through detector production paths
+	if dials := tcpDials.Load(); dials != 0 {
+		t.Fatalf("SECURITY FAILURE: %d TCP dial attempts were made against prohibited destinations in Cloud detector!", dials)
+	}
+
+	// 5. Verify default NewClient() also rejects prohibited IP literals via crawler.NewSafeTransport
+	defaultClient := NewClient()
+	prohibitedURLs := []string{
+		"http://169.254.169.254/latest/meta-data/",
+		"http://[fd00:ec2::254]/latest/meta-data/",
+		"http://127.0.0.1:8080/admin",
+		"http://10.0.0.1:8080/internal",
+	}
+	for _, u := range prohibitedURLs {
+		req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, u, nil)
+		_, err := defaultClient.Do(context.Background(), req)
+		if err == nil {
+			t.Fatalf("expected default cloud client to reject prohibited URL %s, but request succeeded", u)
+		}
+		if !strings.Contains(err.Error(), "SSRF security refusal") {
+			t.Errorf("expected SSRF security refusal for %s, got: %v", u, err)
+		}
+	}
+}
+
+func TestNewClient_DefaultsAndFallbacks(t *testing.T) {
+	// 1. Zero options
+	c1 := NewClient()
+	if c1.timeout != DefaultProbeTimeout {
+		t.Errorf("expected default timeout %v, got %v", DefaultProbeTimeout, c1.timeout)
+	}
+	if c1.maxResponseSize != DefaultMaxCloudResponse {
+		t.Errorf("expected default max response size %d, got %d", DefaultMaxCloudResponse, c1.maxResponseSize)
+	}
+	if c1.userAgent != DefaultUserAgent {
+		t.Errorf("expected default user agent %q, got %q", DefaultUserAgent, c1.userAgent)
+	}
+
+	// 2. Negative/zero values fall back to defaults
+	c2 := NewClient(ClientOptions{
+		Timeout:         -5 * time.Second,
+		MaxResponseSize: -1024,
+		UserAgent:       "",
+	})
+	if c2.timeout != DefaultProbeTimeout {
+		t.Errorf("expected fallback timeout %v, got %v", DefaultProbeTimeout, c2.timeout)
+	}
+	if c2.maxResponseSize != DefaultMaxCloudResponse {
+		t.Errorf("expected fallback max response size %d, got %d", DefaultMaxCloudResponse, c2.maxResponseSize)
+	}
+	if c2.userAgent != DefaultUserAgent {
+		t.Errorf("expected fallback user agent %q, got %q", DefaultUserAgent, c2.userAgent)
+	}
+
+	// 3. Custom options are preserved
+	customTimeout := 15 * time.Second
+	customMax := int64(2 * 1024 * 1024)
+	customUA := "CustomCloud/1.0"
+	c3 := NewClient(ClientOptions{
+		Timeout:         customTimeout,
+		MaxResponseSize: customMax,
+		UserAgent:       customUA,
+	})
+	if c3.timeout != customTimeout {
+		t.Errorf("expected timeout %v, got %v", customTimeout, c3.timeout)
+	}
+	if c3.maxResponseSize != customMax {
+		t.Errorf("expected max response size %d, got %d", customMax, c3.maxResponseSize)
+	}
+	if c3.userAgent != customUA {
+		t.Errorf("expected user agent %q, got %q", customUA, c3.userAgent)
+	}
+}
+
+
+// TestDetector_ScopeExclusion verifies that discovered cloud endpoints outside authorized
+// scope are NOT probed over the network, and are instead recorded as informational findings.
+func TestDetector_ScopeExclusion(t *testing.T) {
+	// Mock network detector with scope restricting to target.com
+	scopeTarget := "https://target.com"
+	isAllowed := func(u string) bool {
+		return strings.HasPrefix(u, scopeTarget)
+	}
+
+	detector := NewDetector(nil, isAllowed)
+
+	// Sample asset with external cloud service URLs
+	assetContent := `
+		const awsBucket = "https://external-client-bucket.s3.amazonaws.com";
+		const firebase = "https://external-auth-app.firebaseio.com";
+	`
+	assets := []crawler.Asset{
+		{
+			URL:     "https://target.com/app.js",
+			Content: []byte(assetContent),
+			InScope: true,
+		},
+	}
+
+	res := detector.Audit(context.Background(), assets, nil)
+	findings := res.Findings
+
+	if len(findings) == 0 {
+		t.Fatalf("expected out-of-scope informational findings, got 0")
+	}
+
+	for _, f := range findings {
+		if f.Category != "Discovered Cloud Service (Out of Scope)" {
+			t.Errorf("expected Category 'Discovered Cloud Service (Out of Scope)', got %q", f.Category)
+		}
+		if f.Severity != SeverityInfo {
+			t.Errorf("expected SeverityInfo for out-of-scope finding, got %s", f.Severity)
+		}
+		if !strings.Contains(f.Description, "outside authorized assessment scope") {
+			t.Errorf("expected description to mention outside authorized scope, got: %s", f.Description)
+		}
+	}
+}

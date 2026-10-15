@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -40,17 +41,22 @@ type AuditResult struct {
 
 // Detector identifies cloud vendor configurations and coordinates safe verification.
 type Detector struct {
-	client *Client
+	client    *Client
+	isAllowed func(string) bool
 }
 
-// NewDetector initializes a new Cloud & BaaS auditor.
-func NewDetector(client *Client) *Detector {
+// NewDetector initializes a new Cloud & BaaS auditor with optional scope authorization checker.
+func NewDetector(client *Client, isAllowed ...func(string) bool) *Detector {
 	if client == nil {
 		client = NewClient()
 	}
-	return &Detector{
+	d := &Detector{
 		client: client,
 	}
+	if len(isAllowed) > 0 && isAllowed[0] != nil {
+		d.isAllowed = isAllowed[0]
+	}
+	return d
 }
 
 // DiscoverServicesFromContent extracts recognized cloud endpoints from raw text.
@@ -229,6 +235,25 @@ func (d *Detector) Audit(ctx context.Context, assets []crawler.Asset, secretFind
 
 	// Audit discovered services
 	for _, svc := range services {
+		// Verify if the discovered service is within authorized assessment scope before network probing
+		if d.isAllowed != nil && !d.isAllowed(svc.URL) {
+			f := CloudFinding{
+				Provider:    svc.Provider,
+				Category:    "Discovered Cloud Service (Out of Scope)",
+				Endpoint:    svc.URL,
+				Description: fmt.Sprintf("Discovered %s service reference in client assets; active probing skipped (outside authorized assessment scope)", svc.Provider),
+				Evidence:    fmt.Sprintf("Discovered in %s: %s", svc.Source, svc.URL),
+				Severity:    SeverityInfo,
+				Confidence:  ConfidenceHigh,
+				Fingerprint: GenerateFingerprint(svc.Provider, svc.URL, "Discovered Cloud Service (Out of Scope)"),
+			}
+			if _, exists := seenFindingFPs[f.Fingerprint]; !exists {
+				seenFindingFPs[f.Fingerprint] = struct{}{}
+				allFindings = append(allFindings, f)
+			}
+			continue
+		}
+
 		var svcFindings []CloudFinding
 
 		switch svc.Provider {

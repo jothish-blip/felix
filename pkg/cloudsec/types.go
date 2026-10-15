@@ -4,12 +4,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"net/url"
-	"regexp"
-	"strings"
+	"net/http"
 	"time"
 
 	"felix/pkg/report"
+	"felix/pkg/secrets"
 )
 
 // Provider identifies the target cloud platform.
@@ -283,6 +282,7 @@ type Config struct {
 	EnableExternal  bool
 	EnableAPIChecks bool
 	CanaryCallback  string
+	Transport       http.RoundTripper
 }
 
 // DefaultConfig provides safe, bounded defaults.
@@ -300,25 +300,9 @@ func DefaultConfig() Config {
 // Secret Safety & Redaction Helpers
 // -------------------------------------------------------------------------
 
-var (
-	awsKeyRegex      = regexp.MustCompile(`(?i)(AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16}`)
-	jwtTokenRegex    = regexp.MustCompile(`\beyJ[a-zA-Z0-9_\-]{10,}\.eyJ[a-zA-Z0-9_\-]{10,}\.[a-zA-Z0-9_\-]{10,}\b`)
-	bearerRegex      = regexp.MustCompile(`(?i)Bearer\s+[a-zA-Z0-9_\-\.~+/]+=*`)
-	privateKeyRegex  = regexp.MustCompile(`(?s)-----BEGIN [A-Z ]+PRIVATE KEY-----.*?-----END [A-Z ]+PRIVATE KEY-----`)
-	secretParamRegex = regexp.MustCompile(`(?i)(sig|token|key|secret|password|auth|signature|code)=([^\s&"']+)`)
-)
-
 // RedactText sanitizes text by replacing secrets, tokens, and private keys.
 func RedactText(s string) string {
-	if s == "" {
-		return ""
-	}
-	s = privateKeyRegex.ReplaceAllString(s, "[REDACTED_PRIVATE_KEY]")
-	s = jwtTokenRegex.ReplaceAllString(s, "[REDACTED_JWT]")
-	s = bearerRegex.ReplaceAllString(s, "Bearer [REDACTED]")
-	s = awsKeyRegex.ReplaceAllString(s, "[REDACTED_AWS_KEY]")
-	s = secretParamRegex.ReplaceAllString(s, "$1=[REDACTED]")
-	return s
+	return secrets.RedactText(s)
 }
 
 // HashSecret produces a safe, one-way fingerprint of a secret for comparison.
@@ -332,21 +316,7 @@ func HashSecret(secret string) string {
 
 // SanitizeURL strips sensitive parameters from URL strings.
 func SanitizeURL(rawURL string) string {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return RedactText(rawURL)
-	}
-	q := u.Query()
-	for k := range q {
-		lower := strings.ToLower(k)
-		if strings.Contains(lower, "token") || strings.Contains(lower, "sig") ||
-			strings.Contains(lower, "key") || strings.Contains(lower, "secret") ||
-			strings.Contains(lower, "auth") || strings.Contains(lower, "code") {
-			q.Set(k, "[REDACTED]")
-		}
-	}
-	u.RawQuery = q.Encode()
-	return u.String()
+	return secrets.SanitizeURL(rawURL)
 }
 
 // MaskIdentifier masks sensitive account numbers or resource IDs for display.

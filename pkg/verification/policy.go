@@ -101,6 +101,33 @@ func (bp *BasePolicy) createResult(
 	}
 
 	confRes := ComputeConfidence(detConf, verConf, status, hasContradiction, synthetic, mandatoryPassed)
+	if safety.Decision == DecisionBlocked || !attempted || method == "safety_block" {
+		confRes.OverallConfidence = confRes.DetectionConfidence
+	}
+
+	var fStatus report.FindingStatus
+	if safety.Decision == DecisionBlocked || (!attempted && status == StatusNotVerified) {
+		fStatus = report.FindingStatusNotTested
+	} else if failureReason != "" && attempted {
+		fStatus = report.FindingStatusError
+	} else if attempted && (inconclusiveReason != "" || status == StatusNotExposed) {
+		fStatus = report.FindingStatusInconclusive
+	} else if status == StatusVerified {
+		fStatus = report.FindingStatusConfirmed
+	} else if status == StatusDetected {
+		fStatus = report.FindingStatusSuspected
+	} else {
+		fStatus = report.FindingStatusFromVerification(status)
+	}
+
+	var aMethod report.AnalysisMethod
+	if attempted {
+		aMethod = report.AnalysisMethodActive
+	} else if f.AnalysisMethod != "" {
+		aMethod = f.AnalysisMethod
+	} else {
+		aMethod = report.AnalysisMethodStatic
+	}
 
 	repro := BuildReproductionContext(
 		f,
@@ -128,6 +155,8 @@ func (bp *BasePolicy) createResult(
 		Endpoint:               f.Endpoint,
 		Category:               f.Category,
 		Status:                 status,
+		FindingStatus:          fStatus,
+		AnalysisMethod:         aMethod,
 		VerificationMethod:     method,
 		PolicyID:               bp.id,
 		PolicyVersion:          bp.version,
@@ -220,13 +249,13 @@ func (p *DiscoveryExposurePolicy) Verify(ctx context.Context, f report.Finding, 
 		})
 
 		return p.createResult(
-			f, StatusNotVerified, "static_pattern_analysis", true,
-			f.Confidence, ConfidenceLow, criteria,
+			f, StatusNotVerified, "static_pattern_analysis", false,
+			f.Confidence, ConfidenceNone, criteria,
 			"Credential confirmed functional on live provider endpoint",
 			"Pattern identified in client asset; live credential validation skipped for safety",
 			[]string{"Client assets parsed"},
 			[]string{"Live credential testing not executed"},
-			"", "Live credential validity not tested",
+			"", "",
 			safety, synthetic, start,
 		), nil
 	}

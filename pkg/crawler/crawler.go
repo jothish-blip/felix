@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -69,27 +70,26 @@ func New(cfg Config) *Crawler {
 			tlsConfig.InsecureSkipVerify = true
 		}
 
-		transport := &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
-			DialContext: (&net.Dialer{
-				Timeout:   cfg.Timeout,
-				KeepAlive: 30 * time.Second,
-			}).DialContext,
-			MaxIdleConns:          100,
-			MaxIdleConnsPerHost:   20,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
-			ForceAttemptHTTP2:     true,
-			TLSClientConfig:       tlsConfig,
-		}
+		transport := NewSafeTransport(SafeTransportOptions{
+			Timeout:            cfg.Timeout,
+			AllowLoopback:      cfg.AllowLoopback,
+			AllowPrivateIPs:    cfg.AllowPrivateIPs,
+			InsecureSkipVerify: cfg.InsecureSkipVerify,
+			TLSConfig:          tlsConfig,
+			Resolver:           cfg.Resolver,
+			DialFunc:           cfg.DialFunc,
+		})
 
+		redirectLimit := cfg.MaxRedirects
+		if redirectLimit <= 0 {
+			redirectLimit = 10
+		}
 		client = &http.Client{
 			Transport: transport,
 			Timeout:   cfg.Timeout,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if len(via) >= 10 {
-					return fmt.Errorf("stopped after 10 redirects")
+				if len(via) >= redirectLimit {
+					return fmt.Errorf("stopped after %d redirects", redirectLimit)
 				}
 				return nil
 			},
@@ -105,7 +105,7 @@ func New(cfg Config) *Crawler {
 // ExtractScripts fetches a single HTML page and extracts all resolved <script src="..."> URLs.
 // Preserved for backward compatibility.
 func (c *Crawler) ExtractScripts(ctx context.Context, rawURL string) ([]string, error) {
-	parsedBase, err := url.Parse(rawURL)
+	parsedBase, err := ValidateTargetURL(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid target URL: %w", err)
 	}
@@ -141,18 +141,43 @@ func (c *Crawler) scopedClientForTarget(scope *Scope) *http.Client {
 	base := c.client
 	origCheck := base.CheckRedirect
 
+	redirectLimit := c.config.MaxRedirects
+	if redirectLimit <= 0 {
+		redirectLimit = 10
+	}
+
 	return &http.Client{
 		Transport: base.Transport,
 		Timeout:   base.Timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 {
-				return fmt.Errorf("stopped after 10 redirects")
+			if len(via) >= redirectLimit {
+				return fmt.Errorf("stopped after %d redirects", redirectLimit)
 			}
 			if origCheck != nil {
 				if err := origCheck(req, via); err != nil {
 					return err
 				}
 			}
+
+			// Validate scheme: only http and https are permitted
+			scheme := strings.ToLower(req.URL.Scheme)
+			if scheme != "http" && scheme != "https" {
+				return fmt.Errorf("redirect to unsupported scheme %q blocked", req.URL.Scheme)
+			}
+
+			// Block embedded credentials in redirect URLs
+			if req.URL.User != nil {
+				return fmt.Errorf("redirect with embedded credentials blocked")
+			}
+
+			// Check IP literal destinations in redirect immediately
+			destHost := req.URL.Hostname()
+			if ip := net.ParseIP(destHost); ip != nil {
+				if prohibited, reason := ProhibitedIPReason(ip, c.config.AllowLoopback, c.config.AllowPrivateIPs); prohibited {
+					return &SSRFError{Host: destHost, IP: ip, Reason: reason}
+				}
+			}
+
 			nextURL := req.URL.String()
 			if c.config.IsExcluded != nil && c.config.IsExcluded(nextURL) {
 				return fmt.Errorf("redirect to %s blocked: matches exclusion rule", nextURL)
@@ -293,7 +318,7 @@ func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
 
 	// Phase 1: Download discovered assets
 	for _, da := range toDownload {
-		inScope := scope.IsAllowed(da.URL)
+		inScope := scope.IsAllowed(da.URL) && (c.config.IsAllowed == nil || c.config.IsAllowed(da.URL)) && (c.config.IsExcluded == nil || !c.config.IsExcluded(da.URL))
 		if !inScope {
 			assetsMu.Lock()
 			assets = append(assets, Asset{
@@ -306,18 +331,25 @@ func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
 			continue
 		}
 
-		wg.Add(1)
-		sem <- struct{}{}
+		if ctx.Err() != nil {
+			break
+		}
 
-		go func(item DiscoveredAsset) {
-			defer wg.Done()
-			defer func() { <-sem }()
+		select {
+		case <-ctx.Done():
+			break
+		case sem <- struct{}{}:
+			wg.Add(1)
+			go func(item DiscoveredAsset) {
+				defer wg.Done()
+				defer func() { <-sem }()
 
-			downloaded := c.downloadAsset(ctx, targetClient, item.URL, item.Type)
-			assetsMu.Lock()
-			assets = append(assets, downloaded)
-			assetsMu.Unlock()
-		}(da)
+				downloaded := c.downloadAsset(ctx, targetClient, item.URL, item.Type)
+				assetsMu.Lock()
+				assets = append(assets, downloaded)
+				assetsMu.Unlock()
+			}(da)
+		}
 	}
 
 	wg.Wait()
@@ -357,7 +389,7 @@ func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
 
 	// Download discovered source maps
 	for _, smURL := range sourceMapJobs {
-		inScope := scope.IsAllowed(smURL)
+		inScope := scope.IsAllowed(smURL) && (c.config.IsAllowed == nil || c.config.IsAllowed(smURL)) && (c.config.IsExcluded == nil || !c.config.IsExcluded(smURL))
 		if !inScope {
 			assetsMu.Lock()
 			assets = append(assets, Asset{
@@ -371,21 +403,28 @@ func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
 			continue
 		}
 
-		wg.Add(1)
-		sem <- struct{}{}
+		if ctx.Err() != nil {
+			break
+		}
 
-		go func(targetURL string) {
-			defer wg.Done()
-			defer func() { <-sem }()
+		select {
+		case <-ctx.Done():
+			break
+		case sem <- struct{}{}:
+			wg.Add(1)
+			go func(targetURL string) {
+				defer wg.Done()
+				defer func() { <-sem }()
 
-			smAsset := c.downloadAsset(ctx, targetClient, targetURL, AssetSourceMap)
-			smAsset.Type = AssetSourceMap
-			smAsset.IsSourceMap = true
-			smAsset.Provenance = ProvenanceStatic
-			assetsMu.Lock()
-			assets = append(assets, smAsset)
-			assetsMu.Unlock()
-		}(smURL)
+				smAsset := c.downloadAsset(ctx, targetClient, targetURL, AssetSourceMap)
+				smAsset.Type = AssetSourceMap
+				smAsset.IsSourceMap = true
+				smAsset.Provenance = ProvenanceStatic
+				assetsMu.Lock()
+				assets = append(assets, smAsset)
+				assetsMu.Unlock()
+			}(smURL)
+		}
 	}
 
 	wg.Wait()
@@ -478,6 +517,22 @@ func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
 
 // downloadAsset fetches an individual asset subject to size limits and error handling.
 func (c *Crawler) downloadAsset(ctx context.Context, client *http.Client, assetURL string, defaultType AssetType) Asset {
+	if _, err := ValidateTargetURL(assetURL); err != nil {
+		return Asset{
+			URL:     assetURL,
+			Type:    defaultType,
+			InScope: false,
+			Error:   fmt.Errorf("invalid asset URL: %w", err),
+		}
+	}
+	if (c.config.IsExcluded != nil && c.config.IsExcluded(assetURL)) || (c.config.IsAllowed != nil && !c.config.IsAllowed(assetURL)) {
+		return Asset{
+			URL:     assetURL,
+			Type:    defaultType,
+			InScope: false,
+			Error:   errors.New("asset blocked: outside authorized scope or excluded"),
+		}
+	}
 	if client == nil {
 		client = c.client
 	}
@@ -804,9 +859,19 @@ func (c *Crawler) CrawlConcurrently(ctx context.Context, targets []string) <-cha
 		defer close(results)
 
 		for _, target := range targets {
-			wg.Add(1)
-			sem <- struct{}{}
+			if ctx.Err() != nil {
+				results <- Result{Target: target, Err: ctx.Err()}
+				continue
+			}
 
+			select {
+			case <-ctx.Done():
+				results <- Result{Target: target, Err: ctx.Err()}
+				continue
+			case sem <- struct{}{}:
+			}
+
+			wg.Add(1)
 			go func(t string) {
 				defer wg.Done()
 				defer func() { <-sem }()

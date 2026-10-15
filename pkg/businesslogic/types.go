@@ -4,12 +4,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"net/url"
-	"regexp"
-	"strings"
 	"time"
 
 	"felix/pkg/report"
+	"felix/pkg/secrets"
 )
 
 // BLCategory defines the 8 business logic security categories.
@@ -374,41 +372,14 @@ func DefaultConfig() Config {
 // Redaction & URL Sanitization Helpers
 // -------------------------------------------------------------------------
 
-var (
-	tokenRegex    = regexp.MustCompile(`(?i)(bearer\s+[a-z0-9_\-\.~+/]+=*|eyj[a-z0-9_\-]{10,}\.[a-z0-9_\-]{10,}\.[a-z0-9_\-]+)`)
-	creditCardRegex = regexp.MustCompile(`\b(?:\d{4}[-\s]?){3}\d{4}\b`)
-	secretParamRegex = regexp.MustCompile(`(?i)(sig|token|key|secret|password|auth|cvv|pin|card)=([^\s&"']+)`)
-)
-
 // RedactText removes sensitive credentials, tokens, and payment card numbers.
 func RedactText(s string) string {
-	if s == "" {
-		return ""
-	}
-	s = tokenRegex.ReplaceAllString(s, "Bearer [REDACTED_TOKEN]")
-	s = creditCardRegex.ReplaceAllString(s, "[REDACTED_CARD_NUMBER]")
-	s = secretParamRegex.ReplaceAllString(s, "$1=[REDACTED]")
-	return s
+	return secrets.RedactText(s)
 }
 
 // SanitizeURL strips sensitive query parameters from target URLs.
 func SanitizeURL(rawURL string) string {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return RedactText(rawURL)
-	}
-	q := u.Query()
-	for k := range q {
-		lower := strings.ToLower(k)
-		if strings.Contains(lower, "token") || strings.Contains(lower, "sig") ||
-			strings.Contains(lower, "key") || strings.Contains(lower, "secret") ||
-			strings.Contains(lower, "card") || strings.Contains(lower, "cvv") ||
-			strings.Contains(lower, "auth") || strings.Contains(lower, "code") {
-			q.Set(k, "[REDACTED]")
-		}
-	}
-	u.RawQuery = q.Encode()
-	return u.String()
+	return secrets.SanitizeURL(rawURL)
 }
 
 // HashIdentifier produces a safe one-way fingerprint of an identifier.

@@ -73,30 +73,51 @@ func (e *Engine) AnalyzeAuthentication(
 					score = 25
 				}
 
+				ruleID := "AUTH-COOKIE-DEFECT"
+				fStatus := report.FindingStatusSuspected
+				if verificationStatus == report.VerificationObserved || verificationStatus == report.VerificationVerified {
+					fStatus = report.FindingStatusConfirmed
+				}
 				fp := fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%s:cookie:%s:%s", targetURL, c.Name, defect))))
+				fID := report.ComputeStableFindingID(targetURL, ruleID, "Authentication / Session Security", c.Path, "GET", fp)
+				loc := fmt.Sprintf("Set-Cookie Header on %s", SanitizeURL(targetURL))
+				evSummary := fmt.Sprintf("Cookie name: %s | Secure: %t | HttpOnly: %t | SameSite: %s", c.Name, c.IsSecure, c.IsHTTPOnly, c.SameSite)
+				prov := report.NewEvidenceProvenance("auth", ruleID, fID, "", "http_response", loc, "PASSIVE_COOKIE_INSPECTION", evSummary)
+				prov.AssessmentID = asmID
+				prov.ExecutionID = execID
+				prov.TargetID = targetID
+
+				evDetails := report.EvidenceDetails{
+					Observation:     defect,
+					Location:        loc,
+					HTTPMethod:      "GET",
+					DetectionMethod: "PASSIVE_COOKIE_INSPECTION",
+					Provenance:      &prov,
+				}
+
 				findings = append(findings, report.Finding{
-					ID:          uuid.New().String(),
-					Title:       fmt.Sprintf("Session Cookie Security Defect: %s (%s)", c.Name, defect),
-					Category:    "Authentication / Session Security",
-					Severity:    severity,
-					Confidence:  report.ConfidenceHigh,
-					Target:      SanitizeURL(targetURL),
-					Endpoint:    SanitizeURL(c.Path),
-					Method:      "GET",
-					Description: fmt.Sprintf("Session cookie '%s' observed with security defect: %s.", c.Name, defect),
-					Evidence:    fmt.Sprintf("Cookie name: %s | Secure: %t | HttpOnly: %t | SameSite: %s", c.Name, c.IsSecure, c.IsHTTPOnly, c.SameSite),
-					EvidenceDetails: report.EvidenceDetails{
-						Observation:     defect,
-						Location:        fmt.Sprintf("Set-Cookie Header on %s", SanitizeURL(targetURL)),
-						HTTPMethod:      "GET",
-						DetectionMethod: "PASSIVE_COOKIE_INSPECTION",
-					},
+					ID:              fID,
+					RuleID:          ruleID,
+					Status:          fStatus,
+					AnalysisMethod:  report.AnalysisMethodStatic,
+					Title:           fmt.Sprintf("Session Cookie Security Defect: %s (%s)", c.Name, defect),
+					Category:        "Authentication / Session Security",
+					Severity:        severity,
+					Confidence:      report.ConfidenceHigh,
+					Target:          SanitizeURL(targetURL),
+					Endpoint:        SanitizeURL(c.Path),
+					Method:          "GET",
+					Description:     fmt.Sprintf("Session cookie '%s' observed with security defect: %s.", c.Name, defect),
+					Evidence:        evSummary,
+					EvidenceDetails: evDetails,
 					Verification: report.VerificationRecord{
-						Status:    verificationStatus,
-						Result:    "Observed cookie attributes on authorized response",
-						Rationale: rationale,
+						Status:         verificationStatus,
+						AnalysisMethod: report.AnalysisMethodStatic,
+						Result:         "Observed cookie attributes on authorized response",
+						Rationale:      rationale,
 					},
 					Remediation: "", // Explicitly deferred in Stage 3 per specification
+					Provenance:  &prov,
 					Source:      "auth",
 					Fingerprint: fp,
 					Score:       score,
@@ -113,29 +134,42 @@ func (e *Engine) AnalyzeAuthentication(
 
 		for _, t := range tokens {
 			if t.TokenType == "PKCE" && t.Algorithm == "PLAIN" {
+				ruleID := "AUTH-PKCE-PLAIN"
 				fp := fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%s:pkce:plain", asset.URL))))
+				fID := report.ComputeStableFindingID(targetURL, ruleID, "Authentication / OAuth PKCE", asset.URL, "GET", fp)
+				prov := report.NewEvidenceProvenance("auth", ruleID, fID, "", "source_code", SanitizeURL(asset.URL), "STATIC_SCRIPT_TOKEN_ANALYSIS", t.EvidenceSummary)
+				prov.AssessmentID = asmID
+				prov.ExecutionID = execID
+				prov.TargetID = targetID
+
 				findings = append(findings, report.Finding{
-					ID:          uuid.New().String(),
-					Title:       "Potential Insecure PKCE Configuration (plain code_challenge_method)",
-					Category:    "Authentication / OAuth PKCE",
-					Severity:    report.SeverityInfo,
-					Confidence:  report.ConfidenceMedium,
-					Target:      SanitizeURL(targetURL),
-					Endpoint:    SanitizeURL(asset.URL),
-					Method:      "GET",
-					Description: "Client authentication bundle was observed declaring code_challenge_method='plain'. RFC 7636 recommends 'S256' for secure authorization code interception defense. Server-side rejection of plain method was not verified to preserve non-destructive testing.",
-					Evidence:    t.EvidenceSummary,
+					ID:             fID,
+					RuleID:         ruleID,
+					Status:         report.FindingStatusSuspected,
+					AnalysisMethod: report.AnalysisMethodStatic,
+					Title:          "Potential Insecure PKCE Configuration (plain code_challenge_method)",
+					Category:       "Authentication / OAuth PKCE",
+					Severity:       report.SeverityInfo,
+					Confidence:     report.ConfidenceMedium,
+					Target:         SanitizeURL(targetURL),
+					Endpoint:       SanitizeURL(asset.URL),
+					Method:         "GET",
+					Description:    "Client authentication bundle was observed declaring code_challenge_method='plain'. RFC 7636 recommends 'S256' for secure authorization code interception defense. Server-side rejection of plain method was not verified to preserve non-destructive testing.",
+					Evidence:       t.EvidenceSummary,
 					EvidenceDetails: report.EvidenceDetails{
 						Observation:     "PKCE plain method observed in script configuration",
 						Location:        SanitizeURL(asset.URL),
 						DetectionMethod: "STATIC_SCRIPT_TOKEN_ANALYSIS",
+						Provenance:      &prov,
 					},
 					Verification: report.VerificationRecord{
-						Status:    report.VerificationNotVerified,
-						Result:    "Static parameter configuration for code_challenge_method=plain observed in client script",
-						Rationale: "Static parameter detected in client asset bundle; live OAuth exchange was not initiated to preserve non-destructive testing",
+						Status:         report.VerificationNotVerified,
+						AnalysisMethod: report.AnalysisMethodStatic,
+						Result:         "Static parameter configuration for code_challenge_method=plain observed in client script",
+						Rationale:      "Static parameter detected in client asset bundle; live OAuth exchange was not initiated to preserve non-destructive testing",
 					},
 					Remediation: "",
+					Provenance:  &prov,
 					Source:      "auth",
 					Fingerprint: fp,
 					Score:       10,
@@ -143,29 +177,42 @@ func (e *Engine) AnalyzeAuthentication(
 			}
 
 			if t.TokenType == "JWT" && strings.EqualFold(t.Algorithm, "none") {
+				ruleID := "AUTH-JWT-ALG-NONE"
 				fp := fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%s:jwt:none", asset.URL))))
+				fID := report.ComputeStableFindingID(targetURL, ruleID, "Authentication / Token Security", asset.URL, "GET", fp)
+				prov := report.NewEvidenceProvenance("auth", ruleID, fID, "", "token_artifact", SanitizeURL(asset.URL), "STATIC_JWT_HEADER_ANALYSIS", t.EvidenceSummary)
+				prov.AssessmentID = asmID
+				prov.ExecutionID = execID
+				prov.TargetID = targetID
+
 				findings = append(findings, report.Finding{
-					ID:          uuid.New().String(),
-					Title:       "Unverified JWT Structure Declaring Algorithm 'none' in Client Asset",
-					Category:    "Authentication / Token Security",
-					Severity:    report.SeverityInfo,
-					Confidence:  report.ConfidenceMedium,
-					Target:      SanitizeURL(targetURL),
-					Endpoint:    SanitizeURL(asset.URL),
-					Method:      "GET",
-					Description: "A JWT-like structure declaring algorithm 'none' was statically identified in client assets. Server-side token acceptance was not verified, as token replay is strictly prohibited during passive auditing.",
-					Evidence:    t.EvidenceSummary,
+					ID:             fID,
+					RuleID:         ruleID,
+					Status:         report.FindingStatusSuspected,
+					AnalysisMethod: report.AnalysisMethodStatic,
+					Title:          "Unverified JWT Structure Declaring Algorithm 'none' in Client Asset",
+					Category:       "Authentication / Token Security",
+					Severity:       report.SeverityInfo,
+					Confidence:     report.ConfidenceMedium,
+					Target:         SanitizeURL(targetURL),
+					Endpoint:       SanitizeURL(asset.URL),
+					Method:         "GET",
+					Description:    "A JWT-like structure declaring algorithm 'none' was statically identified in client assets. Server-side token acceptance was not verified, as token replay is strictly prohibited during passive auditing.",
+					Evidence:       t.EvidenceSummary,
 					EvidenceDetails: report.EvidenceDetails{
 						Observation:     "JWT header specifies alg=none",
 						Location:        SanitizeURL(asset.URL),
 						DetectionMethod: "STATIC_JWT_HEADER_ANALYSIS",
+						Provenance:      &prov,
 					},
 					Verification: report.VerificationRecord{
-						Status:    report.VerificationNotVerified,
-						Result:    "Static observation of JWT header declaring alg=none in client asset",
-						Rationale: "Header was decoded statically from client bundle; server-side token acceptance was not verified to prevent unauthorized session replay",
+						Status:         report.VerificationNotVerified,
+						AnalysisMethod: report.AnalysisMethodStatic,
+						Result:         "Static observation of JWT header declaring alg=none in client asset",
+						Rationale:      "Header was decoded statically from client bundle; server-side token acceptance was not verified to prevent unauthorized session replay",
 					},
 					Remediation: "",
+					Provenance:  &prov,
 					Source:      "auth",
 					Fingerprint: fp,
 					Score:       10,

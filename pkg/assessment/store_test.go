@@ -2358,3 +2358,110 @@ func TestScenarioF_PersistenceAndRepeatExecution(t *testing.T) {
 		t.Errorf("expected 0 findings and 0 verified paths, got %+v", emptySummary)
 	}
 }
+
+func TestStore_CommonAssetModelRoundTrip(t *testing.T) {
+	store, cleanup := newTestStore(t)
+	defer cleanup()
+
+	asmID := "asm-" + uuid.New().String()
+	execID := "exec-" + uuid.New().String()
+	targetID := "tgt-" + uuid.New().String()
+
+	// Setup client, assessment, and execution in SQLite
+	client := &Client{ID: uuid.New().String(), Name: "Asset Corp", Organization: "Asset Corp Ltd"}
+	if err := store.CreateClient(client); err != nil {
+		t.Fatalf("CreateClient failed: %v", err)
+	}
+	asm := &Assessment{ID: asmID, ClientID: client.ID, Name: "Asset Model Test", Ref: "ASM-AST-01", Status: StatusRunning}
+	if err := store.CreateAssessment(asm); err != nil {
+		t.Fatalf("CreateAssessment failed: %v", err)
+	}
+	exec := &AssessmentExecution{ID: execID, AssessmentID: asmID, Status: StatusRunning, StartedAt: time.Now().UTC()}
+	if err := store.CreateExecution(exec); err != nil {
+		t.Fatalf("CreateExecution failed: %v", err)
+	}
+
+	// 1. Create all 7 asset categories using constructors
+	app := discovery.NewApplicationAsset(asmID, execID, targetID, "https://app.test.corp", discovery.ApplicationDetails{
+		AppType: "spa", RootURL: "https://app.test.corp", TechStack: []string{"Vue", "FastAPI"},
+	})
+	host := discovery.NewHostAsset(asmID, execID, targetID, "app.test.corp", discovery.HostDetails{
+		Hostname: "app.test.corp", IPAddresses: []string{"192.168.1.100"}, Infrastructure: "cloud",
+	})
+	endpoint := discovery.NewEndpointAsset(asmID, execID, targetID, "GET", "https://app.test.corp/api/v1/health", discovery.EndpointDetails{
+		URL: "https://app.test.corp/api/v1/health", HTTPMethod: "GET", Path: "/api/v1/health", HTTPStatus: 200, Authenticated: false,
+	})
+	service := discovery.NewServiceAsset(asmID, execID, targetID, "app.test.corp", 443, "tcp", discovery.ServiceDetails{
+		ServiceName: "https", Port: 443, Protocol: "tcp", Transport: "tls", Banner: "uvicorn",
+	})
+	database := discovery.NewDatabaseAsset(asmID, execID, targetID, "postgres", "db.test.corp", 5432, "app_db", discovery.DatabaseDetails{
+		Engine: "postgres", Host: "db.test.corp", Port: 5432, InstanceName: "app_db", PubliclyAccessible: false,
+	})
+	storage := discovery.NewStorageAsset(asmID, execID, targetID, "aws_s3", "test-bucket", discovery.StorageDetails{
+		Provider: "aws_s3", BucketName: "test-bucket", PublicRead: false,
+	})
+	apk := discovery.NewAPKAsset(asmID, execID, targetID, "corp.test.mobile", "hash987654321", discovery.APKDetails{
+		PackageName: "corp.test.mobile", VersionName: "1.2.0", VersionCode: 120, SHA256: "hash987654321",
+	})
+
+	assets := []discovery.Asset{app, host, endpoint, service, database, storage, apk}
+	relations := []discovery.Relation{
+		{AssessmentID: asmID, ExecutionID: execID, SourceAssetID: host.ID, TargetAssetID: app.ID, RelationType: discovery.RelHostsApplication, Confidence: discovery.ConfidenceHigh},
+		{AssessmentID: asmID, ExecutionID: execID, SourceAssetID: app.ID, TargetAssetID: endpoint.ID, RelationType: discovery.RelExposesEndpoint, Confidence: discovery.ConfidenceHigh},
+		{AssessmentID: asmID, ExecutionID: execID, SourceAssetID: app.ID, TargetAssetID: database.ID, RelationType: discovery.RelUsesDatabase, Confidence: discovery.ConfidenceHigh},
+		{AssessmentID: asmID, ExecutionID: execID, SourceAssetID: app.ID, TargetAssetID: storage.ID, RelationType: discovery.RelUsesStorage, Confidence: discovery.ConfidenceHigh},
+		{AssessmentID: asmID, ExecutionID: execID, SourceAssetID: app.ID, TargetAssetID: apk.ID, RelationType: discovery.RelRelatedApplication, Confidence: discovery.ConfidenceHigh},
+	}
+
+	// 2. Persist to SQLite
+	if err := store.SaveInventory(assets, relations); err != nil {
+		t.Fatalf("SaveInventory failed: %v", err)
+	}
+
+	// 3. Read back from SQLite
+	loadedAssets, loadedRelations, err := store.GetInventory(asmID, execID, "", false)
+	if err != nil {
+		t.Fatalf("GetInventory failed: %v", err)
+	}
+
+	if len(loadedAssets) != 7 {
+		t.Fatalf("expected 7 loaded assets, got %d", len(loadedAssets))
+	}
+	if len(loadedRelations) != 5 {
+		t.Fatalf("expected 5 loaded relations, got %d", len(loadedRelations))
+	}
+
+	// 4. Verify all 7 asset categories had their typed struct pointers properly hydrated
+	for _, a := range loadedAssets {
+		switch a.Type {
+		case discovery.AssetTypeApplication:
+			if a.Application == nil || a.Application.AppType != "spa" {
+				t.Fatalf("expected Application details hydrated with AppType=spa, got: %+v", a.Application)
+			}
+		case discovery.AssetTypeHost:
+			if a.Host == nil || a.Host.Hostname != "app.test.corp" {
+				t.Fatalf("expected Host details hydrated with Hostname=app.test.corp, got: %+v", a.Host)
+			}
+		case discovery.AssetTypeEndpoint:
+			if a.Endpoint == nil || a.Endpoint.Path != "/api/v1/health" {
+				t.Fatalf("expected Endpoint details hydrated with Path=/api/v1/health, got: %+v", a.Endpoint)
+			}
+		case discovery.AssetTypeService:
+			if a.Service == nil || a.Service.Port != 443 {
+				t.Fatalf("expected Service details hydrated with Port=443, got: %+v", a.Service)
+			}
+		case discovery.AssetTypeDatabase:
+			if a.Database == nil || a.Database.InstanceName != "app_db" {
+				t.Fatalf("expected Database details hydrated with InstanceName=app_db, got: %+v", a.Database)
+			}
+		case discovery.AssetTypeStorage:
+			if a.Storage == nil || a.Storage.BucketName != "test-bucket" {
+				t.Fatalf("expected Storage details hydrated with BucketName=test-bucket, got: %+v", a.Storage)
+			}
+		case discovery.AssetTypeAPK:
+			if a.APK == nil || a.APK.PackageName != "corp.test.mobile" {
+				t.Fatalf("expected APK details hydrated with PackageName=corp.test.mobile, got: %+v", a.APK)
+			}
+		}
+	}
+}

@@ -83,6 +83,7 @@ func TestBrowserDiscovery_JSRenderedRoute(t *testing.T) {
 	defer ts.Close()
 
 	cfg := DefaultConfig()
+	cfg.AllowLoopback = true
 	cfg.BrowserDiscovery = BrowserDiscoveryOptions{
 		Enabled: true,
 		Driver: &MockBrowserDriver{
@@ -155,6 +156,7 @@ func TestBrowserDiscovery_InteractionRevealedLink(t *testing.T) {
 	defer ts.Close()
 
 	cfg := DefaultConfig()
+	cfg.AllowLoopback = true
 	cfg.BrowserDiscovery = BrowserDiscoveryOptions{
 		Enabled: true,
 		Driver: &MockBrowserDriver{
@@ -203,6 +205,7 @@ func TestBrowserDiscovery_RuntimeAPIRequests(t *testing.T) {
 	defer ts.Close()
 
 	cfg := DefaultConfig()
+	cfg.AllowLoopback = true
 	cfg.BrowserDiscovery = BrowserDiscoveryOptions{
 		Enabled: true,
 		Driver: &MockBrowserDriver{
@@ -252,6 +255,7 @@ func TestBrowserDiscovery_OutOfScopeBlocked(t *testing.T) {
 	defer ts.Close()
 
 	cfg := DefaultConfig()
+	cfg.AllowLoopback = true
 	cfg.ScopeMode = ScopeSameOrigin
 	cfg.BrowserDiscovery = BrowserDiscoveryOptions{
 		Enabled: true,
@@ -298,6 +302,7 @@ func TestBrowserDiscovery_HangingPageTimeout(t *testing.T) {
 	defer ts.Close()
 
 	cfg := DefaultConfig()
+	cfg.AllowLoopback = true
 	cfg.BrowserDiscovery = BrowserDiscoveryOptions{
 		Enabled: true,
 		Timeout: 50 * time.Millisecond,
@@ -338,6 +343,7 @@ func TestBrowserDiscovery_BrowserUnavailableFallback(t *testing.T) {
 	defer ts.Close()
 
 	cfg := DefaultConfig()
+	cfg.AllowLoopback = true
 	cfg.BrowserDiscovery = BrowserDiscoveryOptions{
 		Enabled:       true,
 		BrowserBinary: "C:\\nonexistent\\path\\to\\fakebrowser.exe",

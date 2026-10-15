@@ -42,6 +42,7 @@ func (e *Engine) VerifyFinding(ctx context.Context, f report.Finding) Verificati
 			Endpoint:               f.Endpoint,
 			Category:               f.Category,
 			Status:                 StatusNotVerified,
+			FindingStatus:          report.FindingStatusError,
 			VerificationMethod:     "error_fail_safe",
 			PolicyID:               policy.ID(),
 			PolicyVersion:          policy.Version(),
@@ -72,6 +73,9 @@ func (e *Engine) VerifyFindings(ctx context.Context, findings []report.Finding) 
 	}
 
 	for _, f := range findings {
+		if ctx.Err() != nil {
+			break
+		}
 		res := e.VerifyFinding(ctx, f)
 		results = append(results, res)
 
@@ -165,7 +169,48 @@ func ApplyVerificationToFindings(findings []report.Finding, results []Verificati
 			fCopy.Verification.Result = res.ObservedBehavior
 		}
 
-		fCopy.Confidence = res.OverallConfidence
+		// Honest Status and AnalysisMethod assignment
+		if res.SafetyDecision == DecisionBlocked || (!res.Attempted && res.Status == StatusNotVerified) {
+			fCopy.Status = report.FindingStatusNotTested
+			// Detection confidence preserved; do not downgrade upon block/skip
+			fCopy.Confidence = f.Confidence
+			if res.AnalysisMethod != "" {
+				fCopy.AnalysisMethod = res.AnalysisMethod
+				fCopy.Verification.AnalysisMethod = res.AnalysisMethod
+			}
+		} else if res.FailureReason != "" && res.Attempted {
+			fCopy.Status = report.FindingStatusError
+			fCopy.AnalysisMethod = report.AnalysisMethodActive
+			fCopy.Verification.AnalysisMethod = report.AnalysisMethodActive
+			fCopy.Confidence = res.OverallConfidence
+		} else if res.Attempted && (res.InconclusiveReason != "" || res.Status == StatusNotExposed) {
+			fCopy.Status = report.FindingStatusInconclusive
+			if res.Attempted {
+				fCopy.AnalysisMethod = report.AnalysisMethodActive
+				fCopy.Verification.AnalysisMethod = report.AnalysisMethodActive
+			}
+			fCopy.Confidence = res.OverallConfidence
+		} else if res.Status == StatusVerified {
+			fCopy.Status = report.FindingStatusConfirmed
+			fCopy.AnalysisMethod = report.AnalysisMethodActive
+			fCopy.Verification.AnalysisMethod = report.AnalysisMethodActive
+			fCopy.Confidence = res.OverallConfidence
+		} else if res.Status == StatusDetected {
+			fCopy.Status = report.FindingStatusSuspected
+			if res.Attempted {
+				fCopy.AnalysisMethod = report.AnalysisMethodActive
+				fCopy.Verification.AnalysisMethod = report.AnalysisMethodActive
+			}
+			fCopy.Confidence = res.OverallConfidence
+		} else {
+			fCopy.Status = report.FindingStatusFromVerification(res.Status)
+			if res.AnalysisMethod != "" {
+				fCopy.AnalysisMethod = res.AnalysisMethod
+				fCopy.Verification.AnalysisMethod = res.AnalysisMethod
+			}
+			fCopy.Confidence = res.OverallConfidence
+		}
+
 		fCopy.Score = report.CalculateFindingScore(fCopy)
 		updated[i] = fCopy
 	}

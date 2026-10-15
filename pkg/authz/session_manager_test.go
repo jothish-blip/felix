@@ -366,3 +366,31 @@ func TestSessionManager_DifferentialAuthorizationBOLA(t *testing.T) {
 		t.Errorf("expected doc-secure check for bob to be classified as StateNotVulnerable")
 	}
 }
+
+func TestSessionManager_TimeoutFallback(t *testing.T) {
+	// Zero timeout falls back to 15s default
+	sm1 := NewSessionManager(0)
+	if sm1.timeout != 15*time.Second {
+		t.Errorf("expected default timeout 15s, got %v", sm1.timeout)
+	}
+	c1 := sm1.GetClientForIdentity("alice")
+	if c1.Timeout != 15*time.Second {
+		t.Errorf("expected client timeout 15s, got %v", c1.Timeout)
+	}
+
+	// Negative timeout falls back to 15s default
+	sm2 := NewSessionManager(-5 * time.Second)
+	if sm2.timeout != 15*time.Second {
+		t.Errorf("expected default timeout 15s, got %v", sm2.timeout)
+	}
+
+	// Positive timeout is respected
+	sm3 := NewSessionManager(30 * time.Second)
+	if sm3.timeout != 30*time.Second {
+		t.Errorf("expected custom timeout 30s, got %v", sm3.timeout)
+	}
+	c3 := sm3.GetClientForIdentity("bob")
+	if c3.Timeout != 30*time.Second {
+		t.Errorf("expected client timeout 30s, got %v", c3.Timeout)
+	}
+}

@@ -3,12 +3,14 @@ package api
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"felix/pkg/crawler"
 )
@@ -497,7 +499,7 @@ func TestCrossOriginScopeEnforcement(t *testing.T) {
 	}))
 	defer targetServer.Close()
 
-	client := NewClient(ClientOptions{})
+	client := NewClient(ClientOptions{AllowLoopback: true})
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, targetServer.URL, nil)
 	resp, err := client.Do(context.Background(), req)
 
@@ -548,4 +550,247 @@ func TestConcurrentDetectorSafety(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+// apiMockResolver implements crawler.Resolver for deterministic offline DNS resolution tests in API auditing.
+type apiMockResolver struct {
+	hosts map[string][]net.IPAddr
+}
+
+func newAPIMockResolver(entries map[string][]string) *apiMockResolver {
+	hosts := make(map[string][]net.IPAddr)
+	for h, ipStrs := range entries {
+		var addrs []net.IPAddr
+		for _, ipStr := range ipStrs {
+			ip := net.ParseIP(ipStr)
+			if ip != nil {
+				addrs = append(addrs, net.IPAddr{IP: ip})
+			}
+		}
+		hosts[strings.ToLower(h)] = addrs
+	}
+	return &apiMockResolver{hosts: hosts}
+}
+
+func (m *apiMockResolver) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {
+	if addrs, ok := m.hosts[strings.ToLower(host)]; ok {
+		return addrs, nil
+	}
+	return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
+}
+
+// TestAPIDetector_SSRF_ProhibitedHostnamesBlocked proves that production API detector request paths
+// cannot reach prohibited destinations (IPv4/IPv6 IMDS, loopback, private) and that ZERO TCP connections occur.
+func TestAPIDetector_SSRF_ProhibitedHostnamesBlocked(t *testing.T) {
+	resolver := newAPIMockResolver(map[string][]string{
+		"imds.api.internal":     {"169.254.169.254"},
+		"nitro.api.internal":    {"fd00:ec2::254"},
+		"loopback.api.internal": {"127.0.0.1"},
+		"private.api.internal":  {"10.0.0.1"},
+	})
+
+	var tcpDials atomic.Int32
+	mockDialer := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		tcpDials.Add(1)
+		return nil, fmt.Errorf("unexpected TCP connection attempt to prohibited destination %s", addr)
+	}
+
+	safeTransport := crawler.NewSafeTransport(crawler.SafeTransportOptions{
+		Timeout:  2 * time.Second,
+		Resolver: resolver,
+		DialFunc: mockDialer,
+	})
+	safeClient := &http.Client{
+		Transport: safeTransport,
+		Timeout:   2 * time.Second,
+	}
+
+	client := NewClient(ClientOptions{
+		HTTPClient: safeClient,
+	})
+	detector := NewDetector(client)
+
+	assets := []crawler.Asset{
+		{
+			URL:     "https://app.example.com/bundle.js",
+			Content: []byte(`const ep1 = "/graphql"; const ep2 = "/api/v1/users"; const ep3 = "/.env";`),
+		},
+	}
+
+	prohibitedTargets := []string{
+		"http://imds.api.internal",
+		"http://nitro.api.internal",
+		"http://loopback.api.internal",
+		"http://private.api.internal",
+	}
+
+	for _, target := range prohibitedTargets {
+		res := detector.Audit(context.Background(), target, assets)
+		// Detector must complete safely without finding valid vulnerable endpoints
+		for _, f := range res.Findings {
+			if f.Severity == SeverityCritical || f.Severity == SeverityHigh {
+				t.Errorf("unexpected finding against prohibited target %s: %+v", target, f)
+			}
+		}
+	}
+
+	// Critical assertion: EXACTLY ZERO TCP connection attempts occurred
+	if dials := tcpDials.Load(); dials != 0 {
+		t.Fatalf("SECURITY FAILURE: %d TCP dial attempts were made against prohibited destinations in API detector!", dials)
+	}
+
+	// Verify default NewClient() also rejects prohibited IP literals via crawler.NewSafeTransport
+	defaultClient := NewClient()
+	prohibitedURLs := []string{
+		"http://169.254.169.254/graphql",
+		"http://[fd00:ec2::254]/graphql",
+		"http://127.0.0.1:8080/graphql",
+		"http://10.0.0.1:8080/graphql",
+	}
+	for _, u := range prohibitedURLs {
+		req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, u, nil)
+		_, err := defaultClient.Do(context.Background(), req)
+		if err == nil {
+			t.Fatalf("expected default API client to reject prohibited URL %s, but request succeeded", u)
+		}
+		if !strings.Contains(err.Error(), "SSRF security refusal") {
+			t.Errorf("expected SSRF security refusal for %s, got: %v", u, err)
+		}
+	}
+}
+
+func TestNewClient_DefaultsAndFallbacks(t *testing.T) {
+	// 1. Zero options
+	c1 := NewClient()
+	if c1.timeout != DefaultAPITimeout {
+		t.Errorf("expected default timeout %v, got %v", DefaultAPITimeout, c1.timeout)
+	}
+	if c1.maxResponseSize != DefaultMaxAPIResponse {
+		t.Errorf("expected default max response size %d, got %d", DefaultMaxAPIResponse, c1.maxResponseSize)
+	}
+	if c1.userAgent != DefaultUserAgent {
+		t.Errorf("expected default user agent %q, got %q", DefaultUserAgent, c1.userAgent)
+	}
+
+	// 2. Negative/zero values fall back to defaults
+	c2 := NewClient(ClientOptions{
+		Timeout:         -5 * time.Second,
+		MaxResponseSize: -1024,
+		UserAgent:       "",
+	})
+	if c2.timeout != DefaultAPITimeout {
+		t.Errorf("expected fallback timeout %v, got %v", DefaultAPITimeout, c2.timeout)
+	}
+	if c2.maxResponseSize != DefaultMaxAPIResponse {
+		t.Errorf("expected fallback max response size %d, got %d", DefaultMaxAPIResponse, c2.maxResponseSize)
+	}
+	if c2.userAgent != DefaultUserAgent {
+		t.Errorf("expected fallback user agent %q, got %q", DefaultUserAgent, c2.userAgent)
+	}
+
+	// 3. Custom options are preserved
+	customTimeout := 12 * time.Second
+	customMax := int64(2 * 1024 * 1024)
+	customUA := "CustomAPI/1.0"
+	c3 := NewClient(ClientOptions{
+		Timeout:         customTimeout,
+		MaxResponseSize: customMax,
+		UserAgent:       customUA,
+	})
+	if c3.timeout != customTimeout {
+		t.Errorf("expected timeout %v, got %v", customTimeout, c3.timeout)
+	}
+	if c3.maxResponseSize != customMax {
+		t.Errorf("expected max response size %d, got %d", customMax, c3.maxResponseSize)
+	}
+	if c3.userAgent != customUA {
+		t.Errorf("expected user agent %q, got %q", customUA, c3.userAgent)
+	}
+}
+
+func TestDetector_Step6_ScopeExclusion(t *testing.T) {
+	var receivedPaths []string
+	var mu sync.Mutex
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		receivedPaths = append(receivedPaths, r.URL.Path)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer ts.Close()
+
+	// Configure client with safe loopback for httptest
+	client := NewClient(ClientOptions{
+		AllowLoopback: true,
+	})
+
+	isAllowed := func(u string) bool {
+		return !strings.Contains(u, "out-of-scope")
+	}
+	isExcluded := func(u string) bool {
+		return strings.Contains(u, "excluded")
+	}
+
+	d := NewDetector(client, DetectorOptions{
+		IsAllowed:  isAllowed,
+		IsExcluded: isExcluded,
+	})
+
+	assets := []crawler.Asset{
+		{
+			URL:     ts.URL + "/bundle.js",
+			Type:    crawler.AssetJavaScript,
+			InScope: true,
+			Content: []byte(`
+				const a = "/api/allowed";
+				const b = "/api/excluded";
+				const c = "/api/out-of-scope";
+			`),
+		},
+	}
+
+	result := d.Audit(context.Background(), ts.URL, assets)
+	if len(result.DiscoveredEndpoints) == 0 {
+		t.Fatal("expected discovered endpoints in AuditResult")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	for _, p := range receivedPaths {
+		if strings.Contains(p, "excluded") {
+			t.Errorf("SECURITY LEAK: excluded endpoint %s was requested over network", p)
+		}
+		if strings.Contains(p, "out-of-scope") {
+			t.Errorf("SECURITY LEAK: out-of-scope endpoint %s was requested over network", p)
+		}
+	}
+}
+
+func TestAPIClient_ScopeAndRedirectSafety(t *testing.T) {
+	client := NewClient(ClientOptions{
+		AllowLoopback: true,
+		IsAllowed: func(u string) bool {
+			return !strings.Contains(u, "forbidden")
+		},
+		IsExcluded: func(u string) bool {
+			return strings.Contains(u, "blocked")
+		},
+	})
+
+	// 1. Excluded request blocked before wire
+	req1, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://127.0.0.1:8080/blocked/path", nil)
+	_, err1 := client.Do(context.Background(), req1)
+	if err1 == nil || !strings.Contains(err1.Error(), "matches exclusion rule") {
+		t.Errorf("expected exclusion rule error, got: %v", err1)
+	}
+
+	// 2. Out-of-scope request blocked before wire
+	req2, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://127.0.0.1:8080/forbidden/path", nil)
+	_, err2 := client.Do(context.Background(), req2)
+	if err2 == nil || !strings.Contains(err2.Error(), "target outside authorized scope") {
+		t.Errorf("expected out-of-scope error, got: %v", err2)
+	}
 }

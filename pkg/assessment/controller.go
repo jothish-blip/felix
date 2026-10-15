@@ -5,11 +5,13 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"felix/pkg/api"
@@ -49,6 +51,13 @@ type ExecutionOptions struct {
 	ExportJSONPath  string
 	Verbose         bool
 	ProgressFunc    func(msg string)
+	AllowLoopback      bool
+	AllowPrivateIPs    bool
+	InsecureSkipVerify bool
+	ActiveVerification bool
+	MaxRedirects       int
+	MaxRetries         int
+	RetryDelayMs       int
 }
 
 // ExecutionResult encapsulates the outcome of an assessment run.
@@ -151,7 +160,10 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 	}
 
 	// 6. Build Effective Scan Configuration Snapshot
-	cfgStore := config.Load()
+	cfgStore, err := config.LoadWithEnv("")
+	if err != nil {
+		return nil, fmt.Errorf("configuration error: %w", err)
+	}
 	timeoutDur := opts.TimeoutDuration
 	if timeoutDur <= 0 {
 		timeoutDur = time.Duration(cfgStore.Timeout) * time.Second
@@ -161,6 +173,9 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 		concurrency = cfgStore.Concurrency
 	}
 	maxAssets := opts.MaxAssets
+	if maxAssets <= 0 {
+		maxAssets = cfgStore.MaxAssets
+	}
 	maxSizeBytes := opts.MaxSizeBytes
 	if maxSizeBytes <= 0 {
 		maxSizeBytes = int64(cfgStore.MaxSizeMB) * 1024 * 1024
@@ -203,31 +218,56 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 
 	opts.ProgressFunc(fmt.Sprintf("[*] Assessment %s execution started (%s) against %d target(s)...", asm.Ref, execID, len(runnableTargets)))
 
-	// 8. Invoke Existing Felix Scan Pipeline with strict redirect validation
+	// 8. Invoke Existing Felix Scan Pipeline with strict redirect and SSRF safe transport validation
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 	}
-	transport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   timeoutDur,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		MaxIdleConns:          100,
-		MaxIdleConnsPerHost:   20,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		ForceAttemptHTTP2:     true,
-		TLSClientConfig:       tlsConfig,
+	insecureSkip := opts.InsecureSkipVerify || cfgStore.InsecureSkipVerify
+	if insecureSkip {
+		tlsConfig.InsecureSkipVerify = true
+	}
+	transport := crawler.NewSafeTransport(crawler.SafeTransportOptions{
+		Timeout:            timeoutDur,
+		KeepAlive:          30 * time.Second,
+		AllowLoopback:      opts.AllowLoopback || cfgStore.AllowLoopback,
+		AllowPrivateIPs:    opts.AllowPrivateIPs || cfgStore.AllowPrivateIPs,
+		InsecureSkipVerify: insecureSkip,
+		TLSConfig:          tlsConfig,
+	})
+	maxRedirects := opts.MaxRedirects
+	if maxRedirects <= 0 {
+		maxRedirects = cfgStore.MaxRedirects
+	}
+	if maxRedirects <= 0 {
+		maxRedirects = config.DefaultMaxRedirects
 	}
 	httpClient := &http.Client{
 		Transport: transport,
 		Timeout:   timeoutDur,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 {
-				return fmt.Errorf("stopped after 10 redirects")
+			if len(via) >= maxRedirects {
+				return fmt.Errorf("stopped after %d redirects", maxRedirects)
 			}
+
+			// Validate scheme: only http and https are permitted
+			scheme := strings.ToLower(req.URL.Scheme)
+			if scheme != "http" && scheme != "https" {
+				return fmt.Errorf("redirect to unsupported scheme %q blocked", req.URL.Scheme)
+			}
+
+			// Block embedded credentials in redirect URLs
+			if req.URL.User != nil {
+				return fmt.Errorf("redirect with embedded credentials blocked")
+			}
+
+			// Check IP literal destinations in redirect immediately
+			destHost := req.URL.Hostname()
+			if ip := net.ParseIP(destHost); ip != nil {
+				if prohibited, reason := crawler.ProhibitedIPReason(ip, opts.AllowLoopback, opts.AllowPrivateIPs); prohibited {
+					return &crawler.SSRFError{Host: destHost, IP: ip, Reason: reason}
+				}
+			}
+
 			lastURL := ""
 			if len(via) > 0 {
 				lastURL = via[len(via)-1].URL.String()
@@ -240,16 +280,18 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 	}
 
 	crawlerCfg := crawler.Config{
-		Concurrency:  concurrency,
-		Timeout:      timeoutDur,
-		MaxAssetSize: maxSizeBytes,
-		MaxAssets:    maxAssets,
-		ScopeMode:    crawler.ScopeMode(asm.ScopeMode),
-		UserAgent:    userAgent,
-		Client:       httpClient,
-		IsAllowed:    scopeVal.IsAllowed,
-		IsExcluded:   func(u string) bool { excluded, _ := scopeVal.IsExcluded(u); return excluded },
-		Progress:     opts.ProgressFunc,
+		Concurrency:     concurrency,
+		Timeout:         timeoutDur,
+		MaxAssetSize:    maxSizeBytes,
+		MaxAssets:       maxAssets,
+		ScopeMode:       crawler.ScopeMode(asm.ScopeMode),
+		UserAgent:       userAgent,
+		Client:          httpClient,
+		AllowLoopback:   opts.AllowLoopback,
+		AllowPrivateIPs: opts.AllowPrivateIPs,
+		IsAllowed:       scopeVal.IsAllowed,
+		IsExcluded:      func(u string) bool { excluded, _ := scopeVal.IsExcluded(u); return excluded },
+		Progress:        opts.ProgressFunc,
 	}
 	cEng := crawler.New(crawlerCfg)
 	detector := secrets.NewDetector()
@@ -258,13 +300,21 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 		MaxResponseSize: maxSizeBytes,
 		UserAgent:       userAgent,
 		HTTPClient:      httpClient,
-	}))
+	}), func(u string) bool {
+		return scopeVal.IsAllowed(u)
+	})
 	apiAuditor := api.NewDetector(api.NewClient(api.ClientOptions{
 		Timeout:         timeoutDur,
 		MaxResponseSize: maxSizeBytes,
 		UserAgent:       userAgent,
 		HTTPClient:      httpClient,
-	}))
+	}), api.DetectorOptions{
+		IsAllowed: scopeVal.IsAllowed,
+		IsExcluded: func(u string) bool {
+			excluded, _ := scopeVal.IsExcluded(u)
+			return excluded
+		},
+	})
 
 	startTime := time.Now()
 	crawlResultsChan := cEng.CrawlConcurrently(ctx, runnableTargets)
@@ -373,6 +423,33 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 			inScopeAssets,
 			scopeVal.IsAllowed,
 		)
+
+		// Ingest Crawler assets, API endpoints, and Cloud services into the common inventory model
+		rootAppID := ""
+		for _, a := range targetInv.Assets {
+			if a.Type == discovery.AssetTypeApplication {
+				rootAppID = a.ID
+				break
+			}
+		}
+		if rootAppID == "" {
+			rootApp := discovery.NewApplicationAsset(assessmentID, execID, targetRecord.ID, res.Target, discovery.ApplicationDetails{
+				AppType: "web",
+				RootURL: res.Target,
+			})
+			rootAppID = targetInv.AddAsset(rootApp)
+		}
+
+		for _, a := range inScopeAssets {
+			discovery.IngestCrawlerAsset(targetInv, assessmentID, execID, targetRecord.ID, rootAppID, a)
+		}
+		if len(apiRes.DiscoveredEndpoints) > 0 {
+			discovery.IngestAPIEndpoints(targetInv, assessmentID, execID, targetRecord.ID, res.Target, rootAppID, apiRes.DiscoveredEndpoints)
+		}
+		if len(cloudRes.Services) > 0 {
+			discovery.IngestCloudServices(targetInv, assessmentID, execID, targetRecord.ID, rootAppID, cloudRes.Services)
+		}
+
 		allInventoryAssets = append(allInventoryAssets, targetInv.Assets...)
 		allInventoryRelations = append(allInventoryRelations, targetInv.Relations...)
 
@@ -394,6 +471,32 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 		for _, f := range authFindings {
 			allReportFindings = append(allReportFindings, f)
 			allAssessmentFindings = append(allAssessmentFindings, toAssessmentFinding(assessmentID, execID, targetRecord.ID, f))
+		}
+	}
+
+	// Link all findings to the Common Asset Model
+	if len(allInventoryAssets) > 0 {
+		combinedInv := &discovery.Inventory{
+			Assets:    allInventoryAssets,
+			Relations: allInventoryRelations,
+		}
+		for i := range allReportFindings {
+			allReportFindings[i].ResolveAssetIDs(combinedInv)
+		}
+		for i := range allAssessmentFindings {
+			for _, rf := range allReportFindings {
+				if allAssessmentFindings[i].OriginalFindingID == rf.ID {
+					allAssessmentFindings[i].PrimaryAssetID = rf.PrimaryAssetID
+					allAssessmentFindings[i].AffectedAssetIDs = rf.AffectedAssetIDs
+					allAssessmentFindings[i].RuleID = rf.RuleID
+					allAssessmentFindings[i].Status = rf.Status
+					if allAssessmentFindings[i].Provenance != nil {
+						allAssessmentFindings[i].Provenance.AssetID = rf.PrimaryAssetID
+						allAssessmentFindings[i].EvidenceDetails.Provenance = allAssessmentFindings[i].Provenance
+					}
+					break
+				}
+			}
 		}
 	}
 
@@ -427,9 +530,15 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 
 	// Preserve partial results on error or cancellation
 	if scanErr != nil || ctx.Err() != nil {
-		if ctx.Err() == context.Canceled {
+		if scanErr == nil {
+			scanErr = ctx.Err()
+		}
+		if errors.Is(scanErr, context.Canceled) {
 			execRecord.Status = StatusCancelled
 			execRecord.ErrorMessage = "Execution was cancelled by operator"
+		} else if errors.Is(scanErr, context.DeadlineExceeded) {
+			execRecord.Status = StatusFailed
+			execRecord.ErrorMessage = "Scan timed out: execution deadline exceeded"
 		} else {
 			execRecord.Status = StatusFailed
 			execRecord.ErrorMessage = fmt.Sprintf("Scan failed: %v", scanErr)
@@ -453,10 +562,21 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 	if len(allReportFindings) > 0 {
 		opts.ProgressFunc("[*] Executing Verification Engine 2.0 on candidate findings...")
 		safetyChecker := verification.NewSafetyChecker(verification.SafetyOptions{
-			IsAuthorized:         true,
-			AllowStateChanging:   false, // Default safe: non-destructive
-			InScopeFunc:          func(rawURL string) bool { return true }, // Assessment targets are pre-scoped
-			IsExcludedFunc:       func(rawURL string) bool { return false },
+			IsAuthorized:       true,
+			AllowStateChanging: false, // Default safe: non-destructive
+			InScopeFunc: func(rawURL string) bool {
+				if scopeVal == nil {
+					return true
+				}
+				return scopeVal.IsAllowed(rawURL)
+			},
+			IsExcludedFunc: func(rawURL string) bool {
+				if scopeVal == nil {
+					return false
+				}
+				excluded, _ := scopeVal.IsExcluded(rawURL)
+				return excluded
+			},
 			MaxRequestsPerTarget: 20,
 		})
 		verEngine := verification.NewEngine(safetyChecker)
@@ -473,10 +593,13 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 		}
 		for i := range allAssessmentFindings {
 			if rf, ok := findingMap[allAssessmentFindings[i].OriginalFindingID]; ok {
-				allAssessmentFindings[i].VerificationStatus = rf.Verification.Status
-				allAssessmentFindings[i].Confidence = rf.Confidence
-				allAssessmentFindings[i].Score = rf.Score
-				allAssessmentFindings[i].VerificationRecord = rf.Verification
+				cleanRF := report.SanitizeFinding(rf)
+				allAssessmentFindings[i].VerificationStatus = cleanRF.Verification.Status
+				allAssessmentFindings[i].Confidence = cleanRF.Confidence
+				allAssessmentFindings[i].Score = cleanRF.Score
+				allAssessmentFindings[i].VerificationRecord = cleanRF.Verification
+				allAssessmentFindings[i].Status = cleanRF.Status
+				allAssessmentFindings[i].AnalysisMethod = cleanRF.AnalysisMethod
 			}
 		}
 
@@ -672,25 +795,75 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 
 // ToAssessmentFinding maps a report.Finding to an AssessmentFinding with full relationship IDs.
 func ToAssessmentFinding(assessmentID, executionID, targetID string, f report.Finding) AssessmentFinding {
+	sanitized := report.SanitizeFinding(f)
+	fndKey := sanitized.ID
+	if fndKey == "" {
+		fndKey = report.ComputeStableFindingID(sanitized.Target, sanitized.RuleID, sanitized.Category, sanitized.Endpoint, sanitized.Method, sanitized.Fingerprint)
+	}
+	stableID := ComputeAssessmentFindingID(assessmentID, fndKey)
+
+	status := sanitized.Status
+	if status == "" {
+		status = report.FindingStatusFromVerification(sanitized.Verification.Status)
+	}
+	status = report.NormalizeFindingStatus(status)
+
+	analysisMethod := sanitized.AnalysisMethod
+	if analysisMethod == "" {
+		analysisMethod = report.DefaultAnalysisMethod(sanitized.Source, sanitized.EvidenceDetails.DetectionMethod)
+	}
+
+	prov := sanitized.Provenance
+	if prov == nil && sanitized.EvidenceDetails.Provenance != nil {
+		prov = sanitized.EvidenceDetails.Provenance
+	}
+	if prov != nil {
+		pCopy := *prov
+		if pCopy.AssessmentID == "" {
+			pCopy.AssessmentID = assessmentID
+		}
+		if pCopy.ExecutionID == "" {
+			pCopy.ExecutionID = executionID
+		}
+		if pCopy.TargetID == "" {
+			pCopy.TargetID = targetID
+		}
+		if pCopy.FindingID == "" {
+			pCopy.FindingID = sanitized.ID
+		}
+		if pCopy.AssetID == "" && sanitized.PrimaryAssetID != "" {
+			pCopy.AssetID = sanitized.PrimaryAssetID
+		}
+		prov = &pCopy
+	}
+	sanitized.EvidenceDetails.Provenance = prov
+
 	return AssessmentFinding{
-		ID:                 "fnd-" + uuid.New().String(),
+		ID:                 stableID,
 		AssessmentID:       assessmentID,
 		ExecutionID:        executionID,
 		TargetID:           targetID,
-		OriginalFindingID:  f.ID,
-		Title:              f.Title,
-		Category:           f.Category,
-		Severity:           f.Severity,
-		Confidence:         f.Confidence,
-		VerificationStatus: f.Verification.Status,
-		TargetURL:          f.Target,
-		Endpoint:           f.Endpoint,
-		Method:             f.Method,
-		Fingerprint:        f.Fingerprint,
-		Score:              f.Score,
-		EvidenceDetails:    f.EvidenceDetails,
-		VerificationRecord: f.Verification,
-		Remediation:        f.Remediation,
+		OriginalFindingID:  sanitized.ID,
+		RuleID:             sanitized.RuleID,
+		Status:             status,
+		AnalysisMethod:     analysisMethod,
+		PrimaryAssetID:     sanitized.PrimaryAssetID,
+		AffectedAssetIDs:   sanitized.AffectedAssetIDs,
+		Title:              sanitized.Title,
+		Category:           sanitized.Category,
+		Severity:           sanitized.Severity,
+		Confidence:         sanitized.Confidence,
+		VerificationStatus: sanitized.Verification.Status,
+		TargetURL:          sanitized.Target,
+		Endpoint:           sanitized.Endpoint,
+		Method:             sanitized.Method,
+		Fingerprint:        sanitized.Fingerprint,
+		Score:              sanitized.Score,
+		EvidenceDetails:    sanitized.EvidenceDetails,
+		VerificationRecord: sanitized.Verification,
+		Remediation:        sanitized.Remediation,
+		RemediationAdvice:  sanitized.RemediationAdvice,
+		Provenance:         prov,
 		CreatedAt:          time.Now().UTC(),
 	}
 }

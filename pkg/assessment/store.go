@@ -1781,6 +1781,17 @@ func (s *SQLiteStore) SaveFindings(findings []AssessmentFinding) error {
 			target_url, endpoint, method, fingerprint, score,
 			evidence_json, verification_json, remediation, created_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			execution_id = excluded.execution_id,
+			title = excluded.title,
+			category = excluded.category,
+			severity = excluded.severity,
+			confidence = excluded.confidence,
+			verification_status = excluded.verification_status,
+			score = excluded.score,
+			evidence_json = excluded.evidence_json,
+			verification_json = excluded.verification_json,
+			remediation = excluded.remediation
 	`)
 	if err != nil {
 		return err
@@ -1788,6 +1799,41 @@ func (s *SQLiteStore) SaveFindings(findings []AssessmentFinding) error {
 	defer stmt.Close()
 
 	for _, f := range findings {
+		// Sync Phase 1.3 metadata to EvidenceDetails.Details for transparent SQLite round-trip
+		if f.EvidenceDetails.Details == nil {
+			f.EvidenceDetails.Details = make(map[string]string)
+		}
+		if f.RuleID != "" {
+			f.EvidenceDetails.Details["rule_id"] = f.RuleID
+		}
+		if f.Status != "" {
+			f.EvidenceDetails.Details["finding_status"] = string(report.NormalizeFindingStatus(f.Status))
+		} else {
+			f.EvidenceDetails.Details["finding_status"] = string(report.FindingStatusFromVerification(f.VerificationStatus))
+		}
+		if f.AnalysisMethod != "" {
+			f.EvidenceDetails.Details["analysis_method"] = string(f.AnalysisMethod)
+		}
+		if f.PrimaryAssetID != "" {
+			f.EvidenceDetails.Details["primary_asset_id"] = f.PrimaryAssetID
+		}
+		if len(f.AffectedAssetIDs) > 0 {
+			f.EvidenceDetails.Details["affected_asset_ids"] = strings.Join(f.AffectedAssetIDs, ",")
+		}
+
+		// Sync Phase 1.4 provenance metadata
+		if f.Provenance != nil {
+			f.EvidenceDetails.Provenance = f.Provenance
+			if f.Provenance.EvidenceID != "" {
+				f.EvidenceDetails.Details["evidence_id"] = f.Provenance.EvidenceID
+			}
+			if f.Provenance.EvidenceType != "" {
+				f.EvidenceDetails.Details["evidence_type"] = f.Provenance.EvidenceType
+			}
+		} else if f.EvidenceDetails.Provenance != nil {
+			f.Provenance = f.EvidenceDetails.Provenance
+		}
+
 		evJSON, err := json.Marshal(f.EvidenceDetails)
 		if err != nil {
 			evJSON = []byte("{}")
@@ -1872,6 +1918,40 @@ func (s *SQLiteStore) GetFindings(assessmentID string, executionID string) ([]As
 		f.VerificationStatus = report.VerificationStatus(verStatus)
 		_ = json.Unmarshal([]byte(evJSON), &f.EvidenceDetails)
 		_ = json.Unmarshal([]byte(verJSON), &f.VerificationRecord)
+
+		if f.EvidenceDetails.Details != nil {
+			if rID, ok := f.EvidenceDetails.Details["rule_id"]; ok {
+				f.RuleID = rID
+			}
+			if st, ok := f.EvidenceDetails.Details["finding_status"]; ok {
+				f.Status = report.NormalizeFindingStatus(report.FindingStatus(st))
+			}
+			if am, ok := f.EvidenceDetails.Details["analysis_method"]; ok && am != "" {
+				f.AnalysisMethod = report.AnalysisMethod(am)
+			}
+			if astID, ok := f.EvidenceDetails.Details["primary_asset_id"]; ok {
+				f.PrimaryAssetID = astID
+			}
+			if asts, ok := f.EvidenceDetails.Details["affected_asset_ids"]; ok && asts != "" {
+				f.AffectedAssetIDs = strings.Split(asts, ",")
+			}
+		}
+		if f.Status == "" {
+			f.Status = report.FindingStatusFromVerification(f.VerificationStatus)
+		} else {
+			f.Status = report.NormalizeFindingStatus(f.Status)
+		}
+		if f.EvidenceDetails.Provenance != nil {
+			f.Provenance = f.EvidenceDetails.Provenance
+		}
+		if f.AnalysisMethod == "" {
+			if f.Provenance != nil && f.Provenance.AnalysisMethod != "" {
+				f.AnalysisMethod = f.Provenance.AnalysisMethod
+			} else if f.VerificationRecord.AnalysisMethod != "" {
+				f.AnalysisMethod = f.VerificationRecord.AnalysisMethod
+			}
+		}
+
 		findings = append(findings, f)
 	}
 	return findings, rows.Err()
@@ -2006,6 +2086,7 @@ func (s *SQLiteStore) SaveInventory(assets []discovery.Asset, relations []discov
 
 		for _, a := range assets {
 			a.AssessmentID = s.resolveAssessmentID(a.AssessmentID)
+			a.SyncTypedDetailsToMetadata()
 			metaJSON, _ := json.Marshal(a.Metadata)
 			evJSON, _ := json.Marshal(a.Evidence)
 			inScopeInt := 0
@@ -2047,6 +2128,9 @@ func (s *SQLiteStore) SaveInventory(assets []discovery.Asset, relations []discov
 
 		for _, r := range relations {
 			r.AssessmentID = s.resolveAssessmentID(r.AssessmentID)
+			if r.ID == "" {
+				r.ID = fmt.Sprintf("rel_%s", discovery.ComputeRelationFingerprint(r.AssessmentID, r.SourceAssetID, r.TargetAssetID, r.RelationType))
+			}
 			if r.CreatedAt.IsZero() {
 				r.CreatedAt = time.Now().UTC()
 			}
@@ -2119,6 +2203,7 @@ func (s *SQLiteStore) GetInventory(assessmentID string, executionID string, asse
 		if evJSON != "" {
 			_ = json.Unmarshal([]byte(evJSON), &a.Evidence)
 		}
+		a.HydrateTypedDetailsFromMetadata()
 		assets = append(assets, a)
 	}
 

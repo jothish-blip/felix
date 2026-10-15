@@ -40,6 +40,11 @@ type CommercialExecutiveSummary struct {
 	FindingsDetectedCount   int            `json:"findings_detected_count"`
 	FindingsVerifiedCount   int            `json:"findings_verified_count"`
 	FindingsUnverifiedCount int            `json:"findings_unverified_count"`
+	FindingsConfirmedCount  int            `json:"findings_confirmed_count,omitempty"`
+	FindingsSuspectedCount  int            `json:"findings_suspected_count,omitempty"`
+	FindingsNotTestedCount  int            `json:"findings_not_tested_count,omitempty"`
+	FindingsErrorCount      int            `json:"findings_error_count,omitempty"`
+	StatusDistribution      map[string]int `json:"status_distribution,omitempty"`
 	ObservationsCount       int            `json:"observations_count"`
 	NotExposedChecksCount   int            `json:"not_exposed_checks_count"`
 	InconclusiveChecksCount int            `json:"inconclusive_checks_count"`
@@ -184,6 +189,8 @@ type CommercialFinding struct {
 	// Metadata
 	Category            string                       `json:"category"`
 	Source              string                       `json:"source"`
+	Status              FindingStatus                `json:"status,omitempty"`
+	AnalysisMethod      AnalysisMethod               `json:"analysis_method,omitempty"`
 	SyntheticFixture    bool                         `json:"synthetic_fixture,omitempty"`
 }
 

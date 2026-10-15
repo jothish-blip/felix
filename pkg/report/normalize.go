@@ -1,7 +1,10 @@
 package report
 
 import (
+	"errors"
+	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 )
 
@@ -64,8 +67,97 @@ func NormalizeConfidence(conf string) string {
 		return ConfidenceMedium
 	case ConfidenceLow:
 		return ConfidenceLow
+	case ConfidenceUnknown, "NONE":
+		return ConfidenceUnknown
 	default:
 		return ConfidenceMedium
+	}
+}
+
+// ParseFindingStatus parses a raw status string into a canonical FindingStatus.
+// Returns an error if the status is unknown, empty, or malformed.
+func ParseFindingStatus(s string) (FindingStatus, error) {
+	clean := strings.ToUpper(strings.TrimSpace(s))
+	switch clean {
+	case string(FindingStatusConfirmed), "VERIFIED", "PROVEN":
+		return FindingStatusConfirmed, nil
+	case string(FindingStatusSuspected), "DETECTED", "CANDIDATE", "POTENTIAL", "UNVERIFIED":
+		return FindingStatusSuspected, nil
+	case string(FindingStatusInconclusive), "INDETERMINATE", "UNDETERMINED", "NOT_EXPOSED":
+		return FindingStatusInconclusive, nil
+	case string(FindingStatusNotTested), "NOT-TESTED", "NOTTESTED", "BLOCKED", "SKIPPED", "OMITTED", "UNTESTED":
+		return FindingStatusNotTested, nil
+	case string(FindingStatusError), "FAIL", "FAILED", "FAILURE", "ERR", "CRASH", "TIMEOUT":
+		return FindingStatusError, nil
+	case "":
+		return FindingStatusInconclusive, errors.New("empty finding status")
+	default:
+		return FindingStatusInconclusive, fmt.Errorf("unknown finding status %q", s)
+	}
+}
+
+// NormalizeFindingStatus canonicalizes finding status to one of the canonical states.
+// Recognizes standard aliases while preserving honest security semantics.
+// Unknown or malformed input explicitly defaults to INCONCLUSIVE, ensuring invalid inputs
+// can never silently be promoted to a legitimate SUSPECTED or CONFIRMED vulnerability.
+func NormalizeFindingStatus(s FindingStatus) FindingStatus {
+	st, err := ParseFindingStatus(string(s))
+	if err != nil {
+		return FindingStatusInconclusive
+	}
+	return st
+}
+
+// FindingStatusRank returns an ordering rank for finding statuses (higher is more definitive).
+// Deterministic precedence: CONFIRMED > SUSPECTED > INCONCLUSIVE > NOT_TESTED > ERROR.
+func FindingStatusRank(s FindingStatus) int {
+	switch NormalizeFindingStatus(s) {
+	case FindingStatusConfirmed:
+		return 5
+	case FindingStatusSuspected:
+		return 4
+	case FindingStatusInconclusive:
+		return 3
+	case FindingStatusNotTested:
+		return 2
+	case FindingStatusError:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// FindingStatusFromVerification maps a verification status to its corresponding finding status.
+func FindingStatusFromVerification(v VerificationStatus) FindingStatus {
+	switch NormalizeVerificationStatus(v) {
+	case VerificationVerified:
+		return FindingStatusConfirmed
+	case VerificationDetected:
+		return FindingStatusSuspected
+	case VerificationObserved:
+		return FindingStatusConfirmed
+	case VerificationNotVerified:
+		return FindingStatusSuspected
+	case VerificationNotExposed:
+		return FindingStatusInconclusive
+	default:
+		return FindingStatusSuspected
+	}
+}
+
+// VerificationFromFindingStatus maps a finding status to its closest verification status.
+func VerificationFromFindingStatus(s FindingStatus) VerificationStatus {
+	switch NormalizeFindingStatus(s) {
+	case FindingStatusConfirmed:
+		return VerificationVerified
+	case FindingStatusSuspected:
+		return VerificationDetected
+	case FindingStatusInconclusive:
+		return VerificationNotExposed
+	case FindingStatusNotTested, FindingStatusError:
+		return VerificationNotVerified
+	default:
+		return VerificationObserved
 	}
 }
 
@@ -171,6 +263,53 @@ func NormalizeFinding(f Finding) Finding {
 	f.Title = strings.TrimSpace(f.Title)
 	f.Description = strings.TrimSpace(f.Description)
 	f.Evidence = strings.TrimSpace(f.Evidence)
+	f.RuleID = strings.TrimSpace(f.RuleID)
+	f.PrimaryAssetID = strings.TrimSpace(f.PrimaryAssetID)
+
+	// Normalize Status
+	if f.Status == "" {
+		f.Status = FindingStatusFromVerification(f.Verification.Status)
+	} else {
+		f.Status = NormalizeFindingStatus(f.Status)
+	}
+
+	// Normalize AnalysisMethod
+	if f.AnalysisMethod == "" {
+		if f.Verification.AnalysisMethod != "" {
+			f.AnalysisMethod = NormalizeAnalysisMethod(f.Verification.AnalysisMethod)
+		} else if f.Provenance != nil && f.Provenance.AnalysisMethod != "" {
+			f.AnalysisMethod = NormalizeAnalysisMethod(f.Provenance.AnalysisMethod)
+		} else if f.EvidenceDetails.Provenance != nil && f.EvidenceDetails.Provenance.AnalysisMethod != "" {
+			f.AnalysisMethod = NormalizeAnalysisMethod(f.EvidenceDetails.Provenance.AnalysisMethod)
+		} else {
+			f.AnalysisMethod = DefaultAnalysisMethod(f.Source, f.EvidenceDetails.DetectionMethod)
+		}
+	} else {
+		f.AnalysisMethod = NormalizeAnalysisMethod(f.AnalysisMethod)
+	}
+	if f.Verification.AnalysisMethod == "" {
+		f.Verification.AnalysisMethod = f.AnalysisMethod
+	} else {
+		f.Verification.AnalysisMethod = NormalizeAnalysisMethod(f.Verification.AnalysisMethod)
+	}
+
+	// Normalize AffectedAssetIDs: deduplicate and sort
+	if len(f.AffectedAssetIDs) > 0 {
+		seenAssets := make(map[string]struct{}, len(f.AffectedAssetIDs))
+		var uniqueAssets []string
+		for _, ast := range f.AffectedAssetIDs {
+			clean := strings.TrimSpace(ast)
+			if clean == "" {
+				continue
+			}
+			if _, exists := seenAssets[clean]; !exists {
+				seenAssets[clean] = struct{}{}
+				uniqueAssets = append(uniqueAssets, clean)
+			}
+		}
+		sort.Strings(uniqueAssets)
+		f.AffectedAssetIDs = uniqueAssets
+	}
 
 	// Normalize EvidenceDetails
 	f.EvidenceDetails.Observation = strings.TrimSpace(f.EvidenceDetails.Observation)
@@ -198,12 +337,106 @@ func NormalizeFinding(f Finding) Finding {
 		f.Verification.Result = f.Description
 	}
 
+	// Remediation and RemediationAdvice
 	if f.Remediation == "" {
 		f.Remediation = RemediationFor(f.Category, f.Title)
+	}
+	if f.RemediationAdvice == nil && f.Remediation != "" {
+		f.RemediationAdvice = &RemediationAdvice{Summary: f.Remediation}
+	} else if f.RemediationAdvice != nil && f.Remediation == "" {
+		f.Remediation = f.RemediationAdvice.Summary
 	}
 
 	if f.Fingerprint == "" {
 		f.Fingerprint = ComputeFingerprint(f.Target, f.Category, f.Endpoint, f.Method, f.Title)
+	}
+
+	if f.ID == "" {
+		f.ID = ComputeStableFindingID(f.Target, f.RuleID, f.Category, f.Endpoint, f.Method, f.Fingerprint)
+	}
+
+	// Synchronize and enrich structured EvidenceProvenance
+	if f.Provenance == nil && f.EvidenceDetails.Provenance != nil {
+		f.Provenance = f.EvidenceDetails.Provenance
+	} else if f.Provenance != nil && f.EvidenceDetails.Provenance == nil {
+		f.EvidenceDetails.Provenance = f.Provenance
+	}
+
+	if f.Provenance == nil {
+		rawEv := f.Evidence
+		if rawEv == "" {
+			rawEv = f.EvidenceDetails.Observation
+		}
+		loc := f.EvidenceDetails.Location
+		if loc == "" {
+			loc = f.Endpoint
+		}
+		prov := NewEvidenceProvenance(
+			f.Source,
+			f.RuleID,
+			f.ID,
+			f.PrimaryAssetID,
+			DefaultEvidenceType(f.Source),
+			loc,
+			f.EvidenceDetails.DetectionMethod,
+			rawEv,
+		)
+		if !f.Timestamp.IsZero() {
+			prov.CollectedAt = f.Timestamp
+		}
+		prov.AnalysisMethod = f.AnalysisMethod
+		f.Provenance = &prov
+		f.EvidenceDetails.Provenance = &prov
+	} else {
+		if f.Provenance.SourceEngine == "" {
+			f.Provenance.SourceEngine = f.Source
+		}
+		if f.Provenance.RuleID == "" {
+			f.Provenance.RuleID = f.RuleID
+		}
+		if f.Provenance.FindingID == "" {
+			f.Provenance.FindingID = f.ID
+		}
+		if f.Provenance.AssetID == "" && f.PrimaryAssetID != "" {
+			f.Provenance.AssetID = f.PrimaryAssetID
+		}
+		if f.Provenance.Location == "" {
+			loc := f.EvidenceDetails.Location
+			if loc == "" {
+				loc = f.Endpoint
+			}
+			f.Provenance.Location = loc
+		}
+		if f.Provenance.EvidenceType == "" {
+			f.Provenance.EvidenceType = DefaultEvidenceType(f.Source)
+		}
+		if f.Provenance.CollectionMethod == "" {
+			f.Provenance.CollectionMethod = f.EvidenceDetails.DetectionMethod
+			if f.Provenance.CollectionMethod == "" {
+				f.Provenance.CollectionMethod = DefaultCollectionMethod(f.Source)
+			}
+		}
+		if f.Provenance.AnalysisMethod == "" {
+			f.Provenance.AnalysisMethod = f.AnalysisMethod
+		} else {
+			f.Provenance.AnalysisMethod = NormalizeAnalysisMethod(f.Provenance.AnalysisMethod)
+		}
+		if f.Provenance.EvidenceID == "" {
+			f.Provenance.EvidenceID = ComputeEvidenceID(f.Provenance.SourceEngine, f.Provenance.RuleID, f.Provenance.FindingID, f.Provenance.Location, f.Provenance.EvidenceType)
+		}
+		if f.Provenance.ContentDigest == "" {
+			rawEv := f.Evidence
+			if rawEv == "" {
+				rawEv = f.EvidenceDetails.Observation
+			}
+			if rawEv != "" {
+				f.Provenance.ContentDigest = ComputeContentDigest(rawEv)
+			}
+		}
+		if f.Provenance.CollectedAt.IsZero() && !f.Timestamp.IsZero() {
+			f.Provenance.CollectedAt = f.Timestamp
+		}
+		f.EvidenceDetails.Provenance = f.Provenance
 	}
 
 	f.Score = CalculateFindingScore(f)

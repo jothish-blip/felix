@@ -1,15 +1,11 @@
 package apisec
 
 import (
-	"encoding/json"
-	"fmt"
 	"net/http"
-	"net/url"
-	"regexp"
-	"strings"
 	"time"
 
 	"felix/pkg/report"
+	"felix/pkg/secrets"
 )
 
 // OWASPCategory identifies one of the OWASP API Security Top 10 (2023) categories.
@@ -202,181 +198,25 @@ type RunRecord struct {
 
 // SanitizeHeaders strips sensitive auth tokens and passwords from HTTP headers.
 func SanitizeHeaders(h http.Header) map[string]string {
-	out := make(map[string]string)
-	if h == nil {
-		return out
-	}
-	sensitive := map[string]struct{}{
-		"authorization": {}, "cookie": {}, "set-cookie": {}, "x-api-key": {},
-		"api-key": {}, "x-auth-token": {}, "x-session-id": {}, "token": {},
-	}
-	for k, vv := range h {
-		lower := strings.ToLower(k)
-		if _, ok := sensitive[lower]; ok || strings.Contains(lower, "auth") || strings.Contains(lower, "token") || strings.Contains(lower, "secret") {
-			out[k] = "[REDACTED]"
-		} else {
-			out[k] = strings.Join(vv, ", ")
-		}
-	}
-	return out
+	return secrets.SanitizeHeaders(h)
 }
 
 // SanitizeURL scrubs sensitive query parameter values from URL strings.
 func SanitizeURL(rawURL string) string {
-	if rawURL == "" {
-		return ""
-	}
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return rawURL
-	}
-	q := parsed.Query()
-	if len(q) == 0 {
-		return rawURL
-	}
-	modified := false
-	for k := range q {
-		lower := strings.ToLower(k)
-		if strings.Contains(lower, "token") || strings.Contains(lower, "secret") ||
-			strings.Contains(lower, "pass") || strings.Contains(lower, "key") ||
-			strings.Contains(lower, "auth") || strings.Contains(lower, "session") {
-			q.Set(k, "[REDACTED]")
-			modified = true
-		}
-	}
-	if modified {
-		parsed.RawQuery = q.Encode()
-		return parsed.String()
-	}
-	return rawURL
+	return secrets.SanitizeURL(rawURL)
 }
-
-var (
-	secretJSONPattern = regexp.MustCompile(`(?i)"(password|passwd|secret|token|access_token|refresh_token|api_key|credit_card|cvv)"\s*:\s*"[^"]*"`)
-
-	// PEM private key blocks
-	pemPrivateKeyPattern = regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----`)
-
-	// JWT tokens: three dot-separated base64url segments (minimum 10 chars each for header/payload)
-	jwtPattern = regexp.MustCompile(`\bey[A-Za-z0-9_-]{10,}\.ey[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\b`)
-
-	// Bearer authorization tokens
-	bearerTokenPattern = regexp.MustCompile(`(?i)\b(Bearer\s+)[A-Za-z0-9_\-\.~+/]+=*`)
-
-	// Key-value pairs in form data, query strings, headers, config lines, etc.
-	kvSecretPattern = regexp.MustCompile(`(?i)\b(access_token|client_secret|api_key|apikey|secret_key|secret|password|passwd|auth_token|refresh_token|private_key|token)\s*([:=])\s*(?:"([^"]*)"|'([^']*)'|([^&\s,;'"<>]+))`)
-
-	// Session cookies in Set-Cookie / Cookie headers or response body text
-	cookieSecretPattern = regexp.MustCompile(`(?i)\b(connect\.sid|phpsessid|jsessionid|sessionid|session_id|session|sid)\s*=\s*([^;\s\r\n]+)`)
-
-	// Sensitive query parameters in embedded URLs
-	querySecretPattern = regexp.MustCompile(`(?i)([?&](?:token|key|api_key|apikey|secret|password|passwd|auth|access_token|session)=)[^&\s"'<>]+`)
-
-	// HTML password and hidden sensitive token inputs
-	htmlPasswordPattern1 = regexp.MustCompile(`(?i)(<input[^>]+type=["']?password["']?[^>]*value=["'])([^"']*)(["'])`)
-	htmlPasswordPattern2 = regexp.MustCompile(`(?i)(<input[^>]+value=["'])([^"']*)(["'][^>]*type=["']?password["']?)`)
-	htmlTokenPattern1    = regexp.MustCompile(`(?i)(<input[^>]+name=["'][^"']*(?:token|secret|key|csrf|auth)[^"']*["'][^>]*value=["'])([^"']*)(["'])`)
-	htmlTokenPattern2    = regexp.MustCompile(`(?i)(<input[^>]+value=["'])([^"']*)(["'][^>]*name=["'][^"']*(?:token|secret|key|csrf|auth)[^"']*["'])`)
-)
 
 // RedactText redacts all recognized sensitive credentials, tokens, cookies, private keys,
 // HTML password inputs, and key-value secret pairs from free-form text.
 func RedactText(input string) string {
-	if input == "" {
-		return ""
-	}
-	s := input
-
-	// 1. Redact PEM private keys
-	s = pemPrivateKeyPattern.ReplaceAllString(s, "[REDACTED_PRIVATE_KEY]")
-
-	// 2. Redact Bearer tokens
-	s = bearerTokenPattern.ReplaceAllString(s, "${1}[REDACTED]")
-
-	// 3. Redact JWT tokens
-	s = jwtPattern.ReplaceAllString(s, "[REDACTED_JWT]")
-
-	// 4. Redact HTML form password and sensitive token inputs
-	s = htmlPasswordPattern1.ReplaceAllString(s, "${1}[REDACTED]${3}")
-	s = htmlPasswordPattern2.ReplaceAllString(s, "${1}[REDACTED]${3}")
-	s = htmlTokenPattern1.ReplaceAllString(s, "${1}[REDACTED]${3}")
-	s = htmlTokenPattern2.ReplaceAllString(s, "${1}[REDACTED]${3}")
-
-	// 5. Redact session cookies
-	s = cookieSecretPattern.ReplaceAllString(s, "${1}=[REDACTED]")
-
-	// 6. Redact URL query parameters
-	s = querySecretPattern.ReplaceAllString(s, "${1}[REDACTED]")
-
-	// 7. Redact key-value secrets (e.g. access_token=..., api_key: ...)
-	s = kvSecretPattern.ReplaceAllStringFunc(s, func(m string) string {
-		if strings.Contains(m, "[REDACTED") {
-			return m
-		}
-		idx := strings.IndexAny(m, ":=")
-		if idx == -1 {
-			return m
-		}
-		key := m[:idx]
-		sep := string(m[idx])
-		return fmt.Sprintf("%s%s[REDACTED]", key, sep)
-	})
-
-	return s
+	return secrets.RedactText(input)
 }
 
 // RedactBody produces a bounded, sanitized snippet of an HTTP body for evidence recording.
 func RedactBody(body []byte, maxLen int) string {
-	if len(body) == 0 {
-		return ""
-	}
-	// Attempt structured JSON redaction first
-	var js any
-	if err := json.Unmarshal(body, &js); err == nil {
-		redacted := redactMapRecursive(js)
-		b, err := json.Marshal(redacted)
-		if err == nil {
-			s := RedactText(string(b))
-			if maxLen > 0 && len(s) > maxLen {
-				return s[:maxLen] + " ... [TRUNCATED]"
-			}
-			return s
-		}
-	}
-
-	// Non-JSON or unstructured content: comprehensive text redaction
-	s := RedactText(string(body))
-	if maxLen > 0 && len(s) > maxLen {
-		return s[:maxLen] + " ... [TRUNCATED]"
-	}
-	return s
+	return secrets.RedactBody(body, maxLen)
 }
 
 func redactMapRecursive(v any) any {
-	switch val := v.(type) {
-	case map[string]any:
-		out := make(map[string]any)
-		for k, item := range val {
-			lowerK := strings.ToLower(k)
-			if strings.Contains(lowerK, "pass") || strings.Contains(lowerK, "secret") ||
-				strings.Contains(lowerK, "token") || strings.Contains(lowerK, "key") ||
-				strings.Contains(lowerK, "auth") || strings.Contains(lowerK, "credit") ||
-				strings.Contains(lowerK, "cookie") || strings.Contains(lowerK, "session") {
-				out[k] = "[REDACTED]"
-			} else {
-				out[k] = redactMapRecursive(item)
-			}
-		}
-		return out
-	case []any:
-		out := make([]any, len(val))
-		for i, item := range val {
-			out[i] = redactMapRecursive(item)
-		}
-		return out
-	case string:
-		return RedactText(val)
-	default:
-		return val
-	}
+	return secrets.RedactAny(v)
 }

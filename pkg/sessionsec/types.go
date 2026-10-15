@@ -4,12 +4,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"net/url"
-	"regexp"
-	"strings"
 	"time"
 
 	"felix/pkg/report"
+	"felix/pkg/secrets"
 )
 
 // SessionCategory defines the 11 OWASP WSTG-aligned session and identity security categories.
@@ -348,40 +346,9 @@ func DefaultConfig() Config {
 	}
 }
 
-// Regex patterns for comprehensive credential and token redaction.
-var (
-	pemPrivateKeyPattern = regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9_-]+ PRIVATE KEY-----.*?-----END [A-Z0-9_-]+ PRIVATE KEY-----`)
-	bearerTokenPattern   = regexp.MustCompile(`(?i)(Bearer\s+)[A-Za-z0-9\-_.~+/=]{12,}`)
-	jwtPattern           = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b`)
-	cookieSecretPattern  = regexp.MustCompile(`(?i)((?:session|token|auth|access_token|jwt|sid|key|connect\.sid|phpsessid|jsessionid)=)[^;,\s]+`)
-	querySecretPattern   = regexp.MustCompile(`(?i)((?:token|api_key|apikey|secret|password|passwd|auth|session_id|sid)=)[^&\s]+`)
-	kvSecretPattern      = regexp.MustCompile(`(?i)\b(?:api_key|apikey|secret|password|passwd|auth_token|access_token|client_secret|db_password|private_key|session_id)\s*[:=]\s*["']?([^\s"']+)["']?`)
-)
-
 // RedactText removes credentials, tokens, session IDs, private keys, and secrets from text.
 func RedactText(input string) string {
-	if input == "" {
-		return ""
-	}
-	s := input
-	s = pemPrivateKeyPattern.ReplaceAllString(s, "[REDACTED_PRIVATE_KEY]")
-	s = bearerTokenPattern.ReplaceAllString(s, "${1}[REDACTED]")
-	s = jwtPattern.ReplaceAllString(s, "[REDACTED_JWT]")
-	s = cookieSecretPattern.ReplaceAllString(s, "${1}[REDACTED]")
-	s = querySecretPattern.ReplaceAllString(s, "${1}[REDACTED]")
-	s = kvSecretPattern.ReplaceAllStringFunc(s, func(m string) string {
-		if strings.Contains(m, "[REDACTED") {
-			return m
-		}
-		idx := strings.IndexAny(m, ":=")
-		if idx == -1 {
-			return m
-		}
-		key := m[:idx]
-		sep := string(m[idx])
-		return fmt.Sprintf("%s%s[REDACTED]", key, sep)
-	})
-	return s
+	return secrets.RedactText(input)
 }
 
 // HashSecret produces a safe, non-reversible SHA-256 fingerprint (first 8 hex characters)
@@ -397,42 +364,10 @@ func HashSecret(secret string) string {
 // RedactCookieHeader redacts sensitive values from a Cookie or Set-Cookie header string
 // while preserving security attributes (Secure, HttpOnly, SameSite, Path, Domain).
 func RedactCookieHeader(raw string) string {
-	if raw == "" {
-		return ""
-	}
-	parts := strings.Split(raw, ";")
-	if len(parts) == 0 {
-		return ""
-	}
-
-	firstPart := strings.TrimSpace(parts[0])
-	eqIdx := strings.Index(firstPart, "=")
-	if eqIdx != -1 {
-		name := firstPart[:eqIdx]
-		parts[0] = fmt.Sprintf("%s=[REDACTED]", name)
-	}
-
-	return strings.Join(parts, "; ")
+	return secrets.RedactCookieHeader(raw)
 }
 
 // SanitizeURL removes query parameters and userinfo from URLs for safe logging.
 func SanitizeURL(rawURL string) string {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return rawURL
-	}
-	u.User = nil
-	if u.RawQuery != "" {
-		q := u.Query()
-		for k := range q {
-			lower := strings.ToLower(k)
-			if strings.Contains(lower, "token") || strings.Contains(lower, "key") ||
-				strings.Contains(lower, "secret") || strings.Contains(lower, "session") ||
-				strings.Contains(lower, "auth") || strings.Contains(lower, "password") {
-				q.Set(k, "[REDACTED]")
-			}
-		}
-		u.RawQuery = q.Encode()
-	}
-	return u.String()
+	return secrets.SanitizeURL(rawURL)
 }

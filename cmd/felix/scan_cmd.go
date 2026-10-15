@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -21,7 +23,11 @@ import (
 
 // runScan executes the "felix scan" subcommand.
 func runScan(args []string) int {
-	cfgStore := config.Load()
+	cfgStore, err := config.LoadWithEnv("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] configuration error: %v\n", err)
+		return 2
+	}
 
 	var (
 		timeoutStr     string
@@ -39,6 +45,10 @@ func runScan(args []string) int {
 		verbose        bool
 		inputFile      string
 		userAgent      string
+		allowPrivate   = cfgStore.AllowPrivateIPs
+		allowLoopback  = cfgStore.AllowLoopback
+		insecure       = cfgStore.InsecureSkipVerify
+		activeVerif    = cfgStore.ActiveVerification
 		targets        []string
 	)
 
@@ -251,6 +261,46 @@ func runScan(args []string) int {
 			continue
 		}
 
+		// --allow-private
+		if arg == "--allow-private" || arg == "--allow-private=true" {
+			allowPrivate = true
+			continue
+		}
+		if arg == "--allow-private=false" || arg == "--no-allow-private" {
+			allowPrivate = false
+			continue
+		}
+
+		// --allow-loopback
+		if arg == "--allow-loopback" || arg == "--allow-loopback=true" {
+			allowLoopback = true
+			continue
+		}
+		if arg == "--allow-loopback=false" || arg == "--no-allow-loopback" {
+			allowLoopback = false
+			continue
+		}
+
+		// --insecure / --insecure-skip-verify
+		if arg == "--insecure" || arg == "--insecure=true" || arg == "--insecure-skip-verify" || arg == "--insecure-skip-verify=true" {
+			insecure = true
+			continue
+		}
+		if arg == "--insecure=false" || arg == "--insecure-skip-verify=false" || arg == "--no-insecure" {
+			insecure = false
+			continue
+		}
+
+		// --active / --active-verification
+		if arg == "--active" || arg == "--active=true" || arg == "--active-verification" || arg == "--active-verification=true" {
+			activeVerif = true
+			continue
+		}
+		if arg == "--active=false" || arg == "--active-verification=false" || arg == "--no-active" {
+			activeVerif = false
+			continue
+		}
+
 		// Unknown flag
 		if strings.HasPrefix(arg, "-") {
 			fmt.Fprintf(os.Stderr, "[-] error: unknown flag %q\n\n", arg)
@@ -305,7 +355,7 @@ func runScan(args []string) int {
 	}
 
 	// 5. Max Assets Validation
-	maxAssetsVal := 0
+	maxAssetsVal := cfgStore.MaxAssets
 	if maxAssetsStr != "" {
 		val, err := strconv.Atoi(maxAssetsStr)
 		if err != nil || val <= 0 {
@@ -348,6 +398,18 @@ func runScan(args []string) int {
 		return 2
 	}
 
+	// Validate and normalize all targets according to strict authorization & syntax rules
+	var normalizedTargets []string
+	for _, t := range targets {
+		norm, err := crawler.NormalizeTargetURL(t)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] error: invalid target URL %q: %v\n", t, err)
+			return 2
+		}
+		normalizedTargets = append(normalizedTargets, norm)
+	}
+	targets = normalizedTargets
+
 	startTime := time.Now()
 
 	// Operational Banners / Status
@@ -367,12 +429,20 @@ func runScan(args []string) int {
 				fmt.Printf("    Max Assets:       unbounded\n")
 			}
 			fmt.Printf("    Max Size:         %d bytes (%s)\n", maxSizeBytes, formatBytes(maxSizeBytes))
-			fmt.Printf("    User-Agent:       %s\n\n", userAgent)
+			fmt.Printf("    User-Agent:       %s\n", userAgent)
+			if insecure {
+				fmt.Printf("    TLS Insecure:     %t\n", insecure)
+			}
+			if activeVerif {
+				fmt.Printf("    Active Verify:    %t\n", activeVerif)
+			}
+			fmt.Println()
 		} else if !jsonBare {
 			fmt.Printf("[*] Loaded %d target(s) | Concurrency: %d | Timeout: %s | Scope: %s\n\n",
 				len(targets), concurrencyVal, timeoutDuration, scopeMode)
 		}
 	}
+	_ = activeVerif
 
 	uiProg := ui.New(ui.Options{
 		Writer:   os.Stdout,
@@ -380,20 +450,97 @@ func runScan(args []string) int {
 		JSONMode: jsonBare,
 	})
 
-	// Initialize Crawler & Security Analyzers with validated configuration
+	// Build target authorization checker
+	isTargetAuthorized := func(u string) bool {
+		for _, t := range targets {
+			s, err := crawler.NewScope(t, scopeMode)
+			if err == nil && s.IsAllowed(u) {
+				return true
+			}
+		}
+		return false
+	}
+
+	maxRedirects := cfgStore.MaxRedirects
+	if maxRedirects <= 0 {
+		maxRedirects = config.DefaultMaxRedirects
+	}
+
+	// Initialize SafeTransport and Safe HTTP Client for Crawler, Cloud Detector, and API Detector
+	safeTransport := crawler.NewSafeTransport(crawler.SafeTransportOptions{
+		Timeout:            timeoutDuration,
+		AllowLoopback:      allowLoopback,
+		AllowPrivateIPs:    allowPrivate,
+		InsecureSkipVerify: insecure,
+	})
+	safeHTTPClient := &http.Client{
+		Transport: safeTransport,
+		Timeout:   timeoutDuration,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= maxRedirects {
+				return fmt.Errorf("stopped after %d redirects", maxRedirects)
+			}
+			scheme := strings.ToLower(req.URL.Scheme)
+			if scheme != "http" && scheme != "https" {
+				return fmt.Errorf("invalid redirect scheme: %s", scheme)
+			}
+			if req.URL.User != nil {
+				return fmt.Errorf("redirect URL contains embedded credentials")
+			}
+			destHost := req.URL.Hostname()
+			if ip := net.ParseIP(destHost); ip != nil {
+				if prohibited, reason := crawler.ProhibitedIPReason(ip, allowLoopback, allowPrivate); prohibited {
+					return &crawler.SSRFError{Host: destHost, IP: ip, Reason: reason}
+				}
+			}
+			if !isTargetAuthorized(req.URL.String()) {
+				return fmt.Errorf("redirect to %s blocked: target is outside authorized scope", req.URL.String())
+			}
+			return nil
+		},
+	}
+
+	// Initialize Crawler & Security Analyzers with validated configuration and safe transport
 	cConfig := crawler.Config{
-		Concurrency:  concurrencyVal,
-		Timeout:      timeoutDuration,
-		MaxAssetSize: maxSizeBytes,
-		MaxAssets:    maxAssetsVal,
-		ScopeMode:    scopeMode,
-		UserAgent:    userAgent,
-		Progress:     uiProg.Callback(),
+		Concurrency:        concurrencyVal,
+		Timeout:            timeoutDuration,
+		MaxAssetSize:       maxSizeBytes,
+		MaxAssets:          maxAssetsVal,
+		MaxDepth:           cfgStore.MaxDepth,
+		MaxRetries:         cfgStore.MaxRetries,
+		RetryDelay:         time.Duration(cfgStore.RetryDelayMs) * time.Millisecond,
+		MaxRedirects:       maxRedirects,
+		ScopeMode:          scopeMode,
+		UserAgent:          userAgent,
+		Client:             safeHTTPClient,
+		InsecureSkipVerify: insecure,
+		AllowLoopback:      allowLoopback,
+		AllowPrivateIPs:    allowPrivate,
+		IsAllowed:          isTargetAuthorized,
+		Progress:           uiProg.Callback(),
 	}
 	c := crawler.New(cConfig)
 	detector := secrets.NewDetector()
-	cloudAuditor := cloud.NewDetector(nil)
-	apiAuditor := api.NewDetector(nil)
+	cloudAuditor := cloud.NewDetector(cloud.NewClient(cloud.ClientOptions{
+		Timeout:         timeoutDuration,
+		MaxResponseSize: maxSizeBytes,
+		UserAgent:       userAgent,
+		HTTPClient:      safeHTTPClient,
+		AllowLoopback:   allowLoopback,
+		AllowPrivateIPs: allowPrivate,
+		IsAllowed:       isTargetAuthorized,
+	}), isTargetAuthorized)
+	apiAuditor := api.NewDetector(api.NewClient(api.ClientOptions{
+		Timeout:         timeoutDuration,
+		MaxResponseSize: maxSizeBytes,
+		UserAgent:       userAgent,
+		HTTPClient:      safeHTTPClient,
+		AllowLoopback:   allowLoopback,
+		AllowPrivateIPs: allowPrivate,
+		IsAllowed:       isTargetAuthorized,
+	}), api.DetectorOptions{
+		IsAllowed: isTargetAuthorized,
+	})
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -777,6 +924,10 @@ func printScanHelp() {
 	fmt.Println("  --verbose, -v               Enable detailed operational output")
 	fmt.Println("  -l <file>                   Path to file containing target URLs (one per line)")
 	fmt.Println("  --user-agent <string>       Custom User-Agent header string")
+	fmt.Println("  --allow-private             Allow connections to RFC 1918 private subnets")
+	fmt.Println("  --allow-loopback            Allow connections to loopback addresses (127.0.0.0/8, ::1)")
+	fmt.Println("  --insecure                  Skip TLS certificate verification (default: false)")
+	fmt.Println("  --active                    Enable active vulnerability verification (default: false)")
 }
 
 func parseTimeout(s string) (time.Duration, error) {

@@ -98,6 +98,8 @@ type VerificationResult struct {
 	Endpoint               string                    `json:"endpoint"`
 	Category               string                    `json:"category"`
 	Status                 report.VerificationStatus `json:"status"`
+	FindingStatus          report.FindingStatus      `json:"finding_status,omitempty"`
+	AnalysisMethod         report.AnalysisMethod     `json:"analysis_method,omitempty"`
 	VerificationMethod     string                    `json:"verification_method"`
 	PolicyID               string                    `json:"policy_id"`
 	PolicyVersion          string                    `json:"policy_version"`

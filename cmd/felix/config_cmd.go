@@ -9,7 +9,11 @@ import (
 
 func runConfig(args []string) int {
 	if len(args) == 0 || args[0] == "show" {
-		cfg := config.Load()
+		cfg, err := config.Load()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Configuration error: %v\n", err)
+			return 2
+		}
 		p, _ := config.Path()
 		fmt.Printf("Felix Configuration (%s):\n", p)
 		fmt.Printf("  timeout:      %d seconds\n", cfg.Timeout)
@@ -17,6 +21,15 @@ func runConfig(args []string) int {
 		fmt.Printf("  scope:        %s\n", cfg.Scope)
 		fmt.Printf("  max_size_mb:  %d MB\n", cfg.MaxSizeMB)
 		fmt.Printf("  user_agent:   %s\n", cfg.UserAgent)
+		fmt.Printf("  max_assets:   %d\n", cfg.MaxAssets)
+		fmt.Printf("  max_depth:    %d\n", cfg.MaxDepth)
+		fmt.Printf("  max_retries:  %d\n", cfg.MaxRetries)
+		fmt.Printf("  retry_delay:  %d ms\n", cfg.RetryDelayMs)
+		fmt.Printf("  max_redirects: %d\n", cfg.MaxRedirects)
+		fmt.Printf("  insecure_skip_verify: %t\n", cfg.InsecureSkipVerify)
+		fmt.Printf("  allow_private_ips:    %t\n", cfg.AllowPrivateIPs)
+		fmt.Printf("  allow_loopback:       %t\n", cfg.AllowLoopback)
+		fmt.Printf("  active_verification:  %t\n", cfg.ActiveVerification)
 		return 0
 	}
 
@@ -26,7 +39,11 @@ func runConfig(args []string) int {
 			fmt.Fprintf(os.Stderr, "Usage: felix config get <key>\n")
 			return 2
 		}
-		cfg := config.Load()
+		cfg, err := config.Load()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Configuration error: %v\n", err)
+			return 2
+		}
 		val, err := cfg.Get(args[1])
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[-] Error: %v\n", err)
@@ -40,7 +57,11 @@ func runConfig(args []string) int {
 			fmt.Fprintf(os.Stderr, "Usage: felix config set <key> <value>\n")
 			return 2
 		}
-		cfg := config.Load()
+		cfg, err := config.Load()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Configuration error: %v\n", err)
+			return 2
+		}
 		if err := cfg.Set(args[1], args[2]); err != nil {
 			fmt.Fprintf(os.Stderr, "[-] Error: %v\n", err)
 			return 2

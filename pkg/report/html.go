@@ -195,6 +195,13 @@ const htmlReportTemplate = `<!DOCTYPE html>
   .badge-OBSERVED { background: #141414; color: #a3a3a3; border: 1px solid #333333; }
   .badge-NOT_VERIFIED { background: #171717; color: #d4d4d4; border: 1px solid #404040; }
   .badge-NOT_EXPOSED { background: #042f2e; color: #5eead4; border: 1px solid #0f766e; }
+  .badge-CONFIRMED { background: var(--verified-bg); color: #6ee7b7; border: 1px solid var(--verified-border); }
+  .badge-SUSPECTED { background: var(--med-bg); color: #fde047; border: 1px solid var(--med-border); }
+  .badge-NOT_TESTED { background: #171717; color: #d4d4d4; border: 1px solid #404040; }
+  .badge-ERROR { background: var(--crit-bg); color: #fca5a5; border: 1px solid var(--crit-border); }
+  .badge-STATIC_ANALYSIS { background: #1e1b4b; color: #c7d2fe; border: 1px solid #3730a3; }
+  .badge-ACTIVE_VERIFICATION { background: #064e3b; color: #a7f3d0; border: 1px solid #065f46; }
+  .badge-MANUAL_REVIEW { background: #3b0764; color: #f5d0fe; border: 1px solid #581c87; }
 
   /* Narrative Boxes */
   .summary-narrative {
@@ -647,6 +654,8 @@ const htmlReportTemplate = `<!DOCTYPE html>
         <div style="display: flex; gap: 0.4rem; flex-wrap: wrap;">
           <span class="badge badge-{{.Severity}}">{{.Severity}}</span>
           <span class="badge badge-INFO">Conf: {{.Confidence}}</span>
+          {{if .Status}}<span class="badge badge-{{.Status}}">{{.Status}}</span>{{end}}
+          {{if .AnalysisMethod}}<span class="badge badge-{{.AnalysisMethod}}">{{.AnalysisMethod}}</span>{{end}}
           {{if .Verification.Status}}
           <span class="badge badge-{{.Verification.Status}}">{{.Verification.Status}}</span>
           {{end}}
@@ -826,6 +835,8 @@ const htmlReportTemplate = `<!DOCTYPE html>
           <div style="display: flex; gap: 0.4rem; flex-wrap: wrap;">
             <span class="badge badge-{{.Severity}}">{{.Severity}}</span>
             <span class="badge badge-INFO">Conf: {{.Confidence}}</span>
+            {{if .Status}}<span class="badge badge-{{.Status}}">{{.Status}}</span>{{end}}
+            {{if .AnalysisMethod}}<span class="badge badge-{{.AnalysisMethod}}">{{.AnalysisMethod}}</span>{{end}}
             {{if .Verification.Status}}
             <span class="badge badge-{{.Verification.Status}}">{{.Verification.Status}}</span>
             {{end}}

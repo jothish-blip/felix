@@ -19,3 +19,12 @@ Thumbs.db
 
 # Local certificates
 certs/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Logs & coverage
+*.log
+coverage.*

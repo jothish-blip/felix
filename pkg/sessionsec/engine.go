@@ -36,8 +36,13 @@ func NewEngine(client *http.Client, config Config) *Engine {
 // scopedClient creates an HTTP client that validates every redirect destination
 // against the assessment's approved scope and exclusions before the redirected request is sent.
 func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
+	transport := e.client.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
 	return &http.Client{
-		Timeout: e.config.Timeout,
+		Transport: transport,
+		Timeout:   e.config.Timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return fmt.Errorf("stopped after 10 redirects")

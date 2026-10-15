@@ -2,13 +2,15 @@ package cloud
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"time"
+
+	"felix/pkg/crawler"
 )
 
 // Common probing errors
@@ -29,6 +31,10 @@ type ClientOptions struct {
 	MaxResponseSize int64
 	UserAgent       string
 	HTTPClient      *http.Client
+	AllowLoopback   bool
+	AllowPrivateIPs bool
+	IsAllowed       func(string) bool
+	IsExcluded      func(string) bool
 }
 
 // Client manages safe, bounded outbound HTTP requests for cloud service verification.
@@ -37,6 +43,8 @@ type Client struct {
 	timeout         time.Duration
 	maxResponseSize int64
 	userAgent       string
+	isAllowed       func(string) bool
+	isExcluded      func(string) bool
 }
 
 // NewClient initializes a hardened, bounded probe client.
@@ -45,6 +53,10 @@ func NewClient(opts ...ClientOptions) *Client {
 	maxSize := int64(DefaultMaxCloudResponse)
 	ua := DefaultUserAgent
 	var customHTTP *http.Client
+	var allowLoopback bool
+	var allowPrivate bool
+	var isAllowed func(string) bool
+	var isExcluded func(string) bool
 
 	if len(opts) > 0 {
 		if opts[0].Timeout > 0 {
@@ -59,25 +71,18 @@ func NewClient(opts ...ClientOptions) *Client {
 		if opts[0].HTTPClient != nil {
 			customHTTP = opts[0].HTTPClient
 		}
+		allowLoopback = opts[0].AllowLoopback
+		allowPrivate = opts[0].AllowPrivateIPs
+		isAllowed = opts[0].IsAllowed
+		isExcluded = opts[0].IsExcluded
 	}
 
 	if customHTTP == nil {
-		transport := &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
-			DialContext: (&net.Dialer{
-				Timeout:   timeout,
-				KeepAlive: 30 * time.Second,
-			}).DialContext,
-			MaxIdleConns:          50,
-			MaxIdleConnsPerHost:   10,
-			IdleConnTimeout:       60 * time.Second,
-			TLSHandshakeTimeout:   5 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
-			ForceAttemptHTTP2:     true,
-			TLSClientConfig: &tls.Config{
-				MinVersion: tls.VersionTLS12,
-			},
-		}
+		transport := crawler.NewSafeTransport(crawler.SafeTransportOptions{
+			Timeout:         timeout,
+			AllowLoopback:   allowLoopback,
+			AllowPrivateIPs: allowPrivate,
+		})
 
 		customHTTP = &http.Client{
 			Transport: transport,
@@ -85,6 +90,26 @@ func NewClient(opts ...ClientOptions) *Client {
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= 5 {
 					return fmt.Errorf("stopped after 5 redirects")
+				}
+				scheme := strings.ToLower(req.URL.Scheme)
+				if scheme != "http" && scheme != "https" {
+					return fmt.Errorf("redirect to unsupported scheme %q blocked", req.URL.Scheme)
+				}
+				if req.URL.User != nil {
+					return fmt.Errorf("redirect with embedded credentials blocked")
+				}
+				destHost := req.URL.Hostname()
+				if ip := net.ParseIP(destHost); ip != nil {
+					if prohibited, reason := crawler.ProhibitedIPReason(ip, allowLoopback, allowPrivate); prohibited {
+						return &crawler.SSRFError{Host: destHost, IP: ip, Reason: reason}
+					}
+				}
+				nextURL := req.URL.String()
+				if isExcluded != nil && isExcluded(nextURL) {
+					return fmt.Errorf("redirect to %s blocked: matches exclusion rule", nextURL)
+				}
+				if isAllowed != nil && !isAllowed(nextURL) {
+					return fmt.Errorf("redirect to %s blocked: out of approved scope", nextURL)
 				}
 				// Prevent cross-origin redirect following to enforce cloud boundary
 				if len(via) > 0 {
@@ -103,6 +128,8 @@ func NewClient(opts ...ClientOptions) *Client {
 		timeout:         timeout,
 		maxResponseSize: maxSize,
 		userAgent:       ua,
+		isAllowed:       isAllowed,
+		isExcluded:      isExcluded,
 	}
 }
 
@@ -116,6 +143,16 @@ type ProbeResponse struct {
 
 // Do executes a bounded probe request subject to strict size and rate limits.
 func (c *Client) Do(ctx context.Context, req *http.Request) (*ProbeResponse, error) {
+	if req.URL != nil {
+		reqURL := req.URL.String()
+		if c.isExcluded != nil && c.isExcluded(reqURL) {
+			return nil, fmt.Errorf("request to %s blocked: matches exclusion rule", reqURL)
+		}
+		if c.isAllowed != nil && !c.isAllowed(reqURL) {
+			return nil, fmt.Errorf("request to %s blocked: target outside authorized scope", reqURL)
+		}
+	}
+
 	if req.Header.Get("User-Agent") == "" {
 		req.Header.Set("User-Agent", c.userAgent)
 	}

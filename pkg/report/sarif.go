@@ -231,6 +231,8 @@ func BuildSARIFLog(rep Report) SARIFLog {
 			"confidence":          f.Confidence,
 			"score":               f.Score,
 			"source":              f.Source,
+			"status":              string(f.Status),
+			"analysis_method":     string(f.AnalysisMethod),
 			"verification_status": string(f.Verification.Status),
 			"verification_result": f.Verification.Result,
 		}
@@ -245,6 +247,11 @@ func BuildSARIFLog(rep Report) SARIFLog {
 		}
 		if f.EvidenceDetails.DetectionMethod != "" {
 			props["detection_method"] = f.EvidenceDetails.DetectionMethod
+		}
+		if f.Provenance != nil {
+			props["provenance"] = f.Provenance
+		} else if f.EvidenceDetails.Provenance != nil {
+			props["provenance"] = f.EvidenceDetails.Provenance
 		}
 
 		fingerprints := make(map[string]string)

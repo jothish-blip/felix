@@ -16,6 +16,12 @@ import (
 	"time"
 )
 
+func testConfig() Config {
+	cfg := DefaultConfig()
+	cfg.AllowLoopback = true
+	return cfg
+}
+
 func TestExtractScripts(t *testing.T) {
 	mockHTML := `<!DOCTYPE html>
 <html>
@@ -41,7 +47,7 @@ func TestExtractScripts(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New(DefaultConfig())
+	c := New(testConfig())
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -70,8 +76,9 @@ func TestCrawlConcurrently(t *testing.T) {
 	defer server.Close()
 
 	c := New(Config{
-		Concurrency: 3,
-		Timeout:     5 * time.Second,
+		Concurrency:   3,
+		Timeout:       5 * time.Second,
+		AllowLoopback: true,
 	})
 
 	targets := []string{
@@ -115,7 +122,7 @@ func TestRelativeJavaScriptURL(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New(DefaultConfig())
+	c := New(testConfig())
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -145,7 +152,7 @@ func TestAbsoluteJavaScriptURL(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New(DefaultConfig())
+	c := New(testConfig())
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -178,7 +185,7 @@ func TestProtocolRelativeURL(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New(DefaultConfig())
+	c := New(testConfig())
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -224,7 +231,7 @@ func TestDuplicateScripts(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New(DefaultConfig())
+	c := New(testConfig())
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -257,7 +264,7 @@ func TestInlineScriptWithoutSrc(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New(DefaultConfig())
+	c := New(testConfig())
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -289,7 +296,7 @@ func TestJavaScriptDownloading(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New(DefaultConfig())
+	c := New(testConfig())
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -335,7 +342,7 @@ func TestJavaScriptAssetMetadata(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New(DefaultConfig())
+	c := New(testConfig())
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -385,7 +392,7 @@ func TestSourceMapDiscovery(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New(DefaultConfig())
+	c := New(testConfig())
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -449,7 +456,7 @@ func TestCrossOriginScopeEnforcement(t *testing.T) {
 	}))
 	defer targetServer.Close()
 
-	c := New(DefaultConfig()) // Default is ScopeSameOrigin
+	c := New(testConfig()) // Default is ScopeSameOrigin
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -500,7 +507,7 @@ func TestOversizedAssetRejection(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg := DefaultConfig()
+	cfg := testConfig()
 	cfg.MaxAssetSize = 256 // Limit to 256 bytes
 
 	c := New(cfg)
@@ -549,7 +556,7 @@ func TestHTTPErrorHandling(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New(DefaultConfig())
+	c := New(testConfig())
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -620,8 +627,9 @@ func TestConcurrentDownloading(t *testing.T) {
 
 	concurrencyLimit := 3
 	c := New(Config{
-		Concurrency: concurrencyLimit,
-		Timeout:     5 * time.Second,
+		Concurrency:   concurrencyLimit,
+		Timeout:       5 * time.Second,
+		AllowLoopback: true,
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -671,7 +679,7 @@ func TestAssetClassificationAndStylesheets(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := New(DefaultConfig())
+	c := New(testConfig())
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -874,7 +882,7 @@ func TestCrawler_ScopedRedirectEnforcement(t *testing.T) {
 	}))
 	defer primary.Close()
 
-	cfg := DefaultConfig()
+	cfg := testConfig()
 	cfg.ScopeMode = ScopeSameOrigin
 	cfg.IsExcluded = func(u string) bool {
 		return strings.Contains(u, "/blocked-path")
@@ -915,7 +923,7 @@ func TestReachabilityClassification_HTTPResponses(t *testing.T) {
 	}))
 	defer tsOK.Close()
 
-	c := New(Config{Timeout: 2 * time.Second})
+	c := New(Config{Timeout: 2 * time.Second, AllowLoopback: true})
 	resOK := c.Crawl(context.Background(), tsOK.URL)
 	if resOK.Err != nil {
 		t.Fatalf("expected successful crawl, got: %v", resOK.Err)

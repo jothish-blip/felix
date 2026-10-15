@@ -3,56 +3,44 @@ package report
 import (
 	"encoding/json"
 	"os"
-	"regexp"
-	"strings"
-)
 
-var (
-	jsonJWTRegex       = regexp.MustCompile(`\bey[A-Za-z0-9_-]{8,}\.ey[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+\b`)
-	jsonSensitiveRegex = regexp.MustCompile(`(?i)(password|secret|key|token|auth|bearer|credential|api_key|private)\s*[:=]\s*["']?([^\s"'` + "`" + `,;]+)`)
+	"felix/pkg/secrets"
 )
 
 // SanitizeEvidence strips any residual sensitive values, passwords, or tokens from evidence strings.
 func SanitizeEvidence(input string) string {
-	if input == "" {
-		return ""
-	}
-
-	// Mask JWT tokens
-	output := jsonJWTRegex.ReplaceAllString(input, "[REDACTED_JWT]")
-
-	// Mask sensitive key-value pairs
-	output = jsonSensitiveRegex.ReplaceAllStringFunc(output, func(m string) string {
-		parts := strings.SplitN(m, "=", 2)
-		if len(parts) == 2 {
-			return parts[0] + "=[REDACTED]"
-		}
-		parts = strings.SplitN(m, ":", 2)
-		if len(parts) == 2 {
-			return parts[0] + ": [REDACTED]"
-		}
-		return "[REDACTED]"
-	})
-
-	return output
+	return secrets.RedactText(input)
 }
 
-// sanitizeFinding sanitizes all string fields within a Finding to prevent leaking sensitive credentials.
-func sanitizeFinding(f Finding) Finding {
+// SanitizeFinding sanitizes all string, URL, header, and structured evidence fields within a Finding
+// to prevent leaking sensitive credentials, private keys, or tokens.
+func SanitizeFinding(f Finding) Finding {
 	cleanF := f
 	cleanF.Title = SanitizeEvidence(f.Title)
 	cleanF.Description = SanitizeEvidence(f.Description)
 	cleanF.Evidence = SanitizeEvidence(f.Evidence)
+	cleanF.Target = secrets.SanitizeURL(f.Target)
+	cleanF.Endpoint = secrets.SanitizeURL(f.Endpoint)
+	cleanF.Remediation = SanitizeEvidence(f.Remediation)
+
 	cleanF.EvidenceDetails.Observation = SanitizeEvidence(f.EvidenceDetails.Observation)
-	cleanF.EvidenceDetails.Location = SanitizeEvidence(f.EvidenceDetails.Location)
+	cleanF.EvidenceDetails.Location = secrets.SanitizeURL(f.EvidenceDetails.Location)
 	cleanF.EvidenceDetails.NegativeEvidence = SanitizeEvidence(f.EvidenceDetails.NegativeEvidence)
+	cleanF.EvidenceDetails.DetectionStatus = SanitizeEvidence(f.EvidenceDetails.DetectionStatus)
+	cleanF.EvidenceDetails.DetectionMethod = SanitizeEvidence(f.EvidenceDetails.DetectionMethod)
+
 	if len(f.EvidenceDetails.Details) > 0 {
 		cleanDetails := make(map[string]string, len(f.EvidenceDetails.Details))
 		for k, v := range f.EvidenceDetails.Details {
-			cleanDetails[k] = SanitizeEvidence(v)
+			if secrets.IsSensitiveKey(k) || secrets.IsSensitiveHeader(k) {
+				cleanDetails[k] = "[REDACTED]"
+			} else {
+				cleanDetails[k] = SanitizeEvidence(v)
+			}
 		}
 		cleanF.EvidenceDetails.Details = cleanDetails
 	}
+
 	cleanF.Verification.Result = SanitizeEvidence(f.Verification.Result)
 	cleanF.Verification.Rationale = SanitizeEvidence(f.Verification.Rationale)
 	cleanF.Verification.SafeCurlCommand = SanitizeEvidence(f.Verification.SafeCurlCommand)
@@ -70,11 +58,56 @@ func sanitizeFinding(f Finding) Finding {
 		}
 		cleanF.Verification.Limitations = cleanLimits
 	}
+
+	if f.RemediationAdvice != nil {
+		cleanAdvice := *f.RemediationAdvice
+		cleanAdvice.Summary = SanitizeEvidence(f.RemediationAdvice.Summary)
+		cleanAdvice.CodeSnippet = SanitizeEvidence(f.RemediationAdvice.CodeSnippet)
+		if len(f.RemediationAdvice.Steps) > 0 {
+			cleanSteps := make([]string, len(f.RemediationAdvice.Steps))
+			for j, s := range f.RemediationAdvice.Steps {
+				cleanSteps[j] = SanitizeEvidence(s)
+			}
+			cleanAdvice.Steps = cleanSteps
+		}
+		if len(f.RemediationAdvice.References) > 0 {
+			cleanRefs := make([]string, len(f.RemediationAdvice.References))
+			for j, r := range f.RemediationAdvice.References {
+				cleanRefs[j] = SanitizeEvidence(r)
+			}
+			cleanAdvice.References = cleanRefs
+		}
+		cleanF.RemediationAdvice = &cleanAdvice
+	}
+
+	if cleanF.Provenance != nil {
+		sanProv := SanitizeEvidenceProvenance(*cleanF.Provenance)
+		cleanF.Provenance = &sanProv
+	}
+	if cleanF.EvidenceDetails.Provenance != nil {
+		sanProv := SanitizeEvidenceProvenance(*cleanF.EvidenceDetails.Provenance)
+		cleanF.EvidenceDetails.Provenance = &sanProv
+	}
+
 	return cleanF
+}
+
+// sanitizeFinding is an internal alias for SanitizeFinding.
+func sanitizeFinding(f Finding) Finding {
+	return SanitizeFinding(f)
 }
 
 // SanitizeReport ensures all findings and security stories in a report are fully redacted.
 func SanitizeReport(rep Report) Report {
+	rep.Target = secrets.SanitizeURL(rep.Target)
+	if len(rep.Targets) > 0 {
+		cleanTargets := make([]string, len(rep.Targets))
+		for i, t := range rep.Targets {
+			cleanTargets[i] = secrets.SanitizeURL(t)
+		}
+		rep.Targets = cleanTargets
+	}
+
 	cleanFindings := make([]Finding, len(rep.Findings))
 	for i, f := range rep.Findings {
 		cleanFindings[i] = sanitizeFinding(f)
@@ -88,6 +121,7 @@ func SanitizeReport(rep Report) Report {
 	cleanStories := make([]SecurityStory, len(rep.SecurityStories))
 	for i, s := range rep.SecurityStories {
 		cleanS := s
+		cleanS.Title = SanitizeEvidence(s.Title)
 		cleanS.Summary = SanitizeEvidence(s.Summary)
 		cleanS.Description = SanitizeEvidence(s.Description)
 		cleanS.InvestigateFirst = SanitizeEvidence(s.InvestigateFirst)
@@ -153,13 +187,13 @@ func WriteJSON(rep Report, filePath string) error {
 	return os.WriteFile(filePath, data, 0644)
 }
 
-// ParseReport deserializes a JSON scan result into a Report struct.
+// ParseReport deserializes a JSON scan result into a Report struct and ensures all findings are sanitized.
 func ParseReport(data []byte) (Report, error) {
 	var rep Report
 	if err := json.Unmarshal(data, &rep); err != nil {
 		return rep, err
 	}
-	return rep, nil
+	return SanitizeReport(rep), nil
 }
 
 // LoadReport reads and deserializes a saved scan result JSON file from disk without network access.

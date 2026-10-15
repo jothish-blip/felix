@@ -284,6 +284,8 @@ func buildCommercialFinding(
 		RiskContribution:    riskContrib,
 		Category:            f.Category,
 		Source:              f.Source,
+		Status:              NormalizeFindingStatus(f.Status),
+		AnalysisMethod:      NormalizeAnalysisMethod(f.AnalysisMethod),
 		SyntheticFixture:    synthetic,
 	}
 }
@@ -1140,6 +1142,17 @@ func buildExecutiveSummary(
 		FindingsDetectedCount:   rep.Summary.DetectedCount,
 		FindingsVerifiedCount:   rep.Summary.VerifiedCount,
 		FindingsUnverifiedCount: rep.Summary.NotVerifiedCount,
+		FindingsConfirmedCount:  rep.Summary.ConfirmedCount,
+		FindingsSuspectedCount:  rep.Summary.SuspectedCount,
+		FindingsNotTestedCount:  rep.Summary.NotTestedCount,
+		FindingsErrorCount:      rep.Summary.ErrorCount,
+		StatusDistribution: map[string]int{
+			"CONFIRMED":    rep.Summary.ConfirmedCount,
+			"SUSPECTED":    rep.Summary.SuspectedCount,
+			"INCONCLUSIVE": rep.Summary.InconclusiveStatusCount,
+			"NOT_TESTED":   rep.Summary.NotTestedCount,
+			"ERROR":        rep.Summary.ErrorCount,
+		},
 		ObservationsCount:       rep.Summary.ObservedCount,
 		NotExposedChecksCount:   rep.Summary.NotExposedCount,
 		InconclusiveChecksCount: rep.Summary.InconclusiveCount,

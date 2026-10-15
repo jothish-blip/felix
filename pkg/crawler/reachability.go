@@ -31,6 +31,7 @@ const (
 	ReachabilityHTTP5xxServer     ReachabilityCategory = "HTTP_5XX_SERVER_ERROR"
 	ReachabilityRedirectError     ReachabilityCategory = "REDIRECT_ERROR"
 	ReachabilityHTTPClientError   ReachabilityCategory = "HTTP_CLIENT_ERROR"
+	ReachabilitySSRFBlocked       ReachabilityCategory = "SSRF_REFUSED"
 	ReachabilityGenericError      ReachabilityCategory = "GENERIC_ERROR"
 )
 
@@ -55,12 +56,12 @@ func (d *ReachabilityDiagnostic) Error() string {
 	return d.SafeSummary
 }
 
-// IsBlocked returns true if access was halted due to access control or challenge barriers.
+// IsBlocked returns true if access was halted due to access control, challenge barriers, or SSRF refusal.
 func (d *ReachabilityDiagnostic) IsBlocked() bool {
 	if d == nil {
 		return false
 	}
-	return d.Category == ReachabilityHTTP403Challenge || d.Category == ReachabilityHTTP403Forbidden
+	return d.Category == ReachabilityHTTP403Challenge || d.Category == ReachabilityHTTP403Forbidden || d.Category == ReachabilitySSRFBlocked
 }
 
 // IsFailed returns true if reachability failed due to network, transport, or server errors.
@@ -92,16 +93,30 @@ func SanitizeRayID(raw string) string {
 	return b.String()
 }
 
-var sensitiveParamPattern = regexp.MustCompile(`(?i)(token|key|secret|auth|api_key|session|password|pwd|credential)=([^&#\s]+)`)
+var (
+	sensitiveParamPattern = regexp.MustCompile(`(?i)(token|key|secret|auth|api_key|session|password|pwd|credential)=([^&#\s]+)`)
+	userPassURLPattern    = regexp.MustCompile(`(?i)([a-zA-Z0-9+.-]+://)([^:]+):([^@]+)@`)
+	bearerErrPattern      = regexp.MustCompile(`(?i)(Bearer\s+)[A-Za-z0-9_\-\.~+/]+=*`)
+)
 
-// SanitizeURLString strips sensitive query parameter values while preserving URL structure.
+// SanitizeURLString strips user:pass credentials and sensitive query parameter values while preserving URL structure.
 func SanitizeURLString(raw string) string {
 	if raw == "" {
 		return ""
 	}
-	u, err := url.Parse(raw)
+	clean := userPassURLPattern.ReplaceAllString(raw, "${1}${2}:[REDACTED]@")
+	u, err := url.Parse(clean)
 	if err != nil {
-		return sensitiveParamPattern.ReplaceAllString(raw, "$1=[REDACTED]")
+		scrubbed := sensitiveParamPattern.ReplaceAllString(clean, "$1=[REDACTED]")
+		return strings.ReplaceAll(scrubbed, "%5BREDACTED%5D", "[REDACTED]")
+	}
+	if u.User != nil {
+		username := u.User.Username()
+		if _, hasPass := u.User.Password(); hasPass {
+			u.User = url.UserPassword(username, "[REDACTED]")
+		} else {
+			u.User = url.User("[REDACTED]")
+		}
 	}
 	if u.RawQuery != "" {
 		q := u.Query()
@@ -117,21 +132,27 @@ func SanitizeURLString(raw string) string {
 			}
 		}
 		if modified {
-			u.RawQuery = q.Encode()
+			u.RawQuery = strings.ReplaceAll(q.Encode(), "%5BREDACTED%5D", "[REDACTED]")
 		}
 	}
-	return u.String()
+	res := u.String()
+	res = strings.ReplaceAll(res, "%5BREDACTED%5D", "[REDACTED]")
+	return res
 }
 
-// SanitizeErrorString strips sensitive parameters, cookies, and bounds error length.
+// SanitizeErrorString strips sensitive parameters, bearer tokens, cookies, and bounds error length safely.
 func SanitizeErrorString(err error) string {
 	if err == nil {
 		return ""
 	}
 	msg := err.Error()
+	msg = userPassURLPattern.ReplaceAllString(msg, "${1}${2}:[REDACTED]@")
+	msg = bearerErrPattern.ReplaceAllString(msg, "${1}[REDACTED]")
 	msg = sensitiveParamPattern.ReplaceAllString(msg, "$1=[REDACTED]")
-	if len(msg) > 256 {
-		msg = msg[:253] + "..."
+	msg = strings.ReplaceAll(msg, "%5BREDACTED%5D", "[REDACTED]")
+	runes := []rune(msg)
+	if len(runes) > 256 {
+		msg = string(runes[:253]) + "..."
 	}
 	return msg
 }
@@ -145,6 +166,16 @@ func ClassifyNetworkError(err error, rawTarget string) *ReachabilityDiagnostic {
 	sanitizedTarget := SanitizeURLString(rawTarget)
 	sanitizedErr := SanitizeErrorString(err)
 	errLower := strings.ToLower(err.Error())
+
+	// 0. SSRF / Prohibited Destination IP Refusal
+	var ssrfErr *SSRFError
+	if errors.As(err, &ssrfErr) || strings.Contains(errLower, "ssrf security refusal") || strings.Contains(errLower, "prohibited destination ip") {
+		return &ReachabilityDiagnostic{
+			Category:    ReachabilitySSRFBlocked,
+			SafeSummary: fmt.Sprintf("SSRF security policy blocked connection to %s: %s", sanitizedTarget, sanitizedErr),
+			RawError:    sanitizedErr,
+		}
+	}
 
 	// 1. DNS resolution failure
 	var dnsErr *net.DNSError
@@ -198,8 +229,8 @@ func ClassifyNetworkError(err error, rawTarget string) *ReachabilityDiagnostic {
 	}
 
 	// 5. Redirect error
-	if strings.Contains(errLower, "stopped after 10 redirects") || strings.Contains(errLower, "redirect loop") ||
-		strings.Contains(errLower, "redirect to") {
+	if (strings.Contains(errLower, "stopped after") && strings.Contains(errLower, "redirects")) ||
+		strings.Contains(errLower, "redirect loop") || strings.Contains(errLower, "redirect to") {
 		return &ReachabilityDiagnostic{
 			Category:    ReachabilityRedirectError,
 			SafeSummary: fmt.Sprintf("redirect policy prevented reachability for %s: %s", sanitizedTarget, sanitizedErr),

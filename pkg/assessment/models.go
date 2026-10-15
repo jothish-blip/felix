@@ -2,8 +2,11 @@ package assessment
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 
 	"felix/pkg/report"
@@ -202,6 +205,11 @@ type AssessmentFinding struct {
 	ExecutionID        string                    `json:"execution_id"`
 	TargetID           string                    `json:"target_id"`
 	OriginalFindingID  string                    `json:"original_finding_id"` // report.Finding.ID
+	RuleID             string                    `json:"rule_id,omitempty"`
+	Status             report.FindingStatus      `json:"status,omitempty"`
+	AnalysisMethod     report.AnalysisMethod     `json:"analysis_method,omitempty"`
+	PrimaryAssetID     string                    `json:"primary_asset_id,omitempty"`
+	AffectedAssetIDs   []string                  `json:"affected_asset_ids,omitempty"`
 	Title              string                    `json:"title"`
 	Category           string                    `json:"category"`
 	Severity           string                    `json:"severity"`
@@ -215,7 +223,19 @@ type AssessmentFinding struct {
 	EvidenceDetails    report.EvidenceDetails    `json:"evidence"`
 	VerificationRecord report.VerificationRecord `json:"verification"`
 	Remediation        string                    `json:"remediation,omitempty"`
+	RemediationAdvice  *report.RemediationAdvice `json:"remediation_advice,omitempty"`
+	Provenance         *report.EvidenceProvenance `json:"provenance,omitempty"`
 	CreatedAt          time.Time                 `json:"created_at"`
+}
+
+// ComputeAssessmentFindingID generates a deterministic finding ID for persistence in an assessment run.
+func ComputeAssessmentFindingID(assessmentID, findingID string) string {
+	h := sha256.New()
+	cleanAsm := strings.TrimSpace(assessmentID)
+	cleanFnd := strings.TrimSpace(findingID)
+	h.Write([]byte(fmt.Sprintf("%s:%s", cleanAsm, cleanFnd)))
+	sum := h.Sum(nil)
+	return fmt.Sprintf("fnd_%s", hex.EncodeToString(sum[:12])) // 24 hex characters
 }
 
 // ReportRecord indexes a generated HTML or JSON assessment report.

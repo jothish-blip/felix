@@ -1145,8 +1145,13 @@ func (e *Engine) assessOpenRedirect(ctx context.Context, actx *AssessmentContext
 	}
 
 	// Dedicated client that refuses to follow redirects so we can inspect Location header directly
+	noRedirectTransport := e.client.Transport
+	if noRedirectTransport == nil {
+		noRedirectTransport = http.DefaultTransport
+	}
 	noRedirectClient := &http.Client{
-		Timeout: e.config.Timeout,
+		Transport: noRedirectTransport,
+		Timeout:   e.config.Timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},

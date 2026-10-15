@@ -1,6 +1,9 @@
 package report
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -9,6 +12,7 @@ import (
 	"felix/pkg/api"
 	"felix/pkg/cloud"
 	"felix/pkg/crawler"
+	"felix/pkg/discovery"
 	"felix/pkg/secrets"
 )
 
@@ -19,14 +23,86 @@ const (
 	SeverityMedium   = "MEDIUM"
 	SeverityLow      = "LOW"
 	SeverityInfo     = "INFO"
+	SeverityUnknown  = "UNKNOWN"
 )
 
 // Standard Confidence levels.
 const (
-	ConfidenceHigh   = "HIGH"
-	ConfidenceMedium = "MEDIUM"
-	ConfidenceLow    = "LOW"
+	ConfidenceHigh    = "HIGH"
+	ConfidenceMedium  = "MEDIUM"
+	ConfidenceLow     = "LOW"
+	ConfidenceUnknown = "UNKNOWN"
 )
+
+// FindingStatus represents the operational verification or evaluation state of a finding.
+type FindingStatus string
+
+const (
+	FindingStatusConfirmed    FindingStatus = "CONFIRMED"
+	FindingStatusSuspected    FindingStatus = "SUSPECTED"
+	FindingStatusInconclusive FindingStatus = "INCONCLUSIVE"
+	FindingStatusNotTested    FindingStatus = "NOT_TESTED"
+	FindingStatusError        FindingStatus = "ERROR"
+)
+
+// IsValidFindingStatus returns true if the status is one of the five canonical states.
+func IsValidFindingStatus(s FindingStatus) bool {
+	switch s {
+	case FindingStatusConfirmed, FindingStatusSuspected, FindingStatusInconclusive, FindingStatusNotTested, FindingStatusError:
+		return true
+	default:
+		return false
+	}
+}
+
+// ValidateFindingStatus returns an error if the status is not one of the five canonical states.
+func ValidateFindingStatus(s FindingStatus) error {
+	if IsValidFindingStatus(s) {
+		return nil
+	}
+	return fmt.Errorf("invalid finding status %q: must be one of CONFIRMED, SUSPECTED, INCONCLUSIVE, NOT_TESTED, ERROR", s)
+}
+
+// IsValidFindingStatusTransition checks whether transitioning from one status to another is valid.
+// In the FELIX honest finding model:
+// - A CONFIRMED finding cannot be downgraded to SUSPECTED, INCONCLUSIVE, NOT_TESTED, or ERROR (verified proof cannot be silently erased).
+// - Unverified states (NOT_TESTED, SUSPECTED, INCONCLUSIVE, ERROR) may transition through progressive evaluation or re-testing.
+func IsValidFindingStatusTransition(from, to FindingStatus) bool {
+	if !IsValidFindingStatus(from) || !IsValidFindingStatus(to) {
+		return false
+	}
+	if from == to {
+		return true
+	}
+	if from == FindingStatusConfirmed {
+		return false
+	}
+	return true
+}
+
+// AnalysisMethod distinguishes how a security claim or artifact was analyzed.
+type AnalysisMethod string
+
+const (
+	AnalysisMethodStatic AnalysisMethod = "STATIC_ANALYSIS"
+	AnalysisMethodActive AnalysisMethod = "ACTIVE_VERIFICATION"
+	AnalysisMethodManual AnalysisMethod = "MANUAL_REVIEW"
+)
+
+// NormalizeAnalysisMethod standardizes the analysis method to a canonical enum value.
+func NormalizeAnalysisMethod(m AnalysisMethod) AnalysisMethod {
+	clean := strings.ToUpper(strings.TrimSpace(string(m)))
+	switch AnalysisMethod(clean) {
+	case AnalysisMethodStatic, "STATIC", "STATIC_CODE_ANALYSIS":
+		return AnalysisMethodStatic
+	case AnalysisMethodActive, "ACTIVE", "ACTIVE_PROBE", "DYNAMIC":
+		return AnalysisMethodActive
+	case AnalysisMethodManual, "MANUAL":
+		return AnalysisMethodManual
+	default:
+		return AnalysisMethodStatic
+	}
+}
 
 // Finding Sources.
 const (
@@ -56,6 +132,7 @@ type VerificationRecord struct {
 	Rationale          string             `json:"rationale,omitempty"`
 	PolicyID           string             `json:"policy_id,omitempty"`
 	VerificationMethod string             `json:"verification_method,omitempty"`
+	AnalysisMethod     AnalysisMethod     `json:"analysis_method,omitempty"`
 	ConfidenceScore    int                `json:"confidence_score,omitempty"`
 	ReproductionSteps  []string           `json:"reproduction_steps,omitempty"`
 	SafeCurlCommand    string             `json:"safe_curl_command,omitempty"`
@@ -63,37 +140,73 @@ type VerificationRecord struct {
 	SyntheticFixture   bool               `json:"synthetic_fixture,omitempty"`
 }
 
+// EvidenceProvenance captures the lineage, collection context, and integrity of a piece of security evidence.
+type EvidenceProvenance struct {
+	EvidenceID          string         `json:"evidence_id,omitempty"`
+	EvidenceType        string         `json:"evidence_type,omitempty"`        // e.g. "http_response", "source_code", "config_file", "dns_record", "api_spec", "token_artifact"
+	SourceEngine        string         `json:"source_engine,omitempty"`        // e.g. "crawler", "secrets", "cloud", "api", "auth", "verification"
+	RuleID              string         `json:"rule_id,omitempty"`              // rule or check identifier
+	FindingID           string         `json:"finding_id,omitempty"`           // associated finding ID
+	AssetID             string         `json:"asset_id,omitempty"`             // affected asset ID (ast_<hex>)
+	AssessmentID        string         `json:"assessment_id,omitempty"`        // assessment project ID
+	ExecutionID         string         `json:"execution_id,omitempty"`         // scan execution ID
+	TargetID            string         `json:"target_id,omitempty"`            // assessment target ID
+	CollectedAt         time.Time      `json:"collected_at,omitempty"`         // collection timestamp
+	Location            string         `json:"location,omitempty"`             // URL, file path, line number, config path
+	CollectionMethod    string         `json:"collection_method,omitempty"`    // "passive_crawl", "static_pattern_analysis", "active_probe", etc.
+	AnalysisMethod      AnalysisMethod `json:"analysis_method,omitempty"`      // STATIC_ANALYSIS, ACTIVE_VERIFICATION, MANUAL_REVIEW
+	VerificationContext string         `json:"verification_context,omitempty"` // verification test or condition
+	ContentDigest       string         `json:"content_digest,omitempty"`       // SHA-256 digest of sanitized evidence content (sha256:<hex>)
+}
+
 // EvidenceDetails provides structured, machine-readable evidence for a finding.
 type EvidenceDetails struct {
-	Observation      string            `json:"observation"`
-	Location         string            `json:"location"`
-	HTTPMethod       string            `json:"http_method,omitempty"`
-	HTTPStatus       int               `json:"http_status,omitempty"`
-	ContentType      string            `json:"content_type,omitempty"`
-	DetectionMethod  string            `json:"detection_method"`
-	DetectionStatus  string            `json:"detection_status,omitempty"`
-	NegativeEvidence string            `json:"negative_evidence,omitempty"`
-	Details          map[string]string `json:"details,omitempty"`
+	Observation      string              `json:"observation"`
+	Location         string              `json:"location"`
+	HTTPMethod       string              `json:"http_method,omitempty"`
+	HTTPStatus       int                 `json:"http_status,omitempty"`
+	ContentType      string              `json:"content_type,omitempty"`
+	DetectionMethod  string              `json:"detection_method"`
+	DetectionStatus  string              `json:"detection_status,omitempty"`
+	NegativeEvidence string              `json:"negative_evidence,omitempty"`
+	Details          map[string]string   `json:"details,omitempty"`
+	Provenance       *EvidenceProvenance `json:"provenance,omitempty"`
+}
+
+// RemediationAdvice provides structured, actionable guidance for finding mitigation.
+type RemediationAdvice struct {
+	Summary     string   `json:"summary"`
+	Steps       []string `json:"steps,omitempty"`
+	References  []string `json:"references,omitempty"`
+	CodeSnippet string   `json:"code_snippet,omitempty"`
 }
 
 // Finding represents a normalized, deduplicated security observation or exposure.
 type Finding struct {
-	ID              string             `json:"id"`
-	Title           string             `json:"title"`
-	Category        string             `json:"category"`
-	Severity        string             `json:"severity"`
-	Confidence      string             `json:"confidence"`
-	Target          string             `json:"target"`
-	Endpoint        string             `json:"endpoint"`
-	Method          string             `json:"method"`
-	Description     string             `json:"description"`
-	Evidence        string             `json:"evidence_summary,omitempty"`
-	EvidenceDetails EvidenceDetails    `json:"evidence"`
-	Verification    VerificationRecord `json:"verification"`
-	Remediation     string             `json:"remediation"`
-	Source          string             `json:"source"`
-	Fingerprint     string             `json:"fingerprint"`
-	Score           int                `json:"score"`
+	ID                string              `json:"id"`
+	RuleID            string              `json:"rule_id,omitempty"`
+	Status            FindingStatus       `json:"status,omitempty"`
+	AnalysisMethod    AnalysisMethod      `json:"analysis_method,omitempty"`
+	PrimaryAssetID    string              `json:"primary_asset_id,omitempty"`
+	AffectedAssetIDs  []string            `json:"affected_asset_ids,omitempty"`
+	Title             string              `json:"title"`
+	Category          string              `json:"category"`
+	Severity          string              `json:"severity"`
+	Confidence        string              `json:"confidence"`
+	Target            string              `json:"target"`
+	Endpoint          string              `json:"endpoint"`
+	Method            string              `json:"method"`
+	Description       string              `json:"description"`
+	Evidence          string              `json:"evidence_summary,omitempty"`
+	EvidenceDetails   EvidenceDetails     `json:"evidence"`
+	Verification      VerificationRecord  `json:"verification"`
+	Remediation       string              `json:"remediation"`
+	RemediationAdvice *RemediationAdvice  `json:"remediation_advice,omitempty"`
+	Provenance        *EvidenceProvenance `json:"provenance,omitempty"`
+	Source            string              `json:"source"`
+	Fingerprint       string              `json:"fingerprint"`
+	Score             int                 `json:"score"`
+	Timestamp         time.Time           `json:"timestamp,omitempty"`
 }
 
 // SecurityStory represents a correlated relationship between multiple findings.
@@ -150,10 +263,16 @@ type Summary struct {
 	BlockedCount              int            `json:"blocked_count,omitempty"`
 	InconclusiveCount         int            `json:"inconclusive_count,omitempty"`
 	SyntheticCount            int            `json:"synthetic_count,omitempty"`
-	VerificationRateAttempted float64        `json:"verification_rate_attempted,omitempty"`
-	VerificationRateTotal     float64        `json:"verification_rate_total,omitempty"`
-	ScoreAvailable            bool           `json:"score_available"`
-	BySource                  map[string]int `json:"by_source"`
+	VerificationRateAttempted float64               `json:"verification_rate_attempted,omitempty"`
+	VerificationRateTotal     float64               `json:"verification_rate_total,omitempty"`
+	ConfirmedCount            int                   `json:"confirmed_count"`
+	SuspectedCount            int                   `json:"suspected_count"`
+	InconclusiveStatusCount   int                   `json:"inconclusive_status_count,omitempty"`
+	NotTestedCount            int                   `json:"not_tested_count"`
+	ErrorCount                int                   `json:"error_count"`
+	ByStatus                  map[FindingStatus]int `json:"by_status,omitempty"`
+	ScoreAvailable            bool                  `json:"score_available"`
+	BySource                  map[string]int        `json:"by_source"`
 }
 
 // Report represents the complete audit results ready for presentation or export.
@@ -220,6 +339,7 @@ func FromSecretFinding(target string, f secrets.SecretFinding) Finding {
 	ver := VerificationRecord{
 		Status:          VerificationNotVerified,
 		DetectionStatus: "DETECTED",
+		AnalysisMethod:  AnalysisMethodStatic,
 		Result:          fmt.Sprintf("Discovered in client bundle (%s); live credential validity was not tested.", loc),
 		Rationale:       "Live credential testing is intentionally avoided to eliminate risk of account lockout, quota consumption, or security policy violations.",
 	}
@@ -229,8 +349,12 @@ func FromSecretFinding(target string, f secrets.SecretFinding) Finding {
 		evidenceSummary = fmt.Sprintf("Observed %s in %s (line %d): %s", f.Type, endpoint, f.LineNumber, f.Redacted)
 	}
 
+	ruleID := fmt.Sprintf("SEC-%s", strings.ToUpper(strings.ReplaceAll(string(f.Type), "_", "-")))
 	finding := Finding{
 		ID:              fmt.Sprintf("SEC-%s", shortHash(f.Fingerprint)),
+		RuleID:          ruleID,
+		Status:          FindingStatusSuspected,
+		AnalysisMethod:  AnalysisMethodStatic,
 		Title:           f.Title,
 		Category:        string(f.Type),
 		Severity:        NormalizeSeverity(f.Severity),
@@ -245,6 +369,20 @@ func FromSecretFinding(target string, f secrets.SecretFinding) Finding {
 		Source:          SourceSecrets,
 		Fingerprint:     f.Fingerprint,
 	}
+
+	prov := NewEvidenceProvenance(
+		SourceSecrets,
+		ruleID,
+		finding.ID,
+		"",
+		"secret_pattern",
+		loc,
+		detMethod,
+		evidenceSummary,
+	)
+	prov.AnalysisMethod = AnalysisMethodStatic
+	finding.Provenance = &prov
+	finding.EvidenceDetails.Provenance = &prov
 
 	return NormalizeFinding(finding)
 }
@@ -350,14 +488,31 @@ func FromCloudFinding(target string, f cloud.CloudFinding) Finding {
 		Details:          cldDetails,
 	}
 
+	aMethod := AnalysisMethodStatic
+	if detMethod == "active_probe" {
+		aMethod = AnalysisMethodActive
+	}
+
 	ver := VerificationRecord{
 		Status:          verStatus,
 		DetectionStatus: detStatus,
+		AnalysisMethod:  aMethod,
 		Result:          verResult,
+	}
+
+	ruleID := fmt.Sprintf("CLD-%s-%s", strings.ToUpper(string(f.Provider)), strings.ToUpper(strings.ReplaceAll(f.Category, "_", "-")))
+	fStatus := FindingStatusSuspected
+	if verStatus == VerificationVerified || verStatus == VerificationObserved {
+		fStatus = FindingStatusConfirmed
+	} else if verStatus == VerificationNotExposed {
+		fStatus = FindingStatusInconclusive
 	}
 
 	finding := Finding{
 		ID:              fmt.Sprintf("CLD-%s", shortHash(f.Fingerprint)),
+		RuleID:          ruleID,
+		Status:          fStatus,
+		AnalysisMethod:  aMethod,
 		Title:           title,
 		Category:        f.Category,
 		Severity:        NormalizeSeverity(f.Severity),
@@ -372,6 +527,20 @@ func FromCloudFinding(target string, f cloud.CloudFinding) Finding {
 		Source:          SourceCloud,
 		Fingerprint:     f.Fingerprint,
 	}
+
+	prov := NewEvidenceProvenance(
+		SourceCloud,
+		ruleID,
+		finding.ID,
+		"",
+		"cloud_resource",
+		f.Endpoint,
+		detMethod,
+		f.Evidence,
+	)
+	prov.AnalysisMethod = aMethod
+	finding.Provenance = &prov
+	finding.EvidenceDetails.Provenance = &prov
 
 	return NormalizeFinding(finding)
 }
@@ -540,14 +709,31 @@ func FromAPIFinding(target string, f api.APIFinding) Finding {
 		Details:          details,
 	}
 
+	aMethod := AnalysisMethodStatic
+	if detMethod == "active_probe" {
+		aMethod = AnalysisMethodActive
+	}
+
 	ver := VerificationRecord{
 		Status:          verStatus,
 		DetectionStatus: detStatus,
+		AnalysisMethod:  aMethod,
 		Result:          verResult,
+	}
+
+	ruleID := fmt.Sprintf("API-%s", strings.ToUpper(strings.ReplaceAll(f.Category, "_", "-")))
+	fStatus := FindingStatusSuspected
+	if verStatus == VerificationVerified || verStatus == VerificationObserved {
+		fStatus = FindingStatusConfirmed
+	} else if verStatus == VerificationNotExposed {
+		fStatus = FindingStatusInconclusive
 	}
 
 	finding := Finding{
 		ID:              fmt.Sprintf("API-%s", shortHash(f.Fingerprint)),
+		RuleID:          ruleID,
+		Status:          fStatus,
+		AnalysisMethod:  aMethod,
 		Title:           title,
 		Category:        f.Category,
 		Severity:        NormalizeSeverity(f.Severity),
@@ -562,6 +748,20 @@ func FromAPIFinding(target string, f api.APIFinding) Finding {
 		Source:          SourceAPI,
 		Fingerprint:     f.Fingerprint,
 	}
+
+	prov := NewEvidenceProvenance(
+		SourceAPI,
+		ruleID,
+		finding.ID,
+		"",
+		"http_response",
+		f.Endpoint,
+		detMethod,
+		f.Evidence,
+	)
+	prov.AnalysisMethod = aMethod
+	finding.Provenance = &prov
+	finding.EvidenceDetails.Provenance = &prov
 
 	return NormalizeFinding(finding)
 }
@@ -586,11 +786,15 @@ func FromCrawlerAsset(target string, a crawler.Asset) (Finding, bool) {
 		ver := VerificationRecord{
 			Status:          VerificationObserved,
 			DetectionStatus: "OBSERVED",
+			AnalysisMethod:  AnalysisMethodStatic,
 			Result:          fmt.Sprintf("Source map asset (.map) was successfully downloaded during crawl (%d bytes).", a.Size),
 		}
 
 		f := Finding{
 			ID:              fmt.Sprintf("CRW-%s", shortHash(a.URL)),
+			RuleID:          "CRW-SOURCE-MAP",
+			Status:          FindingStatusConfirmed,
+			AnalysisMethod:  AnalysisMethodStatic,
 			Title:           "Public JavaScript Source Map Discovered",
 			Category:        "source-map-discovered",
 			Severity:        SeverityInfo,
@@ -604,6 +808,19 @@ func FromCrawlerAsset(target string, a crawler.Asset) (Finding, bool) {
 			Verification:    ver,
 			Source:          SourceCrawler,
 		}
+		prov := NewEvidenceProvenance(
+			SourceCrawler,
+			f.RuleID,
+			f.ID,
+			"",
+			"client_asset",
+			a.URL,
+			"asset_ingestion",
+			f.Evidence,
+		)
+		prov.AnalysisMethod = AnalysisMethodStatic
+		f.Provenance = &prov
+		f.EvidenceDetails.Provenance = &prov
 		return NormalizeFinding(f), true
 	}
 	return Finding{}, false
@@ -628,11 +845,15 @@ func FromCrawlerDiscovery(target string, a crawler.Asset) Finding {
 	ver := VerificationRecord{
 		Status:          VerificationObserved,
 		DetectionStatus: "OBSERVED",
+		AnalysisMethod:  AnalysisMethodStatic,
 		Result:          fmt.Sprintf("Asset observed during crawl of %s.", target),
 	}
 
 	f := Finding{
 		ID:              fmt.Sprintf("CRW-%s", shortHash(a.URL)),
+		RuleID:          fmt.Sprintf("CRW-ASSET-%s", strings.ToUpper(string(a.Type))),
+		Status:          FindingStatusConfirmed,
+		AnalysisMethod:  AnalysisMethodStatic,
 		Title:           fmt.Sprintf("Client Asset Observed: %s", a.Type),
 		Category:        fmt.Sprintf("asset-%s", a.Type),
 		Severity:        SeverityInfo,
@@ -646,6 +867,19 @@ func FromCrawlerDiscovery(target string, a crawler.Asset) Finding {
 		Verification:    ver,
 		Source:          SourceCrawler,
 	}
+	prov := NewEvidenceProvenance(
+		SourceCrawler,
+		f.RuleID,
+		f.ID,
+		"",
+		"client_asset",
+		a.URL,
+		"asset_ingestion",
+		f.Evidence,
+	)
+	prov.AnalysisMethod = AnalysisMethodStatic
+	f.Provenance = &prov
+	f.EvidenceDetails.Provenance = &prov
 	return NormalizeFinding(f)
 }
 
@@ -658,4 +892,321 @@ func shortHash(s string) string {
 		return clean
 	}
 	return fmt.Sprintf("%x", time.Now().UnixNano())[:8]
+}
+
+// AddAffectedAsset appends a unique asset ID to AffectedAssetIDs and sets PrimaryAssetID if empty.
+// Returns true if the asset ID was added, or false if already present or invalid.
+func (f *Finding) AddAffectedAsset(assetID string) bool {
+	clean := strings.TrimSpace(assetID)
+	if clean == "" {
+		return false
+	}
+	for _, id := range f.AffectedAssetIDs {
+		if id == clean {
+			return false
+		}
+	}
+	f.AffectedAssetIDs = append(f.AffectedAssetIDs, clean)
+	if f.PrimaryAssetID == "" {
+		f.PrimaryAssetID = clean
+	}
+	return true
+}
+
+// ResolveAssetIDs matches finding attributes against the discovery inventory to associate
+// relevant asset IDs (e.g. endpoints, services, storage, databases, hosts, and applications).
+func (f *Finding) ResolveAssetIDs(inv *discovery.Inventory) {
+	if inv == nil || len(inv.Assets) == 0 {
+		return
+	}
+
+	normTarget := NormalizeURL(f.Target)
+	normEndpoint := NormalizeURL(f.Endpoint)
+
+	// 1. Match specific Endpoint assets first
+	if normEndpoint != "" {
+		for _, a := range inv.Assets {
+			if a.Type == discovery.AssetTypeEndpoint {
+				if a.Endpoint != nil && (NormalizeURL(a.Endpoint.URL) == normEndpoint || NormalizeURL(a.Endpoint.Path) == normEndpoint) {
+					f.AddAffectedAsset(a.ID)
+				} else if NormalizeURL(a.CanonicalID) == normEndpoint {
+					f.AddAffectedAsset(a.ID)
+				}
+			}
+		}
+	}
+
+	// 2. Match Service, Database, Storage, and CloudService assets
+	for _, a := range inv.Assets {
+		epLower := strings.ToLower(f.Endpoint)
+		canID := strings.ToLower(strings.TrimSpace(a.CanonicalID))
+		disp := strings.ToLower(strings.TrimSpace(a.DisplayName))
+
+		switch a.Type {
+		case discovery.AssetTypeStorage:
+			var bkt string
+			if a.Storage != nil {
+				bkt = strings.ToLower(strings.TrimSpace(a.Storage.BucketName))
+			}
+			if (canID != "" && strings.Contains(epLower, canID)) || (disp != "" && strings.Contains(epLower, disp)) || (bkt != "" && strings.Contains(epLower, bkt)) {
+				f.AddAffectedAsset(a.ID)
+			}
+		case discovery.AssetTypeDatabase:
+			var dbName, dbHost string
+			if a.Database != nil {
+				dbName = strings.ToLower(strings.TrimSpace(a.Database.InstanceName))
+				dbHost = strings.ToLower(strings.TrimSpace(a.Database.Host))
+			}
+			if (canID != "" && strings.Contains(epLower, canID)) || (disp != "" && strings.Contains(epLower, disp)) || (dbName != "" && strings.Contains(epLower, dbName)) || (dbHost != "" && strings.Contains(epLower, dbHost)) {
+				f.AddAffectedAsset(a.ID)
+			}
+		case discovery.AssetTypeService, discovery.AssetTypeCloudService, discovery.AssetTypeWebService, discovery.AssetTypeAPIService:
+			if (canID != "" && strings.Contains(epLower, canID)) || (disp != "" && strings.Contains(epLower, disp)) {
+				f.AddAffectedAsset(a.ID)
+			}
+		}
+	}
+
+	// 3. Match Host and Domain assets
+	for _, a := range inv.Assets {
+		if a.Type == discovery.AssetTypeHost || a.Type == discovery.AssetTypeDomain || a.Type == discovery.AssetTypeSubdomain {
+			canID := strings.ToLower(strings.TrimSpace(a.CanonicalID))
+			if canID != "" && (strings.Contains(normEndpoint, canID) || strings.Contains(normTarget, canID)) {
+				f.AddAffectedAsset(a.ID)
+			}
+		}
+	}
+
+	// 4. Match Application root asset
+	for _, a := range inv.Assets {
+		if a.Type == discovery.AssetTypeApplication {
+			if a.Application != nil && NormalizeURL(a.Application.RootURL) == normTarget {
+				f.AddAffectedAsset(a.ID)
+			} else if NormalizeURL(a.CanonicalID) == normTarget {
+				f.AddAffectedAsset(a.ID)
+			}
+		}
+	}
+
+	if f.PrimaryAssetID != "" {
+		if f.Provenance != nil && f.Provenance.AssetID == "" {
+			f.Provenance.AssetID = f.PrimaryAssetID
+		}
+		if f.EvidenceDetails.Provenance != nil && f.EvidenceDetails.Provenance.AssetID == "" {
+			f.EvidenceDetails.Provenance.AssetID = f.PrimaryAssetID
+		}
+	}
+}
+
+// ValidateFinding validates that required attributes are present and values conform to specification.
+func ValidateFinding(f Finding) error {
+	if strings.TrimSpace(f.ID) == "" {
+		return errors.New("finding ID cannot be empty")
+	}
+	if strings.TrimSpace(f.Category) == "" {
+		return errors.New("finding Category cannot be empty")
+	}
+	if strings.TrimSpace(f.Target) == "" {
+		return errors.New("finding Target cannot be empty")
+	}
+	if strings.TrimSpace(f.Endpoint) == "" {
+		return errors.New("finding Endpoint cannot be empty")
+	}
+
+	// Validate Severity
+	normSev := NormalizeSeverity(f.Severity)
+	switch normSev {
+	case SeverityCritical, SeverityHigh, SeverityMedium, SeverityLow, SeverityInfo, SeverityUnknown:
+		// Valid
+	default:
+		return fmt.Errorf("invalid finding severity: %s", f.Severity)
+	}
+
+	// Validate Confidence
+	normConf := NormalizeConfidence(f.Confidence)
+	switch normConf {
+	case ConfidenceHigh, ConfidenceMedium, ConfidenceLow, ConfidenceUnknown:
+		// Valid
+	default:
+		return fmt.Errorf("invalid finding confidence: %s", f.Confidence)
+	}
+
+	// Validate Status
+	if f.Status != "" {
+		if _, err := ParseFindingStatus(string(f.Status)); err != nil {
+			return fmt.Errorf("invalid finding status %q: %w", f.Status, err)
+		}
+	}
+
+	// Validate AffectedAssetIDs uniqueness
+	seenAssets := make(map[string]struct{}, len(f.AffectedAssetIDs))
+	for _, id := range f.AffectedAssetIDs {
+		clean := strings.TrimSpace(id)
+		if clean == "" {
+			return errors.New("affected asset ID cannot be empty")
+		}
+		if _, exists := seenAssets[clean]; exists {
+			return fmt.Errorf("duplicate affected asset ID: %s", clean)
+		}
+		seenAssets[clean] = struct{}{}
+	}
+
+	return nil
+}
+
+// ValidateAffectedAssets verifies that all associated asset IDs exist in the provided inventory.
+func ValidateAffectedAssets(f Finding, inv *discovery.Inventory) error {
+	if inv == nil {
+		return nil
+	}
+	if f.PrimaryAssetID != "" {
+		if inv.FindByID(f.PrimaryAssetID) == nil {
+			return fmt.Errorf("primary asset ID %q not found in inventory", f.PrimaryAssetID)
+		}
+	}
+	for _, id := range f.AffectedAssetIDs {
+		if inv.FindByID(id) == nil {
+			return fmt.Errorf("affected asset ID %q not found in inventory", id)
+		}
+	}
+	return nil
+}
+
+// ComputeEvidenceID generates a deterministic evidence identifier (ev_<24-hex>).
+func ComputeEvidenceID(sourceEngine, ruleID, findingID, location, evidenceType string) string {
+	h := sha256.New()
+	cleanSource := strings.ToLower(strings.TrimSpace(sourceEngine))
+	cleanRule := strings.ToUpper(strings.TrimSpace(ruleID))
+	cleanFinding := strings.TrimSpace(findingID)
+	cleanLocation := strings.TrimSpace(location)
+	cleanType := strings.ToLower(strings.TrimSpace(evidenceType))
+
+	payload := fmt.Sprintf("%s|%s|%s|%s|%s", cleanSource, cleanRule, cleanFinding, cleanLocation, cleanType)
+	h.Write([]byte(payload))
+	sum := h.Sum(nil)
+	return fmt.Sprintf("ev_%s", hex.EncodeToString(sum[:12])) // 24 hex characters
+}
+
+// ComputeContentDigest calculates a safe SHA-256 digest of sanitized evidence content.
+// Secrets MUST NOT be hashed or leaked via digest dictionaries.
+// Therefore, any raw text is sanitized prior to computing the content digest.
+func ComputeContentDigest(sanitizedContent string) string {
+	clean := secrets.RedactText(strings.TrimSpace(sanitizedContent))
+	if clean == "" {
+		return ""
+	}
+	h := sha256.Sum256([]byte(clean))
+	return fmt.Sprintf("sha256:%x", h)
+}
+
+// DefaultEvidenceType returns the canonical evidence type for a given source engine.
+func DefaultEvidenceType(sourceEngine string) string {
+	switch strings.ToLower(strings.TrimSpace(sourceEngine)) {
+	case SourceCrawler:
+		return "client_asset"
+	case SourceSecrets:
+		return "secret_pattern"
+	case SourceCloud:
+		return "cloud_resource"
+	case SourceAPI:
+		return "http_response"
+	case "auth":
+		return "token_artifact"
+	case "verification":
+		return "reproduction_payload"
+	default:
+		return "text_observation"
+	}
+}
+
+// DefaultCollectionMethod returns the canonical collection method for a given source engine.
+func DefaultCollectionMethod(sourceEngine string) string {
+	switch strings.ToLower(strings.TrimSpace(sourceEngine)) {
+	case SourceCrawler:
+		return "asset_ingestion"
+	case SourceSecrets:
+		return "static_pattern_analysis"
+	case SourceCloud:
+		return "active_probe"
+	case SourceAPI:
+		return "active_probe"
+	case "auth":
+		return "static_jwt_header_analysis"
+	case "verification":
+		return "active_probe"
+	default:
+		return "passive_observation"
+	}
+}
+
+// DefaultAnalysisMethod returns the canonical analysis method for a given source engine and collection method.
+func DefaultAnalysisMethod(sourceEngine, collectionMethod string) AnalysisMethod {
+	cm := strings.ToLower(strings.TrimSpace(collectionMethod))
+	if strings.Contains(cm, "active") || strings.Contains(cm, "probe") {
+		return AnalysisMethodActive
+	}
+	if strings.Contains(cm, "manual") {
+		return AnalysisMethodManual
+	}
+	src := strings.ToLower(strings.TrimSpace(sourceEngine))
+	switch src {
+	case "api_security_engine", "apisec", "api_auditor", "webvuln", "web_vulnerability_engine", "felix-webvuln", "authz", "api_authz", "businesslogic", "business_logic_security_engine", "sessionsec", "session_identity_engine", "verification", "felix-verification":
+		return AnalysisMethodActive
+	default:
+		return AnalysisMethodStatic
+	}
+}
+
+// NewEvidenceProvenance constructs a valid EvidenceProvenance instance with sanitized digest.
+func NewEvidenceProvenance(sourceEngine, ruleID, findingID, assetID, evidenceType, location, collectionMethod, rawEvidence string) EvidenceProvenance {
+	src := NormalizeSource(sourceEngine)
+	if evidenceType == "" {
+		evidenceType = DefaultEvidenceType(src)
+	}
+	if collectionMethod == "" {
+		collectionMethod = DefaultCollectionMethod(src)
+	}
+	cleanLoc := secrets.SanitizeURL(location)
+	evID := ComputeEvidenceID(src, ruleID, findingID, cleanLoc, evidenceType)
+	digest := ComputeContentDigest(rawEvidence)
+	aMethod := DefaultAnalysisMethod(src, collectionMethod)
+
+	return EvidenceProvenance{
+		EvidenceID:       evID,
+		EvidenceType:     evidenceType,
+		SourceEngine:     src,
+		RuleID:           ruleID,
+		FindingID:        findingID,
+		AssetID:          assetID,
+		Location:         cleanLoc,
+		CollectionMethod: collectionMethod,
+		AnalysisMethod:   aMethod,
+		ContentDigest:    digest,
+	}
+}
+
+// ValidateEvidenceProvenance ensures that the provenance contains valid required fields.
+func ValidateEvidenceProvenance(p EvidenceProvenance) error {
+	if strings.TrimSpace(p.EvidenceID) == "" {
+		return errors.New("evidence ID cannot be empty")
+	}
+	if strings.TrimSpace(p.SourceEngine) == "" {
+		return errors.New("source engine cannot be empty")
+	}
+	if p.ContentDigest != "" && !strings.HasPrefix(p.ContentDigest, "sha256:") {
+		return fmt.Errorf("content digest must start with 'sha256:', got: %s", p.ContentDigest)
+	}
+	return nil
+}
+
+// SanitizeEvidenceProvenance scrubs credentials from provenance fields (Location, VerificationContext)
+// and preserves safe content digest.
+func SanitizeEvidenceProvenance(p EvidenceProvenance) EvidenceProvenance {
+	cleanP := p
+	cleanP.Location = secrets.SanitizeURL(p.Location)
+	cleanP.Location = secrets.RedactText(cleanP.Location)
+	if p.VerificationContext != "" {
+		cleanP.VerificationContext = secrets.RedactText(p.VerificationContext)
+	}
+	return cleanP
 }

@@ -265,6 +265,7 @@ func TestController_SyntheticExecutionAndTraceability(t *testing.T) {
 		ExportJSONPath:  jsonPath,
 		FelixVersion:    "2.0.0",
 		BuildID:         "test",
+		AllowLoopback:   true,
 	}
 
 	// 7. Execute Assessment
@@ -427,6 +428,7 @@ func TestController_NetworkRedirectAndExclusionEnforcement(t *testing.T) {
 		Concurrency:     2,
 		FelixVersion:    "2.0.0",
 		BuildID:         "test",
+		AllowLoopback:   true,
 	}
 
 	res, err := ctrl.RunAssessment(ctx, asmID, opts)
@@ -770,6 +772,7 @@ func TestController_VerificationEngineIntegration(t *testing.T) {
 		TimeoutDuration: 5 * time.Second,
 		Concurrency:     2,
 		MaxAssets:       20,
+		AllowLoopback:   true,
 	})
 	if err != nil {
 		t.Fatalf("RunAssessment failed: %v", err)

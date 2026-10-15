@@ -18,6 +18,8 @@ func NormalizeSeverity(raw string) string {
 		return SeverityLow
 	case SeverityInfo, "INFORMATIONAL", "NOTE":
 		return SeverityInfo
+	case SeverityUnknown:
+		return SeverityUnknown
 	default:
 		return SeverityInfo
 	}

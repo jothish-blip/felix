@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"felix/pkg/report"
+	"felix/pkg/secrets"
 )
 
 // BuildReproductionContext generates safe, actionable reproduction steps and a sanitized curl command.
@@ -19,7 +20,8 @@ func BuildReproductionContext(
 	preconditions []string,
 	limitations []string,
 ) ReproductionContext {
-	endpoint := f.Endpoint
+	targetURL = secrets.SanitizeURL(targetURL)
+	endpoint := secrets.SanitizeURL(f.Endpoint)
 	if endpoint == "" {
 		endpoint = targetURL
 	}
@@ -61,6 +63,18 @@ func BuildReproductionContext(
 	// Safe curl command with credentials redacted
 	curlCmd := buildSafeCurl(method, endpoint, cleanHeaders)
 
+	// Sanitize string slices and descriptions
+	cleanPreconditions := make([]string, len(preconditions))
+	for i, p := range preconditions {
+		cleanPreconditions[i] = report.SanitizeEvidence(p)
+	}
+	cleanLimitations := make([]string, len(limitations))
+	for i, l := range limitations {
+		cleanLimitations[i] = report.SanitizeEvidence(l)
+	}
+	cleanExpected := report.SanitizeEvidence(expected)
+	cleanObserved := report.SanitizeEvidence(observed)
+
 	// Determine reproducibility tier
 	var reproState string
 	switch status {
@@ -77,15 +91,15 @@ func BuildReproductionContext(
 	// Build step-by-step reproduction guide
 	var steps []string
 	steps = append(steps, fmt.Sprintf("1. Target environment setup: verify reachability to %s", targetURL))
-	if len(preconditions) > 0 {
-		for _, p := range preconditions {
+	if len(cleanPreconditions) > 0 {
+		for _, p := range cleanPreconditions {
 			steps = append(steps, fmt.Sprintf("   - Precondition: %s", p))
 		}
 	}
 	steps = append(steps, fmt.Sprintf("2. Dispatch safe probe via %s to %s", method, endpoint))
 	steps = append(steps, fmt.Sprintf("   Execute: %s", curlCmd))
-	steps = append(steps, fmt.Sprintf("3. Expected secure behavior: %s", expected))
-	steps = append(steps, fmt.Sprintf("4. Observed result: %s", observed))
+	steps = append(steps, fmt.Sprintf("3. Expected secure behavior: %s", cleanExpected))
+	steps = append(steps, fmt.Sprintf("4. Observed result: %s", cleanObserved))
 	steps = append(steps, fmt.Sprintf("5. Verification conclusion: %s under policy %s", status, policyID))
 
 	return ReproductionContext{
@@ -94,13 +108,13 @@ func BuildReproductionContext(
 		Method:            method,
 		Headers:           cleanHeaders,
 		Params:            cleanParams,
-		Preconditions:     preconditions,
-		ExpectedBehavior:  expected,
-		ObservedBehavior:  observed,
+		Preconditions:     cleanPreconditions,
+		ExpectedBehavior:  cleanExpected,
+		ObservedBehavior:  cleanObserved,
 		ReproductionSteps: steps,
 		SafeCurlCommand:   curlCmd,
 		Reproducibility:   reproState,
-		Limitations:       limitations,
+		Limitations:       cleanLimitations,
 	}
 }
 

@@ -4,76 +4,20 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+
+	"felix/pkg/crawler"
 )
 
-// ValidateTargetURL validates an assessment target URL according to strict security rules:
-// - Must be HTTP or HTTPS
-// - Must have a valid, non-empty host
-// - Must NOT contain embedded credentials (user:pass@host)
-// - Must NOT be empty or purely whitespace
+// ValidateTargetURL validates an assessment target URL according to strict security rules.
+// Delegates to crawler.ValidateTargetURL for unified validation logic.
 func ValidateTargetURL(raw string) (*url.URL, error) {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return nil, fmt.Errorf("target URL cannot be empty")
-	}
-
-	parsed, err := url.Parse(trimmed)
-	if err != nil {
-		return nil, fmt.Errorf("invalid URL syntax: %w", err)
-	}
-
-	scheme := strings.ToLower(parsed.Scheme)
-	if scheme != "http" && scheme != "https" {
-		return nil, fmt.Errorf("unsupported URL scheme %q: only http and https are permitted", parsed.Scheme)
-	}
-
-	if parsed.User != nil {
-		return nil, fmt.Errorf("embedded credentials in target URL are prohibited")
-	}
-
-	host := strings.TrimSpace(parsed.Hostname())
-	if host == "" {
-		return nil, fmt.Errorf("target URL must contain a valid hostname")
-	}
-
-	// Reject localhost or non-routable link-local unless explicitly permitted in testing
-	if strings.Contains(host, " ") {
-		return nil, fmt.Errorf("invalid characters in target hostname")
-	}
-
-	return parsed, nil
+	return crawler.ValidateTargetURL(raw)
 }
 
 // NormalizeTargetURL returns a canonical representation of a target URL.
+// Delegates to crawler.NormalizeTargetURL for unified normalization logic.
 func NormalizeTargetURL(raw string) (string, error) {
-	u, err := ValidateTargetURL(raw)
-	if err != nil {
-		return "", err
-	}
-
-	scheme := strings.ToLower(u.Scheme)
-	host := strings.ToLower(u.Hostname())
-	port := u.Port()
-
-	hostPort := host
-	if port != "" {
-		if !(scheme == "http" && port == "80") && !(scheme == "https" && port == "443") {
-			hostPort = fmt.Sprintf("%s:%s", host, port)
-		}
-	}
-
-	path := u.EscapedPath()
-	path = strings.TrimRight(path, "/")
-	if path != "" && !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-
-	normalized := fmt.Sprintf("%s://%s%s", scheme, hostPort, path)
-	if u.RawQuery != "" {
-		normalized = fmt.Sprintf("%s?%s", normalized, u.RawQuery)
-	}
-
-	return normalized, nil
+	return crawler.NormalizeTargetURL(raw)
 }
 
 // ScopeValidator enforces scope and exclusion boundaries for an assessment.
@@ -150,7 +94,15 @@ func (v *ScopeValidator) IsExcluded(rawURL string) (bool, string) {
 			}
 
 		case "PATH_PREFIX":
-			if strings.HasPrefix(path, pattern) {
+			cleanPattern := strings.TrimSpace(pattern)
+			if !strings.HasPrefix(cleanPattern, "/") {
+				cleanPattern = "/" + cleanPattern
+			}
+			cleanPrefix := strings.TrimRight(strings.TrimRight(cleanPattern, "*"), "/")
+			if cleanPrefix == "" {
+				return true, fmt.Sprintf("path %s matches excluded prefix %s (reason: %s)", path, pattern, exc.Reason)
+			}
+			if path == cleanPrefix || strings.HasPrefix(path, cleanPrefix+"/") {
 				return true, fmt.Sprintf("path %s matches excluded prefix %s (reason: %s)", path, pattern, exc.Reason)
 			}
 
@@ -195,6 +147,11 @@ func (v *ScopeValidator) IsAllowed(rawURL string) bool {
 		return false
 	}
 
+	// Reject embedded credentials in candidate URLs
+	if parsed.User != nil {
+		return false
+	}
+
 	assetHost := strings.ToLower(parsed.Hostname())
 	if assetHost == "" {
 		// Relative URLs inherit the active target origin
@@ -207,7 +164,7 @@ func (v *ScopeValidator) IsAllowed(rawURL string) bool {
 		for _, t := range v.Targets {
 			if targetParsed, err := url.Parse(t); err == nil {
 				targetHost := strings.ToLower(targetParsed.Hostname())
-				if assetHost == targetHost && parsed.Port() == targetParsed.Port() {
+				if assetHost == targetHost && crawler.EffectivePort(parsed) == crawler.EffectivePort(targetParsed) {
 					if parsed.Scheme == "" || targetParsed.Scheme == "" || strings.EqualFold(parsed.Scheme, targetParsed.Scheme) {
 						return true
 					}
@@ -251,6 +208,20 @@ func (v *ScopeValidator) ValidateRedirect(currentURL, nextURL string) error {
 		return fmt.Errorf("scope validator is nil")
 	}
 
+	nextParsed, err := url.Parse(nextURL)
+	if err != nil {
+		return fmt.Errorf("invalid redirect URL %q: %w", nextURL, err)
+	}
+
+	scheme := strings.ToLower(nextParsed.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return fmt.Errorf("redirect to unsupported scheme %q blocked", nextParsed.Scheme)
+	}
+
+	if nextParsed.User != nil {
+		return fmt.Errorf("redirect with embedded credentials blocked")
+	}
+
 	if excluded, reason := v.IsExcluded(nextURL); excluded {
 		return fmt.Errorf("redirect to %s blocked: %s", nextURL, reason)
 	}
@@ -262,13 +233,12 @@ func (v *ScopeValidator) ValidateRedirect(currentURL, nextURL string) error {
 	// Enforce origin and host boundaries relative to currentURL
 	if currentURL != "" {
 		currParsed, err1 := url.Parse(currentURL)
-		nextParsed, err2 := url.Parse(nextURL)
-		if err1 == nil && err2 == nil && currParsed.Hostname() != "" && nextParsed.Hostname() != "" {
+		if err1 == nil && currParsed.Hostname() != "" && nextParsed.Hostname() != "" {
 			currHost := strings.ToLower(currParsed.Hostname())
 			nextHost := strings.ToLower(nextParsed.Hostname())
 			if v.ScopeMode == "same-origin" || v.ScopeMode == "" {
-				if currHost != nextHost || currParsed.Port() != nextParsed.Port() {
-					return fmt.Errorf("cross-host redirect from %s to %s blocked in same-origin mode", currHost, nextHost)
+				if currHost != nextHost || crawler.EffectivePort(currParsed) != crawler.EffectivePort(nextParsed) || (currParsed.Scheme != "" && nextParsed.Scheme != "" && !strings.EqualFold(currParsed.Scheme, nextParsed.Scheme)) {
+					return fmt.Errorf("cross-origin redirect from %s to %s blocked in same-origin mode", currHost, nextHost)
 				}
 			} else if v.ScopeMode == "subdomains" {
 				if currHost != nextHost && !strings.HasSuffix(nextHost, "."+currHost) && !strings.HasSuffix(currHost, "."+nextHost) {

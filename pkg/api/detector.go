@@ -22,20 +22,33 @@ type AuditResult struct {
 	Findings            []APIFinding         `json:"findings"`
 }
 
-// Detector coordinates modern API discovery, SPA analysis, GraphQL auditing, CORS analysis, and posture verification.
-type Detector struct {
-	client *Client
-	mu     sync.RWMutex
+// DetectorOptions configures optional scope authorization and exclusion filters for API auditing.
+type DetectorOptions struct {
+	IsAllowed  func(string) bool
+	IsExcluded func(string) bool
 }
 
-// NewDetector initializes a new Engine 4 API auditor instance.
-func NewDetector(client *Client) *Detector {
+// Detector coordinates modern API discovery, SPA analysis, GraphQL auditing, CORS analysis, and posture verification.
+type Detector struct {
+	client     *Client
+	isAllowed  func(string) bool
+	isExcluded func(string) bool
+	mu         sync.RWMutex
+}
+
+// NewDetector initializes a new Engine 4 API auditor instance with optional scope filters.
+func NewDetector(client *Client, opts ...DetectorOptions) *Detector {
 	if client == nil {
 		client = NewClient()
 	}
-	return &Detector{
+	d := &Detector{
 		client: client,
 	}
+	if len(opts) > 0 {
+		d.isAllowed = opts[0].IsAllowed
+		d.isExcluded = opts[0].IsExcluded
+	}
+	return d
 }
 
 // ExtractAllEndpoints discovers, normalizes, deduplicates, and classifies endpoints across all crawled assets.
@@ -156,10 +169,17 @@ func (d *Detector) Audit(ctx context.Context, targetURL string, assets []crawler
 	// 1. Discover, extract, and classify all endpoints across JS/SPA assets and source maps
 	discoveredEndpoints := d.ExtractAllEndpoints(targetURL, assets)
 
-	// Build candidate paths list
+	// Build candidate paths list, filtering out any endpoints excluded or outside authorized scope
 	var candidatePaths []string
 	var graphQLCandidates []string
 	for _, ep := range discoveredEndpoints {
+		fullURL := baseURL + ep.Path
+		if d.isExcluded != nil && d.isExcluded(fullURL) {
+			continue
+		}
+		if d.isAllowed != nil && !d.isAllowed(fullURL) {
+			continue
+		}
 		candidatePaths = append(candidatePaths, ep.Path)
 		if strings.Contains(strings.ToLower(ep.Path), "graphql") {
 			graphQLCandidates = append(graphQLCandidates, ep.Path)
@@ -190,9 +210,19 @@ func (d *Detector) Audit(ctx context.Context, targetURL string, assets []crawler
 
 	// 4. Audit CORS on target base and initial API paths
 	var corsFindings []APIFinding
-	corsTargets := []string{baseURL}
+	var corsTargets []string
+	if (d.isExcluded == nil || !d.isExcluded(baseURL)) && (d.isAllowed == nil || d.isAllowed(baseURL)) {
+		corsTargets = append(corsTargets, baseURL)
+	}
 	for _, p := range candidatePaths {
-		corsTargets = append(corsTargets, baseURL+p)
+		fullURL := baseURL + p
+		if d.isExcluded != nil && d.isExcluded(fullURL) {
+			continue
+		}
+		if d.isAllowed != nil && !d.isAllowed(fullURL) {
+			continue
+		}
+		corsTargets = append(corsTargets, fullURL)
 		if len(corsTargets) >= 4 {
 			break // bound CORS probes to 4 representative endpoints
 		}
@@ -222,6 +252,12 @@ func (d *Detector) Audit(ctx context.Context, targetURL string, assets []crawler
 		}
 
 		probeURL := baseURL + ep.Path
+		if d.isExcluded != nil && d.isExcluded(probeURL) {
+			continue
+		}
+		if d.isAllowed != nil && !d.isAllowed(probeURL) {
+			continue
+		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
 		if err != nil {
 			continue

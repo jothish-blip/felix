@@ -7,11 +7,12 @@ import (
 	"time"
 )
 
-// Summarize counts findings across severity tiers, verification states, and sources.
+// Summarize counts findings across severity tiers, verification states, sources, and finding statuses.
 func Summarize(findings []Finding) Summary {
 	s := Summary{
 		TotalFindings: len(findings),
 		BySource:      make(map[string]int),
+		ByStatus:      make(map[FindingStatus]int),
 	}
 
 	for _, f := range findings {
@@ -44,6 +45,26 @@ func Summarize(findings []Finding) Summary {
 			s.AttemptedCount++
 		}
 
+		st := f.Status
+		if st == "" {
+			st = FindingStatusFromVerification(f.Verification.Status)
+		}
+		st = NormalizeFindingStatus(st)
+		s.ByStatus[st]++
+		switch st {
+		case FindingStatusConfirmed:
+			s.ConfirmedCount++
+		case FindingStatusSuspected:
+			s.SuspectedCount++
+		case FindingStatusInconclusive:
+			s.InconclusiveStatusCount++
+			s.InconclusiveCount++
+		case FindingStatusNotTested:
+			s.NotTestedCount++
+		case FindingStatusError:
+			s.ErrorCount++
+		}
+
 		if f.Verification.SyntheticFixture {
 			s.SyntheticCount++
 		}
@@ -66,12 +87,13 @@ func Summarize(findings []Finding) Summary {
 }
 
 // Prioritize deterministically sorts findings by:
-// 1. Verification rank (VERIFIED -> DETECTED -> NOT_VERIFIED -> OBSERVED -> NOT_EXPOSED)
-// 2. Severity rank (CRITICAL -> INFO)
-// 3. Confidence rank (HIGH -> LOW)
-// 4. Risk score (descending)
-// 5. Category (alphabetical)
-// 6. Endpoint (alphabetical)
+// 1. Finding status rank (CONFIRMED > SUSPECTED > INCONCLUSIVE > NOT_TESTED > ERROR)
+// 2. Verification rank (VERIFIED -> DETECTED -> NOT_VERIFIED -> OBSERVED -> NOT_EXPOSED)
+// 3. Severity rank (CRITICAL -> INFO)
+// 4. Confidence rank (HIGH -> LOW)
+// 5. Risk score (descending)
+// 6. Category (alphabetical)
+// 7. Endpoint (alphabetical)
 func Prioritize(findings []Finding) []Finding {
 	if len(findings) == 0 {
 		return nil
@@ -84,40 +106,55 @@ func Prioritize(findings []Finding) []Finding {
 		fi := sorted[i]
 		fj := sorted[j]
 
-		// 1. Verification rank
+		// 1. Finding status rank
+		stI := fi.Status
+		if stI == "" {
+			stI = FindingStatusFromVerification(fi.Verification.Status)
+		}
+		stJ := fj.Status
+		if stJ == "" {
+			stJ = FindingStatusFromVerification(fj.Verification.Status)
+		}
+		siStatus := FindingStatusRank(stI)
+		sjStatus := FindingStatusRank(stJ)
+		if siStatus != sjStatus {
+			return siStatus > sjStatus
+		}
+
+		// 2. Verification rank
 		vi := VerificationRank(fi.Verification.Status)
 		vj := VerificationRank(fj.Verification.Status)
 		if vi != vj {
 			return vi > vj
 		}
 
-		// 2. Severity rank
+		// 3. Severity rank
 		si := SeverityRank(fi.Severity)
 		sj := SeverityRank(fj.Severity)
 		if si != sj {
 			return si > sj
 		}
 
-		// 3. Confidence rank
+		// 4. Confidence rank
 		ci := ConfidenceRank(fi.Confidence)
 		cj := ConfidenceRank(fj.Confidence)
 		if ci != cj {
 			return ci > cj
 		}
 
-		// 4. Risk score
+		// 5. Risk score
 		if fi.Score != fj.Score {
 			return fi.Score > fj.Score
 		}
 
-		// 5. Category
+		// 6. Category
 		cati := strings.ToLower(fi.Category)
 		catj := strings.ToLower(fj.Category)
 		if cati != catj {
 			return cati < catj
 		}
 
-		// 6. Endpoint
+		// 7. Endpoint
 		epi := strings.ToLower(fi.Endpoint)
 		epj := strings.ToLower(fj.Endpoint)
 		return epi < epj

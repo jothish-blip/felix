@@ -200,3 +200,56 @@ func TestScopeValidator_CrossHostRedirectBlocked(t *testing.T) {
 		t.Errorf("expected third-party redirect to be blocked in subdomains mode")
 	}
 }
+
+func TestScopeValidator_RedirectSafety(t *testing.T) {
+	approvedTargets := []string{
+		"http://example.com",
+		"https://example.com",
+	}
+	exclusions := []Exclusion{
+		{ExclusionType: ExclusionPathPrefix, Pattern: "/admin"},
+	}
+	v := NewScopeValidator("same-origin", approvedTargets, nil, exclusions)
+
+	// 1. Unsupported schemes must be rejected
+	dangerousRedirects := []string{
+		"javascript:alert(1)",
+		"file:///etc/passwd",
+		"data:text/html,<b>xss</b>",
+		"ftp://example.com/file",
+	}
+	for _, dr := range dangerousRedirects {
+		if err := v.ValidateRedirect("http://example.com/start", dr); err == nil {
+			t.Errorf("expected redirect to %s to be blocked, got nil", dr)
+		}
+	}
+
+	// 2. Embedded credentials in redirect must be rejected
+	if err := v.ValidateRedirect("http://example.com/start", "http://user:pass@example.com/home"); err == nil {
+		t.Error("expected redirect with embedded credentials to be blocked")
+	}
+
+	// 3. Port normalization: http default port 80 should match omitted port
+	if err := v.ValidateRedirect("http://example.com/start", "http://example.com:80/home"); err != nil {
+		t.Errorf("expected redirect to same origin with explicit port 80 to be allowed, got: %v", err)
+	}
+
+	// 4. Cross-port redirect to non-default port must be blocked
+	if err := v.ValidateRedirect("http://example.com/start", "http://example.com:8080/home"); err == nil {
+		t.Error("expected cross-port redirect to port 8080 to be blocked in same-origin mode")
+	}
+
+	// 5. Excluded path prefix boundary integrity:
+	// /admin and /admin/users must be blocked
+	if err := v.ValidateRedirect("http://example.com/start", "http://example.com/admin"); err == nil {
+		t.Error("expected redirect to /admin to be blocked")
+	}
+	if err := v.ValidateRedirect("http://example.com/start", "http://example.com/admin/users"); err == nil {
+		t.Error("expected redirect to /admin/users to be blocked")
+	}
+
+	// /administrator is NOT within /admin boundary and must be allowed
+	if err := v.ValidateRedirect("http://example.com/start", "http://example.com/administrator"); err != nil {
+		t.Errorf("expected redirect to /administrator to be allowed, got: %v", err)
+	}
+}
