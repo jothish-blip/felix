@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"felix/pkg/crawler"
 )
 
 // PreflightSessionResult contains the health check status of an identity's active session.
@@ -67,9 +69,14 @@ func (sm *SessionManager) GetClientForIdentity(alias string) *http.Client {
 		Timeout: sm.timeout,
 		Jar:     jar,
 	}
-	if sm.transport != nil {
-		client.Transport = sm.transport
+	tr := sm.transport
+	if tr == nil {
+		tr = http.DefaultTransport
 	}
+	if _, ok := tr.(*crawler.RateLimitedTransport); !ok {
+		tr = crawler.NewRateLimitedTransport(tr, crawler.RateLimitOptions{})
+	}
+	client.Transport = tr
 
 	sm.clients[key] = client
 	sm.cookieJars[key] = jar

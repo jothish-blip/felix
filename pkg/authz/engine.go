@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"felix/pkg/crawler"
 	"felix/pkg/report"
 )
 
@@ -290,9 +291,16 @@ func (e *Engine) scopedClientForIdentity(identityAlias string, isAllowed func(st
 		base = e.client
 	}
 	origCheck := base.CheckRedirect
+	transport := base.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	if _, ok := transport.(*crawler.RateLimitedTransport); !ok {
+		transport = crawler.NewRateLimitedTransport(transport, crawler.RateLimitOptions{})
+	}
 
 	return &http.Client{
-		Transport: base.Transport,
+		Transport: transport,
 		Timeout:   base.Timeout,
 		Jar:       base.Jar,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {

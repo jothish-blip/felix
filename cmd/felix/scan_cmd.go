@@ -505,30 +505,55 @@ func runScan(args []string) int {
 			return false
 		}
 		p := parsed.Path
-		// Iteratively unescape up to 3 times to prevent single or double percent-encoded traversal
-		for i := 0; i < 3; i++ {
-			u, err := url.PathUnescape(p)
-			if err != nil || u == p {
+		// Iteratively unescape until convergence or max 10 passes
+		decoded := p
+		for pass := 0; pass < 10; pass++ {
+			u, err := url.PathUnescape(decoded)
+			if err != nil {
+				return false // Malformed escape sequence is strictly rejected
+			}
+			if u == decoded {
 				break
 			}
-			p = u
+			decoded = u
+			if pass == 9 {
+				return false // Suspicious non-converging recursive encoding rejected
+			}
 		}
-		// Normalize backslashes to forward slashes to prevent Windows/IIS-style bypasses
-		p = strings.ReplaceAll(p, "\\", "/")
-		p = strings.ToLower(path.Clean(p))
+		p = decoded
 
-		if p == "/favicon.ico" || p == "/favicon.png" || p == "/manifest.json" || p == "/robots.txt" {
+		// Reject null bytes and ASCII control characters
+		if strings.ContainsRune(p, 0) {
+			return false
+		}
+		for i := 0; i < len(p); i++ {
+			if p[i] < 0x20 || p[i] == 0x7f {
+				return false
+			}
+		}
+
+		// Reject residual suspicious escaped tokens (e.g. %2e, %2f, %5c, %00)
+		lowerP := strings.ToLower(p)
+		if strings.Contains(lowerP, "%2e") || strings.Contains(lowerP, "%2f") ||
+			strings.Contains(lowerP, "%5c") || strings.Contains(lowerP, "%00") {
+			return false
+		}
+
+		// Normalize backslashes to forward slashes to prevent Windows/IIS-style bypasses
+		cleanP := strings.ToLower(path.Clean(strings.ReplaceAll(p, "\\", "/")))
+
+		if cleanP == "/favicon.ico" || cleanP == "/favicon.png" || cleanP == "/manifest.json" || cleanP == "/robots.txt" {
 			return true
 		}
-		inAssetDir := strings.HasPrefix(p, "/_next/") ||
-			strings.HasPrefix(p, "/assets/") ||
-			strings.HasPrefix(p, "/static/") ||
-			strings.HasPrefix(p, "/build/") ||
-			strings.HasPrefix(p, "/dist/")
+		inAssetDir := strings.HasPrefix(cleanP, "/_next/") ||
+			strings.HasPrefix(cleanP, "/assets/") ||
+			strings.HasPrefix(cleanP, "/static/") ||
+			strings.HasPrefix(cleanP, "/build/") ||
+			strings.HasPrefix(cleanP, "/dist/")
 		if !inAssetDir {
 			return false
 		}
-		ext := strings.ToLower(path.Ext(p))
+		ext := strings.ToLower(path.Ext(cleanP))
 		switch ext {
 		case ".js", ".mjs", ".css", ".map", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff", ".woff2", ".ttf", ".eot", ".json", ".webmanifest":
 			return true

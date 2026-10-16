@@ -132,6 +132,19 @@ func NewClient(opts ...ClientOptions) *Client {
 				return nil
 			},
 		}
+	} else if customHTTP.Transport != nil {
+		if _, ok := customHTTP.Transport.(*crawler.RateLimitedTransport); !ok {
+			var rateVal float64
+			var concVal int
+			if len(opts) > 0 {
+				rateVal = opts[0].RateLimit
+				concVal = opts[0].MaxConcurrency
+			}
+			customHTTP.Transport = crawler.NewRateLimitedTransport(customHTTP.Transport, crawler.RateLimitOptions{
+				Rate:           rateVal,
+				MaxConcurrency: concVal,
+			})
+		}
 	}
 
 	return &Client{

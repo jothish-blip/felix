@@ -772,9 +772,17 @@ func TestRunScan_HithaOneStrictBoundaryProof(t *testing.T) {
     <script src="/_next/../admin.js"></script>
     <script src="/assets/%2e%2e/secret.js"></script>
     <script src="/assets/%252e%252e/secret2.js"></script>
+    <script src="/assets/%25252e%25252e/secret3.js"></script>
+    <script src="/assets/%2525252e%2525252e/secret4.js"></script>
+    <script src="/assets/%00/evil.js"></script>
+    <script src="/assets/%2500/evil2.js"></script>
+    <script src="/assets/%2f%2e%2e%2fadmin.js"></script>
     <script src="/assets\..\evil.js"></script>
     <a href="/root-page">Root Page</a>
     <a href="/hithaone-admin">Lookalike Prefix</a>
+    <a href="/hithaone/../hithaone/escape">Escape Traversal</a>
+    <a href="/hithaone/%25252e%25252e/admin">Deep Encoded Escape</a>
+    <a href="/hithaone%5cadmin">Backslash Lookalike</a>
     <a href="/other/app">Other App</a>
 </head>
 <body>
@@ -818,9 +826,15 @@ const userEndpoint = "/api/v1/users";
 		"/_next/../admin.js",
 		"/secret.js",
 		"/secret2.js",
+		"/secret3.js",
+		"/secret4.js",
 		"/evil.js",
+		"/evil2.js",
 		"/root-page",
 		"/hithaone-admin",
+		"/hithaone/escape",
+		"/escape",
+		"/hithaone/../hithaone/escape",
 		"/other/app",
 		"/admin",
 		"/.env",

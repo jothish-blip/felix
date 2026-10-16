@@ -16,6 +16,7 @@ import (
 
 	"felix/pkg/auth"
 	"felix/pkg/authz"
+	"felix/pkg/crawler"
 	"felix/pkg/report"
 )
 
@@ -42,9 +43,16 @@ func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
 		base = &http.Client{Timeout: e.cfg.Timeout}
 	}
 	origCheck := base.CheckRedirect
+	transport := base.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	if _, ok := transport.(*crawler.RateLimitedTransport); !ok {
+		transport = crawler.NewRateLimitedTransport(transport, crawler.RateLimitOptions{})
+	}
 
 	return &http.Client{
-		Transport: base.Transport,
+		Transport: transport,
 		Timeout:   base.Timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {

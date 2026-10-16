@@ -98,6 +98,13 @@ func New(cfg Config) *Crawler {
 				return nil
 			},
 		}
+	} else if client.Transport != nil {
+		if _, ok := client.Transport.(*RateLimitedTransport); !ok {
+			client.Transport = NewRateLimitedTransport(client.Transport, RateLimitOptions{
+				Rate:           cfg.RateLimit,
+				MaxConcurrency: cfg.Concurrency,
+			})
+		}
 	}
 
 	return &Crawler{

@@ -315,15 +315,22 @@ func (s *Scope) IsPathInScope(rawURL string) bool {
 		}
 	}
 
-	targetPath := s.TargetURL.Path
-	for i := 0; i < 3; i++ {
-		u, err := url.PathUnescape(targetPath)
-		if err != nil || u == targetPath {
+	// Unescape targetPath until convergence or max 10 passes
+	decodedTarget := s.TargetURL.Path
+	for pass := 0; pass < 10; pass++ {
+		u, err := url.PathUnescape(decodedTarget)
+		if err != nil {
+			return false // Malformed target path encoding
+		}
+		if u == decodedTarget {
 			break
 		}
-		targetPath = u
+		decodedTarget = u
+		if pass == 9 {
+			return false // Non-converging target path encoding
+		}
 	}
-	targetPath = strings.ReplaceAll(targetPath, "\\", "/")
+	targetPath := strings.ReplaceAll(decodedTarget, "\\", "/")
 	targetPath = path.Clean(targetPath)
 	if targetPath == "." || targetPath == "/" || targetPath == "" {
 		return true
@@ -335,14 +342,40 @@ func (s *Scope) IsPathInScope(rawURL string) bool {
 		reqPath = "/"
 	}
 
-	// Iteratively unescape percent-encoding to defeat single/double-encoded traversal (%2e%2e, %252e%252e, %2f)
-	for i := 0; i < 3; i++ {
-		u, err := url.PathUnescape(reqPath)
-		if err != nil || u == reqPath {
+	// Unescape reqPath until convergence or max 10 passes
+	decodedReq := reqPath
+	for pass := 0; pass < 10; pass++ {
+		u, err := url.PathUnescape(decodedReq)
+		if err != nil {
+			return false // Malformed escape sequence is strictly rejected
+		}
+		if u == decodedReq {
 			break
 		}
-		reqPath = u
+		decodedReq = u
+		if pass == 9 {
+			return false // Suspicious non-converging recursive encoding rejected
+		}
 	}
+	reqPath = decodedReq
+
+	// Reject null bytes and ASCII control characters
+	if strings.ContainsRune(reqPath, 0) {
+		return false
+	}
+	for i := 0; i < len(reqPath); i++ {
+		if reqPath[i] < 0x20 || reqPath[i] == 0x7f {
+			return false
+		}
+	}
+
+	// Reject residual suspicious escaped tokens (e.g. %2e, %2f, %5c, %00)
+	lowerReq := strings.ToLower(reqPath)
+	if strings.Contains(lowerReq, "%2e") || strings.Contains(lowerReq, "%2f") ||
+		strings.Contains(lowerReq, "%5c") || strings.Contains(lowerReq, "%00") {
+		return false
+	}
+
 	// The delimiter immediately following targetPath in raw unescaped path must be "/" or end-of-string.
 	// Non-slash separators (such as backslashes "\", dashes "-", underscores "_") are strictly rejected.
 	if strings.HasPrefix(reqPath, targetPath) {
@@ -356,15 +389,28 @@ func (s *Scope) IsPathInScope(rawURL string) bool {
 	cleanReqPath := path.Clean(strings.ReplaceAll(reqPath, "\\", "/"))
 	cleanReqPath = strings.TrimRight(cleanReqPath, "/")
 
-	// Exact match: e.g. "/hithaone" == "/hithaone"
-	if cleanReqPath == targetPath {
-		return true
+	// Cleaned path must match targetPath or start with targetPath + "/"
+	if cleanReqPath != targetPath && !strings.HasPrefix(cleanReqPath, targetPath+"/") {
+		return false
 	}
 
-	// Subpath match: must start with targetPath + "/"
-	if strings.HasPrefix(cleanReqPath, targetPath+"/") {
-		return true
+	// Verify segment-stack containment: simulated directory traversal must never pop above the target subpath boundary
+	targetSegments := strings.Split(strings.Trim(targetPath, "/"), "/")
+	reqSegments := strings.Split(strings.Trim(strings.ReplaceAll(reqPath, "\\", "/"), "/"), "/")
+	var stack []string
+	for _, seg := range reqSegments {
+		if seg == "" || seg == "." {
+			continue
+		}
+		if seg == ".." {
+			if len(stack) <= len(targetSegments) {
+				return false // Attempted to traverse above target subpath boundary
+			}
+			stack = stack[:len(stack)-1]
+		} else {
+			stack = append(stack, seg)
+		}
 	}
 
-	return false
+	return true
 }
