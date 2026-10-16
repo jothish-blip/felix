@@ -35,16 +35,18 @@ var (
 
 // AuditResult encapsulates discovered cloud services and evaluated risk findings.
 type AuditResult struct {
-	Services           []Service           `json:"services"`
-	DiscoveredServices []DiscoveredService `json:"discovered_services"`
-	Findings           []CloudFinding      `json:"findings"`
+	Services           []Service                  `json:"services"`
+	DiscoveredServices []DiscoveredService        `json:"discovered_services"`
+	Findings           []CloudFinding             `json:"findings"`
+	AccessRecords      []AccessVerificationRecord `json:"access_records,omitempty"`
 }
 
 // Detector identifies cloud vendor configurations and coordinates safe verification.
 type Detector struct {
-	client    *Client
-	engine    *ServiceDiscoveryEngine
-	isAllowed func(string) bool
+	client       *Client
+	engine       *ServiceDiscoveryEngine
+	accessEngine *AccessVerificationEngine
+	isAllowed    func(string) bool
 }
 
 // NewDetector initializes a new Cloud & BaaS auditor with optional scope authorization checker.
@@ -59,7 +61,16 @@ func NewDetector(client *Client, isAllowed ...func(string) bool) *Detector {
 		d.isAllowed = isAllowed[0]
 	}
 	d.engine = NewServiceDiscoveryEngine(client, d.isAllowed)
+	d.accessEngine = NewAccessVerificationEngine(AccessEngineOptions{
+		Client:    client,
+		IsAllowed: d.isAllowed,
+	})
 	return d
+}
+
+// AccessEngine returns the associated AccessVerificationEngine.
+func (d *Detector) AccessEngine() *AccessVerificationEngine {
+	return d.accessEngine
 }
 
 // DiscoverServicesFromContent extracts recognized cloud endpoints from raw text.
@@ -320,10 +331,33 @@ func (d *Detector) Audit(ctx context.Context, assets []crawler.Asset, secretFind
 		}
 	}
 
+	// Phase 2.2: Safe Access Verification for in-scope discovered services
+	var accessRecords []AccessVerificationRecord
+	if d.accessEngine != nil && len(discoveredServices) > 0 {
+		var inScopeServices []DiscoveredService
+		for _, ds := range discoveredServices {
+			if ds.InScope && (ds.Outcome == OutcomeDetected || ds.Outcome == OutcomePossible) {
+				inScopeServices = append(inScopeServices, ds)
+			}
+		}
+		if len(inScopeServices) > 0 {
+			accessRecords = d.accessEngine.VerifyServicesConcurrently(ctx, inScopeServices, nil, nil, nil)
+			for _, rec := range accessRecords {
+				if f, ok := rec.ToCloudFinding(); ok {
+					if _, exists := seenFindingFPs[f.Fingerprint]; !exists {
+						seenFindingFPs[f.Fingerprint] = struct{}{}
+						allFindings = append(allFindings, f)
+					}
+				}
+			}
+		}
+	}
+
 	return AuditResult{
 		Services:           services,
 		DiscoveredServices: discoveredServices,
 		Findings:           allFindings,
+		AccessRecords:      accessRecords,
 	}
 }
 
