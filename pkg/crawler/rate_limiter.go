@@ -116,9 +116,18 @@ func (t *RateLimitedTransport) RoundTrip(req *http.Request) (*http.Response, err
 
 	// 3. Enforce per-host rate limit (if configured)
 	if t.minInterval > 0 {
-		host := strings.ToLower(req.URL.Hostname())
+		host := strings.ToLower(req.URL.Host)
 		if host == "" {
 			host = strings.ToLower(req.Host)
+		}
+		if host == "" {
+			host = strings.ToLower(req.URL.Hostname())
+		}
+		// Normalize default ports for consistent bucketing
+		if strings.HasSuffix(host, ":80") && (req.URL.Scheme == "http" || req.URL.Scheme == "") {
+			host = strings.TrimSuffix(host, ":80")
+		} else if strings.HasSuffix(host, ":443") && (req.URL.Scheme == "https" || req.URL.Scheme == "") {
+			host = strings.TrimSuffix(host, ":443")
 		}
 
 		var waitDuration time.Duration

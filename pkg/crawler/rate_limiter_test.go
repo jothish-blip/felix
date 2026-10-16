@@ -210,3 +210,169 @@ func TestRateLimitedTransport_RedirectsCounted(t *testing.T) {
 		t.Errorf("expected 2 total requests including redirect hop, got %d", rt.TotalRequests())
 	}
 }
+
+// TestRateLimitedTransport_ConcurrentRequestsPaced verifies that concurrent goroutines to the same host
+// are strictly paced by the per-host rate limiter even when MaxConcurrency allows multiple simultaneous requests.
+func TestRateLimitedTransport_ConcurrentRequestsPaced(t *testing.T) {
+	var arrivalTimes []time.Time
+	var mu sync.Mutex
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		arrivalTimes = append(arrivalTimes, time.Now())
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	// Rate: 10.0 req/sec -> 100ms interval
+	rate := 10.0
+	rt := NewRateLimitedTransport(ts.Client().Transport, RateLimitOptions{
+		Rate:           rate,
+		MaxConcurrency: 5, // High concurrency, but per-host rate limiter must pace them
+	})
+	client := &http.Client{Transport: rt}
+
+	var wg sync.WaitGroup
+	numRequests := 4
+	for i := 0; i < numRequests; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL, nil)
+			if err != nil {
+				return
+			}
+			resp, err := client.Do(req)
+			if err == nil {
+				resp.Body.Close()
+			}
+		}()
+	}
+	wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(arrivalTimes) != numRequests {
+		t.Fatalf("expected %d requests received, got %d", numRequests, len(arrivalTimes))
+	}
+
+	// Sort arrival times to measure inter-arrival intervals
+	for i := 0; i < len(arrivalTimes)-1; i++ {
+		for j := i + 1; j < len(arrivalTimes); j++ {
+			if arrivalTimes[j].Before(arrivalTimes[i]) {
+				arrivalTimes[i], arrivalTimes[j] = arrivalTimes[j], arrivalTimes[i]
+			}
+		}
+	}
+
+	for i := 1; i < len(arrivalTimes); i++ {
+		interval := arrivalTimes[i].Sub(arrivalTimes[i-1])
+		// 100ms nominal; allowing 75ms for OS scheduler / timer resolution on Windows
+		if interval < 75*time.Millisecond {
+			t.Errorf("concurrent request %d followed %d too quickly: interval was %v (expected >= 75ms)", i, i-1, interval)
+		}
+	}
+
+	if rt.TotalRequests() != int64(numRequests) {
+		t.Errorf("expected %d total requests, got %d", numRequests, rt.TotalRequests())
+	}
+}
+
+// TestRateLimitedTransport_RetriesPaced verifies that retry attempts pass through the transport
+// and increment the transport counter.
+func TestRateLimitedTransport_RetriesPaced(t *testing.T) {
+	attempts := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts < 3 {
+			http.Error(w, "server error", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	rt := NewRateLimitedTransport(ts.Client().Transport, RateLimitOptions{
+		Rate:           20.0,
+		MaxConcurrency: 2,
+	})
+	client := &http.Client{Transport: rt}
+
+	// Dispatch request with retry loop
+	maxRetries := 3
+	var finalResp *http.Response
+	for retry := 0; retry < maxRetries; retry++ {
+		req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL, nil)
+		resp, err := client.Do(req)
+		if err == nil && resp.StatusCode == http.StatusOK {
+			finalResp = resp
+			break
+		}
+		if resp != nil {
+			resp.Body.Close()
+		}
+	}
+
+	if finalResp == nil {
+		t.Fatal("expected request to succeed after retries")
+	}
+	finalResp.Body.Close()
+
+	if attempts != 3 {
+		t.Errorf("expected 3 server attempts, got %d", attempts)
+	}
+	if rt.TotalRequests() != 3 {
+		t.Errorf("expected 3 transport requests counted, got %d", rt.TotalRequests())
+	}
+}
+
+// TestRateLimitedTransport_IndependentHostsNotBlocked verifies that rate limiting on host A
+// does not unnecessarily block immediate requests to distinct host B.
+func TestRateLimitedTransport_IndependentHostsNotBlocked(t *testing.T) {
+	tsA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer tsA.Close()
+
+	tsB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer tsB.Close()
+
+	// Slow rate of 1 req/sec on each host, but concurrency = 5
+	rt := NewRateLimitedTransport(tsA.Client().Transport, RateLimitOptions{
+		Rate:           1.0, // 1 second interval per host
+		MaxConcurrency: 5,
+	})
+	client := &http.Client{Transport: rt}
+
+	start := time.Now()
+
+	// Send to host A
+	reqA, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, tsA.URL, nil)
+	respA, errA := client.Do(reqA)
+	if errA != nil {
+		t.Fatalf("request A failed: %v", errA)
+	}
+	respA.Body.Close()
+
+	// Immediately send to host B (different host)
+	reqB, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, tsB.URL, nil)
+	respB, errB := client.Do(reqB)
+	if errB != nil {
+		t.Fatalf("request B failed: %v", errB)
+	}
+	respB.Body.Close()
+
+	elapsed := time.Since(start)
+
+	// Since host B has its own independent rate limiter, it should NOT wait 1 second for host A
+	if elapsed > 600*time.Millisecond {
+		t.Errorf("request to host B took %v; expected independent per-host pacing (< 600ms)", elapsed)
+	}
+	if rt.TotalRequests() != 2 {
+		t.Errorf("expected 2 total requests, got %d", rt.TotalRequests())
+	}
+}

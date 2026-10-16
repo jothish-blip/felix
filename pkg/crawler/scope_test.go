@@ -507,10 +507,57 @@ func TestScope_IsPathInScope(t *testing.T) {
 		"https://example.com/hithaone-admin",
 		"https://example.com/dashboard",
 		"https://attacker.com/hithaone/dashboard",
+		"/hithaone/../admin",
+		"/hithaone/..",
+		"/hithaone/%2e%2e/admin",
+		"/hithaone/%2E%2E/admin",
+		"/hithaone%2dadmin",
 	}
 	for _, u := range invalidSubpathCases {
 		if sSubpath.IsPathInScope(u) {
 			t.Errorf("expected %q to be OUT of path scope for /hithaone target", u)
+		}
+	}
+
+	validNormalizedCases := []string{
+		"/hithaone/./admin",
+		"/hithaone/sub/../admin",
+		"/hithaone/%2fadmin",
+	}
+	for _, u := range validNormalizedCases {
+		if !sSubpath.IsPathInScope(u) {
+			t.Errorf("expected %q to be IN path scope for /hithaone target", u)
+		}
+	}
+
+	// Nested subpath target
+	sNested, err := NewScope("https://example.com/app/v1", ScopeSameOrigin)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	validNestedCases := []string{
+		"/app/v1",
+		"/app/v1/",
+		"/app/v1/users",
+		"https://example.com/app/v1/dashboard",
+	}
+	for _, u := range validNestedCases {
+		if !sNested.IsPathInScope(u) {
+			t.Errorf("expected %q to be IN path scope for /app/v1 target", u)
+		}
+	}
+
+	invalidNestedCases := []string{
+		"/app/v1-admin",
+		"/app/v2",
+		"/app",
+		"/app/v1/../v2",
+		"/app/v1/%2e%2e/v2",
+	}
+	for _, u := range invalidNestedCases {
+		if sNested.IsPathInScope(u) {
+			t.Errorf("expected %q to be OUT of path scope for /app/v1 target", u)
 		}
 	}
 

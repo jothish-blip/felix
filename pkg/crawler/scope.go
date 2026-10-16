@@ -3,6 +3,7 @@ package crawler
 import (
 	"fmt"
 	"net/url"
+	"path"
 	"strings"
 )
 
@@ -287,10 +288,11 @@ func (s *Scope) IsAllowed(rawURL string) bool {
 }
 
 // IsPathInScope checks if a URL or path is strictly within the target's authorized path boundary.
+// It normalizes path traversals (..), URL-encoded entities (%2e%2e, %2f), and enforces exact boundary delimiters.
 // If the target has a root path ("" or "/"), any path on the authorized origin is in path scope.
 // If the target has a subpath (e.g. "/hithaone" or "/app/v1"), the URL/path must equal the subpath
 // or have the subpath followed immediately by a path separator ("/" or end of string).
-// Similar-looking prefixes (e.g. "/hithaone-admin" or "/hithaone_evil") are STRICTLY REJECTED.
+// Similar-looking prefixes (e.g. "/hithaone-admin" or "/hithaone_evil") or traversal escapes (e.g. "/hithaone/../admin") are STRICTLY REJECTED.
 func (s *Scope) IsPathInScope(rawURL string) bool {
 	if s == nil || s.TargetURL == nil {
 		return false
@@ -313,16 +315,25 @@ func (s *Scope) IsPathInScope(rawURL string) bool {
 		}
 	}
 
-	targetPath := strings.TrimRight(s.TargetURL.Path, "/")
-	if targetPath == "" || targetPath == "/" {
+	targetPath := path.Clean(s.TargetURL.Path)
+	if targetPath == "." || targetPath == "/" || targetPath == "" {
 		return true
 	}
+	targetPath = strings.TrimRight(targetPath, "/")
 
 	reqPath := parsed.Path
 	if reqPath == "" {
 		reqPath = "/"
 	}
-	cleanReqPath := strings.TrimRight(reqPath, "/")
+
+	// Unescape percent-encoding to detect encoded traversal (e.g. %2e%2e) or encoded slashes (%2f)
+	unescaped, err := url.PathUnescape(reqPath)
+	if err == nil {
+		reqPath = unescaped
+	}
+
+	cleanReqPath := path.Clean(reqPath)
+	cleanReqPath = strings.TrimRight(cleanReqPath, "/")
 
 	// Exact match: e.g. "/hithaone" == "/hithaone"
 	if cleanReqPath == targetPath {

@@ -78,28 +78,50 @@ All live assessments were conducted strictly under user authorization with conse
 - **Maximum Assets Ingested:** Bounded at `--max-assets 25`.
 - **Network Timeout:** Set to `--timeout 15s`.
 - **Canary Mutations:** Prohibited and verified disabled (`--active=false`).
-- **Scope Boundary:** Strict origin and path isolation enforced; out-of-scope third-party services and unlisted hosts encountered during crawling (e.g. Supabase hosts `sqycamubfmxbxthzqakx.supabase.co` and `xyqqtsrcbusqbpduvutt.supabase.co`) were recorded as indicators and active probing was strictly skipped.
+- **Scope Boundary:** Strict origin and path isolation enforced; out-of-scope third-party services and unlisted hosts encountered during crawling (e.g. Supabase hosts `sqycamubfmxbxthzqakx.supabase.co` and `xyqqtsrcbusqbpduvutt.supabase.co`) were recorded as passive indicators and active probing was strictly skipped.
 
 ### 3.2 Request-Rate Contradiction Root Cause & Remediation (`FELIX-DEFECT-002`)
 - **Audit Discovery:** An audit of the initial live scan execution metrics revealed that while `--concurrency 2` was active, effective request rates across targets ranged between **2.4 and 12.3 req/sec**, contradicting the report's aspirational claim of $\le 1$ req/sec.
-- **Root Cause:** FELIX previously lacked an active rate limiter in `SafeTransport` and `scan_cmd.go`. Requests dispatched by the crawler and API detector completed as fast as the edge server returned responses (5–20ms for Vercel CDN), governed solely by worker concurrency. Furthermore, `rep.RequestCount` previously counted discovered assets and audited endpoints rather than measuring raw outbound socket transmissions.
+- **Root Cause:** FELIX previously lacked an active rate limiter in `SafeTransport` and `scan_cmd.go`. Requests dispatched by the crawler and API detector completed as fast as the edge server returned responses (5–20ms for Vercel CDN), governed solely by worker concurrency. Furthermore, `rep.RequestCount` previously counted discovered assets and audited endpoints rather than measuring outbound transport round-trips.
 - **Remediation:**
   1. Built `crawler.RateLimitedTransport` wrapping `SafeTransport`, enforcing per-host interval token pacing (`minInterval = 1s / rate`) and global semaphore concurrency limits.
   2. Added `--rate-limit, -r <float>` CLI flag to `felix scan` to allow operators to specify exact maximum requests per second per host (e.g. `--rate-limit 1.0`).
-  3. Integrated atomic wire request tracking via `rateLimitedTransport.TotalRequests()`, populating `rep.RequestCount`, `rep.Metadata["wire_requests_count"]`, `rep.Metadata["peak_concurrency"]`, and `rep.Metadata["effective_req_per_sec"]`.
+  3. Integrated atomic transport request tracking via `rateLimitedTransport.TotalRequests()`, populating `rep.RequestCount`, `rep.Metadata["transport_requests_count"]`, `rep.Metadata["wire_requests_count"]` (preserved alias), `rep.Metadata["peak_concurrency"]`, and `rep.Metadata["effective_req_per_sec"]`.
+
+### 3.3 Historical Scan Provenance, Telemetry Definitions & Concurrency Scope
+- **Historical Production Baseline Scans:** The five JSON files in `reports/` (`scan_target1_nexspace.json` through `scan_target5_hithaone.json`) constitute the **unmodified empirical record of the pre-fix production scans**. These scans were executed unpaced prior to the rate limiter implementation, and their finding sets reflect pre-fix classifications (e.g. Supabase publishable keys flagged as high-entropy, SPA routes generating findings on 404s/shells, and subpath probe escapes). These historical files are preserved verbatim; they must NOT be claimed to have run under the rate limiter or with post-fix suppressions.
+- **Post-Fix Verification Methodology:** All post-fix behaviors (rate-limiting pacing, concurrency bounding, subpath containment, route suppression, and key classification) are verified through deterministic, local automated regression test suites without re-scanning production websites.
+- **Telemetry Metric Definitions:**
+  - `RequestCount`: Total HTTP transport round-trips (`http.RoundTripper.RoundTrip`) handled by `RateLimitedTransport`. If HTTP keep-alive is active, multiple transport requests share an underlying TCP connection; this metric measures HTTP round-trips rather than kernel socket descriptors.
+  - `transport_requests_count`: Metadata field recording total HTTP transport round-trips.
+  - `wire_requests_count`: Maintained as a backward-compatible alias identical in value to `transport_requests_count`.
+  - `peak_concurrency`: Maximum simultaneous active `RoundTrip()` calls observed during scan execution.
+  - `effective_req_per_sec`: `transport_requests_count` divided by the scan wall-clock duration in seconds.
+- **Concurrency Scope (In-Process vs Multi-Process):**
+  - Concurrency throttling is enforced in-process via a shared Go channel semaphore across all workers and targets within a single `felix scan` execution.
+  - If multiple independent OS processes of `felix` are spawned simultaneously by an external scheduler or user, each process manages its own independent memory space and rate limiter; OS-level cross-process synchronization is outside the scope of single-binary execution.
+- **Strict Subpath and Asset Containment:**
+  - Target subpath boundaries (`Scope.IsPathInScope`) are unescaped and normalized via `path.Clean` and `url.PathUnescape`, preventing path traversal (`/hithaone/../admin`, `%2e%2e`) and prefix spoofing (`/hithaone-admin`).
+  - Active probes (`apiAuditor`, `cloudAuditor`) and HTTP redirects (`safeHTTPClient.CheckRedirect`) are strictly confined to `isPathAuthorized`.
+  - Crawler asset downloads (`isClientAssetURL`) are confined to standard root icons (`/favicon.ico`) or recognized build asset directories (`/_next/`, `/assets/`, `/static/`, `/build/`, `/dist/`) with recognized static extensions (`.js`, `.css`, etc.).
+- **Database Intelligence Boundary:**
+  - Supabase references on Targets 1 & 5 were passively extracted from frontend assets. Because those third-party hosts were out of scope, backend access controls and Row-Level Security (RLS) were **not actively probed against live databases**. All 16 Phase 2 database and cloud providers were validated through local mock fixtures.
 
 ---
 
-## 4. Per-Target Assessment Matrix
+## 4. Per-Target Assessment Matrix (Historical Baseline Scans)
 
-| # | Target URL | HTTP / TLS Status | Assets Crawled | Requests Sent | Duration | Effective Rate | Findings (Total / Low / Info) | Discovered Services & Integrations | Risk Score | JSON Evidence File |
+> [!NOTE]
+> The table below records the original pre-fix baseline assessment metrics as captured in the preserved `reports/` JSON dossiers before rate limiter and route suppression remediations were implemented.
+
+| # | Target URL | HTTP / TLS Status | Assets Crawled | Pre-Fix Requests Recorded | Duration | Effective Rate (Pre-Fix) | Findings (Total / Low / Info) | Discovered Services & Integrations | Risk Score | Historical JSON Evidence File |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 1 | `https://nexspace.space` | 200 OK (TLS 1.3 / Vercel) | 18 | 35 | 8.91s | ~3.9 req/s | 13 (2 Low, 11 Info) | Supabase (`sqycamubfmxbxthzqakx.supabase.co`) | 8/100 (LOW) | `reports/scan_target1_nexspace.json` |
+| 1 | `https://nexspace.space` | 200 OK (TLS 1.3 / Vercel) | 18 | 35 | 8.91s | ~3.9 req/s | 13 (2 Low, 11 Info) | Supabase (`sqycamubfmxbxthzqakx.supabase.co`, passive only) | 8/100 (LOW) | `reports/scan_target1_nexspace.json` |
 | 2 | `https://www.webjothishanalyst.site` | 200 OK (TLS 1.3 / Vercel) | 19 | 41 | 17.01s | ~2.4 req/s | 14 (1 Low, 13 Info) | Next.js Telemetry, Policies, Contact API | 6/100 (LOW) | `reports/scan_target2_webjothish.json` |
 | 3 | `https://jothish-blip-birthday-for-kiranmai.vercel.app` | 200 OK (TLS 1.3 / Vercel) | 11 | 22 | 5.145s | ~4.3 req/s | 6 (2 Low, 4 Info) | None detected | 8/100 (LOW) | `reports/scan_target3_birthday.json` |
 | 3R | `https://jothish-blip-birthday-for-kiranmai.vercel.app` *(Repeatability)* | 200 OK (TLS 1.3 / Vercel) | 11 | 22 | 1.795s | ~12.3 req/s | 6 (2 Low, 4 Info) | None detected | 8/100 (LOW) | `reports/scan_target3_birthday_run2.json` |
 | 4 | `https://svstack-po-nextjs.vercel.app` | 200 OK (TLS 1.3 / Vercel) | 14 | 49 | 13.756s | ~3.6 req/s | 32 (2 Low, 30 Info) | Next.js PO Routes (Invoices, Payments, RFQ) | 8/100 (LOW) | `reports/scan_target4_svstack_po.json` |
-| 5 | `https://hithaone.svstack.com/hithaone` | 200 OK (TLS 1.3 / Vercel) | 3 | 81 | 8.885s | ~9.1 req/s | 35 (2 Low, 33 Info) | Supabase (`xyqqtsrcbusqbpduvutt.supabase.co`) | 9/100 (LOW) | `reports/scan_target5_hithaone.json` |
+| 5 | `https://hithaone.svstack.com/hithaone` | 200 OK (TLS 1.3 / Vercel) | 3 | 81 | 8.885s | ~9.1 req/s | 35 (2 Low, 33 Info) | Supabase (`xyqqtsrcbusqbpduvutt.supabase.co`, passive only) | 9/100 (LOW) | `reports/scan_target5_hithaone.json` |
 
 ---
 
@@ -173,23 +195,24 @@ Target 3 was re-scanned in identical configuration (`reports/scan_target3_birthd
 ### `FELIX-DEFECT-002`: Missing Request-Rate Limiter and Aspirational Rate Claims
 - **Component:** `pkg/crawler/rate_limiter.go`, `cmd/felix/scan_cmd.go`
 - **Severity:** High (Operational Safety & Compliance)
-- **Impact:** Live scans previously executed at 2.4–12.3 req/sec because outbound HTTP requests were constrained solely by concurrency workers (`-c 2`) without pacing. The report's claim of $\le 1$ req/sec was an aspirational policy not enforced in code.
-- **Root Cause:** FELIX had no rate-limiting round-tripper wrapping `SafeTransport`, and `rep.RequestCount` counted discovered assets and audited endpoints rather than raw socket transmissions.
+- **Impact:** Historical baseline live scans executed at 2.4–12.3 req/sec because outbound HTTP requests were constrained solely by concurrency workers (`-c 2`) without interval pacing. The report's claim of $\le 1$ req/sec was an aspirational policy not enforced in code.
+- **Root Cause:** FELIX previously lacked a rate-limiting round-tripper wrapping `SafeTransport`, and `rep.RequestCount` counted discovered assets and audited endpoints rather than measuring actual outbound HTTP transport round-trips.
 - **Remediation:**
-  1. Created `crawler.RateLimitedTransport` enforcing per-host token pacing (`minInterval = 1s / rate`) and concurrency limits.
+  1. Created `crawler.RateLimitedTransport` enforcing per-host token pacing (`minInterval = 1s / rate`) and global semaphore concurrency limits.
   2. Added `--rate-limit, -r <float>` CLI flag to `felix scan` and wired `RateLimitedTransport` into `SafeHTTPClient`.
-  3. Recorded raw socket request counts via `rateLimitedTransport.TotalRequests()` in `rep.RequestCount` and telemetry metadata.
-- **Verification:** Regression test `TestRateLimitedTransport_PerHostPacing` and CLI test `TestRunScan_RateLimitingAndSubpathEnforcement` verified strict rate compliance and accurate wire request telemetry.
+  3. Recorded accurate transport request counts via `rateLimitedTransport.TotalRequests()` in `rep.RequestCount`, `rep.Metadata["transport_requests_count"]`, and alias `rep.Metadata["wire_requests_count"]`.
+- **Verification:** Regression tests `TestRateLimitedTransport_PerHostPacing`, `TestRateLimitedTransport_ConcurrentRequestsPaced`, `TestRateLimitedTransport_RetriesPaced`, and CLI test `TestRunScan_RateLimitingAndSubpathEnforcement` verified strict rate compliance and accurate transport request telemetry.
 
-### `FELIX-DEFECT-003`: Scope Boundary Similar-Prefix Vulnerability & Asset Containment
+### `FELIX-DEFECT-003`: Scope Boundary Similar-Prefix Vulnerability, Traversal Escapes & Asset Containment
 - **Component:** `pkg/crawler/scope.go`, `cmd/felix/scan_cmd.go`
-- **Severity:** Medium (Boundary Integrity)
-- **Impact:** A simple string prefix check like `strings.HasPrefix(url, "/hithaone")` would incorrectly accept lookalike paths such as `/hithaone-admin` or `/hithaone_evil`. Furthermore, strictly blocking non-subpath URLs would prevent the crawler from fetching frontend static assets (e.g. `/_next/static/...` or `/assets/app.js`) hosted at the origin root.
-- **Root Cause:** Lack of formal boundary delimiter checks (`/` or end-of-string) and conflation of application page/probe routes with static asset loading.
+- **Severity:** High (Boundary Integrity)
+- **Impact:** A simple string prefix check like `strings.HasPrefix(url, "/hithaone")` would incorrectly accept lookalike paths such as `/hithaone-admin` or `/hithaone_evil`. Furthermore, path traversal sequences (`/hithaone/../admin`, `%2e%2e`) could escape the subpath boundary. Conversely, strictly blocking all non-subpath URLs would prevent the crawler from fetching frontend static assets (e.g. `/_next/static/...` or `/assets/app.js`) hosted at the origin root.
+- **Root Cause:** Lack of path normalization (`path.Clean`, `url.PathUnescape`), missing delimiter checks (`/` or end-of-string), overly permissive client asset filters, and passing `isTargetAuthorized` instead of `isPathAuthorized` to `cloudAuditor`.
 - **Remediation:**
-  1. Added `Scope.IsPathInScope(rawURL)` requiring exact match or `/` delimiter after prefix.
-  2. In `scan_cmd.go`, defined `isPathAuthorized` (strict path boundary for probes and redirects) and `isTargetAuthorized` (permits same-host static client assets for crawler ingestion).
-- **Verification:** Regression test `TestScope_IsPathInScope` verified strict rejection of `/hithaone-admin`, `/hithaone_evil`, and `/admin`.
+  1. Hardened `Scope.IsPathInScope(rawURL)` using `url.PathUnescape` and `path.Clean` to strictly defeat traversal escapes (`/hithaone/../admin`, `%2e%2e`) and require exact match or `/` delimiter after prefix.
+  2. Tightened `isClientAssetURL` in `scan_cmd.go` to strictly require recognized build asset directory prefixes (`/_next/`, `/assets/`, `/static/`, `/build/`, `/dist/`) or standard root icons (`/favicon.ico`), combined with recognized static asset file extensions.
+  3. Configured `cloudAuditor`, `apiAuditor`, and `safeHTTPClient.CheckRedirect` to strictly use `isPathAuthorized`.
+- **Verification:** Regression tests `TestScope_IsPathInScope`, `TestRunScan_RateLimitingAndSubpathEnforcement`, and `TestRunScan_RedirectBlockedOutsidePathScope` verified complete rejection of traversal escapes, lookalike prefixes, out-of-scope active probes, and uncontained redirects.
 
 ### `FELIX-DEFECT-004`: False-Positive Informational Route Flooding on SPAs
 - **Component:** `pkg/api/authstate.go`, `pkg/api/detector.go`
@@ -217,7 +240,12 @@ Target 3 was re-scanned in identical configuration (`reports/scan_target3_birthd
 
 ## 7. Local Implementation Coverage Matrix (All 16 Phase 2 Targets)
 
-Because live website assessment URLs cannot legitimately test third-party cloud backends without active authorization on those endpoints, all 16 supported Phase 2 service targets were verified using deterministic local mocks, network mocks, and protocol parsers:
+> [!IMPORTANT]
+> **Separation of Local Mock Verification and Live Database Operations:**
+> The 16 Phase 2 targets listed below represent engine-level protocol parsers, handshake negotiators, and access evaluators. All 16 were rigorously proven using deterministic local mock servers, packet simulators, and synthetic responses in automated test suites.
+> During live website validation, FELIX strictly respected scope boundaries: discovered third-party endpoints (e.g. Supabase hosts on Targets 1 & 5) were cataloged purely via passive client asset references. Backend database access controls, user privileges, and Row-Level Security policies on live production databases were **not actively probed or altered**.
+
+Because live website assessment URLs cannot legitimately test third-party cloud backends without explicit authorization on those specific backend endpoints, all 16 supported Phase 2 service targets were verified using deterministic local mocks, network mocks, and protocol parsers:
 
 | # | Target Technology | Family | Passive Indicator Detection | In-Scope Discovery Probe | Out-of-Scope Safety Gate | Active Access Verification Gate | Canary Safety Lifecycle | Local Verification Status |
 |---|---|---|---|---|---|---|---|---|

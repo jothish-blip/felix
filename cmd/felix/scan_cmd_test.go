@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -629,13 +630,20 @@ func TestRunScan_RateLimitingAndSubpathEnforcement(t *testing.T) {
 
 	jsonOut := filepath.Join(tempDir, "result.json")
 
+	var requestedPaths []string
+	var mu sync.Mutex
+
 	// Server with subpath app and outside paths
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requestedPaths = append(requestedPaths, r.URL.Path)
+		mu.Unlock()
+
 		switch r.URL.Path {
 		case "/subapp":
 			w.Header().Set("Content-Type", "text/html")
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`<!doctype html><html><head><script src="/assets/app.js"></script></head><body><h1>SubApp</h1></body></html>`))
+			w.Write([]byte(`<!doctype html><html><head><script src="/assets/app.js"></script><a href="/outside">Outside</a></head><body><h1>SubApp</h1></body></html>`))
 		case "/assets/app.js":
 			w.Header().Set("Content-Type", "application/javascript")
 			w.WriteHeader(http.StatusOK)
@@ -667,7 +675,16 @@ func TestRunScan_RateLimitingAndSubpathEnforcement(t *testing.T) {
 		t.Fatalf("expected exit code 0 or 1 for completed scan, got %d", code)
 	}
 
-	// Verify JSON output records wire_requests_count
+	// Verify path containment: /outside must NOT have been requested
+	mu.Lock()
+	for _, p := range requestedPaths {
+		if p == "/outside" {
+			t.Errorf("expected /outside to NOT be requested due to subpath containment, but it was requested")
+		}
+	}
+	mu.Unlock()
+
+	// Verify JSON output records transport_requests_count and wire_requests_count
 	data, err := os.ReadFile(jsonOut)
 	if err != nil {
 		t.Fatalf("failed reading result JSON: %v", err)
@@ -679,7 +696,54 @@ func TestRunScan_RateLimitingAndSubpathEnforcement(t *testing.T) {
 	if rep.RequestCount <= 0 {
 		t.Errorf("expected rep.RequestCount > 0, got %d", rep.RequestCount)
 	}
+	if transportCount, ok := rep.Metadata["transport_requests_count"].(float64); !ok || transportCount <= 0 {
+		t.Errorf("expected Metadata.transport_requests_count > 0, got %v", rep.Metadata["transport_requests_count"])
+	}
 	if wireCount, ok := rep.Metadata["wire_requests_count"].(float64); !ok || wireCount <= 0 {
 		t.Errorf("expected Metadata.wire_requests_count > 0, got %v", rep.Metadata["wire_requests_count"])
+	}
+}
+
+func TestRunScan_RedirectBlockedOutsidePathScope(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("FELIX_DIR", tempDir)
+
+	visitedAdmin := false
+	var mu sync.Mutex
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.URL.Path {
+		case "/subapp":
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`<!doctype html><html><head><a href="/subapp/redirect">Go</a></head></html>`))
+		case "/subapp/redirect":
+			// Redirects outside the /subapp path boundary
+			http.Redirect(w, r, "/admin-secret", http.StatusFound)
+		case "/admin-secret":
+			visitedAdmin = true
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`sensitive admin data`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	code := runScan([]string{
+		"--allow-loopback",
+		"--quiet",
+		ts.URL + "/subapp",
+	})
+	if code != 0 && code != 1 {
+		t.Fatalf("expected scan exit code 0 or 1, got %d", code)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if visitedAdmin {
+		t.Errorf("redirect out of subpath to /admin-secret was followed, but should have been blocked")
 	}
 }

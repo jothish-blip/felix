@@ -495,20 +495,29 @@ func runScan(args []string) int {
 		JSONMode: jsonBare,
 	})
 
-	// isClientAssetURL detects common static web assets required for frontend analysis.
+	// isClientAssetURL detects common static web assets required for frontend analysis
+	// when a target is scoped to a subpath. It strictly requires both an asset directory prefix
+	// (e.g. /_next/, /assets/, /static/) or standard root icon/manifest and a recognized static asset extension.
 	isClientAssetURL := func(rawURL string) bool {
 		parsed, err := url.Parse(rawURL)
 		if err != nil {
 			return false
 		}
 		p := strings.ToLower(parsed.Path)
-		if strings.HasPrefix(p, "/_next/") || strings.HasPrefix(p, "/assets/") ||
-			strings.HasPrefix(p, "/static/") || strings.HasPrefix(p, "/favicon.") {
+		if p == "/favicon.ico" || p == "/favicon.png" || p == "/manifest.json" {
 			return true
+		}
+		inAssetDir := strings.HasPrefix(p, "/_next/") ||
+			strings.HasPrefix(p, "/assets/") ||
+			strings.HasPrefix(p, "/static/") ||
+			strings.HasPrefix(p, "/build/") ||
+			strings.HasPrefix(p, "/dist/")
+		if !inAssetDir {
+			return false
 		}
 		ext := strings.ToLower(filepath.Ext(p))
 		switch ext {
-		case ".js", ".mjs", ".css", ".map", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff", ".woff2", ".ttf", ".eot":
+		case ".js", ".mjs", ".css", ".map", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff", ".woff2", ".ttf", ".eot", ".json", ".webmanifest":
 			return true
 		}
 		return false
@@ -620,8 +629,8 @@ func runScan(args []string) int {
 		HTTPClient:      safeHTTPClient,
 		AllowLoopback:   allowLoopback,
 		AllowPrivateIPs: allowPrivate,
-		IsAllowed:       isTargetAuthorized,
-	}), isTargetAuthorized)
+		IsAllowed:       isPathAuthorized,
+	}), isPathAuthorized)
 	cloudAuditor.SetAllowActiveVerification(activeVerif)
 	apiAuditor := api.NewDetector(api.NewClient(api.ClientOptions{
 		Timeout:         timeoutDuration,
@@ -894,6 +903,15 @@ func runScan(args []string) int {
 			rep.RiskLevel = "UNAVAILABLE"
 			rep.RiskScoreAvailable = false
 			rep.Summary.ScoreAvailable = false
+			reqCount := int(rateLimitedTransport.TotalRequests())
+			rep.RequestCount = reqCount
+			if rep.Metadata == nil {
+				rep.Metadata = make(map[string]any)
+			}
+			rep.Metadata["crawled_assets_count"] = 0
+			rep.Metadata["transport_requests_count"] = reqCount
+			rep.Metadata["wire_requests_count"] = reqCount
+			rep.Metadata["peak_concurrency"] = rateLimitedTransport.PeakConcurrency()
 			report.RecalculateReportRisk(&rep)
 
 			if outStr != "" {
@@ -921,9 +939,9 @@ func runScan(args []string) int {
 	rep.Duration = duration.Round(time.Millisecond).String()
 	rep.DurationMs = duration.Milliseconds()
 
-	wireRequests := int(rateLimitedTransport.TotalRequests())
-	if wireRequests > 0 {
-		rep.RequestCount = wireRequests
+	transportRequests := int(rateLimitedTransport.TotalRequests())
+	if transportRequests > 0 {
+		rep.RequestCount = transportRequests
 	} else {
 		rep.RequestCount = totalDiscovered + totalEndpointsAudited
 	}
@@ -932,10 +950,11 @@ func runScan(args []string) int {
 		rep.Metadata = make(map[string]any)
 	}
 	rep.Metadata["crawled_assets_count"] = totalDiscovered
-	rep.Metadata["wire_requests_count"] = wireRequests
+	rep.Metadata["transport_requests_count"] = transportRequests
+	rep.Metadata["wire_requests_count"] = transportRequests // preserved alias for backwards compatibility
 	rep.Metadata["peak_concurrency"] = rateLimitedTransport.PeakConcurrency()
-	if duration.Seconds() > 0 && wireRequests > 0 {
-		rep.Metadata["effective_req_per_sec"] = float64(wireRequests) / duration.Seconds()
+	if duration.Seconds() > 0 && transportRequests > 0 {
+		rep.Metadata["effective_req_per_sec"] = float64(transportRequests) / duration.Seconds()
 	}
 	report.RecalculateReportRisk(&rep)
 
