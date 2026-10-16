@@ -451,7 +451,7 @@ func TestLaravel_TelescopeSensitiveTelemetryDisclosure(t *testing.T) {
       "id": "2",
       "type": "query",
       "content": {
-        "sql": "SELECT * FROM users WHERE id = 1"
+        "sql": "SELECT id, name, email, password_hash, remember_token FROM users WHERE id = 1"
       }
     }
   ],
@@ -817,7 +817,7 @@ func TestLaravel_TelescopeOperationalEventEntries(t *testing.T) {
 	}
 }
 
-// Test 23: Telescope harmless SQL queries (SELECT 1, migrations) -> SeverityMedium (not High)
+// Test 23: Telescope harmless SQL queries (SELECT 1, migrations, users table queries) -> SeverityMedium (not High)
 func TestLaravel_TelescopeBenignQueries_SeverityMedium(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/telescope/telescope-api/requests" {
@@ -837,6 +837,20 @@ func TestLaravel_TelescopeBenignQueries_SeverityMedium(t *testing.T) {
       "type": "query",
       "content": {
         "sql": "SELECT * FROM migrations ORDER BY batch ASC"
+      }
+    },
+    {
+      "id": "3",
+      "type": "query",
+      "content": {
+        "sql": "SELECT * FROM users WHERE id = 1"
+      }
+    },
+    {
+      "id": "4",
+      "type": "query",
+      "content": {
+        "sql": "SELECT count(*) FROM users"
       }
     }
   ],
@@ -934,8 +948,8 @@ func TestLaravel_TelescopeRoutineExceptions_SeverityMedium(t *testing.T) {
 	}
 }
 
-// Test 25: Telescope sensitive internal exception (QueryException disclosing database error) -> SeverityHigh
-func TestLaravel_TelescopeSensitiveExceptions_SeverityHigh(t *testing.T) {
+// Test 25: Telescope routine database exceptions (QueryException for missing table) -> SeverityMedium (not High)
+func TestLaravel_TelescopeRoutineDatabaseException_SeverityMedium(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/telescope/telescope-api/requests" {
 			w.Header().Set("Content-Type", "application/json")
@@ -970,11 +984,11 @@ func TestLaravel_TelescopeSensitiveExceptions_SeverityHigh(t *testing.T) {
 	for _, f := range findings {
 		if f.Category == CategoryLaravelTelescopeData {
 			found = true
-			if f.Severity != SeverityHigh {
-				t.Errorf("expected SeverityHigh for QueryException disclosing database schema, got %s", f.Severity)
+			if f.Severity != SeverityMedium {
+				t.Errorf("expected SeverityMedium for routine QueryException without credentials, got %s", f.Severity)
 			}
-			if !strings.Contains(f.Details["sensitive_data_types"], "application_exceptions") {
-				t.Errorf("expected application_exceptions in sensitive_data_types, got %s", f.Details["sensitive_data_types"])
+			if !strings.Contains(f.Details["sensitive_data_types"], "routine_exceptions") {
+				t.Errorf("expected routine_exceptions in sensitive_data_types, got %s", f.Details["sensitive_data_types"])
 			}
 			break
 		}
@@ -1389,5 +1403,110 @@ func TestLaravel_RecursiveSecretRedaction_DeepNestedCanary(t *testing.T) {
 				t.Fatalf("SECURITY LEAK: synthetic canary appeared in Details")
 			}
 		}
+	}
+}
+
+// Test 33: Telescope sensitive QueryException disclosing credentials or sensitive SQL -> SeverityHigh
+func TestLaravel_TelescopeSensitiveQueryException_SeverityHigh(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/telescope/telescope-api/requests" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{
+  "entries": [
+    {
+      "id": "1",
+      "type": "exception",
+      "content": {
+        "class": "Illuminate\\Database\\QueryException",
+        "message": "Column 'password' cannot be null (SQL: insert into users (name, password) values ('admin', null))"
+      }
+    }
+  ],
+  "status": "enabled"
+}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOptions{HTTPClient: server.Client(), AllowLoopback: true})
+	findings := AuditLaravelDiagnostics(context.Background(), client, server.URL, nil)
+
+	if len(findings) == 0 {
+		t.Fatalf("expected Telescope telemetry finding, got 0")
+	}
+
+	found := false
+	for _, f := range findings {
+		if f.Category == CategoryLaravelTelescopeData {
+			found = true
+			if f.Severity != SeverityHigh {
+				t.Errorf("expected SeverityHigh for QueryException disclosing sensitive column, got %s", f.Severity)
+			}
+			if !strings.Contains(f.Details["sensitive_data_types"], "application_exceptions") {
+				t.Errorf("expected application_exceptions in sensitive_data_types, got %s", f.Details["sensitive_data_types"])
+			}
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected CategoryLaravelTelescopeData finding")
+	}
+}
+
+// Test 34: Telescope candidate credential validity unverified distinction and redaction
+func TestLaravel_TelescopeCredentialValidityUnverifiedAndRedaction(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/telescope/telescope-api/requests" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{
+  "entries": [
+    {
+      "id": "1",
+      "type": "request",
+      "content": {
+        "uri": "/api/v1/auth",
+        "payload": {
+          "password": "%s"
+        }
+      }
+    }
+  ],
+  "status": "enabled"
+}`, syntheticCanarySecret)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOptions{HTTPClient: server.Client(), AllowLoopback: true})
+	findings := AuditLaravelDiagnostics(context.Background(), client, server.URL, nil)
+
+	if len(findings) == 0 {
+		t.Fatalf("expected finding for candidate secret in Telescope")
+	}
+
+	f := findings[0]
+	if f.Severity != SeverityCritical {
+		t.Errorf("expected SeverityCritical for candidate secret material, got %s", f.Severity)
+	}
+	if f.Details["validity_status"] != "unverified_active_probe_omitted" {
+		t.Errorf("expected validity_status unverified_active_probe_omitted, got %s", f.Details["validity_status"])
+	}
+	if f.Details["candidate_material_status"] != "unverified_candidate_material" {
+		t.Errorf("expected candidate_material_status unverified_candidate_material, got %s", f.Details["candidate_material_status"])
+	}
+	if !strings.Contains(f.NegativeEvidence, "credential validity was not tested or confirmed") {
+		t.Errorf("expected negative evidence to state credential validity unverified, got %s", f.NegativeEvidence)
+	}
+	if !strings.Contains(f.Description, "candidate secret material (validity unverified)") {
+		t.Errorf("expected description to state candidate secret material (validity unverified), got %s", f.Description)
+	}
+	if strings.Contains(f.Evidence, syntheticCanarySecret) || strings.Contains(f.Description, syntheticCanarySecret) {
+		t.Fatalf("SECURITY LEAK: synthetic canary leaked into finding fields")
 	}
 }

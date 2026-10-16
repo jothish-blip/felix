@@ -311,7 +311,7 @@ func InspectLaravelIgnition(resp *ProbeResponse, endpointURL string) *APIFinding
 		evidence += fmt.Sprintf(" Runtime: PHP %s.", phpVer)
 	}
 	if hasUnmaskedSecret {
-		evidence += fmt.Sprintf(" Unmasked credential(s) observed: [%s] (secret values redacted).",
+		evidence += fmt.Sprintf(" Candidate secret material observed: [%s] (active validity was not verified against live authentication endpoints; values redacted).",
 			strings.Join(unmaskedSecretKeys, ", "))
 	}
 
@@ -321,7 +321,7 @@ func InspectLaravelIgnition(resp *ProbeResponse, endpointURL string) *APIFinding
 	} else if !hasUnmaskedSecret {
 		negEv = "Official Laravel Ignition developer diagnostic page confirmed; no unmasked database passwords or application secrets were detected. Underlying APP_DEBUG configuration setting was not directly evaluated."
 	} else {
-		negEv = "All detected credentials and secret values were bounded and redacted."
+		negEv = "Detected candidate secret material was observed in debug output; active credential validity was not tested or confirmed. All detected secret values were bounded and redacted."
 	}
 
 	details := map[string]string{
@@ -342,6 +342,7 @@ func InspectLaravelIgnition(resp *ProbeResponse, endpointURL string) *APIFinding
 	}
 	if hasUnmaskedSecret {
 		details["unmasked_secrets_count"] = fmt.Sprintf("%d", len(unmaskedSecretKeys))
+		details["candidate_material_status"] = "unverified_candidate_material"
 	}
 	if resp.Truncated {
 		details["limitations"] = "Response exceeded 512 KiB and was bounded to preserve system resources"
@@ -761,15 +762,19 @@ func InspectTelescopeAPI(resp *ProbeResponse, endpointURL string) *APIFinding {
 
 			case "exception":
 				excClass := ""
+				excMsg := ""
 				if content != nil {
 					if c, ok := content["class"].(string); ok {
 						excClass = c
 					}
+					if m, ok := content["message"].(string); ok {
+						excMsg = m
+					}
 				}
-				if isRoutineException(excClass) {
-					hasRoutineExceptions = true
-				} else {
+				if isSensitiveException(excClass, excMsg) {
 					hasSensitiveExceptions = true
+				} else {
+					hasRoutineExceptions = true
 				}
 
 			case "request":
@@ -854,7 +859,7 @@ func InspectTelescopeAPI(resp *ProbeResponse, endpointURL string) *APIFinding {
 		desc := "Laravel Telescope unauthenticated monitoring telemetry disclosure (operational event entries)"
 		if hasUnmaskedSecret {
 			severity = SeverityCritical
-			desc = "Laravel Telescope unauthenticated monitoring telemetry exposes unmasked credentials"
+			desc = "Laravel Telescope unauthenticated monitoring telemetry exposes candidate secret material (validity unverified)"
 		} else if hasSensitiveQueries || hasSensitiveExceptions || hasSensitiveRequests {
 			severity = SeverityHigh
 			desc = "Laravel Telescope unauthenticated monitoring telemetry disclosure (sensitive application data)"
@@ -867,7 +872,7 @@ func InspectTelescopeAPI(resp *ProbeResponse, endpointURL string) *APIFinding {
 				endpointURL, len(apiData.Entries))
 		}
 		if hasUnmaskedSecret {
-			ev += fmt.Sprintf(" Unmasked credential(s) observed in captured telemetry: [%s] (secret values redacted).",
+			ev += fmt.Sprintf(" Candidate secret material observed in captured telemetry: [%s] (active validity was not verified against live authentication endpoints; values redacted).",
 				strings.Join(uniqueSecretKeys, ", "))
 		}
 
@@ -908,11 +913,13 @@ func InspectTelescopeAPI(resp *ProbeResponse, endpointURL string) *APIFinding {
 			"http_status":              "200",
 			"auth_context":             "unauthenticated",
 			"sensitive_data_types":     strings.Join(sensitiveTypes, ", "),
+			"validity_status":          "unverified_active_probe_omitted",
+			"active_auth_tested":       "false",
 			"verification_limitations": "Passive read-only query; backend state was not altered and active credential authorization was not verified",
 		}
 		if hasUnmaskedSecret {
 			details["unmasked_secrets_count"] = fmt.Sprintf("%d", len(uniqueSecretKeys))
-			details["credential_active_status"] = "unverified"
+			details["candidate_material_status"] = "unverified_candidate_material"
 		}
 		if resp.Truncated {
 			details["limitations"] = "Response exceeded 512 KiB and was bounded to preserve system resources"
@@ -933,7 +940,7 @@ func InspectTelescopeAPI(resp *ProbeResponse, endpointURL string) *APIFinding {
 			Method:           http.MethodGet,
 			Description:      secrets.RedactText(desc),
 			Evidence:         secrets.RedactText(ev),
-			NegativeEvidence: secrets.RedactText("All captured request headers, payloads, query parameters, and telemetry entries were bounded and redacted; credential validity was not tested."),
+			NegativeEvidence: secrets.RedactText("All captured request headers, payloads, query parameters, and telemetry entries were bounded and redacted. Detected candidate secret material was observed in telemetry; active credential validity was not tested or confirmed."),
 			Severity:         severity,
 			Confidence:       ConfidenceHigh,
 			Fingerprint:      GenerateFingerprint(CategoryLaravelTelescopeData, endpointURL, http.MethodGet),
@@ -1052,7 +1059,8 @@ func isGenuineUnmaskedSecret(key, val string) bool {
 	return false
 }
 
-// isSensitiveSQLQuery evaluates whether a captured SQL query targets sensitive tables, columns, or credentials.
+// isSensitiveSQLQuery evaluates whether a captured SQL query targets sensitive credential or PII columns.
+// Table names alone (such as users, accounts, customers) do not indicate sensitive disclosure.
 func isSensitiveSQLQuery(sql string) bool {
 	lower := strings.ToLower(strings.TrimSpace(sql))
 	if lower == "" {
@@ -1071,34 +1079,17 @@ func isSensitiveSQLQuery(sql string) bool {
 	if strings.Contains(lower, "from telescope_entries") || strings.Contains(lower, "from `telescope_entries`") ||
 		strings.Contains(lower, "from telescope_monitoring") || strings.Contains(lower, "from cache") ||
 		strings.Contains(lower, "from `cache`") || strings.Contains(lower, "from failed_jobs") ||
-		strings.Contains(lower, "from job_batches") {
+		strings.Contains(lower, "from job_batches") || strings.Contains(lower, "from sessions") {
 		return false
 	}
 
-	// Sensitive table targets
-	sensitiveTables := []string{
-		"users", "`users`", "\"users\"",
-		"accounts", "`accounts`", "\"accounts\"",
-		"oauth_", "personal_access_tokens", "password_resets",
-		"customers", "`customers`",
-		"payments", "`payments`",
-		"cards", "`cards`", "credit_cards",
-		"admins", "`admins`",
-		"credentials", "`credentials`",
-		"tokens", "`tokens`",
-		"billing", "`billing`",
-		"employees", "`employees`",
-	}
-	for _, tbl := range sensitiveTables {
-		if strings.Contains(lower, tbl) {
-			return true
-		}
-	}
-
-	// Sensitive column targets
+	// Sensitive column targets - only queries explicitly targeting credentials, auth tokens, or PII are sensitive
 	sensitiveColumns := []string{
-		"password", "secret", "remember_token", "api_key", "apikey",
-		"credit_card", "card_number", "ssn", "cvv", "cvc", "salt", "hash",
+		"password", "passwd", "remember_token", "api_key", "apikey",
+		"private_key", "privkey", "app_key", "app-key",
+		"credit_card", "card_number", "ssn", "social_security", "cvv", "cvc",
+		"access_token", "refresh_token", "personal_access_token",
+		"password_hash", "salt", "auth_token", "secret_key",
 	}
 	for _, col := range sensitiveColumns {
 		if strings.Contains(lower, col) {
@@ -1106,6 +1097,37 @@ func isSensitiveSQLQuery(sql string) bool {
 		}
 	}
 
+	return false
+}
+
+// isSensitiveException evaluates if an exception disclosed in Telescope telemetry contains demonstrated sensitive details
+// (such as credentials, auth tokens, sensitive SQL queries, or PII) rather than routine error flows or generic database errors.
+func isSensitiveException(excClass, excMessage string) bool {
+	lowerMsg := strings.ToLower(strings.TrimSpace(excMessage))
+	lowerClass := strings.ToLower(strings.TrimSpace(excClass))
+
+	// Check if message or class discloses credential material, tokens, or PII
+	sensitiveKeywords := []string{
+		"password", "passwd", "remember_token", "api_key", "apikey",
+		"private_key", "bearer ", "credit_card", "card_number",
+		"ssn", "social_security", "cvv", "cvc", "access_token", "refresh_token",
+	}
+	for _, kw := range sensitiveKeywords {
+		if strings.Contains(lowerMsg, kw) || strings.Contains(lowerClass, kw) {
+			return true
+		}
+	}
+
+	// Check if an embedded SQL query discloses sensitive columns or credentials
+	if strings.Contains(lowerMsg, "sql:") || strings.Contains(lowerMsg, "select ") ||
+		strings.Contains(lowerMsg, "insert into ") || strings.Contains(lowerMsg, "update ") {
+		if isSensitiveSQLQuery(lowerMsg) {
+			return true
+		}
+	}
+
+	// Routine database errors (e.g. QueryException / PDOException for missing table, column not found, syntax error,
+	// deadlock, connection refused without credentials) and routine HTTP/framework exceptions do NOT disclose sensitive data.
 	return false
 }
 
@@ -1123,6 +1145,8 @@ func isRoutineException(excClass string) bool {
 		"throttlerequestsexception",
 		"accessdeniedhttpexception",
 		"httpexception",
+		"queryexception",
+		"pdoexception",
 	}
 	for _, r := range routineExceptions {
 		if strings.Contains(lower, r) {
