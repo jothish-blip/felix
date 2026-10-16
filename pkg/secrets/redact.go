@@ -51,8 +51,11 @@ var (
 	// querySensitiveFallbackPattern matches credential query parameters in raw text or malformed URLs.
 	querySensitiveFallbackPattern = regexp.MustCompile(`(?i)([?&](?:[a-zA-Z0-9_\-\.]*(?:token|access_token|refresh_token|auth_token|id_token|key|api_key|apikey|secret|secret_key|client_secret|password|passwd|pwd|pass|auth|credential|credentials|session|session_id|sessionid|sid|sig|signature)|ssn|social_security|socialsecurity|pin|cvv|cvc)=)(?:\[REDACTED\]|[^&\s"'<>` + "`" + `]+)`)
 
-	// userPassURLPattern matches user:password or :password credentials in raw URL strings.
-	userPassURLPattern = regexp.MustCompile(`(?i)([a-zA-Z0-9+.-]+://)([^:@]*):([^@]+)@`)
+	// userPassURLPattern matches user:password or :password credentials in raw URL strings, including percent-encoded credentials.
+	userPassURLPattern = regexp.MustCompile(`(?i)([a-zA-Z0-9+.-]+://)([^:/\s?#]*):([^/\s?#]*)@`)
+
+	// redisTokenURLPattern matches standalone tokens in Redis URIs: redis://token@host:port
+	redisTokenURLPattern = regexp.MustCompile(`(?i)(rediss?://)([^:/\s?#@]+)@`)
 )
 
 // RedactText sanitizes arbitrary text by redacting all recognized credentials, tokens,
@@ -143,6 +146,7 @@ func RedactText(input string) string {
 
 	// 8. Redact URL embedded user:password credentials in text
 	s = userPassURLPattern.ReplaceAllString(s, "${1}${2}:[REDACTED]@")
+	s = redisTokenURLPattern.ReplaceAllString(s, "${1}[REDACTED]@")
 
 	// 9. Redact query parameter secrets in embedded URLs
 	s = querySensitiveFallbackPattern.ReplaceAllString(s, "${1}[REDACTED]")
@@ -240,8 +244,8 @@ func SanitizeURL(rawURL string) string {
 		_, hasPassword := u.User.Password()
 		if hasPassword {
 			u.User = url.UserPassword(username, "[REDACTED]")
-		} else if IsSensitiveKey(username) {
-			// Token passed in username position (e.g. redis://:secret@host or http://token@host)
+		} else if IsSensitiveKey(username) || strings.EqualFold(u.Scheme, "redis") || strings.EqualFold(u.Scheme, "rediss") {
+			// Token passed in username position (e.g. redis://:secret@host or redis://secret@host or http://token@host)
 			u.User = url.User("[REDACTED]")
 		}
 	}

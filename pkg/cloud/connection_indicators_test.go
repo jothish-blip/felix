@@ -98,6 +98,38 @@ func TestCanarySecretRedaction(t *testing.T) {
 			canary:   canaryPass,
 			hasCreds: true,
 		},
+		{
+			name:     "PostgreSQL URL with Percent-Encoded Password",
+			sourceID: "config/database.yml",
+			input:    "url: postgres://app%20user:" + canaryPass + "%40key@postgres.internal:5432/appdb",
+			tech:     TechPostgreSQL,
+			canary:   canaryPass,
+			hasCreds: true,
+		},
+		{
+			name:     "Azure Blob Storage SAS URL with Sig Parameter",
+			sourceID: "src/storage.js",
+			input:    "const blobUrl = 'https://mystorage.blob.core.windows.net/data/report.pdf?sp=r&sv=2020-08-04&sig=" + canaryToken + "';",
+			tech:     TechAzureBlob,
+			canary:   canaryToken,
+			hasCreds: true,
+		},
+		{
+			name:     "Redis URI with Standalone Token",
+			sourceID: ".env",
+			input:    "REDIS_URL=redis://" + canaryPass + "@redis.internal:6379/0",
+			tech:     TechRedis,
+			canary:   canaryPass,
+			hasCreds: true,
+		},
+		{
+			name:     "Malformed Truncated Connection URI",
+			sourceID: "settings.json",
+			input:    `{"db": "postgres://dbuser:` + canaryPass + `@bad[host:5432/appdb"}`,
+			tech:     TechPostgreSQL,
+			canary:   canaryPass,
+			hasCreds: true,
+		},
 	}
 
 	detector := NewIndicatorDetector()
@@ -122,21 +154,21 @@ func TestCanarySecretRedaction(t *testing.T) {
 
 			// 1. Assert SanitizedValue does NOT contain the canary secret
 			if strings.Contains(ind.SanitizedValue, tc.canary) {
-				t.Fatalf("LEAK: SanitizedValue contains canary secret %q: %s", tc.canary, ind.SanitizedValue)
+				t.Fatalf("LEAK: SanitizedValue contains canary secret")
 			}
 
 			// 2. Assert Source.ContextLine does NOT contain the canary secret
 			if strings.Contains(ind.Source.ContextLine, tc.canary) {
-				t.Fatalf("LEAK: Source.ContextLine contains canary secret %q: %s", tc.canary, ind.Source.ContextLine)
+				t.Fatalf("LEAK: Source.ContextLine contains canary secret")
 			}
 
 			// 3. Assert ToCloudFinding Evidence and Description do NOT contain the canary secret
 			finding := ind.ToCloudFinding(true)
 			if strings.Contains(finding.Evidence, tc.canary) {
-				t.Fatalf("LEAK: Finding.Evidence contains canary secret %q: %s", tc.canary, finding.Evidence)
+				t.Fatalf("LEAK: Finding.Evidence contains canary secret")
 			}
 			if strings.Contains(finding.Description, tc.canary) {
-				t.Fatalf("LEAK: Finding.Description contains canary secret %q: %s", tc.canary, finding.Description)
+				t.Fatalf("LEAK: Finding.Description contains canary secret")
 			}
 
 			// 4. Assert Marshaled JSON of ConnectionIndicator does NOT contain the canary secret
@@ -145,7 +177,7 @@ func TestCanarySecretRedaction(t *testing.T) {
 				t.Fatalf("failed to marshal ConnectionIndicator to JSON: %v", err)
 			}
 			if strings.Contains(string(indJSON), tc.canary) {
-				t.Fatalf("LEAK: ConnectionIndicator JSON contains canary secret %q: %s", tc.canary, string(indJSON))
+				t.Fatalf("LEAK: ConnectionIndicator JSON contains canary secret")
 			}
 
 			// 5. Assert Marshaled JSON of CloudFinding does NOT contain the canary secret
@@ -154,7 +186,16 @@ func TestCanarySecretRedaction(t *testing.T) {
 				t.Fatalf("failed to marshal CloudFinding to JSON: %v", err)
 			}
 			if strings.Contains(string(findingJSON), tc.canary) {
-				t.Fatalf("LEAK: CloudFinding JSON contains canary secret %q: %s", tc.canary, string(findingJSON))
+				t.Fatalf("LEAK: CloudFinding JSON contains canary secret")
+			}
+
+			// 6. Assert intermediate struct fields do NOT contain the canary secret
+			if strings.Contains(ind.Endpoint, tc.canary) ||
+				strings.Contains(ind.Host, tc.canary) ||
+				strings.Contains(ind.Database, tc.canary) ||
+				strings.Contains(ind.CredentialUsername, tc.canary) ||
+				strings.Contains(ind.Fingerprint, tc.canary) {
+				t.Fatalf("LEAK: Intermediate struct field contains canary secret")
 			}
 		})
 	}
@@ -378,7 +419,7 @@ func TestStructuralDSNParsing(t *testing.T) {
 			t.Errorf("expected has_credentials=true")
 		}
 		if strings.Contains(ind.SanitizedValue, "SUPER_SECRET_FINANCE_KEY") {
-			t.Errorf("LEAK: SanitizedValue contains raw password: %s", ind.SanitizedValue)
+			t.Errorf("LEAK: SanitizedValue contains raw password")
 		}
 		if !strings.HasPrefix(ind.SanitizedValue, "jdbc:postgresql://") {
 			t.Errorf("expected jdbc:postgresql prefix preserved, got: %s", ind.SanitizedValue)
@@ -403,7 +444,7 @@ func TestStructuralDSNParsing(t *testing.T) {
 			t.Errorf("expected database 'store_db', got %s", ind.Database)
 		}
 		if strings.Contains(ind.SanitizedValue, "DB_PASS_SECRET") {
-			t.Errorf("LEAK: SanitizedValue contains raw password: %s", ind.SanitizedValue)
+			t.Errorf("LEAK: SanitizedValue contains raw password")
 		}
 		if !strings.Contains(ind.SanitizedValue, "root:[REDACTED]@tcp(192.168.1.100:3307)/store_db") {
 			t.Errorf("unexpected sanitized value: %s", ind.SanitizedValue)
@@ -440,7 +481,7 @@ REDIS_URL=redis://:SecretPass2@redis:6379/0
 		t.Errorf("expected SourceTypeConfigFile for .env.production, got %s", pgInd.Source.Type)
 	}
 	if strings.Contains(pgInd.Source.ContextLine, "SecretPass1") {
-		t.Errorf("LEAK: ContextLine contains raw password: %s", pgInd.Source.ContextLine)
+		t.Errorf("LEAK: ContextLine contains raw password")
 	}
 
 	// Verify Redis line attribution
@@ -452,7 +493,7 @@ REDIS_URL=redis://:SecretPass2@redis:6379/0
 		t.Errorf("expected line number 5 for redis, got %d", redisInd.Source.LineNumber)
 	}
 	if strings.Contains(redisInd.Source.ContextLine, "SecretPass2") {
-		t.Errorf("LEAK: ContextLine contains raw password: %s", redisInd.Source.ContextLine)
+		t.Errorf("LEAK: ContextLine contains raw password")
 	}
 }
 
@@ -577,7 +618,7 @@ func TestDetectorAuditIntegration(t *testing.T) {
 
 	for _, ci := range res.ConnectionIndicators {
 		if strings.Contains(ci.SanitizedValue, "SUPER_SECRET_CANARY") {
-			t.Fatalf("LEAK: ConnectionIndicator.SanitizedValue contains canary secret: %s", ci.SanitizedValue)
+			t.Fatalf("LEAK: ConnectionIndicator.SanitizedValue contains canary secret")
 		}
 	}
 

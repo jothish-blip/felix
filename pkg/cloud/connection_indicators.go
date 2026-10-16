@@ -85,8 +85,8 @@ var (
 	// Azure Blob Storage connection strings
 	azureConnStringRegex = regexp.MustCompile(`(?i)\b(DefaultEndpointsProtocol=(?:https|http);(?:[^\s;"'` + "`" + `]+;)*AccountName=([a-zA-Z0-9]+);(?:[^\s;"'` + "`" + `]+;)*AccountKey=([^;\s"'` + "`" + `]+)(?:;[^\s"'` + "`" + `]+)*)`)
 
-	// Azure Blob Storage endpoints
-	azureBlobEndpointRegex = regexp.MustCompile(`(?i)https://([a-zA-Z0-9_\-]+)\.blob\.core\.windows\.net(?:/([a-zA-Z0-9_\-]+))?`)
+	// Azure Blob Storage endpoints (including container path and optional SAS query parameters)
+	azureBlobEndpointRegex = regexp.MustCompile(`(?i)https://([a-zA-Z0-9_\-]+)\.blob\.core\.windows\.net(/[^\s"'` + "`" + `<>]*)?`)
 
 	// AWS S3 URI and endpoint references
 	s3URIRegex  = regexp.MustCompile(`(?i)\bs3://([a-zA-Z0-9_\.\-]+)(?:/([^\s"'` + "`" + `]*))?`)
@@ -101,9 +101,9 @@ var (
 	// MinIO endpoint references (default port 9000 API, 9001 console, or minio hostname)
 	minioEndpointRegex = regexp.MustCompile(`(?i)https?://([a-zA-Z0-9_\.\-]+):(9000|9001)\b`)
 
-	// Firebase RTDB endpoints
-	firebaseRTDBRegex = regexp.MustCompile(`(?i)https://([a-zA-Z0-9_\-]+)\.firebaseio\.com`)
-	firebaseAppRTDBRegex = regexp.MustCompile(`(?i)https://([a-zA-Z0-9_\-]+(?:-default-rtdb)?(?:\.[a-zA-Z0-9_\-]+)?\.firebasedatabase\.app)`)
+	// Firebase RTDB endpoints (including path and optional auth token query parameter)
+	firebaseRTDBRegex = regexp.MustCompile(`(?i)https://([a-zA-Z0-9_\-]+)\.firebaseio\.com(/[^\s"'` + "`" + `<>]*)?`)
+	firebaseAppRTDBRegex = regexp.MustCompile(`(?i)https://([a-zA-Z0-9_\-]+(?:-default-rtdb)?(?:\.[a-zA-Z0-9_\-]+)?\.firebasedatabase\.app)(/[^\s"'` + "`" + `<>]*)?`)
 
 	// Firestore endpoint references
 	firestoreEndpointRegex = regexp.MustCompile(`(?i)https://firestore\.googleapis\.com/v1/projects/([a-zA-Z0-9_\-]+)/databases/\(default\)/documents`)
@@ -381,6 +381,9 @@ func (d *IndicatorDetector) scanURIs(source IndicatorSource, line string) []Conn
 		clean := strings.Trim(raw, "\"'`(),; \t\r\n")
 		ci, ok := d.parseStandardURI(source, clean)
 		if ok {
+			if ci.HasCredentials && ci.Source.ContextLine == "" {
+				ci.Source.ContextLine = secrets.RedactText(strings.Replace(line, clean, ci.SanitizedValue, 1))
+			}
 			indicators = append(indicators, ci)
 		}
 	}
@@ -399,7 +402,66 @@ func (d *IndicatorDetector) parseStandardURI(source IndicatorSource, raw string)
 
 	u, err := url.Parse(workURL)
 	if err != nil || u.Host == "" {
-		return ConnectionIndicator{}, false
+		// Fallback for malformed or truncated URIs (e.g. invalid host characters or bracket syntax)
+		schemeIdx := strings.Index(workURL, "://")
+		if schemeIdx == -1 {
+			return ConnectionIndicator{}, false
+		}
+		var (
+			tech        ServiceTechnology
+			family      ServiceFamily
+			defaultPort int
+		)
+		schemeStr := strings.ToLower(workURL[:schemeIdx])
+		switch schemeStr {
+		case "postgres", "postgresql":
+			tech = TechPostgreSQL
+			family = FamilyDirectDatabase
+			defaultPort = 5432
+			if strings.Contains(strings.ToLower(workURL), "supabase.co") || strings.Contains(strings.ToLower(workURL), "supabase.in") {
+				tech = TechSupabase
+				family = FamilyBackendInterface
+			}
+		case "mongodb", "mongodb+srv":
+			tech = TechMongoDB
+			family = FamilyDirectDatabase
+			defaultPort = 27017
+		case "redis", "rediss":
+			tech = TechRedis
+			family = FamilyDirectDatabase
+			defaultPort = 6379
+		case "mysql":
+			tech = TechMySQL
+			family = FamilyDirectDatabase
+			defaultPort = 3306
+		default:
+			return ConnectionIndicator{}, false
+		}
+
+		sanitized := secrets.SanitizeURL(workURL)
+		if isJDBC {
+			sanitized = "jdbc:" + sanitized
+		}
+		hasCreds := strings.Contains(sanitized, "[REDACTED]")
+
+		src := source
+		if hasCreds {
+			src.ContextLine = secrets.RedactText(strings.Replace(source.ContextLine, raw, sanitized, 1))
+		}
+
+		return ConnectionIndicator{
+			Technology:     tech,
+			Family:         family,
+			Type:           IndicatorTypeConnectionString,
+			SanitizedValue: sanitized,
+			Endpoint:       sanitized,
+			Port:           defaultPort,
+			Protocol:       "tcp",
+			HasCredentials: hasCreds,
+			Source:         src,
+			Fingerprint:    GenerateIndicatorFingerprint(tech, IndicatorTypeConnectionString, sanitized, source.Identifier, source.LineNumber),
+			DetectedAt:     time.Now().UTC(),
+		}, true
 	}
 
 	var (
@@ -453,7 +515,7 @@ func (d *IndicatorDetector) parseStandardURI(source IndicatorSource, raw string)
 			}
 			u.User = url.UserPassword(userStr, "[REDACTED]")
 		} else if uName != "" {
-			if secrets.IsSensitiveKey(uName) {
+			if tech == TechRedis || secrets.IsSensitiveKey(uName) {
 				hasCreds = true
 				redFields = append(redFields, "token")
 				userStr = "[REDACTED]"
@@ -707,14 +769,31 @@ func (d *IndicatorDetector) scanAzureIndicators(source IndicatorSource, line str
 			continue
 		}
 		account := m[1]
-		container := ""
-		if len(m) > 2 {
-			container = m[2]
-		}
+		fullURL := m[0]
 		endpoint := fmt.Sprintf("https://%s.blob.core.windows.net", account)
-		cleanVal := endpoint
-		if container != "" {
-			cleanVal = fmt.Sprintf("%s/%s", endpoint, container)
+		cleanVal := secrets.SanitizeURL(fullURL)
+		hasCreds := strings.Contains(cleanVal, "[REDACTED]")
+
+		container := ""
+		if len(m) > 2 && m[2] != "" {
+			trimmedPath := strings.TrimPrefix(m[2], "/")
+			if qIdx := strings.Index(trimmedPath, "?"); qIdx != -1 {
+				trimmedPath = trimmedPath[:qIdx]
+			}
+			parts := strings.Split(trimmedPath, "/")
+			if len(parts) > 0 {
+				container = parts[0]
+			}
+		}
+
+		src := source
+		if hasCreds {
+			src.ContextLine = secrets.RedactText(strings.Replace(line, fullURL, cleanVal, 1))
+		}
+
+		var redFields []string
+		if hasCreds {
+			redFields = []string{"sig"}
 		}
 
 		ci := ConnectionIndicator{
@@ -727,8 +806,9 @@ func (d *IndicatorDetector) scanAzureIndicators(source IndicatorSource, line str
 			Port:           443,
 			Protocol:       "https",
 			Database:       container,
-			HasCredentials: false,
-			Source:         source,
+			HasCredentials: hasCreds,
+			RedactedFields: redFields,
+			Source:         src,
 			Fingerprint:    GenerateIndicatorFingerprint(TechAzureBlob, IndicatorTypeEndpointReference, cleanVal, source.Identifier, source.LineNumber),
 			DetectedAt:     time.Now().UTC(),
 		}
@@ -941,12 +1021,14 @@ func (d *IndicatorDetector) scanFirebaseIndicators(source IndicatorSource, line 
 			continue
 		}
 		project := m[1]
+		fullURL := m[0]
 		endpoint := fmt.Sprintf("https://%s.firebaseio.com", project)
-		cleanVal := endpoint
-		hasCreds := false
-		if strings.Contains(line, "?auth=") || strings.Contains(line, "&auth=") {
-			hasCreds = true
-			cleanVal = secrets.SanitizeURL(line)
+		cleanVal := secrets.SanitizeURL(fullURL)
+		hasCreds := strings.Contains(cleanVal, "[REDACTED]")
+
+		src := source
+		if hasCreds {
+			src.ContextLine = secrets.RedactText(strings.Replace(line, fullURL, cleanVal, 1))
 		}
 
 		indicators = append(indicators, ConnectionIndicator{
@@ -961,7 +1043,7 @@ func (d *IndicatorDetector) scanFirebaseIndicators(source IndicatorSource, line 
 			Database:           project,
 			HasCredentials:     hasCreds,
 			RedactedFields:     ifSlice(hasCreds, []string{"auth"}),
-			Source:             source,
+			Source:             src,
 			Fingerprint:        GenerateIndicatorFingerprint(TechFirebaseRTDB, IndicatorTypeEndpointReference, endpoint, source.Identifier, source.LineNumber),
 			DetectedAt:         time.Now().UTC(),
 		})
@@ -973,8 +1055,15 @@ func (d *IndicatorDetector) scanFirebaseIndicators(source IndicatorSource, line 
 			continue
 		}
 		domain := m[1]
+		fullURL := m[0]
 		endpoint := fmt.Sprintf("https://%s", domain)
-		cleanVal := endpoint
+		cleanVal := secrets.SanitizeURL(fullURL)
+		hasCreds := strings.Contains(cleanVal, "[REDACTED]")
+
+		src := source
+		if hasCreds {
+			src.ContextLine = secrets.RedactText(strings.Replace(line, fullURL, cleanVal, 1))
+		}
 
 		indicators = append(indicators, ConnectionIndicator{
 			Technology:     TechFirebaseRTDB,
@@ -985,8 +1074,9 @@ func (d *IndicatorDetector) scanFirebaseIndicators(source IndicatorSource, line 
 			Host:           domain,
 			Port:           443,
 			Protocol:       "https",
-			HasCredentials: false,
-			Source:         source,
+			HasCredentials: hasCreds,
+			RedactedFields: ifSlice(hasCreds, []string{"auth"}),
+			Source:         src,
 			Fingerprint:    GenerateIndicatorFingerprint(TechFirebaseRTDB, IndicatorTypeEndpointReference, endpoint, source.Identifier, source.LineNumber),
 			DetectedAt:     time.Now().UTC(),
 		})
