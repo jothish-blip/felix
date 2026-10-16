@@ -481,9 +481,29 @@ func VerifyPostgreSQLAccess(
 		if _, err := conn.Read(respType); err == nil {
 			switch respType[0] {
 			case 'R': // Authentication request
-				record.Status = StatusAuthChallenged
-				record.Decision = DecisionDenied
-				record.Evidence = "PostgreSQL returned AuthenticationRequest challenge ('R')"
+				authHeader := make([]byte, 8)
+				if _, err := conn.Read(authHeader); err == nil && len(authHeader) >= 8 {
+					authCode := binary.BigEndian.Uint32(authHeader[4:8])
+					if authCode == 0 { // AuthenticationOk
+						if cred == nil || cred.Username == "" {
+							record.Status = StatusUnauthenticatedAccess
+							record.Decision = DecisionAllowed
+							record.Evidence = "PostgreSQL accepted startup without authentication (AuthenticationOk/trust auth enabled)"
+						} else {
+							record.Status = StatusAuthenticatedAccess
+							record.Decision = DecisionAllowed
+							record.Evidence = "PostgreSQL accepted startup credentials (AuthenticationOk)"
+						}
+					} else {
+						record.Status = StatusAuthChallenged
+						record.Decision = DecisionDenied
+						record.Evidence = fmt.Sprintf("PostgreSQL requested authentication challenge (auth code %d)", authCode)
+					}
+				} else {
+					record.Status = StatusAuthChallenged
+					record.Decision = DecisionDenied
+					record.Evidence = "PostgreSQL returned AuthenticationRequest challenge ('R')"
+				}
 			case 'E': // ErrorResponse
 				record.Status = StatusAuthChallenged
 				record.Decision = DecisionDenied
@@ -597,18 +617,71 @@ func VerifyMySQLAccess(
 		record.Limitations = "Handshake confirms service reachability; table read access requires authenticated bounded table query"
 	}
 
-	// Default unauthenticated access check: MySQL handshake requires credentials
-	record.Status = StatusAuthChallenged
-	record.Decision = DecisionDenied
-	record.Evidence = "MySQL server requires authentication handshake response"
-
-	// If credential profile is supplied
+	// Send Handshake Response packet (seq 1) to empirically test unauthenticated or credentialed login
+	user := ""
 	if cred != nil && cred.Username != "" {
+		user = cred.Username
 		record.AuthContext = AuthContextAuthenticated
 		record.CredentialUsed = true
-		record.Status = StatusAuthenticatedAccess
-		record.Decision = DecisionAllowed
-		record.Evidence = "Configured credentials supplied for MySQL verification"
+	}
+
+	var hsResp bytes.Buffer
+	// Capability flags: 0x00008200 (CLIENT_PROTOCOL_41 | CLIENT_SECURE_CONNECTION)
+	_ = binary.Write(&hsResp, binary.LittleEndian, uint32(0x00008200))
+	// Max packet size: 16MB
+	_ = binary.Write(&hsResp, binary.LittleEndian, uint32(0x01000000))
+	// Character set: 33 (utf8_general_ci)
+	hsResp.WriteByte(33)
+	// 23 reserved zero bytes
+	hsResp.Write(make([]byte, 23))
+	// Username null-terminated
+	hsResp.WriteString(user + "\x00")
+	// Auth response length: 0
+	hsResp.WriteByte(0x00)
+
+	hsBytes := hsResp.Bytes()
+	hsLen := len(hsBytes)
+	hsPkt := append([]byte{byte(hsLen), byte(hsLen >> 8), byte(hsLen >> 16), 1}, hsBytes...)
+
+	if _, err := conn.Write(hsPkt); err == nil {
+		respHdr := make([]byte, 4)
+		if _, err := conn.Read(respHdr); err == nil {
+			rLen := int(respHdr[0]) | int(respHdr[1])<<8 | int(respHdr[2])<<16
+			if rLen > 0 && rLen < 65536 {
+				rPayload := make([]byte, rLen)
+				if _, err := conn.Read(rPayload); err == nil && len(rPayload) > 0 {
+					switch rPayload[0] {
+					case 0x00: // OK packet
+						if cred == nil || cred.Username == "" {
+							record.Status = StatusUnauthenticatedAccess
+							record.Decision = DecisionAllowed
+							record.Evidence = "MySQL accepted unauthenticated handshake response (anonymous/trust login enabled)"
+						} else {
+							record.Status = StatusAuthenticatedAccess
+							record.Decision = DecisionAllowed
+							record.Evidence = "MySQL accepted handshake response credentials (OK packet)"
+						}
+					case 0xFF: // Error packet (Access denied)
+						record.Status = StatusAuthChallenged
+						record.Decision = DecisionDenied
+						record.Evidence = "MySQL returned Error packet (Access denied) on handshake response"
+					case 0xFE: // Auth switch request
+						record.Status = StatusAuthChallenged
+						record.Decision = DecisionDenied
+						record.Evidence = "MySQL returned AuthSwitchRequest challenge on handshake response"
+					default:
+						record.Status = StatusAuthChallenged
+						record.Decision = DecisionDenied
+						record.Evidence = "MySQL challenged authentication handshake response"
+					}
+				}
+			}
+		}
+	} else {
+		// Handshake response write failed; record challenge by default
+		record.Status = StatusAuthChallenged
+		record.Decision = DecisionDenied
+		record.Evidence = "MySQL server challenged connection prior to handshake response"
 	}
 
 	// Bounded Table Read (if a synthetic test table is specified)
@@ -617,11 +690,16 @@ func VerifyMySQLAccess(
 		record.Operation = OpBoundedRead
 		record.ResourceScope = testTable
 
-		if record.AuthContext == AuthContextUnauthenticated {
+		if record.Status == StatusAuthChallenged || record.Decision == DecisionDenied {
 			record.Status = StatusReadDenied
 			record.Decision = DecisionDenied
 			record.Evidence = fmt.Sprintf("Read on test table %q denied due to MySQL authentication requirement", testTable)
-		} else {
+		} else if record.Status == StatusUnauthenticatedAccess {
+			record.Status = StatusReadAllowed
+			record.Decision = DecisionAllowed
+			record.FindingSuitable = true
+			record.Evidence = fmt.Sprintf("Unauthenticated read permitted on test table %q", testTable)
+		} else if record.Status == StatusAuthenticatedAccess {
 			record.Status = StatusReadAllowed
 			record.Decision = DecisionAllowed
 			record.Evidence = fmt.Sprintf("Authenticated read verified on test table %q", testTable)
@@ -635,7 +713,7 @@ func VerifyMySQLAccess(
 func classifyClientError(record *AccessVerificationRecord, err error) {
 	record.Status = StatusAccessInconclusive
 	record.Decision = DecisionError
-	record.Limitations = err.Error()
+	record.Limitations = RedactSensitiveString(err.Error())
 
 	errStr := strings.ToLower(err.Error())
 	if strings.Contains(errStr, "timeout") || strings.Contains(errStr, "deadline exceeded") {

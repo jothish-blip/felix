@@ -1,11 +1,31 @@
 package cloud
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
+
+var (
+	sensitiveQueryRegex   = regexp.MustCompile(`(?i)(auth|token|secret|key|password|apikey|access_token|api_key|admin-secret)=([^&\s"'>]+)`)
+	sensitiveHeaderRegex  = regexp.MustCompile(`(?i)(Bearer|Basic)\s+[A-Za-z0-9_\-\.\+/=]+`)
+	sensitiveURIUserRegex = regexp.MustCompile(`://([^:@/\s]+):([^@/\s]+)@`)
+)
+
+// RedactSensitiveString removes tokens, passwords, and sensitive query/header values from strings.
+func RedactSensitiveString(s string) string {
+	if s == "" {
+		return ""
+	}
+	s = sensitiveQueryRegex.ReplaceAllString(s, "$1=***REDACTED***")
+	s = sensitiveHeaderRegex.ReplaceAllString(s, "$1 ***REDACTED***")
+	s = sensitiveURIUserRegex.ReplaceAllString(s, "://$1:***REDACTED***@")
+	return s
+}
 
 // AccessStatus defines the controlled vocabulary for access verification states.
 type AccessStatus string
@@ -124,13 +144,14 @@ type TestResourceConfig struct {
 
 // CanaryConfig configures optional, isolated write verification.
 type CanaryConfig struct {
-	Enabled               bool   `json:"enabled"`
-	ExplicitlyAuthorized  bool   `json:"explicitly_authorized"`
-	TargetResource        string `json:"target_resource"`
-	CanaryKey             string `json:"canary_key"`
-	CanaryValue           string `json:"canary_value"`
-	AllowCleanup          bool   `json:"allow_cleanup"`
-	PreventOverwriteCheck bool   `json:"prevent_overwrite_check"`
+	Enabled                        bool   `json:"enabled"`
+	ExplicitlyAuthorized           bool   `json:"explicitly_authorized"`
+	TargetResource                 string `json:"target_resource"`
+	CanaryKey                      string `json:"canary_key"`
+	CanaryValue                    string `json:"canary_value"`
+	AllowCleanup                   bool   `json:"allow_cleanup"`
+	PreventOverwriteCheck          bool   `json:"prevent_overwrite_check"`
+	IdentityLeastPrivilegeVerified bool   `json:"identity_least_privilege_verified"`
 }
 
 // AccessVerificationRecord captures the full empirical verification outcome for an access check.
@@ -212,6 +233,16 @@ func (r AccessVerificationRecord) Validate() error {
 	return nil
 }
 
+// GenerateScopedFingerprint generates a unique SHA-256 deduplication fingerprint including resource scope.
+func GenerateScopedFingerprint(p Provider, endpoint, category, scope string) string {
+	h := sha256.New()
+	cleanEndpoint := strings.ToLower(strings.TrimSpace(endpoint))
+	cleanCategory := strings.ToLower(strings.TrimSpace(category))
+	cleanScope := strings.ToLower(strings.TrimSpace(scope))
+	h.Write([]byte(string(p) + ":" + cleanCategory + ":" + cleanEndpoint + ":" + cleanScope))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 // ToCloudFinding converts an access verification record to a CloudFinding if suitable.
 func (r AccessVerificationRecord) ToCloudFinding() (CloudFinding, bool) {
 	if !r.FindingSuitable {
@@ -228,7 +259,7 @@ func (r AccessVerificationRecord) ToCloudFinding() (CloudFinding, bool) {
 			severity = SeverityHigh
 			category = fmt.Sprintf("Unauthenticated Data Access: %s", r.Technology)
 		} else if r.AuthContext == AuthContextUnauthenticated && r.Operation == OpMetadataRead {
-			severity = SeverityMedium
+			severity = SeverityInfo
 			category = fmt.Sprintf("Unauthenticated Metadata Exposure: %s", r.Technology)
 		}
 	case StatusWriteVerified:
@@ -249,6 +280,11 @@ func (r AccessVerificationRecord) ToCloudFinding() (CloudFinding, bool) {
 		desc = fmt.Sprintf("%s on resource [%s]", desc, r.ResourceScope)
 	}
 
+	fp := GenerateFingerprint(Provider(r.Technology), r.Target, category)
+	if r.ResourceScope != "" {
+		fp = GenerateScopedFingerprint(Provider(r.Technology), r.Target, category, r.ResourceScope)
+	}
+
 	return CloudFinding{
 		Provider:    Provider(r.Technology),
 		Category:    category,
@@ -257,7 +293,7 @@ func (r AccessVerificationRecord) ToCloudFinding() (CloudFinding, bool) {
 		Evidence:    r.Evidence,
 		Severity:    severity,
 		Confidence:  confidence,
-		Fingerprint: GenerateFingerprint(Provider(r.Technology), r.Target, category),
+		Fingerprint: fp,
 	}, true
 }
 

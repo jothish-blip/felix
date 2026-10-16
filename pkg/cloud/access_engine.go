@@ -194,9 +194,22 @@ func (e *AccessVerificationEngine) evaluateAndRunCanary(
 		return currentRec
 	}
 
-	// If all 8 conditions passed and provider is supported:
+	op, err := BuildCanaryOperation(e.client, target, tech, canary, cred)
+	if err != nil {
+		currentRec.Limitations = fmt.Sprintf("%s; canary write unsupported: %v", currentRec.Limitations, err)
+		return currentRec
+	}
+
 	currentRec.Operation = OpControlledCanary
 	currentRec.ResourceScope = canary.TargetResource
+
+	if err := ExecuteCanaryLifecycle(ctx, op); err != nil {
+		currentRec.Status = StatusWriteDenied
+		currentRec.Decision = DecisionDenied
+		currentRec.Evidence = fmt.Sprintf("Canary write failed on %s: %v", tech, err)
+		return currentRec
+	}
+
 	currentRec.Status = StatusWriteVerified
 	currentRec.Decision = DecisionAllowed
 	currentRec.Evidence = fmt.Sprintf("Isolated canary write and cleanup verified on %s on resource %q", tech, canary.TargetResource)

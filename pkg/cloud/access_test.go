@@ -674,11 +674,12 @@ func TestAccessVerification_All27Scenarios(t *testing.T) {
 		}
 
 		canary := CanaryConfig{
-			Enabled:               true,
-			ExplicitlyAuthorized:  true,
-			TargetResource:        "felix-canary-key",
-			PreventOverwriteCheck: true,
-			AllowCleanup:          true,
+			Enabled:                        true,
+			ExplicitlyAuthorized:           true,
+			TargetResource:                 "felix-canary-key",
+			PreventOverwriteCheck:          true,
+			AllowCleanup:                   true,
+			IdentityLeastPrivilegeVerified: true,
 		}
 
 		eval := checker.EvaluateConditions("127.0.0.1:6379", TechRedis, canary, true)
@@ -976,6 +977,14 @@ func TestAccessVerification_All16Providers(t *testing.T) {
 			hdr := []byte{byte(len(payload)), 0, 0, 0}
 			_, _ = conn.Write(hdr)
 			_, _ = conn.Write(payload)
+
+			// Read client handshake response and return error packet (Access denied)
+			buf := make([]byte, 1024)
+			_, _ = conn.Read(buf)
+			errPayload := []byte{0xFF, 0x15, 0x04, '#', '2', '8', '0', '0', '0', 'A', 'c', 'c', 'e', 's', 's', ' ', 'd', 'e', 'n', 'i', 'e', 'd'}
+			errHdr := []byte{byte(len(errPayload)), 0, 0, 2}
+			_, _ = conn.Write(errHdr)
+			_, _ = conn.Write(errPayload)
 		}()
 
 		host, portStr, _ := net.SplitHostPort(ln.Addr().String())
@@ -1171,4 +1180,343 @@ func (m *mockCanaryOp) Cleanup(ctx context.Context) error {
 		return m.cleanupFn(ctx)
 	}
 	return nil
+}
+
+// TestFirebaseRTDB_CredentialSafetyAndRedaction verifies synthetic secret safety and zero query leakage.
+func TestFirebaseRTDB_CredentialSafetyAndRedaction(t *testing.T) {
+	uniqueSecret := "firebase-super-secret-synthetic-token-998877"
+	var receivedAuthHeader string
+	var receivedRawQuery string
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuthHeader = r.Header.Get("Authorization")
+		receivedRawQuery = r.URL.RawQuery
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"test":"val"}`))
+	}))
+	defer ts.Close()
+
+	client := NewClient(ClientOptions{AllowLoopback: true})
+	cred := &CredentialProfile{
+		Name:   "firebase_test",
+		Secret: uniqueSecret,
+	}
+
+	rec := VerifyFirebaseRTDBAccess(context.Background(), client, ts.URL, cred, &TestResourceConfig{ResourceID: "test_path"})
+
+	if receivedAuthHeader != "Bearer "+uniqueSecret {
+		t.Fatalf("expected Authorization: Bearer <secret>, got %q", receivedAuthHeader)
+	}
+	if strings.Contains(receivedRawQuery, uniqueSecret) {
+		t.Fatalf("secret leaked in URL query parameter: %q", receivedRawQuery)
+	}
+	if strings.Contains(rec.Evidence, uniqueSecret) {
+		t.Fatalf("secret leaked in record evidence: %q", rec.Evidence)
+	}
+	if strings.Contains(rec.Limitations, uniqueSecret) {
+		t.Fatalf("secret leaked in record limitations: %q", rec.Limitations)
+	}
+
+	// Verify RedactSensitiveString handles query parameters and headers safely
+	sampleErr := fmt.Sprintf("connection failed to https://db.firebaseio.com/test.json?auth=%s&shallow=true", uniqueSecret)
+	redacted := RedactSensitiveString(sampleErr)
+	if strings.Contains(redacted, uniqueSecret) {
+		t.Fatalf("RedactSensitiveString failed to redact query token: %s", redacted)
+	}
+	if !strings.Contains(redacted, "auth=***REDACTED***") {
+		t.Fatalf("expected auth=***REDACTED***, got %s", redacted)
+	}
+}
+
+// TestHasura_LeastPrivilegeIdentityAndErrorHandling verifies least-privilege identity and error classification.
+func TestHasura_LeastPrivilegeIdentityAndErrorHandling(t *testing.T) {
+	uniqueToken := "hasura-least-priv-user-jwt-112233"
+	var receivedAuth string
+	var receivedAdminSecret string
+	var receivedRole string
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuth = r.Header.Get("Authorization")
+		receivedAdminSecret = r.Header.Get("x-hasura-admin-secret")
+		receivedRole = r.Header.Get("X-Hasura-Role")
+
+		w.Header().Set("Content-Type", "application/json")
+		// Simulate GraphQL validation error when querying a restricted field
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"errors":[{"message":"field 'restricted_field' not found in type: 'query_root'","extensions":{"code":"validation-failed"}}]}`))
+	}))
+	defer ts.Close()
+
+	client := NewClient(ClientOptions{AllowLoopback: true})
+	cred := &CredentialProfile{
+		Secret: uniqueToken,
+		Role:   "user_auditor",
+	}
+
+	rec := VerifyHasuraAccess(context.Background(), client, ts.URL, cred, &TestResourceConfig{ResourceID: "restricted_field"})
+
+	if receivedAuth != "Bearer "+uniqueToken {
+		t.Fatalf("expected Bearer token for least-privilege user, got %q", receivedAuth)
+	}
+	if receivedRole != "user_auditor" {
+		t.Fatalf("expected X-Hasura-Role 'user_auditor', got %q", receivedRole)
+	}
+	if receivedAdminSecret != "" {
+		t.Fatalf("verifier unexpectedly sent x-hasura-admin-secret for routine least-privilege user: %q", receivedAdminSecret)
+	}
+
+	// Assert that GraphQL validation error is NOT misclassified as data access
+	if rec.Status != StatusReadDenied || rec.Decision != DecisionDenied {
+		t.Fatalf("expected ReadDenied/Denied on GraphQL errors, got %s/%s", rec.Status, rec.Decision)
+	}
+	if rec.FindingSuitable {
+		t.Fatal("restricted field response with errors must not be marked finding suitable")
+	}
+}
+
+// TestCanaryWrite_StrictGuardrailsAndOverwrites verifies no-overwrite pre-checks and explicit authorization.
+func TestCanaryWrite_StrictGuardrailsAndOverwrites(t *testing.T) {
+	checker := &CanaryGuardrailChecker{
+		AllowWriteVerification: true,
+		ScopeValidator:         func(string) bool { return true },
+	}
+
+	// Case A: Role name alone without IdentityLeastPrivilegeVerified must be rejected
+	canaryNoVerifiedIdentity := CanaryConfig{
+		Enabled:                        true,
+		ExplicitlyAuthorized:           true,
+		TargetResource:                 "test-key",
+		PreventOverwriteCheck:          true,
+		AllowCleanup:                   true,
+		IdentityLeastPrivilegeVerified: false, // Not verified
+	}
+	eval := checker.EvaluateConditions("127.0.0.1:6379", TechRedis, canaryNoVerifiedIdentity, true)
+	if eval.Allowed {
+		t.Fatal("expected rejection when IdentityLeastPrivilegeVerified is false")
+	}
+
+	// Case B: Pre-check detects existing resource and prevents overwrite
+	op := &mockCanaryOp{
+		preCheckFn: func(ctx context.Context) error {
+			return fmt.Errorf("resource 'test-key' already exists")
+		},
+		executeFn: func(ctx context.Context) error {
+			t.Fatal("execute must not be called when pre-check fails!")
+			return nil
+		},
+	}
+	err := ExecuteCanaryLifecycle(context.Background(), op)
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("expected overwrite prevention error, got: %v", err)
+	}
+}
+
+// TestFindings_DeduplicationAndSeverityCalibration verifies scoped deduplication and metadata severity.
+func TestFindings_DeduplicationAndSeverityCalibration(t *testing.T) {
+	// Case A: Different resource scopes on same target do NOT collide
+	rec1 := AccessVerificationRecord{
+		Target:          "https://example.supabase.co",
+		Technology:      TechSupabase,
+		Status:          StatusReadAllowed,
+		Decision:        DecisionAllowed,
+		AuthContext:     AuthContextUnauthenticated,
+		Operation:       OpBoundedRead,
+		ResourceScope:   "table_users",
+		FindingSuitable: true,
+	}
+	rec2 := AccessVerificationRecord{
+		Target:          "https://example.supabase.co",
+		Technology:      TechSupabase,
+		Status:          StatusReadAllowed,
+		Decision:        DecisionAllowed,
+		AuthContext:     AuthContextUnauthenticated,
+		Operation:       OpBoundedRead,
+		ResourceScope:   "table_orders",
+		FindingSuitable: true,
+	}
+
+	f1, _ := rec1.ToCloudFinding()
+	f2, _ := rec2.ToCloudFinding()
+
+	if f1.Fingerprint == f2.Fingerprint {
+		t.Fatalf("different resource scopes on same endpoint collided into identical fingerprint: %s", f1.Fingerprint)
+	}
+
+	// Case B: Identical checks on same resource scope DO produce identical fingerprint
+	rec3 := rec1
+	f3, _ := rec3.ToCloudFinding()
+	if f1.Fingerprint != f3.Fingerprint {
+		t.Fatalf("identical checks on same resource failed to deduplicate: %s vs %s", f1.Fingerprint, f3.Fingerprint)
+	}
+
+	// Case C: Metadata read generates SeverityInfo (not SeverityMedium or High)
+	recMeta := AccessVerificationRecord{
+		Target:          "http://127.0.0.1:9200",
+		Technology:      TechElasticsearch,
+		Status:          StatusUnauthenticatedAccess,
+		Decision:        DecisionAllowed,
+		AuthContext:     AuthContextUnauthenticated,
+		Operation:       OpMetadataRead,
+		FindingSuitable: true,
+	}
+	fMeta, _ := recMeta.ToCloudFinding()
+	if fMeta.Severity != SeverityInfo {
+		t.Fatalf("expected metadata exposure to be SeverityInfo, got %s", fMeta.Severity)
+	}
+}
+
+// TestDatabaseProtocolHandshake_EmpiricalVerification verifies protocol challenge handling.
+func TestDatabaseProtocolHandshake_EmpiricalVerification(t *testing.T) {
+	client := NewClient(ClientOptions{AllowLoopback: true})
+
+	// PostgreSQL AuthenticationRequest challenge (authCode 5 = MD5)
+	t.Run("PostgreSQL_MD5_Challenge", func(t *testing.T) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ln.Close()
+
+		go func() {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			buf := make([]byte, 128)
+			_, _ = conn.Read(buf) // SSLRequest
+			_, _ = conn.Write([]byte{'N'})
+			_, _ = conn.Read(buf) // StartupMessage
+			// Send AuthenticationMD5Password ('R', len 12, code 5, salt 4 bytes)
+			authPkt := []byte{
+				'R',
+				0x00, 0x00, 0x00, 0x0c, // len 12
+				0x00, 0x00, 0x00, 0x05, // authCode 5 (MD5)
+				0x01, 0x02, 0x03, 0x04, // salt
+			}
+			_, _ = conn.Write(authPkt)
+		}()
+
+		host, portStr, _ := net.SplitHostPort(ln.Addr().String())
+		port, _ := net.LookupPort("tcp", portStr)
+
+		rec := VerifyPostgreSQLAccess(context.Background(), client, host, port, nil, nil)
+		if rec.Status != StatusAuthChallenged || rec.Decision != DecisionDenied {
+			t.Fatalf("expected AuthChallenged/Denied on MD5 challenge, got %s/%s", rec.Status, rec.Decision)
+		}
+	})
+
+	// MySQL Handshake Response Error (Access denied)
+	t.Run("MySQL_Handshake_Access_Denied", func(t *testing.T) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ln.Close()
+
+		go func() {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			// 1. Send Initial Handshake Packet
+			initPayload := []byte{10, '8', '.', '0', '.', '3', '0', 0, 1, 0, 0, 0}
+			initHdr := []byte{byte(len(initPayload)), 0, 0, 0}
+			_, _ = conn.Write(initHdr)
+			_, _ = conn.Write(initPayload)
+
+			// 2. Read Client Handshake Response
+			respHdr := make([]byte, 4)
+			_, _ = conn.Read(respHdr)
+			rLen := int(respHdr[0]) | int(respHdr[1])<<8 | int(respHdr[2])<<16
+			rBuf := make([]byte, rLen)
+			_, _ = conn.Read(rBuf)
+
+			// 3. Return Error Packet (0xFF, code 1045)
+			errPayload := []byte{0xFF, 0x15, 0x04, '#', '2', '8', '0', '0', '0', 'A', 'c', 'c', 'e', 's', 's', ' ', 'd', 'e', 'n', 'i', 'e', 'd'}
+			errHdr := []byte{byte(len(errPayload)), 0, 0, 2}
+			_, _ = conn.Write(errHdr)
+			_, _ = conn.Write(errPayload)
+		}()
+
+		host, portStr, _ := net.SplitHostPort(ln.Addr().String())
+		port, _ := net.LookupPort("tcp", portStr)
+
+		rec := VerifyMySQLAccess(context.Background(), client, host, port, nil, nil)
+		if rec.Status != StatusAuthChallenged || rec.Decision != DecisionDenied {
+			t.Fatalf("expected AuthChallenged/Denied on MySQL Error packet, got %s/%s", rec.Status, rec.Decision)
+		}
+	})
+
+	// MySQL Handshake Reachability Only (Server disconnects before handshake response)
+	t.Run("MySQL_Handshake_Reachability_Only", func(t *testing.T) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ln.Close()
+
+		go func() {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			initPayload := []byte{10, '8', '.', '0', '.', '3', '0', 0, 1, 0, 0, 0}
+			initHdr := []byte{byte(len(initPayload)), 0, 0, 0}
+			_, _ = conn.Write(initHdr)
+			_, _ = conn.Write(initPayload)
+			// Mock closes conn immediately without reading or sending response
+		}()
+
+		host, portStr, _ := net.SplitHostPort(ln.Addr().String())
+		port, _ := net.LookupPort("tcp", portStr)
+
+		rec := VerifyMySQLAccess(context.Background(), client, host, port, nil, nil)
+		if rec.Status != StatusServiceReachable || rec.Decision != DecisionAllowed {
+			t.Fatalf("expected ServiceReachable/Allowed on MySQL initial handshake alone, got %s/%s", rec.Status, rec.Decision)
+		}
+	})
+
+	// MySQL Handshake Anonymous Login Accepted (0x00 OK packet)
+	t.Run("MySQL_Handshake_Anonymous_OK", func(t *testing.T) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ln.Close()
+
+		go func() {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			initPayload := []byte{10, '8', '.', '0', '.', '3', '0', 0, 1, 0, 0, 0}
+			initHdr := []byte{byte(len(initPayload)), 0, 0, 0}
+			_, _ = conn.Write(initHdr)
+			_, _ = conn.Write(initPayload)
+
+			respHdr := make([]byte, 4)
+			_, _ = conn.Read(respHdr)
+			rLen := int(respHdr[0]) | int(respHdr[1])<<8 | int(respHdr[2])<<16
+			rBuf := make([]byte, rLen)
+			_, _ = conn.Read(rBuf)
+
+			// OK packet: 0x00, affected rows 0, last insert id 0, status flags 0x0002, warnings 0
+			okPayload := []byte{0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00}
+			okHdr := []byte{byte(len(okPayload)), 0, 0, 2}
+			_, _ = conn.Write(okHdr)
+			_, _ = conn.Write(okPayload)
+		}()
+
+		host, portStr, _ := net.SplitHostPort(ln.Addr().String())
+		port, _ := net.LookupPort("tcp", portStr)
+
+		rec := VerifyMySQLAccess(context.Background(), client, host, port, nil, nil)
+		if rec.Status != StatusUnauthenticatedAccess || rec.Decision != DecisionAllowed {
+			t.Fatalf("expected UnauthenticatedAccess/Allowed on MySQL OK packet, got %s/%s", rec.Status, rec.Decision)
+		}
+	})
 }

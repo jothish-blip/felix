@@ -250,7 +250,7 @@ func VerifyPostgRESTAccess(
 	return record
 }
 
-// VerifyHasuraAccess evaluates Hasura GraphQL engine reachability, admin-secret enforcement, and bounded queries.
+// VerifyHasuraAccess evaluates Hasura GraphQL engine reachability, least-privilege identity, and bounded queries.
 func VerifyHasuraAccess(
 	ctx context.Context,
 	client *Client,
@@ -276,7 +276,32 @@ func VerifyHasuraAccess(
 		cleanURL = "http://" + cleanURL
 	}
 
-	// 1. Unauthenticated GraphQL probe
+	// Helper to apply configured credentials without elevating privileges
+	applyAuthHeaders := func(req *http.Request) {
+		if cred == nil {
+			return
+		}
+		if cred.Secret != "" {
+			// Check if explicitly configured as admin secret in headers; otherwise default to least-privilege Bearer token
+			if cred.Headers != nil && cred.Headers["x-hasura-admin-secret"] != "" {
+				req.Header.Set("x-hasura-admin-secret", cred.Headers["x-hasura-admin-secret"])
+			} else {
+				req.Header.Set("Authorization", "Bearer "+cred.Secret)
+			}
+		}
+		if cred.Role != "" {
+			req.Header.Set("X-Hasura-Role", cred.Role)
+		}
+		if cred.Headers != nil {
+			for k, v := range cred.Headers {
+				if strings.ToLower(k) != "x-hasura-admin-secret" || cred.Secret == "" {
+					req.Header.Set(k, v)
+				}
+			}
+		}
+	}
+
+	// 1. Unauthenticated GraphQL probe (schema introspection check)
 	queryBody := []byte(`{"query":"query { __typename }"}`)
 	req, err := http.NewRequestWithContext(ctx, "POST", cleanURL+"/v1/graphql", bytes.NewReader(queryBody))
 	if err != nil {
@@ -294,34 +319,37 @@ func VerifyHasuraAccess(
 	}
 
 	bodyStr := string(resp.Body)
-	if resp.StatusCode == http.StatusUnauthorized || strings.Contains(bodyStr, "x-hasura-admin-secret") {
+	if resp.StatusCode == http.StatusUnauthorized || strings.Contains(bodyStr, "x-hasura-admin-secret") || strings.Contains(bodyStr, "missing-authentication-token") {
 		record.Status = StatusAuthChallenged
 		record.Decision = DecisionDenied
-		record.Evidence = "Hasura requires x-hasura-admin-secret or authorization credentials"
-	} else if resp.StatusCode == http.StatusOK && strings.Contains(bodyStr, "__typename") {
+		record.Evidence = "Hasura requires authentication credentials or role authorization"
+	} else if resp.StatusCode == http.StatusOK && strings.Contains(bodyStr, "__typename") && !strings.Contains(bodyStr, `"errors"`) {
 		record.Status = StatusServiceReachable
 		record.Decision = DecisionAllowed
-		record.Evidence = "Hasura GraphQL endpoint reachable without admin secret"
+		record.Evidence = "Hasura GraphQL endpoint reachable; responded to schema introspection query"
 		record.Limitations = "Root introspection response confirms engine presence; application data permissions require bounded query verification"
 	}
 
-	// 2. Credential verification if provided
-	adminSecret := ""
-	if cred != nil {
+	// 2. Least-privilege credential verification if provided
+	if cred != nil && (cred.Secret != "" || len(cred.Headers) > 0 || cred.Role != "") {
 		record.AuthContext = AuthContextAuthenticated
 		record.CredentialUsed = true
-		adminSecret = cred.Secret
 
-		if adminSecret != "" {
-			authReq, err := http.NewRequestWithContext(ctx, "POST", cleanURL+"/v1/graphql", bytes.NewReader(queryBody))
+		authReq, err := http.NewRequestWithContext(ctx, "POST", cleanURL+"/v1/graphql", bytes.NewReader(queryBody))
+		if err == nil {
+			authReq.Header.Set("Content-Type", "application/json")
+			applyAuthHeaders(authReq)
+			authResp, err := client.Do(ctx, authReq)
 			if err == nil {
-				authReq.Header.Set("Content-Type", "application/json")
-				authReq.Header.Set("x-hasura-admin-secret", adminSecret)
-				authResp, err := client.Do(ctx, authReq)
-				if err == nil && authResp.StatusCode == http.StatusOK {
+				authBody := string(authResp.Body)
+				if authResp.StatusCode == http.StatusOK && strings.Contains(authBody, "__typename") && !strings.Contains(authBody, `"errors"`) {
 					record.Status = StatusAuthenticatedAccess
 					record.Decision = DecisionAllowed
-					record.Evidence = "Supplied admin secret accepted by Hasura GraphQL engine"
+					record.Evidence = "Supplied identity credentials accepted by Hasura GraphQL engine"
+				} else if authResp.StatusCode == http.StatusUnauthorized || authResp.StatusCode == http.StatusForbidden {
+					record.Status = StatusAuthChallenged
+					record.Decision = DecisionDenied
+					record.Evidence = fmt.Sprintf("Supplied Hasura credentials rejected (HTTP %d)", authResp.StatusCode)
 				}
 			}
 		}
@@ -337,23 +365,31 @@ func VerifyHasuraAccess(
 		bReq, err := http.NewRequestWithContext(ctx, "POST", cleanURL+"/v1/graphql", strings.NewReader(bQuery))
 		if err == nil {
 			bReq.Header.Set("Content-Type", "application/json")
-			if adminSecret != "" {
-				bReq.Header.Set("x-hasura-admin-secret", adminSecret)
+			if record.AuthContext == AuthContextAuthenticated {
+				applyAuthHeaders(bReq)
 			}
 			bResp, err := client.Do(ctx, bReq)
-			if err == nil {
-				if bResp.StatusCode == http.StatusOK && !strings.Contains(string(bResp.Body), "errors") {
-					record.Status = StatusReadAllowed
-					record.Decision = DecisionAllowed
-					record.Evidence = fmt.Sprintf("Bounded GraphQL query on %q succeeded", testField)
-					if record.AuthContext == AuthContextUnauthenticated {
-						record.FindingSuitable = true
-					}
-				} else {
-					record.Status = StatusReadDenied
-					record.Decision = DecisionDenied
-					record.Evidence = fmt.Sprintf("Query on %q rejected or restricted by Hasura permissions", testField)
+			if err != nil {
+				classifyClientError(&record, err)
+				return record
+			}
+
+			bBody := string(bResp.Body)
+			// GraphQL validation errors, permission errors, or missing fields must NOT be classified as data access
+			hasErrors := strings.Contains(bBody, `"errors"`) || bResp.StatusCode != http.StatusOK
+			hasData := strings.Contains(bBody, fmt.Sprintf(`"%s"`, testField)) && strings.Contains(bBody, `"data"`)
+
+			if !hasErrors && hasData {
+				record.Status = StatusReadAllowed
+				record.Decision = DecisionAllowed
+				record.Evidence = fmt.Sprintf("Bounded GraphQL query on test field %q succeeded with data response", testField)
+				if record.AuthContext == AuthContextUnauthenticated {
+					record.FindingSuitable = true
 				}
+			} else {
+				record.Status = StatusReadDenied
+				record.Decision = DecisionDenied
+				record.Evidence = fmt.Sprintf("Query on %q denied or restricted by Hasura permissions/schema", testField)
 			}
 		}
 	}

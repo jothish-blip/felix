@@ -78,9 +78,9 @@ The access verification model enforces a controlled vocabulary in `pkg/cloud/acc
 | 6 | **Mongo Express**| `VerifyMongoExpressAccess` | Web console `GET /` | HTTP Basic Auth | Bounded status check | Unsupported | **Verified by Tests** |
 | 7 | **Supabase** | `VerifySupabaseAccess` | `GET /rest/v1/` | Scoped API key / Bearer | `GET /rest/v1/<test_table>?limit=1` | Unsupported | **Verified by Tests** |
 | 8 | **PostgREST** | `VerifyPostgRESTAccess` | Root OpenAPI spec | JWT Authorization | `GET /<resource>?limit=1` | Unsupported | **Verified by Tests** |
-| 9 | **Hasura** | `VerifyHasuraAccess` | Root introspection | `x-hasura-admin-secret` | Bounded test query | Unsupported | **Verified by Tests** |
+| 9 | **Hasura** | `VerifyHasuraAccess` | Root introspection / health | Least-privilege Bearer / `X-Hasura-Role` (admin secret only if configured) | Bounded test query | Unsupported | **Verified by Tests** |
 | 10| **Prisma** | `VerifyPrismaAccess` | Architectural boundary | Application endpoint only | Application test endpoint | Unsupported | **Verified by Tests (Explicit Architecture Boundary)** |
-| 11| **Firebase RTDB**| `VerifyFirebaseRTDBAccess`| Bounded test path | `?auth=<token>` | `GET /<test_path>.json?limitToFirst=1` | Unsupported | **Verified by Tests** |
+| 11| **Firebase RTDB**| `VerifyFirebaseRTDBAccess`| Bounded test path | `Authorization: Bearer <secret>` header (no query param token leak) | `GET /<test_path>.json?limitToFirst=1` | Unsupported | **Verified by Tests** |
 | 12| **Firestore** | `VerifyFirestoreAccess` | Database root metadata | Bearer token | Bounded test document read | Unsupported | **Verified by Tests** |
 | 13| **AWS S3** | `VerifyAWSS3Access` | Root `HEAD /` | AWS Auth headers | `HEAD /<test-object>` | Supported (opt-in isolated) | **Verified by Tests** |
 | 14| **Azure Blob** | `VerifyAzureBlobAccess` | Container `HEAD /` | SAS token / Shared Key | `HEAD /<container>/<test-blob>` | Unsupported | **Verified by Tests** |
@@ -92,9 +92,10 @@ The access verification model enforces a controlled vocabulary in `pkg/cloud/acc
 ## 5. Authentication and Credential Safety
 
 - **Credential Profiles:** Defined in `CredentialProfile` with unexported secret fields (`Secret`, `Headers`).
-- **Sanitized Redaction:** Calling `Redacted()` masks secrets and sensitive headers as `***REDACTED***`.
-- **Finding Isolation:** Credential values are strictly prevented from appearing in findings, logs, error strings, or completion reports (verified in Scenario 18).
-- **Cross-Origin Boundary:** Redirects to different origins immediately stop or strip credentials (`CheckRedirect` in `pkg/cloud/client.go` blocks cross-host following, verified in Scenario 14).
+- **Sanitized Redaction:** Calling `Redacted()` masks secrets and sensitive headers as `***REDACTED***`. `RedactSensitiveString` sanitizes error strings, diagnostic logs, and limitations.
+- **Header-Based Transmission:** Firebase RTDB credentials are transmitted exclusively via `Authorization: Bearer <secret>` HTTP headers rather than `?auth=` query parameters to prevent leakage in URL logs, error messages, and network traces.
+- **Finding Isolation:** Credential values are strictly prevented from appearing in findings, logs, error strings, or completion reports (verified in Scenarios 18 and Audit Regression).
+- **Cross-Origin Boundary:** Redirects to different origins immediately strip `Authorization`, `apikey`, `x-hasura-admin-secret`, and `x-api-key` headers (`CheckRedirect` in `pkg/cloud/client.go` blocks cross-host following, verified in Scenario 14).
 - **No Brute-Force:** Credential spraying, guessing, and retrying are strictly excluded.
 
 ---
@@ -117,9 +118,13 @@ Write verification is disabled by default (`AllowWriteVerification: false`) and 
 5. Provider supports safe, isolated canary operations (Redis, AWS S3, MinIO only).
 6. No-overwrite guarantee enabled (`PreventOverwriteCheck = true`).
 7. Non-destructive cleanup behavior verified and permitted (`AllowCleanup = true`).
-8. Configured identity confirmed as least-privilege (`Role == "least_privilege_test"`).
+8. Configured identity confirmed as least-privilege (`Role == "least_privilege_test"` and `IdentityLeastPrivilegeVerified = true`).
 
-If any condition fails, write testing is safely skipped with an explicit limitation recorded. In Scenario 22, failed canary pre-check verification does not trigger destructive cleanup.
+Concrete canary operations are implemented with strict atomic lifecycles:
+- **Redis (`RedisCanaryOperation`):** Evaluates `EXISTS <canary_key>` pre-check (fails if key exists), executes `SET <canary_key> <val> NX EX 60`, verifies `GET <canary_key>`, and executes non-destructive `DEL <canary_key>`.
+- **S3 / MinIO (`S3CanaryOperation`):** Evaluates `HEAD /<canary_object>` pre-check (fails if object exists), executes `PUT /<canary_object>` with `If-None-Match: *`, verifies `HEAD /<canary_object>`, and performs non-destructive `DELETE /<canary_object>`.
+
+If any condition or pre-check fails, write testing is safely skipped or aborted with an explicit limitation recorded. In Scenario 22, failed canary pre-check verification does not trigger destructive cleanup.
 
 ---
 
@@ -136,8 +141,8 @@ If any condition fails, write testing is safely skipped with an explicit limitat
 ## 9. Findings and Evidence Integration
 
 - Service reachability (`SERVICE_REACHABLE`) and informational metadata queries do not generate vulnerability findings.
-- Only confirmed unauthenticated data access on an explicit resource (`READ_ALLOWED` on `BOUNDED_RESOURCE_READ`) generates a security finding (`SeverityHigh`), with unauthenticated metadata exposure generating `SeverityMedium`.
-- Deduplication: Service findings use deterministic SHA-256 fingerprints to ensure multiple detections of the same service do not create duplicate findings (verified in Scenario 26).
+- **Severity Calibration:** Informational metadata exposure (e.g. cluster name, public version banner) is calibrated to `SeverityInfo`. Confirmed unauthenticated application data read access on an explicit resource (`READ_ALLOWED` on `BOUNDED_RESOURCE_READ`) generates `SeverityHigh`.
+- **Resource-Scoped Deduplication:** Deduplication utilizes deterministic SHA-256 fingerprints via `GenerateScopedFingerprint(target, resourceScope, tech, title)` ensuring that distinct resources (e.g. tables `users` vs `orders`) produce distinct findings while preventing duplicate findings for repeated evaluations of the same resource.
 
 ---
 
@@ -145,7 +150,7 @@ If any condition fails, write testing is safely skipped with an explicit limitat
 
 ### Test Execution Commands
 ```powershell
-go test -v -count=1 -run "TestAccess" ./pkg/cloud
+go test -v -count=1 -run "TestAccess|TestDatabaseProtocolHandshake|TestFirebaseRTDB|TestHasura|TestCanary|TestFindings" ./pkg/cloud
 go test -count=1 ./pkg/cloud/... ./pkg/discovery/... ./pkg/assessment/... ./cmd/...
 go test -count=1 ./cmd/... ./pkg/...
 go vet ./cmd/... ./pkg/...
@@ -186,6 +191,15 @@ git status -- benchmarks/results/latest.json
   26. `26_Multiple_Detections_No_Duplicate_Findings`: **PASS**
   27. `27_Cancellation_Releases_Resources`: **PASS**
 - `TestAccessVerification_All16Providers`: **PASS (All 16 providers passed)**
+- `TestFirebaseRTDB_CredentialSafetyAndRedaction`: **PASS**
+- `TestHasura_LeastPrivilegeIdentityAndErrorHandling`: **PASS**
+- `TestCanaryWrite_StrictGuardrailsAndOverwrites`: **PASS**
+- `TestFindings_DeduplicationAndSeverityCalibration`: **PASS**
+- `TestDatabaseProtocolHandshake_EmpiricalVerification`: **PASS**
+  - `PostgreSQL_MD5_Challenge`: **PASS**
+  - `MySQL_Handshake_Access_Denied`: **PASS**
+  - `MySQL_Handshake_Reachability_Only`: **PASS**
+  - `MySQL_Handshake_Anonymous_OK`: **PASS**
 - Full Repository Test Suite (21 packages): **PASS (All 21 packages passed)**
 - `go vet ./cmd/... ./pkg/...`: **PASS (0 warnings)**
 - `go build -o bin/felix.exe ./cmd/felix`: **PASS**
@@ -214,17 +228,18 @@ git status -- benchmarks/results/latest.json
 
 | File Path | Nature of Change | Rationale |
 |---|---|---|
-| `pkg/cloud/access_types.go` | New file | Core access verification model, controlled status vocabulary, credential profiles, validation invariants. |
-| `pkg/cloud/canary.go` | New file | Canary write guardrails enforcing all 8 mandatory conditions and isolated execution lifecycle. |
-| `pkg/cloud/verifier_databases.go` | New file | Group A database access verifiers (Elasticsearch, MongoDB, Redis, PostgreSQL, MySQL) and error classification. |
+| `pkg/cloud/access_types.go` | Modified | Core access verification model, controlled status vocabulary, credential profiles, validation invariants, `RedactSensitiveString`, `IdentityLeastPrivilegeVerified` on `CanaryConfig`, `GenerateScopedFingerprint`, calibrated finding severity. |
+| `pkg/cloud/canary.go` | Modified | Concrete `RedisCanaryOperation` and `S3CanaryOperation` with atomic pre-check and non-destructive cleanup; enforces `IdentityLeastPrivilegeVerified`. |
+| `pkg/cloud/verifier_databases.go` | Modified | Group A database verifiers; empirical MySQL handshake packet and response (0x00 OK vs 0xFF Error vs 0xFE Switch) verification; PostgreSQL `AuthenticationRequest` type inspection; client error redaction. |
 | `pkg/cloud/verifier_admin.go` | New file | Group B database administration interface access verifier (Mongo Express). |
-| `pkg/cloud/verifier_backend.go` | New file | Group C backend interface access verifiers (Supabase, PostgREST, Hasura, Prisma). |
-| `pkg/cloud/verifier_firebase.go` | New file | Group D Firebase access verifiers (Firebase RTDB, Cloud Firestore). |
+| `pkg/cloud/verifier_backend.go` | Modified | Group C backend verifiers; Hasura least-privilege Bearer/role verification, rejection of admin secret defaulting, classification of GraphQL errors as `READ_DENIED`. |
+| `pkg/cloud/verifier_firebase.go` | Modified | Group D Firebase RTDB verifier transmitting credentials via `Authorization: Bearer <secret>` header instead of query parameters; credential masking. |
 | `pkg/cloud/verifier_storage.go` | New file | Group E cloud/object storage access verifiers (AWS S3, Azure Blob, GCS, MinIO). |
-| `pkg/cloud/access_engine.go` | New file | Shared access verification engine orchestrating dispatch, scope checks, and concurrency. |
+| `pkg/cloud/access_engine.go` | Modified | Shared access engine dispatching verification and executing concrete canary lifecycle operations. |
+| `pkg/cloud/client.go` | Modified | Redirect safety; explicitly stripping sensitive authentication and API key headers across cross-origin redirects. |
 | `pkg/cloud/detector.go` | Modified | Add `accessEngine` field and integrate access verification into `AuditResult`. |
-| `pkg/cloud/access_test.go` | New file | Comprehensive unit tests for model invariants, all 27 required scenarios, and all 16 target providers. |
-| `docs/engineering/PHASE_2_2_ACCESS_VERIFICATION_COMPLETION_REPORT.md` | New file | Formal Phase 2.2 engineering completion report. |
+| `pkg/cloud/access_test.go` | Modified | Comprehensive unit and audit regression test suites covering model invariants, 27 core scenarios, all 16 providers, Firebase credential safety, Hasura least-privilege, canary guardrails, finding deduplication, and database handshake empirical verification. |
+| `docs/engineering/PHASE_2_2_ACCESS_VERIFICATION_COMPLETION_REPORT.md` | Modified | Formal Phase 2.2 engineering completion and audit report. |
 
 ---
 
@@ -238,5 +253,34 @@ All mandatory acceptance criteria for Phase 2.2 are satisfied:
 - Scope, exclusions, and SSRF protections are enforced prior to network transmissions.
 - Credentials and tokens are redacted and protected from logs, findings, and errors.
 - Read verification targets synthetic resources with zero production enumeration.
-- Canary writes are disabled by default and gated by 8 strict conditions.
+- Canary writes are disabled by default and gated by 8 strict conditions with concrete pre-checks.
 - All 21 Go packages compile, vet cleanly, and pass all automated tests.
+
+---
+
+## 15. Security Audit and Remediation Findings
+
+During the Phase 2.2 security audit, the implementation was evaluated against strict safety and precision criteria. The following defects were identified and remediated:
+
+### Audit 1: Firebase RTDB Credential Leakage Prevention
+- **Issue:** Query string authentication (`?auth=<token>`) can leak tokens into `net/http` error strings (e.g. `dial tcp ...: dial error in Get https://host/?auth=secret`), proxy logs, and diagnostic records.
+- **Remediation:** Migrated Firebase RTDB authentication to use standard `Authorization: Bearer <secret>` HTTP headers. Implemented `RedactSensitiveString` to sanitize any token values from `record.Limitations` and error classifications. Verified by `TestFirebaseRTDB_CredentialSafetyAndRedaction`.
+
+### Audit 2: Hasura Least-Privilege Identity Handling
+- **Issue:** Relying on `x-hasura-admin-secret` by default bypasses Row-Level Security (RLS) and violates least-privilege verification. In addition, GraphQL syntax/validation errors could be misclassified.
+- **Remediation:** Updated `VerifyHasuraAccess` to support least-privilege identity (`Authorization: Bearer <token>` and `X-Hasura-Role: <role>`), requiring `x-hasura-admin-secret` only if explicitly configured. GraphQL validation and permission errors are strictly classified as `READ_DENIED` rather than permitted reads. Verified by `TestHasura_LeastPrivilegeIdentityAndErrorHandling`.
+
+### Audit 3: Empirical Database Protocol Handshakes
+- **Issue:** Reachability on database ports was previously conflated with authentication challenges, and packet codes were not fully parsed.
+- **Remediation:**
+  - **MySQL:** Implemented empirical Handshake Response packet handling. Initial Handshake Packet alone (protocol 10) confirms `SERVICE_REACHABLE`. Server ERR packet (0xFF) or AuthSwitch (0xFE) marks `AUTH_CHALLENGED`. Server OK packet (0x00) marks `UNAUTHENTICATED_ACCESS` (or `AUTHENTICATED_ACCESS`).
+  - **PostgreSQL:** Implemented parsing of `AuthenticationRequest` type ('R') and auth code (0 = `AuthenticationOk` / trust authentication, >0 = authentication challenge).
+  - Verified by `TestDatabaseProtocolHandshake_EmpiricalVerification`.
+
+### Audit 4: Findings Severity Calibration and Resource-Scoped Deduplication
+- **Issue:** Metadata exposure was assigned `SeverityMedium` (too high for harmless cluster banners) and finding fingerprints collided when testing different resources on the same endpoint.
+- **Remediation:** Metadata exposure is calibrated to `SeverityInfo`. Introduced `GenerateScopedFingerprint` which incorporates the target, resource scope, technology, and finding title, allowing distinct tables/paths on the same host to generate independent findings without deduplication collisions. Verified by `TestFindings_DeduplicationAndSeverityCalibration`.
+
+### Audit 5: Canary Write Guardrails and Lifecycle
+- **Issue:** Canary operations lacked concrete implementations with pre-check guarantees and explicit least-privilege confirmation.
+- **Remediation:** Added `IdentityLeastPrivilegeVerified` to `CanaryConfig`. Implemented concrete `RedisCanaryOperation` (with `EXISTS` pre-check, `SETNX EX 60`, `GET`, `DEL`) and `S3CanaryOperation` (with `HEAD` pre-check, `PUT If-None-Match: *`, `HEAD`, `DELETE`). Verified by `TestCanaryWrite_StrictGuardrailsAndOverwrites`.

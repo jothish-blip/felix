@@ -76,11 +76,14 @@ func VerifyFirebaseRTDBAccess(
 		record.AuthContext = AuthContextAuthenticated
 		record.CredentialUsed = true
 
-		authProbeURL := fmt.Sprintf("%s/%s.json?auth=%s&shallow=true&limitToFirst=1", cleanURL, url.PathEscape(testPath), url.QueryEscape(cred.Secret))
+		authProbeURL := fmt.Sprintf("%s/%s.json?shallow=true&limitToFirst=1", cleanURL, url.PathEscape(testPath))
 		authReq, err := http.NewRequestWithContext(ctx, "GET", authProbeURL, nil)
 		if err == nil {
+			authReq.Header.Set("Authorization", "Bearer "+cred.Secret)
 			authResp, err := client.Do(ctx, authReq)
-			if err == nil {
+			if err != nil {
+				classifyClientError(&record, err)
+			} else {
 				if authResp.StatusCode == http.StatusOK {
 					record.Status = StatusAuthenticatedAccess
 					record.Decision = DecisionAllowed

@@ -126,10 +126,14 @@ func NewClient(opts ...ClientOptions) *Client {
 				if isAllowed != nil && !isAllowed(nextURL) {
 					return fmt.Errorf("redirect to %s blocked: out of approved scope", nextURL)
 				}
-				// Prevent cross-origin redirect following to enforce cloud boundary
+				// Prevent cross-origin redirect following to enforce cloud boundary and strip credentials
 				if len(via) > 0 {
 					origHost := via[0].URL.Host
 					if req.URL.Host != origHost {
+						req.Header.Del("Authorization")
+						req.Header.Del("apikey")
+						req.Header.Del("x-hasura-admin-secret")
+						req.Header.Del("x-api-key")
 						return http.ErrUseLastResponse
 					}
 				}
