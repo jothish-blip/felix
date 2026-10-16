@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -238,29 +239,65 @@ func VerifyMongoDBAccess(
 
 	// Bounded Read Verification if a synthetic test collection is specified
 	if resConfig != nil && strings.TrimSpace(resConfig.ResourceID) != "" {
+		coll := strings.TrimSpace(resConfig.ResourceID)
 		record.Operation = OpBoundedRead
-		record.ResourceScope = resConfig.ResourceID
+		record.ResourceScope = coll
 
-		if cred == nil || cred.Username == "" {
-			// Unauthenticated bounded read attempt
-			// Check if isMaster response indicated auth was required
-			if strings.Contains(bodyStr, "Unauthorized") || strings.Contains(bodyStr, "requires authentication") {
+		if record.Status == StatusAuthChallenged {
+			record.Status = StatusReadDenied
+			record.Decision = DecisionDenied
+			record.Evidence = fmt.Sprintf("Read on test collection %q denied by MongoDB authentication policy", coll)
+		} else {
+			fullColl := "test." + coll
+			if strings.Contains(coll, ".") {
+				fullColl = coll
+			}
+
+			// Send minimal OP_QUERY for collection
+			var qBuf bytes.Buffer
+			qBuf.WriteString(fullColl)
+			qBuf.WriteByte(0x00)
+			qBuf.Write([]byte{0x00, 0x00, 0x00, 0x00})       // numberToSkip: 0
+			qBuf.Write([]byte{0x01, 0x00, 0x00, 0x00})       // numberToReturn: 1
+			qBuf.Write([]byte{0x05, 0x00, 0x00, 0x00, 0x00}) // empty query doc {}
+
+			msgLen := int32(16 + 4 + qBuf.Len())
+			var pkt bytes.Buffer
+			_ = binary.Write(&pkt, binary.LittleEndian, msgLen)
+			_ = binary.Write(&pkt, binary.LittleEndian, int32(2))    // requestID
+			_ = binary.Write(&pkt, binary.LittleEndian, int32(0))    // responseTo
+			_ = binary.Write(&pkt, binary.LittleEndian, int32(2004)) // OP_QUERY
+			pkt.Write([]byte{0x00, 0x00, 0x00, 0x00})                // flags
+			pkt.Write(qBuf.Bytes())
+
+			if _, err := conn.Write(pkt.Bytes()); err == nil {
+				hBuf := make([]byte, 36)
+				if _, err := io.ReadFull(conn, hBuf); err == nil {
+					pBuf := make([]byte, 512)
+					pn, _ := conn.Read(pBuf)
+					pStr := string(pBuf[:pn])
+					if strings.Contains(pStr, "Unauthorized") || strings.Contains(pStr, "requires authentication") || strings.Contains(pStr, "not authorized") {
+						record.Status = StatusReadDenied
+						record.Decision = DecisionDenied
+						record.Evidence = fmt.Sprintf("Read access to MongoDB collection %q denied by authentication policy", coll)
+					} else {
+						record.Status = StatusReadAllowed
+						record.Decision = DecisionAllowed
+						record.Evidence = fmt.Sprintf("Bounded read on MongoDB collection %q succeeded", coll)
+						if record.AuthContext == AuthContextUnauthenticated {
+							record.FindingSuitable = true
+						}
+					}
+				} else {
+					record.Status = StatusReadDenied
+					record.Decision = DecisionDenied
+					record.Evidence = fmt.Sprintf("Failed reading response for MongoDB collection %q", coll)
+				}
+			} else {
 				record.Status = StatusReadDenied
 				record.Decision = DecisionDenied
-				record.Evidence = fmt.Sprintf("Unauthenticated access to collection %q denied by MongoDB authentication policy", resConfig.ResourceID)
-			} else {
-				// MongoDB is running without auth enabled
-				record.Status = StatusReadAllowed
-				record.Decision = DecisionAllowed
-				record.FindingSuitable = true
-				record.Evidence = fmt.Sprintf("MongoDB collection %q accessible without authentication", resConfig.ResourceID)
+				record.Evidence = fmt.Sprintf("Failed sending query for MongoDB collection %q", coll)
 			}
-		} else {
-			record.AuthContext = AuthContextAuthenticated
-			record.CredentialUsed = true
-			record.Status = StatusAuthenticatedAccess
-			record.Decision = DecisionAllowed
-			record.Evidence = fmt.Sprintf("Authenticated access to test collection %q verified using supplied credentials", resConfig.ResourceID)
 		}
 	}
 
@@ -478,11 +515,11 @@ func VerifyPostgreSQLAccess(
 
 	if _, err := conn.Write(startup.Bytes()); err == nil {
 		respType := make([]byte, 1)
-		if _, err := conn.Read(respType); err == nil {
+		if _, err := io.ReadFull(conn, respType); err == nil {
 			switch respType[0] {
 			case 'R': // Authentication request
 				authHeader := make([]byte, 8)
-				if _, err := conn.Read(authHeader); err == nil && len(authHeader) >= 8 {
+				if _, err := io.ReadFull(conn, authHeader); err == nil && len(authHeader) >= 8 {
 					authCode := binary.BigEndian.Uint32(authHeader[4:8])
 					if authCode == 0 { // AuthenticationOk
 						if cred == nil || cred.Username == "" {
@@ -532,11 +569,45 @@ func VerifyPostgreSQLAccess(
 			record.Status = StatusReadDenied
 			record.Decision = DecisionDenied
 			record.Evidence = fmt.Sprintf("Read on test table %q denied by database authentication requirement", testTable)
-		} else if record.Status == StatusUnauthenticatedAccess {
-			record.Status = StatusReadAllowed
-			record.Decision = DecisionAllowed
-			record.FindingSuitable = true
-			record.Evidence = fmt.Sprintf("Unauthenticated read permitted on test table %q", testTable)
+		} else if record.Status == StatusUnauthenticatedAccess || record.Status == StatusAuthenticatedAccess {
+			// Send Query message ('Q') to empirically test bounded read permissions
+			qStr := fmt.Sprintf("SELECT 1 FROM \"%s\" LIMIT 1;\x00", testTable)
+			qPktLen := int32(4 + len(qStr))
+			var qBuf bytes.Buffer
+			qBuf.WriteByte('Q')
+			_ = binary.Write(&qBuf, binary.BigEndian, qPktLen)
+			qBuf.WriteString(qStr)
+
+			if _, err := conn.Write(qBuf.Bytes()); err == nil {
+				qResp := make([]byte, 1)
+				if _, err := io.ReadFull(conn, qResp); err == nil {
+					switch qResp[0] {
+					case 'T', 'C', 'D', 'Z': // RowDescription, CommandComplete, DataRow, ReadyForQuery
+						record.Status = StatusReadAllowed
+						record.Decision = DecisionAllowed
+						record.Evidence = fmt.Sprintf("Read query on test table %q succeeded", testTable)
+						if record.AuthContext == AuthContextUnauthenticated {
+							record.FindingSuitable = true
+						}
+					case 'E': // ErrorResponse (insufficient privilege or relation does not exist)
+						record.Status = StatusReadDenied
+						record.Decision = DecisionDenied
+						record.Evidence = fmt.Sprintf("Read query on test table %q denied by PostgreSQL", testTable)
+					default:
+						record.Status = StatusReadDenied
+						record.Decision = DecisionDenied
+						record.Evidence = fmt.Sprintf("Unexpected response from PostgreSQL table query: %c", qResp[0])
+					}
+				} else {
+					record.Status = StatusReadDenied
+					record.Decision = DecisionDenied
+					record.Evidence = fmt.Sprintf("Failed reading query response on test table %q", testTable)
+				}
+			} else {
+				record.Status = StatusReadDenied
+				record.Decision = DecisionDenied
+				record.Evidence = fmt.Sprintf("Failed sending query on test table %q", testTable)
+			}
 		}
 	}
 
@@ -581,7 +652,7 @@ func VerifyMySQLAccess(
 
 	// Read initial handshake packet from MySQL server
 	hdr := make([]byte, 4)
-	if _, err := conn.Read(hdr); err != nil {
+	if _, err := io.ReadFull(conn, hdr); err != nil {
 		record.Status = StatusAccessInconclusive
 		record.Decision = DecisionError
 		record.Limitations = fmt.Sprintf("failed reading MySQL packet header: %v", err)
@@ -597,7 +668,7 @@ func VerifyMySQLAccess(
 	}
 
 	payload := make([]byte, pktLen)
-	if _, err := conn.Read(payload); err != nil {
+	if _, err := io.ReadFull(conn, payload); err != nil {
 		record.Status = StatusAccessInconclusive
 		record.Decision = DecisionError
 		record.Limitations = fmt.Sprintf("failed reading MySQL payload: %v", err)
@@ -645,11 +716,11 @@ func VerifyMySQLAccess(
 
 	if _, err := conn.Write(hsPkt); err == nil {
 		respHdr := make([]byte, 4)
-		if _, err := conn.Read(respHdr); err == nil {
+		if _, err := io.ReadFull(conn, respHdr); err == nil {
 			rLen := int(respHdr[0]) | int(respHdr[1])<<8 | int(respHdr[2])<<16
 			if rLen > 0 && rLen < 65536 {
 				rPayload := make([]byte, rLen)
-				if _, err := conn.Read(rPayload); err == nil && len(rPayload) > 0 {
+				if _, err := io.ReadFull(conn, rPayload); err == nil && len(rPayload) > 0 {
 					switch rPayload[0] {
 					case 0x00: // OK packet
 						if cred == nil || cred.Username == "" {
@@ -694,15 +765,44 @@ func VerifyMySQLAccess(
 			record.Status = StatusReadDenied
 			record.Decision = DecisionDenied
 			record.Evidence = fmt.Sprintf("Read on test table %q denied due to MySQL authentication requirement", testTable)
-		} else if record.Status == StatusUnauthenticatedAccess {
-			record.Status = StatusReadAllowed
-			record.Decision = DecisionAllowed
-			record.FindingSuitable = true
-			record.Evidence = fmt.Sprintf("Unauthenticated read permitted on test table %q", testTable)
-		} else if record.Status == StatusAuthenticatedAccess {
-			record.Status = StatusReadAllowed
-			record.Decision = DecisionAllowed
-			record.Evidence = fmt.Sprintf("Authenticated read verified on test table %q", testTable)
+		} else if record.Status == StatusUnauthenticatedAccess || record.Status == StatusAuthenticatedAccess {
+			// Send COM_QUERY (0x03) to test table read permissions
+			qStr := fmt.Sprintf("SELECT 1 FROM `%s` LIMIT 1", testTable)
+			qBytes := append([]byte{0x03}, []byte(qStr)...)
+			qLen := len(qBytes)
+			qPkt := append([]byte{byte(qLen), byte(qLen >> 8), byte(qLen >> 16), 0}, qBytes...)
+
+			if _, err := conn.Write(qPkt); err == nil {
+				qHdr := make([]byte, 4)
+				if _, err := io.ReadFull(conn, qHdr); err == nil {
+					rLen := int(qHdr[0]) | int(qHdr[1])<<8 | int(qHdr[2])<<16
+					if rLen > 0 && rLen < 65536 {
+						rPayload := make([]byte, rLen)
+						if _, err := io.ReadFull(conn, rPayload); err == nil && len(rPayload) > 0 {
+							if rPayload[0] == 0xFF {
+								record.Status = StatusReadDenied
+								record.Decision = DecisionDenied
+								record.Evidence = fmt.Sprintf("Read query on test table %q rejected by MySQL (Error packet)", testTable)
+							} else {
+								record.Status = StatusReadAllowed
+								record.Decision = DecisionAllowed
+								record.Evidence = fmt.Sprintf("Read query on test table %q accepted by MySQL", testTable)
+								if record.AuthContext == AuthContextUnauthenticated {
+									record.FindingSuitable = true
+								}
+							}
+						}
+					}
+				} else {
+					record.Status = StatusReadDenied
+					record.Decision = DecisionDenied
+					record.Evidence = fmt.Sprintf("Failed reading query response on test table %q", testTable)
+				}
+			} else {
+				record.Status = StatusReadDenied
+				record.Decision = DecisionDenied
+				record.Evidence = fmt.Sprintf("Failed sending query on test table %q", testTable)
+			}
 		}
 	}
 

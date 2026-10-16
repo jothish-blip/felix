@@ -200,6 +200,22 @@ git status -- benchmarks/results/latest.json
   - `MySQL_Handshake_Access_Denied`: **PASS**
   - `MySQL_Handshake_Reachability_Only`: **PASS**
   - `MySQL_Handshake_Anonymous_OK`: **PASS**
+- `TestCanary_Redis_LifecycleSafety`: **PASS**
+  - `Redis_PreExistingResource`: **PASS**
+  - `Redis_FailedCreation`: **PASS**
+  - `Redis_FailedVerification`: **PASS**
+  - `Redis_ConcurrentReplacement_OwnershipMismatch`: **PASS**
+  - `Redis_RepeatedCleanup`: **PASS**
+- `TestCanary_S3_LifecycleSafety`: **PASS**
+  - `S3_PreExistingResource`: **PASS**
+  - `S3_FailedCreation`: **PASS**
+  - `S3_FailedVerification_ETagMismatch`: **PASS**
+  - `S3_ConcurrentReplacement_CleanupRefused`: **PASS**
+  - `S3_RepeatedCleanup`: **PASS**
+- `TestDatabaseBoundedQueries_EmpiricalVerification`: **PASS**
+  - `MongoDB_BoundedRead_Denied`: **PASS**
+  - `PostgreSQL_BoundedRead_Denied`: **PASS**
+  - `MySQL_BoundedRead_Denied`: **PASS**
 - Full Repository Test Suite (21 packages): **PASS (All 21 packages passed)**
 - `go vet ./cmd/... ./pkg/...`: **PASS (0 warnings)**
 - `go build -o bin/felix.exe ./cmd/felix`: **PASS**
@@ -239,6 +255,7 @@ git status -- benchmarks/results/latest.json
 | `pkg/cloud/client.go` | Modified | Redirect safety; explicitly stripping sensitive authentication and API key headers across cross-origin redirects. |
 | `pkg/cloud/detector.go` | Modified | Add `accessEngine` field and integrate access verification into `AuditResult`. |
 | `pkg/cloud/access_test.go` | Modified | Comprehensive unit and audit regression test suites covering model invariants, 27 core scenarios, all 16 providers, Firebase credential safety, Hasura least-privilege, canary guardrails, finding deduplication, and database handshake empirical verification. |
+| `pkg/cloud/canary_audit_test.go` | New file | Concurrency and lifecycle safety regression tests for Redis and S3/MinIO canary operations (pre-existing resources, failed creation, verification failure, concurrent replacement, ownership mismatch, cleanup failure, repeated cleanup) and database bounded query empirical verification. |
 | `docs/engineering/PHASE_2_2_ACCESS_VERIFICATION_COMPLETION_REPORT.md` | Modified | Formal Phase 2.2 engineering completion and audit report. |
 
 ---
@@ -270,17 +287,22 @@ During the Phase 2.2 security audit, the implementation was evaluated against st
 - **Issue:** Relying on `x-hasura-admin-secret` by default bypasses Row-Level Security (RLS) and violates least-privilege verification. In addition, GraphQL syntax/validation errors could be misclassified.
 - **Remediation:** Updated `VerifyHasuraAccess` to support least-privilege identity (`Authorization: Bearer <token>` and `X-Hasura-Role: <role>`), requiring `x-hasura-admin-secret` only if explicitly configured. GraphQL validation and permission errors are strictly classified as `READ_DENIED` rather than permitted reads. Verified by `TestHasura_LeastPrivilegeIdentityAndErrorHandling`.
 
-### Audit 3: Empirical Database Protocol Handshakes
-- **Issue:** Reachability on database ports was previously conflated with authentication challenges, and packet codes were not fully parsed.
+### Audit 3: Empirical Database Protocol Handshakes and Bounded Queries
+- **Issue:** Reachability on database ports was previously conflated with authentication challenges, and authentication was conflated with table/collection read access without executing bounded queries.
 - **Remediation:**
-  - **MySQL:** Implemented empirical Handshake Response packet handling. Initial Handshake Packet alone (protocol 10) confirms `SERVICE_REACHABLE`. Server ERR packet (0xFF) or AuthSwitch (0xFE) marks `AUTH_CHALLENGED`. Server OK packet (0x00) marks `UNAUTHENTICATED_ACCESS` (or `AUTHENTICATED_ACCESS`).
-  - **PostgreSQL:** Implemented parsing of `AuthenticationRequest` type ('R') and auth code (0 = `AuthenticationOk` / trust authentication, >0 = authentication challenge).
-  - Verified by `TestDatabaseProtocolHandshake_EmpiricalVerification`.
+  - **MySQL:** Implemented empirical Handshake Response packet handling. Initial Handshake Packet alone (protocol 10) confirms `SERVICE_REACHABLE`. Server ERR packet (0xFF) or AuthSwitch (0xFE) marks `AUTH_CHALLENGED`. Server OK packet (0x00) marks `UNAUTHENTICATED_ACCESS` (or `AUTHENTICATED_ACCESS`). If a test table is configured, sends `COM_QUERY` (`SELECT 1 FROM ... LIMIT 1`) to empirically confirm `READ_ALLOWED` vs `READ_DENIED`.
+  - **PostgreSQL:** Implemented parsing of `AuthenticationRequest` type ('R') and auth code (0 = `AuthenticationOk` / trust authentication, >0 = authentication challenge). If a test table is configured, sends Query message ('Q') to empirically confirm `READ_ALLOWED` vs `READ_DENIED`.
+  - **MongoDB:** Replaced `isMaster` metadata inspection with explicit `OP_QUERY` targeting `test.<collection>`, accurately classifying authentication requirements (code 13 `Unauthorized`) as `READ_DENIED`.
+  - Verified by `TestDatabaseProtocolHandshake_EmpiricalVerification` and `TestDatabaseBoundedQueries_EmpiricalVerification`.
 
 ### Audit 4: Findings Severity Calibration and Resource-Scoped Deduplication
 - **Issue:** Metadata exposure was assigned `SeverityMedium` (too high for harmless cluster banners) and finding fingerprints collided when testing different resources on the same endpoint.
 - **Remediation:** Metadata exposure is calibrated to `SeverityInfo`. Introduced `GenerateScopedFingerprint` which incorporates the target, resource scope, technology, and finding title, allowing distinct tables/paths on the same host to generate independent findings without deduplication collisions. Verified by `TestFindings_DeduplicationAndSeverityCalibration`.
 
-### Audit 5: Canary Write Guardrails and Lifecycle
-- **Issue:** Canary operations lacked concrete implementations with pre-check guarantees and explicit least-privilege confirmation.
-- **Remediation:** Added `IdentityLeastPrivilegeVerified` to `CanaryConfig`. Implemented concrete `RedisCanaryOperation` (with `EXISTS` pre-check, `SETNX EX 60`, `GET`, `DEL`) and `S3CanaryOperation` (with `HEAD` pre-check, `PUT If-None-Match: *`, `HEAD`, `DELETE`). Verified by `TestCanaryWrite_StrictGuardrailsAndOverwrites`.
+### Audit 5: Canary Write Concurrency, Ownership Safety, and Lifecycle Guardrails
+- **Issue:** Canary cleanup previously used unconditional deletions without confirming resource ownership or protecting against concurrent replacement.
+- **Remediation:**
+  - **Redis:** Implemented atomic Compare-and-Delete via Lua script `if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end` (with fallback to `WATCH`/`GET`/`MULTI`/`DEL`/`EXEC`). If the key does not match or was replaced concurrently, cleanup refuses to delete the foreign key and reports ownership mismatch.
+  - **S3 / MinIO:** Captured created `ETag` and unique canary token on `PUT` (with `If-None-Match: *`). Prior to deletion, performs pre-cleanup `HEAD` check verifying ETag and token identity; executes conditional `DELETE` with `If-Match`. If the object was replaced by another process, cleanup aborts to prevent deleting the foreign object.
+  - **Lifecycle Invariants:** Failed pre-check or failed creation prevents write and never invokes destructive cleanup. Unwritten canary operations treat cleanup as safe no-op. Repeated cleanup calls are idempotent safe no-ops.
+  - Verified by `TestCanary_Redis_LifecycleSafety` and `TestCanary_S3_LifecycleSafety`.
