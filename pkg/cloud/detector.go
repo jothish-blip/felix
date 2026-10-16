@@ -35,18 +35,20 @@ var (
 
 // AuditResult encapsulates discovered cloud services and evaluated risk findings.
 type AuditResult struct {
-	Services           []Service                  `json:"services"`
-	DiscoveredServices []DiscoveredService        `json:"discovered_services"`
-	Findings           []CloudFinding             `json:"findings"`
-	AccessRecords      []AccessVerificationRecord `json:"access_records,omitempty"`
+	Services             []Service                  `json:"services"`
+	DiscoveredServices   []DiscoveredService        `json:"discovered_services"`
+	Findings             []CloudFinding             `json:"findings"`
+	AccessRecords        []AccessVerificationRecord `json:"access_records,omitempty"`
+	ConnectionIndicators []ConnectionIndicator      `json:"connection_indicators,omitempty"`
 }
 
 // Detector identifies cloud vendor configurations and coordinates safe verification.
 type Detector struct {
-	client       *Client
-	engine       *ServiceDiscoveryEngine
-	accessEngine *AccessVerificationEngine
-	isAllowed    func(string) bool
+	client            *Client
+	engine            *ServiceDiscoveryEngine
+	accessEngine      *AccessVerificationEngine
+	indicatorDetector *IndicatorDetector
+	isAllowed         func(string) bool
 }
 
 // NewDetector initializes a new Cloud & BaaS auditor with optional scope authorization checker.
@@ -55,7 +57,8 @@ func NewDetector(client *Client, isAllowed ...func(string) bool) *Detector {
 		client = NewClient()
 	}
 	d := &Detector{
-		client: client,
+		client:            client,
+		indicatorDetector: NewIndicatorDetector(),
 	}
 	if len(isAllowed) > 0 && isAllowed[0] != nil {
 		d.isAllowed = isAllowed[0]
@@ -71,6 +74,19 @@ func NewDetector(client *Client, isAllowed ...func(string) bool) *Detector {
 // AccessEngine returns the associated AccessVerificationEngine.
 func (d *Detector) AccessEngine() *AccessVerificationEngine {
 	return d.accessEngine
+}
+
+// IndicatorDetector returns the associated connection indicator detector.
+func (d *Detector) IndicatorDetector() *IndicatorDetector {
+	return d.indicatorDetector
+}
+
+// DetectConnectionIndicators scans crawled assets and extracts unique connection indicators.
+func (d *Detector) DetectConnectionIndicators(assets []crawler.Asset) []ConnectionIndicator {
+	if d.indicatorDetector == nil {
+		return nil
+	}
+	return d.indicatorDetector.DetectIndicatorsFromAssets(assets)
 }
 
 // DiscoverServicesFromContent extracts recognized cloud endpoints from raw text.
@@ -353,11 +369,29 @@ func (d *Detector) Audit(ctx context.Context, assets []crawler.Asset, secretFind
 		}
 	}
 
+	// Phase 2.3: Connection Indicators & Secrets Detection
+	var connectionIndicators []ConnectionIndicator
+	if d.indicatorDetector != nil && len(assets) > 0 {
+		connectionIndicators = d.indicatorDetector.DetectIndicatorsFromAssets(assets)
+		for _, ind := range connectionIndicators {
+			inScope := true
+			if d.isAllowed != nil && ind.Endpoint != "" {
+				inScope = d.isAllowed(ind.Endpoint)
+			}
+			f := ind.ToCloudFinding(inScope)
+			if _, exists := seenFindingFPs[f.Fingerprint]; !exists {
+				seenFindingFPs[f.Fingerprint] = struct{}{}
+				allFindings = append(allFindings, f)
+			}
+		}
+	}
+
 	return AuditResult{
-		Services:           services,
-		DiscoveredServices: discoveredServices,
-		Findings:           allFindings,
-		AccessRecords:      accessRecords,
+		Services:             services,
+		DiscoveredServices:   discoveredServices,
+		Findings:             allFindings,
+		AccessRecords:        accessRecords,
+		ConnectionIndicators: connectionIndicators,
 	}
 }
 

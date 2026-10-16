@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"felix/pkg/cloud"
 	"felix/pkg/discovery"
 )
 
@@ -379,5 +380,44 @@ func TestFinding_UnknownSeverityAndConfidence(t *testing.T) {
 	}
 	if err := ValidateFinding(norm); err != nil {
 		t.Errorf("expected UNKNOWN severity and confidence to be valid: %v", err)
+	}
+}
+
+func TestConnectionIndicatorFinding_NonConflationClassification(t *testing.T) {
+	cf := cloud.CloudFinding{
+		Provider:         cloud.Provider("postgresql"),
+		Category:         "Connection Indicator: postgresql",
+		Endpoint:         "postgres.internal:5432",
+		Description:      "Detected postgresql connection_string in config.yml. Service connectivity, authentication validity, and resource exposure remain unverified.",
+		Evidence:         "Matched postgresql indicator in config.yml (line 12): postgres://user:[REDACTED]@postgres.internal:5432/app",
+		Severity:         cloud.SeverityMedium,
+		Confidence:       cloud.ConfidenceHigh,
+		Fingerprint:      "cld-ind-fingerprint-test",
+		NegativeEvidence: "Static analysis only. Zero active network connections or DNS queries were made. Service reachability, credential validity, and resource exposure remain unverified.",
+		Details: map[string]string{
+			"indicator_type":      "CONNECTION_STRING",
+			"technology":          "postgresql",
+			"family":              "direct_database",
+			"analysis_method":     "STATIC_ANALYSIS",
+			"verification_status": "UNVERIFIED",
+		},
+	}
+
+	finding := FromCloudFinding("https://target.com", cf)
+
+	if finding.AnalysisMethod != AnalysisMethodStatic {
+		t.Errorf("expected AnalysisMethodStatic for connection indicator, got %s", finding.AnalysisMethod)
+	}
+	if finding.Status != FindingStatusSuspected {
+		t.Errorf("expected FindingStatusSuspected for connection indicator, got %s", finding.Status)
+	}
+	if finding.Verification.Status == VerificationVerified {
+		t.Errorf("indicator finding must never be VerificationVerified")
+	}
+	if finding.EvidenceDetails.HTTPStatus != 0 {
+		t.Errorf("expected HTTPStatus=0 for static indicator, got %d", finding.EvidenceDetails.HTTPStatus)
+	}
+	if !strings.Contains(finding.EvidenceDetails.NegativeEvidence, "Zero active network connections") {
+		t.Errorf("expected NegativeEvidence in EvidenceDetails to state zero network connections: %s", finding.EvidenceDetails.NegativeEvidence)
 	}
 }

@@ -49,7 +49,7 @@ var (
 	htmlTokenPattern2    = regexp.MustCompile(`(?i)(<input[^>]+value=["'])([^"']*)(["'][^>]*name=["'][^"']*(?:token|secret|key|csrf|xsrf|auth)[^"']*["'])`)
 
 	// querySensitiveFallbackPattern matches credential query parameters in raw text or malformed URLs.
-	querySensitiveFallbackPattern = regexp.MustCompile(`(?i)([?&](?:token|access_token|refresh_token|auth_token|id_token|key|api_key|apikey|secret|secret_key|client_secret|password|passwd|pwd|pass|auth|credential|credentials|session|session_id|sessionid|sid|sig|signature|ssn|social_security|socialsecurity|pin|cvv|cvc)=)(?:\[REDACTED\]|[^&\s"'<>` + "`" + `]+)`)
+	querySensitiveFallbackPattern = regexp.MustCompile(`(?i)([?&](?:[a-zA-Z0-9_\-\.]*(?:token|access_token|refresh_token|auth_token|id_token|key|api_key|apikey|secret|secret_key|client_secret|password|passwd|pwd|pass|auth|credential|credentials|session|session_id|sessionid|sid|sig|signature)|ssn|social_security|socialsecurity|pin|cvv|cvc)=)(?:\[REDACTED\]|[^&\s"'<>` + "`" + `]+)`)
 
 	// userPassURLPattern matches user:password or :password credentials in raw URL strings.
 	userPassURLPattern = regexp.MustCompile(`(?i)([a-zA-Z0-9+.-]+://)([^:@]*):([^@]+)@`)
@@ -707,7 +707,8 @@ func IsSensitiveQueryParam(k string) bool {
 	if strings.Contains(lower, "apikey") || strings.Contains(lower, "api_key") ||
 		strings.Contains(lower, "secret") || strings.Contains(lower, "password") ||
 		strings.Contains(lower, "passwd") || strings.Contains(lower, "credential") ||
-		strings.Contains(lower, "private_key") {
+		strings.Contains(lower, "private_key") || strings.Contains(lower, "signature") ||
+		strings.HasPrefix(lower, "x-amz-") {
 		return true
 	}
 

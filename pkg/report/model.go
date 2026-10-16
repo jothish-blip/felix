@@ -403,6 +403,15 @@ func FromCloudFinding(target string, f cloud.CloudFinding) Finding {
 
 	catLower := strings.ToLower(NormalizeCategory(f.Category))
 	switch {
+	case strings.Contains(catLower, "connection-indicator") || strings.Contains(catLower, "connection indicator") ||
+		f.Details["analysis_method"] == "STATIC_ANALYSIS" || f.Details["indicator_type"] != "":
+		detMethod = "static_analysis"
+		detStatus = "INDICATOR_DETECTED"
+		verStatus = VerificationNotVerified
+		verResult = "Static connection indicator detected; service connectivity and access not verified."
+		negEvidence = "Static analysis only. Zero active network connections or DNS queries were made. Service reachability, credential validity, and resource exposure remain unverified."
+		httpStatus = 0
+
 	case strings.Contains(catLower, "privileged"):
 		detMethod = "static_analysis"
 		detStatus = "DETECTED"

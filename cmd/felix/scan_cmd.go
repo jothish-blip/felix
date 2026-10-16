@@ -689,6 +689,18 @@ func runScan(args []string) int {
 				fmt.Println()
 			}
 
+			if len(cloudResult.ConnectionIndicators) > 0 {
+				fmt.Printf("Connection indicators (%d):\n", len(cloudResult.ConnectionIndicators))
+				for _, ci := range cloudResult.ConnectionIndicators {
+					credStatus := "endpoint only"
+					if ci.HasCredentials {
+						credStatus = "credentials detected"
+					}
+					fmt.Printf("  [%-21s] %-14s -> %s (%s, %s)\n", ci.Type, ci.Technology, ci.Endpoint, ci.Source.Identifier, credStatus)
+				}
+				fmt.Println()
+			}
+
 			if len(cloudResult.Findings) > 0 {
 				fmt.Println("Findings:")
 				for _, f := range cloudResult.Findings {
