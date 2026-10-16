@@ -666,16 +666,23 @@ func FromAPIFinding(target string, f api.APIFinding) Finding {
 
 	case cat == "django-debug-mode":
 		detMethod = "active_probe"
-		detStatus = "DETECTED"
-		verStatus = VerificationVerified
-		verResult = "Django technical 500 debug page confirmed (DEBUG=True). Detailed traceback and environment data exposed."
-		negEvidence = "All traceback paths and settings values were bounded and redacted."
+		if f.Confidence == api.ConfidenceMedium {
+			detStatus = "OBSERVED"
+			verStatus = VerificationObserved
+			verResult = "Django framework exception traceback observed exposing internal filesystem paths (suspected debug mode; technical developer template unconfirmed)."
+			negEvidence = "Traceback observed without official Django developer template; DEBUG=True configuration remains unconfirmed."
+		} else {
+			detStatus = "DETECTED"
+			verStatus = VerificationVerified
+			verResult = "Django technical 500 debug page confirmed (DEBUG=True). Detailed developer traceback and environment data exposed."
+			negEvidence = "All traceback paths and settings values were bounded and redacted."
+		}
 
 	case cat == "django-urlconf-disclosure":
 		detMethod = "active_probe"
 		detStatus = "DETECTED"
 		verStatus = VerificationVerified
-		verResult = "Django technical 404 page exposed application URLconf routing patterns."
+		verResult = "Django technical 404 page exposed application URLconf routing patterns (DEBUG=True confirmed)."
 		negEvidence = "URL patterns cataloged without recursive probing."
 
 	case cat == "django-browsable-api":
@@ -694,17 +701,17 @@ func FromAPIFinding(target string, f api.APIFinding) Finding {
 
 	case cat == "fastapi-sensitive-paths":
 		detMethod = "active_probe"
-		detStatus = "DETECTED"
-		verStatus = VerificationVerified
-		verResult = "FastAPI OpenAPI specification revealed sensitive internal or administrative route paths."
-		negEvidence = "Disclosed route patterns cataloged without recursive probing."
+		detStatus = "OBSERVED"
+		verStatus = VerificationObserved
+		verResult = "FastAPI OpenAPI specification revealed route definitions matching internal/administrative naming conventions (route visibility observation)."
+		negEvidence = "Route definitions cataloged from schema without recursive probing; reachability and authorization state remain unverified."
 
 	case cat == "fastapi-sensitive-schema":
 		detMethod = "active_probe"
 		detStatus = "DETECTED"
 		verStatus = VerificationVerified
 		verResult = "FastAPI OpenAPI specification contains embedded credentials, tokens, or sensitive default values."
-		negEvidence = "All discovered secret values were redacted from output."
+		negEvidence = "All discovered secret values were redacted from output; credential validity and active authorization status were not verified."
 
 	case cat == "sensitive-endpoint-protected":
 		detMethod = "active_probe"

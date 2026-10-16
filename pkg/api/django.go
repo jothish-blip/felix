@@ -253,9 +253,30 @@ func InspectDjangoTechnical500(resp *ProbeResponse, endpointURL string) *APIFind
 		}
 	}
 
-	severity := SeverityHigh
+	// Distinguish confirmed Django technical developer debug page from generic exception traceback
+	hasDeveloperTemplate := strings.Contains(lowerBody, "technical information (for developers)") ||
+		strings.Contains(bodyStr, `id="settings-meta"`) ||
+		(strings.Contains(bodyStr, `<div id="summary">`) && strings.Contains(lowerBody, "django version:") && strings.Contains(lowerBody, "python executable:"))
+
+	debugModeStatus := "suspected"
+	confidence := ConfidenceMedium
+	desc := "Django framework exception traceback and internal path disclosure (suspected debug mode)"
+	if hasDeveloperTemplate {
+		debugModeStatus = "confirmed"
+		confidence = ConfidenceHigh
+		desc = "Django technical 500 debug page exposed (DEBUG=True confirmed)"
+	}
+
+	// Evaluate severity based on actual sensitivity of disclosed content
+	severity := SeverityMedium
 	if hasUnmaskedSecret {
 		severity = SeverityCritical
+	} else if hasDeveloperTemplate {
+		severity = SeverityHigh
+	} else if len(exposedPaths) > 1 {
+		severity = SeverityMedium
+	} else {
+		severity = SeverityLow
 	}
 
 	// Format evidence cleanly with bounded, redacted strings
@@ -269,8 +290,14 @@ func InspectDjangoTechnical500(resp *ProbeResponse, endpointURL string) *APIFind
 			len(exposedPaths), strings.Join(sample, ", "))
 	}
 
-	evidence := fmt.Sprintf("HTTP %d Django technical 500 debug page confirmed (DEBUG=True).%s",
-		resp.StatusCode, pathSummary)
+	statusPrefix := "HTTP %d Django exception traceback observed exposing internal filesystem paths (suspected debug mode)."
+	if hasDeveloperTemplate {
+		statusPrefix = "HTTP %d Django technical 500 debug page confirmed (DEBUG=True)."
+	}
+	evidence := fmt.Sprintf(statusPrefix, resp.StatusCode)
+	if pathSummary != "" {
+		evidence += pathSummary
+	}
 	if djangoVersion != "" {
 		evidence += fmt.Sprintf(" Framework: Django %s.", djangoVersion)
 	}
@@ -279,9 +306,16 @@ func InspectDjangoTechnical500(resp *ProbeResponse, endpointURL string) *APIFind
 			strings.Join(unmaskedSecretKeys, ", "))
 	}
 
+	var negEv string
+	if !hasDeveloperTemplate {
+		negEv = "Traceback observed without official Django developer template; DEBUG=True configuration remains unconfirmed."
+	} else if !hasUnmaskedSecret {
+		negEv = "Official Django debug page confirmed; no unmasked passwords or secret keys were detected."
+	}
+
 	details := map[string]string{
 		"framework":   "Django",
-		"debug_mode":  "true",
+		"debug_mode":  debugModeStatus,
 		"http_status": fmt.Sprintf("%d", resp.StatusCode),
 	}
 	if djangoVersion != "" {
@@ -302,17 +336,18 @@ func InspectDjangoTechnical500(resp *ProbeResponse, endpointURL string) *APIFind
 	}
 
 	return &APIFinding{
-		Category:       CategoryDjangoDebugMode,
-		Endpoint:       endpointURL,
-		Method:         http.MethodGet,
-		Description:    "Django technical 500 debug page exposed (DEBUG=True)",
-		Evidence:       secrets.RedactText(evidence),
-		Severity:       severity,
-		Confidence:     ConfidenceHigh,
-		Fingerprint:    GenerateFingerprint(CategoryDjangoDebugMode, endpointURL, http.MethodGet),
-		Classification: ClassHealth,
-		Details:        details,
-		HTTPStatus:     resp.StatusCode,
+		Category:         CategoryDjangoDebugMode,
+		Endpoint:         endpointURL,
+		Method:           http.MethodGet,
+		Description:      desc,
+		Evidence:         secrets.RedactText(evidence),
+		NegativeEvidence: negEv,
+		Severity:         severity,
+		Confidence:       confidence,
+		Fingerprint:      GenerateFingerprint(CategoryDjangoDebugMode, endpointURL, http.MethodGet),
+		Classification:   ClassHealth,
+		Details:          details,
+		HTTPStatus:       resp.StatusCode,
 	}
 }
 

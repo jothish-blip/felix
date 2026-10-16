@@ -65,8 +65,8 @@ func TestDjango_Technical500ErrorPage(t *testing.T) {
 			if f.Details["django_version"] != "4.2.7" {
 				t.Errorf("expected Django version 4.2.7, got %s", f.Details["django_version"])
 			}
-			if f.Details["debug_mode"] != "true" {
-				t.Errorf("expected debug_mode true")
+			if f.Details["debug_mode"] != "confirmed" {
+				t.Errorf("expected debug_mode confirmed, got %s", f.Details["debug_mode"])
 			}
 			break
 		}
@@ -124,6 +124,55 @@ func TestDjango_Generic500Suppressed(t *testing.T) {
 
 	if len(findings) > 0 {
 		t.Errorf("expected generic 500 error page to be suppressed, got %d findings", len(findings))
+	}
+}
+
+// Test: Traceback without official Django developer template produces suspected debug mode
+func TestDjango_SuspectedDebugModeTraceback(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `<!DOCTYPE html>
+<html>
+<body>
+<div id="traceback">
+  <h2>Traceback (most recent call last):</h2>
+  <div class="frame">File "/app/myproject/views.py", line 42, in get_users</div>
+  <div class="frame">File "/usr/local/lib/python3.11/site-packages/django/core/handlers/base.py", line 197, in get_response</div>
+</div>
+<h2>Request information</h2>
+</body>
+</html>`)
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOptions{HTTPClient: server.Client(), AllowLoopback: true})
+	findings := AuditDjangoDiagnostics(context.Background(), client, server.URL, nil)
+
+	if len(findings) == 0 {
+		t.Fatalf("expected Django diagnostic traceback finding, got 0")
+	}
+
+	found := false
+	for _, f := range findings {
+		if f.Category == CategoryDjangoDebugMode {
+			found = true
+			if f.Confidence != ConfidenceMedium {
+				t.Errorf("expected ConfidenceMedium for suspected debug traceback, got %s", f.Confidence)
+			}
+			if f.Details["debug_mode"] != "suspected" {
+				t.Errorf("expected debug_mode: suspected, got %s", f.Details["debug_mode"])
+			}
+			if !strings.Contains(f.Description, "suspected debug mode") {
+				t.Errorf("expected description to indicate suspected debug mode, got %s", f.Description)
+			}
+			if f.Severity != SeverityMedium {
+				t.Errorf("expected SeverityMedium for suspected debug mode traceback, got %s", f.Severity)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected CategoryDjangoDebugMode finding for traceback")
 	}
 }
 
@@ -464,11 +513,17 @@ func TestFastAPI_SensitiveInternalPathsDisclosure(t *testing.T) {
 	for _, f := range findings {
 		if f.Category == CategoryFastAPISensitivePaths {
 			found = true
-			if f.Severity != SeverityMedium {
-				t.Errorf("expected SeverityMedium for sensitive internal paths, got %s", f.Severity)
+			if f.Severity != SeverityInfo {
+				t.Errorf("expected SeverityInfo for sensitive internal paths, got %s", f.Severity)
+			}
+			if f.Confidence != ConfidenceLow {
+				t.Errorf("expected ConfidenceLow for sensitive internal paths, got %s", f.Confidence)
 			}
 			if !strings.Contains(f.Evidence, "/admin/flush_cache") {
 				t.Errorf("expected evidence to mention /admin/flush_cache, got %s", f.Evidence)
+			}
+			if !strings.Contains(f.NegativeEvidence, "does not demonstrate unauthorized access") {
+				t.Errorf("expected negative evidence explaining route existence != access, got %s", f.NegativeEvidence)
 			}
 			break
 		}
@@ -532,6 +587,91 @@ func TestFastAPI_EmbeddedSecretInSchema(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected CategoryFastAPISensitiveSchema finding")
+	}
+}
+
+// Test: OpenAPI schema placeholders must NOT be treated as sensitive embedded secrets
+func TestFastAPI_SchemaPlaceholderSuppression(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/openapi.json" {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{
+  "openapi": "3.0.0",
+  "info": {"title": "Placeholder API"},
+  "paths": {
+    "/auth/login": {
+      "post": {
+        "parameters": [
+          {"name": "password", "schema": {"type": "string", "default": "password"}},
+          {"name": "api_key", "schema": {"type": "string", "example": "string"}},
+          {"name": "token", "schema": {"type": "string", "default": "your-api-key"}},
+          {"name": "secret", "schema": {"type": "string", "default": "******"}},
+          {"name": "bearer", "schema": {"type": "string", "default": "bearer <token>"}}
+        ]
+      }
+    }
+  }
+}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOptions{HTTPClient: server.Client(), AllowLoopback: true})
+	findings := AuditFastAPIDocs(context.Background(), client, server.URL, nil)
+
+	for _, f := range findings {
+		if f.Category == CategoryFastAPISensitiveSchema {
+			t.Errorf("schema placeholders must NOT trigger sensitive schema finding, got: %+v", f)
+		}
+	}
+}
+
+// Test: Unmasked credentials embedded in route descriptions or summaries must be detected and redacted
+func TestFastAPI_DescriptionSecretDetection(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/openapi.json" {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{
+  "openapi": "3.0.0",
+  "info": {"title": "Leaky Docs API"},
+  "paths": {
+    "/webhooks": {
+      "post": {
+        "summary": "Webhook endpoint",
+        "description": "Provide the webhook secret: %s for authentication",
+        "responses": {"200": {"description": "OK"}}
+      }
+    }
+  }
+}`, syntheticCanarySecret)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOptions{HTTPClient: server.Client(), AllowLoopback: true})
+	findings := AuditFastAPIDocs(context.Background(), client, server.URL, nil)
+
+	found := false
+	for _, f := range findings {
+		if f.Category == CategoryFastAPISensitiveSchema {
+			found = true
+			if f.Severity != SeverityHigh {
+				t.Errorf("expected SeverityHigh for secret in description, got %s", f.Severity)
+			}
+			if strings.Contains(f.Evidence, syntheticCanarySecret) {
+				t.Fatalf("SECURITY LEAK: canary secret present in evidence: %s", f.Evidence)
+			}
+			if strings.Contains(fmt.Sprintf("%v", f.Details), syntheticCanarySecret) {
+				t.Fatalf("SECURITY LEAK: canary secret present in details: %v", f.Details)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected CategoryFastAPISensitiveSchema finding for credential in description")
 	}
 }
 

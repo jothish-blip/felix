@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -204,45 +205,50 @@ func InspectOpenAPISchema(resp *ProbeResponse, endpointURL string) []APIFinding 
 
 	var findings []APIFinding
 
-	// Finding Case A: Embedded Credentials / Secrets in Schema (SeverityHigh)
+	// Finding Case A: Embedded Credentials / Secrets in Schema (Demonstrated Information Disclosure)
 	if hasSecret {
-		ev := fmt.Sprintf("HTTP 200 OK. FastAPI OpenAPI schema contains unmasked credential for field %q (secret value redacted).",
+		ev := fmt.Sprintf("HTTP 200 OK. FastAPI OpenAPI schema contains unmasked credential for field %q (secret value redacted). Note: Credential validity and active authorization status were not verified.",
 			secretKey)
+		negEv := "Credential observed in schema definition; active authentication or authorization against backend services was not attempted."
 		details := map[string]string{
-			"framework":    "FastAPI",
-			"openapi_ver":  openAPIVer,
-			"api_title":    infoTitle,
-			"secret_field": secretKey,
-			"total_routes": fmt.Sprintf("%d", len(allRoutes)),
-			"http_status":  "200",
+			"framework":                "FastAPI",
+			"openapi_ver":              openAPIVer,
+			"api_title":                infoTitle,
+			"secret_field":             secretKey,
+			"credential_active_status": "unverified",
+			"total_routes":             fmt.Sprintf("%d", len(allRoutes)),
+			"http_status":              "200",
 		}
 		if resp.Truncated {
 			details["limitations"] = "Schema response exceeded 512 KiB and was bounded to prevent memory exhaustion"
 		}
 
 		findings = append(findings, APIFinding{
-			Category:       CategoryFastAPISensitiveSchema,
-			Endpoint:       endpointURL,
-			Method:         http.MethodGet,
-			Description:    "FastAPI OpenAPI schema contains embedded credentials or sensitive defaults",
-			Evidence:       secrets.RedactText(ev),
-			Severity:       SeverityHigh,
-			Confidence:     ConfidenceHigh,
-			Fingerprint:    GenerateFingerprint(CategoryFastAPISensitiveSchema, endpointURL, http.MethodGet),
-			Classification: ClassDocumentation,
-			Details:        details,
-			HTTPStatus:     http.StatusOK,
+			Category:         CategoryFastAPISensitiveSchema,
+			Endpoint:         endpointURL,
+			Method:           http.MethodGet,
+			Description:      "FastAPI OpenAPI schema contains embedded credentials or sensitive defaults",
+			Evidence:         secrets.RedactText(ev),
+			NegativeEvidence: negEv,
+			Severity:         SeverityHigh,
+			Confidence:       ConfidenceMedium,
+			Fingerprint:      GenerateFingerprint(CategoryFastAPISensitiveSchema, endpointURL, http.MethodGet),
+			Classification:   ClassDocumentation,
+			Details:          details,
+			HTTPStatus:       http.StatusOK,
 		})
 	}
 
-	// Finding Case B: Sensitive / Administrative Route Definitions in Schema (SeverityMedium)
+	// Finding Case B: Sensitive / Administrative Route Definitions in Schema (Route Visibility Observation)
+	// Route-name visibility alone does not prove unauthorized access, bypass, or vulnerability; classified as INFO.
 	if len(sensitiveRoutes) > 0 {
 		sample := sensitiveRoutes
 		if len(sample) > 4 {
 			sample = sample[:4]
 		}
-		ev := fmt.Sprintf("HTTP 200 OK. FastAPI OpenAPI schema exposes %d internal/administrative route definition(s): [%s].",
+		ev := fmt.Sprintf("HTTP 200 OK. FastAPI OpenAPI schema includes %d route definition(s) matching administrative/internal naming conventions: [%s]. Route definitions cataloged from schema; endpoint reachability, authorization enforcement, and access controls were not evaluated (no recursive probing).",
 			len(sensitiveRoutes), strings.Join(sample, ", "))
+		negEv := "Route existence in schema does not demonstrate unauthorized access, authorization bypass, or reachability."
 		details := map[string]string{
 			"framework":              "FastAPI",
 			"openapi_ver":            openAPIVer,
@@ -251,23 +257,26 @@ func InspectOpenAPISchema(resp *ProbeResponse, endpointURL string) []APIFinding 
 			"sample_sensitive_route": sensitiveRoutes[0],
 			"total_routes":           fmt.Sprintf("%d", len(allRoutes)),
 			"http_status":            "200",
+			"route_visibility_only":  "true",
+			"authorization_status":   "unverified",
 		}
 		if resp.Truncated {
 			details["limitations"] = "Schema response exceeded 512 KiB and was bounded to prevent memory exhaustion"
 		}
 
 		findings = append(findings, APIFinding{
-			Category:       CategoryFastAPISensitivePaths,
-			Endpoint:       endpointURL,
-			Method:         http.MethodGet,
-			Description:    "FastAPI OpenAPI schema exposes internal or administrative route definitions",
-			Evidence:       secrets.RedactText(ev),
-			Severity:       SeverityMedium,
-			Confidence:     ConfidenceHigh,
-			Fingerprint:    GenerateFingerprint(CategoryFastAPISensitivePaths, endpointURL, http.MethodGet),
-			Classification: ClassDocumentation,
-			Details:        details,
-			HTTPStatus:     http.StatusOK,
+			Category:         CategoryFastAPISensitivePaths,
+			Endpoint:         endpointURL,
+			Method:           http.MethodGet,
+			Description:      "FastAPI OpenAPI schema contains internal or administrative route definitions (route visibility observation)",
+			Evidence:         secrets.RedactText(ev),
+			NegativeEvidence: negEv,
+			Severity:         SeverityInfo,
+			Confidence:       ConfidenceLow,
+			Fingerprint:      GenerateFingerprint(CategoryFastAPISensitivePaths, endpointURL, http.MethodGet),
+			Classification:   ClassDocumentation,
+			Details:          details,
+			HTTPStatus:       http.StatusOK,
 		})
 	}
 
@@ -398,6 +407,118 @@ func isSensitiveInternalRoute(routePath string) bool {
 	return false
 }
 
+var descriptionSecretRegex = regexp.MustCompile(`(?i)(?:api[_-]?key|password|webhook[_-]?secret|secret(?:[_-]?token)?|bearer(?:[_-]?token)?|access[_-]?token|auth[_-]?token)\s*[:=]\s*["']?([a-zA-Z0-9_\-\.]{8,})`)
+
+var commonSchemaPlaceholders = map[string]struct{}{
+	"string":         {},
+	"str":            {},
+	"text":           {},
+	"password":       {},
+	"passwd":         {},
+	"pass":           {},
+	"secret":         {},
+	"token":          {},
+	"api_key":        {},
+	"apikey":         {},
+	"key":            {},
+	"admin":          {},
+	"user":           {},
+	"test":           {},
+	"demo":           {},
+	"sample":         {},
+	"example":        {},
+	"placeholder":    {},
+	"dummy":          {},
+	"your_api_key":   {},
+	"your-api-key":   {},
+	"yourapikey":     {},
+	"your_secret":    {},
+	"your-secret":    {},
+	"yoursecret":     {},
+	"your_token":     {},
+	"your-token":     {},
+	"yourtoken":      {},
+	"null":           {},
+	"nil":            {},
+	"none":           {},
+	"undefined":      {},
+	"true":           {},
+	"false":          {},
+	"0":              {},
+	"1":              {},
+	"123":            {},
+	"12345":          {},
+	"123456":         {},
+	"test123":        {},
+	"admin123":       {},
+	"bearer <token>": {},
+	"bearer token":   {},
+	"bearer":         {},
+	"token_here":     {},
+	"enter_token":    {},
+	"insert_key":     {},
+	"changeme":       {},
+	"change_me":      {},
+	"replace_me":     {},
+	"todo":           {},
+	"fixme":          {},
+	"mysecret":       {},
+	"mypassword":     {},
+}
+
+func isSchemaPlaceholder(val string) bool {
+	clean := strings.TrimSpace(val)
+	if clean == "" {
+		return true
+	}
+	lower := strings.ToLower(clean)
+	if _, ok := commonSchemaPlaceholders[lower]; ok {
+		return true
+	}
+	if secrets.IsPlaceholder(clean) {
+		return true
+	}
+	// Masked values (e.g. '******', '********', '[FILTERED]', '[REDACTED]')
+	if strings.Count(clean, "*") >= 3 || strings.Contains(lower, "filter") || strings.Contains(lower, "redact") {
+		return true
+	}
+	// Trivial repeating characters like 'xxxxxx', 'aaaaaa'
+	if len(clean) > 1 {
+		allSame := true
+		for i := 1; i < len(clean); i++ {
+			if clean[i] != clean[0] {
+				allSame = false
+				break
+			}
+		}
+		if allSame {
+			return true
+		}
+	}
+	return false
+}
+
+func isDefensibleSchemaSecret(key, val string) bool {
+	if isSchemaPlaceholder(val) {
+		return false
+	}
+	cleanVal := strings.TrimSpace(val)
+	if len(cleanVal) < 8 {
+		return false
+	}
+	lowerVal := strings.ToLower(cleanVal)
+	if strings.HasPrefix(lowerVal, "http://") || strings.HasPrefix(lowerVal, "https://") {
+		return strings.Contains(cleanVal, "@")
+	}
+	lowerKey := strings.ToLower(key)
+	if strings.Contains(lowerKey, "password") || strings.Contains(lowerKey, "secret") ||
+		strings.Contains(lowerKey, "token") || strings.Contains(lowerKey, "apikey") ||
+		strings.Contains(lowerKey, "private") {
+		return len(cleanVal) >= 8
+	}
+	return len(cleanVal) >= 16 && secrets.ShannonEntropy(cleanVal) >= 3.5
+}
+
 // findEmbeddedSecretInSchema traverses OpenAPI schema objects looking for unmasked default/example secrets.
 func findEmbeddedSecretInSchema(root map[string]interface{}) (bool, string, string) {
 	var walk func(node interface{}, currentKey string) (bool, string, string)
@@ -414,7 +535,7 @@ func findEmbeddedSecretInSchema(root map[string]interface{}) (bool, string, stri
 				for _, secretProp := range []string{"default", "example", "value"} {
 					if val, ok := v[secretProp]; ok {
 						if strVal, ok := val.(string); ok {
-							if isDefensibleSecretValue(effectiveKey, strVal) {
+							if isDefensibleSchemaSecret(effectiveKey, strVal) {
 								return true, effectiveKey, strVal
 							}
 						}
@@ -424,6 +545,19 @@ func findEmbeddedSecretInSchema(root map[string]interface{}) (bool, string, stri
 
 			for k, val := range v {
 				lowerK := strings.ToLower(k)
+
+				// Check descriptions or summaries for embedded credential patterns
+				if lowerK == "description" || lowerK == "summary" {
+					if descStr, ok := val.(string); ok {
+						if m := descriptionSecretRegex.FindStringSubmatch(descStr); len(m) > 1 {
+							cand := m[1]
+							if isDefensibleSchemaSecret("description_secret", cand) {
+								return true, "description_credential", cand
+							}
+						}
+					}
+				}
+
 				subKey := k
 				if effectiveKey != "" && (lowerK == "schema" || lowerK == "items" || lowerK == "default" || lowerK == "example") {
 					subKey = effectiveKey
