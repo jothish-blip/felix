@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+
+	"felix/pkg/secrets"
 )
 
 // NormalizeURL canonicalizes a target or endpoint URL without destroying path semantics.
@@ -260,9 +262,9 @@ func NormalizeFinding(f Finding) Finding {
 	f.Severity = MapSeverity(f.Category, f.Severity)
 	f.Confidence = NormalizeConfidence(f.Confidence)
 	f.Source = NormalizeSource(f.Source)
-	f.Title = strings.TrimSpace(f.Title)
-	f.Description = strings.TrimSpace(f.Description)
-	f.Evidence = strings.TrimSpace(f.Evidence)
+	f.Title = secrets.RedactText(strings.TrimSpace(f.Title))
+	f.Description = secrets.RedactText(strings.TrimSpace(f.Description))
+	f.Evidence = secrets.RedactText(strings.TrimSpace(f.Evidence))
 	f.RuleID = strings.TrimSpace(f.RuleID)
 	f.PrimaryAssetID = strings.TrimSpace(f.PrimaryAssetID)
 
@@ -312,10 +314,22 @@ func NormalizeFinding(f Finding) Finding {
 	}
 
 	// Normalize EvidenceDetails
-	f.EvidenceDetails.Observation = strings.TrimSpace(f.EvidenceDetails.Observation)
-	f.EvidenceDetails.Location = strings.TrimSpace(f.EvidenceDetails.Location)
+	f.EvidenceDetails.Observation = secrets.RedactText(strings.TrimSpace(f.EvidenceDetails.Observation))
+	f.EvidenceDetails.Location = secrets.SanitizeURL(strings.TrimSpace(f.EvidenceDetails.Location))
 	f.EvidenceDetails.DetectionMethod = strings.TrimSpace(f.EvidenceDetails.DetectionMethod)
-	f.EvidenceDetails.NegativeEvidence = strings.TrimSpace(f.EvidenceDetails.NegativeEvidence)
+	f.EvidenceDetails.NegativeEvidence = secrets.RedactText(strings.TrimSpace(f.EvidenceDetails.NegativeEvidence))
+
+	if len(f.EvidenceDetails.Details) > 0 {
+		cleanDetails := make(map[string]string, len(f.EvidenceDetails.Details))
+		for k, v := range f.EvidenceDetails.Details {
+			if secrets.IsSensitiveKey(k) || secrets.IsSensitiveHeader(k) {
+				cleanDetails[k] = "[REDACTED]"
+			} else {
+				cleanDetails[k] = secrets.RedactText(v)
+			}
+		}
+		f.EvidenceDetails.Details = cleanDetails
+	}
 
 	if f.EvidenceDetails.Observation == "" && f.Evidence != "" {
 		f.EvidenceDetails.Observation = f.Evidence

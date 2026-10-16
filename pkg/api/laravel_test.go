@@ -223,7 +223,7 @@ func TestLaravel_IgnitionHealthCheck(t *testing.T) {
 	}
 }
 
-// Test 6: Ignition health check endpoint with command execution enabled -> SeverityMedium (unconfirmed exploitability)
+// Test 6: Ignition health check endpoint with command execution enabled -> SeverityInfo (unconfirmed exploitability)
 func TestLaravel_IgnitionHealthCheckCommandExecution(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/_ignition/health-check" {
@@ -247,14 +247,17 @@ func TestLaravel_IgnitionHealthCheckCommandExecution(t *testing.T) {
 	for _, f := range findings {
 		if strings.Contains(f.Endpoint, "/_ignition/health-check") {
 			found = true
-			if f.Severity != SeverityMedium {
-				t.Errorf("expected SeverityMedium when can_execute_commands is true, got %s", f.Severity)
+			if f.Severity != SeverityInfo {
+				t.Errorf("expected SeverityInfo when can_execute_commands is true, got %s", f.Severity)
 			}
 			if f.Details["exploitability"] != "unconfirmed" {
 				t.Errorf("expected exploitability unconfirmed, got %s", f.Details["exploitability"])
 			}
 			if f.Details["command_execution_tested"] != "false" {
 				t.Errorf("expected command_execution_tested false, got %s", f.Details["command_execution_tested"])
+			}
+			if f.Details["impact"] != "informational_diagnostic_disclosure" {
+				t.Errorf("expected impact informational_diagnostic_disclosure, got %s", f.Details["impact"])
 			}
 			break
 		}
@@ -811,5 +814,580 @@ func TestLaravel_TelescopeOperationalEventEntries(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected CategoryLaravelTelescopeData finding for operational entries")
+	}
+}
+
+// Test 23: Telescope harmless SQL queries (SELECT 1, migrations) -> SeverityMedium (not High)
+func TestLaravel_TelescopeBenignQueries_SeverityMedium(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/telescope/telescope-api/requests" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{
+  "entries": [
+    {
+      "id": "1",
+      "type": "query",
+      "content": {
+        "sql": "SELECT 1"
+      }
+    },
+    {
+      "id": "2",
+      "type": "query",
+      "content": {
+        "sql": "SELECT * FROM migrations ORDER BY batch ASC"
+      }
+    }
+  ],
+  "status": "enabled"
+}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOptions{HTTPClient: server.Client(), AllowLoopback: true})
+	findings := AuditLaravelDiagnostics(context.Background(), client, server.URL, nil)
+
+	if len(findings) == 0 {
+		t.Fatalf("expected Telescope telemetry finding, got 0")
+	}
+
+	found := false
+	for _, f := range findings {
+		if f.Category == CategoryLaravelTelescopeData {
+			found = true
+			if f.Severity != SeverityMedium {
+				t.Errorf("expected SeverityMedium for harmless/routine queries, got %s", f.Severity)
+			}
+			if !strings.Contains(f.Details["sensitive_data_types"], "routine_database_queries") {
+				t.Errorf("expected sensitive_data_types to mention routine_database_queries, got %s", f.Details["sensitive_data_types"])
+			}
+			if strings.Contains(f.Details["sensitive_data_types"], "sensitive_database_queries") {
+				t.Errorf("must not classify harmless queries as sensitive_database_queries")
+			}
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected CategoryLaravelTelescopeData finding")
+	}
+}
+
+// Test 24: Telescope routine framework exceptions (ValidationException, NotFoundHttpException) -> SeverityMedium (not High)
+func TestLaravel_TelescopeRoutineExceptions_SeverityMedium(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/telescope/telescope-api/requests" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{
+  "entries": [
+    {
+      "id": "1",
+      "type": "exception",
+      "content": {
+        "class": "Illuminate\\Validation\\ValidationException",
+        "message": "The given data was invalid."
+      }
+    },
+    {
+      "id": "2",
+      "type": "exception",
+      "content": {
+        "class": "Symfony\\Component\\HttpKernel\\Exception\\NotFoundHttpException",
+        "message": "Resource not found"
+      }
+    }
+  ],
+  "status": "enabled"
+}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOptions{HTTPClient: server.Client(), AllowLoopback: true})
+	findings := AuditLaravelDiagnostics(context.Background(), client, server.URL, nil)
+
+	if len(findings) == 0 {
+		t.Fatalf("expected Telescope telemetry finding, got 0")
+	}
+
+	found := false
+	for _, f := range findings {
+		if f.Category == CategoryLaravelTelescopeData {
+			found = true
+			if f.Severity != SeverityMedium {
+				t.Errorf("expected SeverityMedium for routine exceptions, got %s", f.Severity)
+			}
+			if !strings.Contains(f.Details["sensitive_data_types"], "routine_exceptions") {
+				t.Errorf("expected sensitive_data_types to mention routine_exceptions, got %s", f.Details["sensitive_data_types"])
+			}
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected CategoryLaravelTelescopeData finding")
+	}
+}
+
+// Test 25: Telescope sensitive internal exception (QueryException disclosing database error) -> SeverityHigh
+func TestLaravel_TelescopeSensitiveExceptions_SeverityHigh(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/telescope/telescope-api/requests" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{
+  "entries": [
+    {
+      "id": "1",
+      "type": "exception",
+      "content": {
+        "class": "Illuminate\\Database\\QueryException",
+        "message": "SQLSTATE[42S02]: Base table or view not found: 1146 Table 'production_db.orders' doesn't exist"
+      }
+    }
+  ],
+  "status": "enabled"
+}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOptions{HTTPClient: server.Client(), AllowLoopback: true})
+	findings := AuditLaravelDiagnostics(context.Background(), client, server.URL, nil)
+
+	if len(findings) == 0 {
+		t.Fatalf("expected Telescope telemetry finding, got 0")
+	}
+
+	found := false
+	for _, f := range findings {
+		if f.Category == CategoryLaravelTelescopeData {
+			found = true
+			if f.Severity != SeverityHigh {
+				t.Errorf("expected SeverityHigh for QueryException disclosing database schema, got %s", f.Severity)
+			}
+			if !strings.Contains(f.Details["sensitive_data_types"], "application_exceptions") {
+				t.Errorf("expected application_exceptions in sensitive_data_types, got %s", f.Details["sensitive_data_types"])
+			}
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected CategoryLaravelTelescopeData finding")
+	}
+}
+
+// Test 26: Telescope sensitive request payload (PII disclosure) -> SeverityHigh
+func TestLaravel_TelescopeSensitiveRequestPayload_SeverityHigh(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/telescope/telescope-api/requests" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{
+  "entries": [
+    {
+      "id": "1",
+      "type": "request",
+      "content": {
+        "uri": "/api/v1/profile",
+        "method": "POST",
+        "payload": {
+          "email": "customer@example.com",
+          "phone": "+1-555-0199",
+          "ssn": "000-12-3456"
+        }
+      }
+    }
+  ],
+  "status": "enabled"
+}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOptions{HTTPClient: server.Client(), AllowLoopback: true})
+	findings := AuditLaravelDiagnostics(context.Background(), client, server.URL, nil)
+
+	if len(findings) == 0 {
+		t.Fatalf("expected Telescope telemetry finding, got 0")
+	}
+
+	found := false
+	for _, f := range findings {
+		if f.Category == CategoryLaravelTelescopeData {
+			found = true
+			if f.Severity != SeverityHigh {
+				t.Errorf("expected SeverityHigh for sensitive request payload with PII, got %s", f.Severity)
+			}
+			if !strings.Contains(f.Details["sensitive_data_types"], "sensitive_http_requests") {
+				t.Errorf("expected sensitive_http_requests in sensitive_data_types, got %s", f.Details["sensitive_data_types"])
+			}
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected CategoryLaravelTelescopeData finding")
+	}
+}
+
+// Test 27: Telescope telemetry with masked credentials -> SeverityMedium (not Critical, not High)
+func TestLaravel_TelescopeMaskedCredentials_SeverityMedium(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/telescope/telescope-api/requests" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{
+  "entries": [
+    {
+      "id": "1",
+      "type": "request",
+      "content": {
+        "uri": "/login",
+        "headers": {
+          "authorization": ["Bearer ********"]
+        },
+        "payload": {
+          "password": "********",
+          "remember_token": "[REDACTED]"
+        }
+      }
+    }
+  ],
+  "status": "enabled"
+}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOptions{HTTPClient: server.Client(), AllowLoopback: true})
+	findings := AuditLaravelDiagnostics(context.Background(), client, server.URL, nil)
+
+	if len(findings) == 0 {
+		t.Fatalf("expected Telescope telemetry finding, got 0")
+	}
+
+	found := false
+	for _, f := range findings {
+		if f.Category == CategoryLaravelTelescopeData {
+			found = true
+			if f.Severity != SeverityMedium {
+				t.Errorf("MASKED CREDENTIALS MUST NOT TRIGGER CRITICAL OR HIGH: got %s", f.Severity)
+			}
+			if f.Details["unmasked_secrets_count"] != "" {
+				t.Errorf("expected 0 unmasked secrets for masked entries, got %s", f.Details["unmasked_secrets_count"])
+			}
+			if !strings.Contains(f.Details["sensitive_data_types"], "masked_credentials") {
+				t.Errorf("expected masked_credentials in sensitive_data_types, got %s", f.Details["sensitive_data_types"])
+			}
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected CategoryLaravelTelescopeData finding")
+	}
+}
+
+// Test 28: Ignition health check malformed JSON, unrelated JSON, and false positive suppression
+func TestLaravel_IgnitionHealthCheck_MalformedAndFalsePositives(t *testing.T) {
+	// Case A: Malformed JSON
+	serverMalformed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/_ignition/health-check" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{can_execute_commands: invalid_json`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer serverMalformed.Close()
+
+	clientMalformed := NewClient(ClientOptions{HTTPClient: serverMalformed.Client(), AllowLoopback: true})
+	findingsMalformed := AuditLaravelDiagnostics(context.Background(), clientMalformed, serverMalformed.URL, nil)
+	for _, f := range findingsMalformed {
+		if strings.Contains(f.Endpoint, "/_ignition/health-check") {
+			t.Errorf("must NOT produce finding on malformed health-check JSON")
+		}
+	}
+
+	// Case B: Unrelated JSON
+	serverUnrelated := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/_ignition/health-check" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{"status": "UP", "database": "connected"}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer serverUnrelated.Close()
+
+	clientUnrelated := NewClient(ClientOptions{HTTPClient: serverUnrelated.Client(), AllowLoopback: true})
+	findingsUnrelated := AuditLaravelDiagnostics(context.Background(), clientUnrelated, serverUnrelated.URL, nil)
+	for _, f := range findingsUnrelated {
+		if strings.Contains(f.Endpoint, "/_ignition/health-check") {
+			t.Errorf("must NOT produce finding on unrelated JSON without can_execute_commands")
+		}
+	}
+
+	// Case C: HTML response on health-check
+	serverHTML := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/_ignition/health-check" {
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `<html><body>Health OK</body></html>`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer serverHTML.Close()
+
+	clientHTML := NewClient(ClientOptions{HTTPClient: serverHTML.Client(), AllowLoopback: true})
+	findingsHTML := AuditLaravelDiagnostics(context.Background(), clientHTML, serverHTML.URL, nil)
+	for _, f := range findingsHTML {
+		if strings.Contains(f.Endpoint, "/_ignition/health-check") {
+			t.Errorf("must NOT produce finding on HTML response for health-check")
+		}
+	}
+}
+
+// Test 29: Mixed Protection State — Protected Dashboard (403) with Exposed Telemetry API (200)
+func TestLaravel_TelescopeMixed_ProtectedDashboard_ExposedTelemetryAPI(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/telescope" {
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprintf(w, `Forbidden`)
+			return
+		}
+		if r.URL.Path == "/telescope/telescope-api/requests" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{
+  "entries": [
+    {
+      "id": "1",
+      "type": "query",
+      "content": {
+        "sql": "SELECT * FROM users WHERE email = 'admin@example.com'"
+      }
+    }
+  ],
+  "status": "enabled"
+}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOptions{HTTPClient: server.Client(), AllowLoopback: true})
+	findings := AuditLaravelDiagnostics(context.Background(), client, server.URL, nil)
+
+	foundProtectedDashboard := false
+	foundExposedAPI := false
+
+	for _, f := range findings {
+		if strings.HasSuffix(f.Endpoint, "/telescope") {
+			foundProtectedDashboard = true
+			if f.Category != CategoryLaravelTelescopeProtected {
+				t.Errorf("expected CategoryLaravelTelescopeProtected for /telescope, got %s", f.Category)
+			}
+			if f.Severity != SeverityInfo {
+				t.Errorf("expected SeverityInfo for protected dashboard, got %s", f.Severity)
+			}
+		}
+		if strings.Contains(f.Endpoint, "/telescope-api/") {
+			foundExposedAPI = true
+			if f.Category != CategoryLaravelTelescopeData {
+				t.Errorf("expected CategoryLaravelTelescopeData for exposed API, got %s", f.Category)
+			}
+			if f.Severity != SeverityHigh {
+				t.Errorf("expected SeverityHigh for exposed sensitive telemetry API, got %s", f.Severity)
+			}
+		}
+	}
+
+	if !foundProtectedDashboard {
+		t.Errorf("expected finding for protected dashboard")
+	}
+	if !foundExposedAPI {
+		t.Errorf("expected finding for exposed telemetry API")
+	}
+}
+
+// Test 30: Mixed Protection State — Exposed Dashboard Shell (200) with Protected Telemetry API (403)
+func TestLaravel_TelescopeMixed_ExposedDashboard_ProtectedTelemetryAPI(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/telescope" {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `<!DOCTYPE html><html><head><title>Telescope</title></head><body><div id="telescope"></div></body></html>`)
+			return
+		}
+		if r.URL.Path == "/telescope/telescope-api/requests" {
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprintf(w, `Forbidden`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOptions{HTTPClient: server.Client(), AllowLoopback: true})
+	findings := AuditLaravelDiagnostics(context.Background(), client, server.URL, nil)
+
+	foundExposedShell := false
+	foundProtectedAPI := false
+
+	for _, f := range findings {
+		if strings.HasSuffix(f.Endpoint, "/telescope") {
+			foundExposedShell = true
+			if f.Category != CategoryLaravelTelescopeExposed {
+				t.Errorf("expected CategoryLaravelTelescopeExposed for /telescope shell, got %s", f.Category)
+			}
+			if f.Severity != SeverityInfo {
+				t.Errorf("expected SeverityInfo for dashboard shell, got %s", f.Severity)
+			}
+		}
+		if strings.Contains(f.Endpoint, "/telescope-api/") {
+			foundProtectedAPI = true
+			if f.Category != CategoryLaravelTelescopeProtected {
+				t.Errorf("expected CategoryLaravelTelescopeProtected for protected API, got %s", f.Category)
+			}
+			if f.Severity != SeverityInfo {
+				t.Errorf("expected SeverityInfo for protected API, got %s", f.Severity)
+			}
+		}
+	}
+
+	if !foundExposedShell {
+		t.Errorf("expected finding for exposed dashboard shell")
+	}
+	if !foundProtectedAPI {
+		t.Errorf("expected finding for protected telemetry API")
+	}
+}
+
+// Test 31: Read-Only Safety Invariant — Zero State Mutation (all requests must be GET)
+func TestLaravel_ReadOnlySafety_NoStateMutation(t *testing.T) {
+	var methods []string
+	var mu sync.Mutex
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		methods = append(methods, r.Method)
+		mu.Unlock()
+
+		if r.URL.Path == "/telescope" {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `<div id="telescope"></div>`)
+			return
+		}
+		if r.URL.Path == "/_ignition/health-check" {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{"can_execute_commands": false}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOptions{HTTPClient: server.Client(), AllowLoopback: true})
+	_ = AuditLaravelDiagnostics(context.Background(), client, server.URL, nil)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(methods) == 0 {
+		t.Fatalf("expected requests to be dispatched, got 0")
+	}
+	for _, m := range methods {
+		if m != http.MethodGet {
+			t.Errorf("READ-ONLY SAFETY VIOLATION: dispatched non-GET request method: %s", m)
+		}
+	}
+}
+
+// Test 32: Recursive Secret Redaction across deeply nested structures
+func TestLaravel_RecursiveSecretRedaction_DeepNestedCanary(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/telescope/telescope-api/requests" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{
+  "entries": [
+    {
+      "id": "1",
+      "type": "request",
+      "content": {
+        "headers": {
+          "authorization": ["Bearer %s"]
+        },
+        "payload": {
+          "auth": {
+            "credentials": {
+              "token": "%s"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "2",
+      "type": "query",
+      "content": {
+        "sql": "INSERT INTO users (password) VALUES ('%s')"
+      }
+    },
+    {
+      "id": "3",
+      "type": "exception",
+      "content": {
+        "class": "Illuminate\\Database\\QueryException",
+        "message": "Connection refused with password %s"
+      }
+    }
+  ],
+  "status": "enabled"
+}`, syntheticCanarySecret, syntheticCanarySecret, syntheticCanarySecret, syntheticCanarySecret)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOptions{HTTPClient: server.Client(), AllowLoopback: true})
+	findings := AuditLaravelDiagnostics(context.Background(), client, server.URL, nil)
+
+	if len(findings) == 0 {
+		t.Fatalf("expected finding for deeply nested canary entries")
+	}
+
+	for _, f := range findings {
+		// Strict invariant: synthetic canary must NEVER appear anywhere in finding fields
+		if strings.Contains(f.Evidence, syntheticCanarySecret) {
+			t.Fatalf("SECURITY LEAK: synthetic canary appeared in Evidence")
+		}
+		if strings.Contains(f.Description, syntheticCanarySecret) {
+			t.Fatalf("SECURITY LEAK: synthetic canary appeared in Description")
+		}
+		if strings.Contains(f.NegativeEvidence, syntheticCanarySecret) {
+			t.Fatalf("SECURITY LEAK: synthetic canary appeared in NegativeEvidence")
+		}
+		for k, v := range f.Details {
+			if strings.Contains(k, syntheticCanarySecret) || strings.Contains(v, syntheticCanarySecret) {
+				t.Fatalf("SECURITY LEAK: synthetic canary appeared in Details")
+			}
+		}
 	}
 }

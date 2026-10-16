@@ -706,10 +706,26 @@ func TestFromAPIFinding_Laravel(t *testing.T) {
 		},
 		{
 			apiFinding: api.APIFinding{
+				Category:    api.CategoryLaravelIgnitionDebug,
+				Endpoint:    "https://app.example.com/_ignition/health-check",
+				Method:      "GET",
+				Description: "Laravel Ignition health-check diagnostic endpoint reachable (can_execute_commands: true reported)",
+				Severity:    api.SeverityInfo,
+				Confidence:  api.ConfidenceHigh,
+				Fingerprint: api.GenerateFingerprint(api.CategoryLaravelIgnitionDebug, "https://app.example.com/_ignition/health-check", "GET"),
+			},
+			expectedRule:   "API-LARAVEL-IGNITION-DEBUG",
+			expectedStatus: FindingStatusConfirmed,
+			expectedVer:    VerificationObserved,
+			expectedSev:    SeverityInfo,
+			expectedRemSub: "APP_DEBUG=false",
+		},
+		{
+			apiFinding: api.APIFinding{
 				Category:    api.CategoryLaravelTelescopeData,
 				Endpoint:    "https://app.example.com/telescope/telescope-api/requests",
 				Method:      "GET",
-				Description: "Laravel Telescope unauthenticated monitoring telemetry disclosure (queries/requests/exceptions)",
+				Description: "Laravel Telescope unauthenticated monitoring telemetry disclosure (sensitive application data)",
 				Severity:    api.SeverityHigh,
 				Confidence:  api.ConfidenceHigh,
 				Fingerprint: api.GenerateFingerprint(api.CategoryLaravelTelescopeData, "https://app.example.com/telescope/telescope-api/requests", "GET"),

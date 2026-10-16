@@ -249,7 +249,7 @@ func InspectLaravelIgnition(resp *ProbeResponse, endpointURL string) *APIFinding
 		if len(m) > 2 {
 			k := strings.TrimSpace(m[1])
 			v := strings.TrimSpace(m[2])
-			if isLaravelSecretKey(k) && (isDefensibleSecretValue(k, v) || (len(v) >= 8 && !secrets.IsPlaceholder(v))) {
+			if isGenuineUnmaskedSecret(k, v) {
 				hasUnmaskedSecret = true
 				unmaskedSecretKeys = append(unmaskedSecretKeys, k)
 			}
@@ -347,13 +347,21 @@ func InspectLaravelIgnition(resp *ProbeResponse, endpointURL string) *APIFinding
 		details["limitations"] = "Response exceeded 512 KiB and was bounded to preserve system resources"
 	}
 
+	for k, v := range details {
+		if secrets.IsSensitiveKey(k) || secrets.IsSensitiveHeader(k) {
+			details[k] = "[REDACTED]"
+		} else {
+			details[k] = secrets.RedactText(v)
+		}
+	}
+
 	return &APIFinding{
 		Category:         CategoryLaravelIgnitionDebug,
 		Endpoint:         endpointURL,
 		Method:           http.MethodGet,
-		Description:      desc,
+		Description:      secrets.RedactText(desc),
 		Evidence:         secrets.RedactText(evidence),
-		NegativeEvidence: negEv,
+		NegativeEvidence: secrets.RedactText(negEv),
 		Severity:         severity,
 		Confidence:       confidence,
 		Fingerprint:      GenerateFingerprint(CategoryLaravelIgnitionDebug, endpointURL, http.MethodGet),
@@ -369,28 +377,27 @@ func InspectIgnitionHealthCheck(resp *ProbeResponse, endpointURL string) *APIFin
 		return nil
 	}
 
-	bodyStr := string(resp.Body)
-	lowerBody := strings.ToLower(bodyStr)
-
-	// Must be genuine Ignition health check JSON
-	if !strings.Contains(lowerBody, "can_execute_commands") &&
-		!strings.Contains(lowerBody, "health") &&
-		!strings.Contains(lowerBody, "ignition") {
+	// Strictly validate JSON structure
+	var data map[string]interface{}
+	if err := json.Unmarshal(resp.Body, &data); err != nil {
 		return nil
 	}
 
-	canExecute := strings.Contains(lowerBody, `"can_execute_commands":true`) ||
-		strings.Contains(lowerBody, `"can_execute_commands": true`)
-
-	severity := SeverityInfo
-	desc := "Laravel Ignition health-check diagnostic endpoint reachable"
-	ev := fmt.Sprintf("HTTP 200 OK on %s. Laravel Ignition health-check endpoint responded with diagnostic status (can_execute_commands: false).", endpointURL)
-
-	if canExecute {
-		severity = SeverityMedium
-		desc = "Laravel Ignition health-check diagnostic endpoint reachable (can_execute_commands: true reported)"
-		ev = fmt.Sprintf("HTTP 200 OK on %s. Laravel Ignition health-check endpoint reports can_execute_commands: true. Diagnostic feature flag is enabled; remote command execution exploitability was not tested or verified.", endpointURL)
+	// Must contain can_execute_commands key to be genuine Ignition health-check
+	rawCanExecute, exists := data["can_execute_commands"]
+	if !exists {
+		return nil
 	}
+
+	canExecute, isBool := rawCanExecute.(bool)
+	if !isBool {
+		return nil
+	}
+
+	desc := fmt.Sprintf("Laravel Ignition health-check diagnostic endpoint reachable (can_execute_commands: %t reported)", canExecute)
+	ev := fmt.Sprintf("HTTP 200 OK on %s. Laravel Ignition health-check endpoint responded with diagnostic status (can_execute_commands: %t). Diagnostic feature flag reported; command execution was not tested and exploitability remains unconfirmed.",
+		endpointURL, canExecute)
+	negEv := "Endpoint probed passively; command execution and solution execution were not invoked, and remote command execution was not tested or demonstrated."
 
 	details := map[string]string{
 		"framework":                "Laravel",
@@ -399,17 +406,26 @@ func InspectIgnitionHealthCheck(resp *ProbeResponse, endpointURL string) *APIFin
 		"can_execute_commands":     fmt.Sprintf("%t", canExecute),
 		"command_execution_tested": "false",
 		"exploitability":           "unconfirmed",
+		"impact":                   "informational_diagnostic_disclosure",
 		"http_status":              "200",
+	}
+
+	for k, v := range details {
+		if secrets.IsSensitiveKey(k) || secrets.IsSensitiveHeader(k) {
+			details[k] = "[REDACTED]"
+		} else {
+			details[k] = secrets.RedactText(v)
+		}
 	}
 
 	return &APIFinding{
 		Category:         CategoryLaravelIgnitionDebug,
 		Endpoint:         endpointURL,
 		Method:           http.MethodGet,
-		Description:      desc,
+		Description:      secrets.RedactText(desc),
 		Evidence:         secrets.RedactText(ev),
-		NegativeEvidence: "Endpoint probed passively; command execution and solution execution were not invoked, and remote command execution was not tested or demonstrated.",
-		Severity:         severity,
+		NegativeEvidence: secrets.RedactText(negEv),
+		Severity:         SeverityInfo,
 		Confidence:       ConfidenceHigh,
 		Fingerprint:      GenerateFingerprint(CategoryLaravelIgnitionDebug, endpointURL, http.MethodGet),
 		Classification:   ClassHealth,
@@ -426,28 +442,37 @@ func InspectLaravelTelescope(resp *ProbeResponse, endpointURL string) *APIFindin
 
 	// Case 1: Protected by HTTP Status 401 Unauthorized or 403 Forbidden
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		ev := fmt.Sprintf("HTTP %d observed on %s. Access to Laravel Telescope on this endpoint is restricted by authentication challenge or access controls.",
+		ev := fmt.Sprintf("HTTP %d observed on %s. Access to Laravel Telescope dashboard on this endpoint is restricted by authentication challenge or access controls.",
 			resp.StatusCode, endpointURL)
-		negEv := fmt.Sprintf("Authentication challenge or authorization gate active (HTTP %d) on probed route; unauthenticated access to this endpoint is denied. Access controls for other Telescope resources were not independently tested.", resp.StatusCode)
+		negEv := fmt.Sprintf("Authentication challenge or authorization gate active (HTTP %d) on probed route; unauthenticated access to this endpoint is denied. Access controls for other Telescope resources or API endpoints were not independently tested.", resp.StatusCode)
+		details := map[string]string{
+			"framework":       "Laravel",
+			"component":       "Telescope",
+			"endpoint":        endpointURL,
+			"http_status":     fmt.Sprintf("%d", resp.StatusCode),
+			"observed_access": "restricted",
+			"scope_note":      "restriction confirmed on probed route; sub-resources and telemetry API endpoints were not independently evaluated",
+		}
+		for k, v := range details {
+			if secrets.IsSensitiveKey(k) || secrets.IsSensitiveHeader(k) {
+				details[k] = "[REDACTED]"
+			} else {
+				details[k] = secrets.RedactText(v)
+			}
+		}
 		return &APIFinding{
 			Category:         CategoryLaravelTelescopeProtected,
 			Endpoint:         endpointURL,
 			Method:           http.MethodGet,
 			Description:      "Laravel Telescope interface access restricted on probed endpoint (observed route restriction)",
 			Evidence:         secrets.RedactText(ev),
-			NegativeEvidence: negEv,
+			NegativeEvidence: secrets.RedactText(negEv),
 			Severity:         SeverityInfo,
 			Confidence:       ConfidenceHigh,
 			Fingerprint:      GenerateFingerprint(CategoryLaravelTelescopeProtected, endpointURL, http.MethodGet),
 			Classification:   ClassAdmin,
-			Details: map[string]string{
-				"framework":       "Laravel",
-				"component":       "Telescope",
-				"http_status":     fmt.Sprintf("%d", resp.StatusCode),
-				"observed_access": "restricted",
-				"scope_note":      "restriction confirmed on probed route; sub-resources were not independently evaluated",
-			},
-			HTTPStatus: resp.StatusCode,
+			Details:          details,
+			HTTPStatus:       resp.StatusCode,
 		}
 	}
 
@@ -455,29 +480,38 @@ func InspectLaravelTelescope(resp *ProbeResponse, endpointURL string) *APIFindin
 	if resp.Redirected {
 		redirectURL := strings.ToLower(resp.RedirectURL)
 		if strings.Contains(redirectURL, "login") || strings.Contains(redirectURL, "auth") {
-			ev := fmt.Sprintf("HTTP %d redirect observed on %s to %s. Laravel Telescope route requires authentication.",
+			ev := fmt.Sprintf("HTTP %d redirect observed on %s to %s. Laravel Telescope dashboard route requires authentication.",
 				resp.InitialStatusCode, endpointURL, resp.RedirectURL)
-			negEv := "Authentication redirect active on probed route; unauthenticated access to this endpoint is not permitted. Access controls for other Telescope resources were not independently tested."
+			negEv := "Authentication redirect active on probed route; unauthenticated access to this endpoint is not permitted. Access controls for other Telescope resources or API endpoints were not independently tested."
+			details := map[string]string{
+				"framework":       "Laravel",
+				"component":       "Telescope",
+				"endpoint":        endpointURL,
+				"redirect_url":    resp.RedirectURL,
+				"http_status":     fmt.Sprintf("%d", resp.InitialStatusCode),
+				"observed_access": "restricted",
+				"scope_note":      "restriction confirmed on probed route; sub-resources and telemetry API endpoints were not independently evaluated",
+			}
+			for k, v := range details {
+				if secrets.IsSensitiveKey(k) || secrets.IsSensitiveHeader(k) {
+					details[k] = "[REDACTED]"
+				} else {
+					details[k] = secrets.RedactText(v)
+				}
+			}
 			return &APIFinding{
 				Category:         CategoryLaravelTelescopeProtected,
 				Endpoint:         endpointURL,
 				Method:           http.MethodGet,
 				Description:      "Laravel Telescope interface requires authentication (observed login redirect)",
 				Evidence:         secrets.RedactText(ev),
-				NegativeEvidence: negEv,
+				NegativeEvidence: secrets.RedactText(negEv),
 				Severity:         SeverityInfo,
 				Confidence:       ConfidenceHigh,
 				Fingerprint:      GenerateFingerprint(CategoryLaravelTelescopeProtected, endpointURL, http.MethodGet),
 				Classification:   ClassAdmin,
-				Details: map[string]string{
-					"framework":       "Laravel",
-					"component":       "Telescope",
-					"redirect_url":    resp.RedirectURL,
-					"http_status":     fmt.Sprintf("%d", resp.InitialStatusCode),
-					"observed_access": "restricted",
-					"scope_note":      "restriction confirmed on probed route; sub-resources were not independently evaluated",
-				},
-				HTTPStatus: resp.InitialStatusCode,
+				Details:          details,
+				HTTPStatus:       resp.InitialStatusCode,
 			}
 		}
 	}
@@ -500,24 +534,34 @@ func InspectLaravelTelescope(resp *ProbeResponse, endpointURL string) *APIFindin
 
 		ev := fmt.Sprintf("HTTP 200 OK on %s. Laravel Telescope dashboard interface shell is reachable.", endpointURL)
 		negEv := "Dashboard interface shell is reachable, but unauthenticated access to sensitive monitoring records or operational telemetry was not demonstrated on this endpoint."
+		details := map[string]string{
+			"framework":     "Laravel",
+			"component":     "Telescope",
+			"endpoint":      endpointURL,
+			"http_status":   "200",
+			"interface":     "dashboard_shell",
+			"data_exposure": "none_demonstrated",
+		}
+		for k, v := range details {
+			if secrets.IsSensitiveKey(k) || secrets.IsSensitiveHeader(k) {
+				details[k] = "[REDACTED]"
+			} else {
+				details[k] = secrets.RedactText(v)
+			}
+		}
 		return &APIFinding{
 			Category:         CategoryLaravelTelescopeExposed,
 			Endpoint:         endpointURL,
 			Method:           http.MethodGet,
 			Description:      "Laravel Telescope monitoring dashboard reachable (interface shell observation)",
 			Evidence:         secrets.RedactText(ev),
-			NegativeEvidence: negEv,
+			NegativeEvidence: secrets.RedactText(negEv),
 			Severity:         SeverityInfo,
 			Confidence:       ConfidenceMedium,
 			Fingerprint:      GenerateFingerprint(CategoryLaravelTelescopeExposed, endpointURL, http.MethodGet),
 			Classification:   ClassAdmin,
-			Details: map[string]string{
-				"framework":   "Laravel",
-				"component":   "Telescope",
-				"http_status": "200",
-				"interface":   "dashboard_shell",
-			},
-			HTTPStatus: http.StatusOK,
+			Details:          details,
+			HTTPStatus:       http.StatusOK,
 		}
 	}
 
@@ -541,24 +585,35 @@ func InspectTelescopeAPI(resp *ProbeResponse, endpointURL string) *APIFinding {
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		ev := fmt.Sprintf("HTTP %d observed on %s. Laravel Telescope API access is restricted by authentication gate.",
 			resp.StatusCode, endpointURL)
+		negEv := fmt.Sprintf("HTTP %d challenge active on probed route; unauthenticated access to this API endpoint is denied. Other Telescope endpoints were not independently tested.", resp.StatusCode)
+		details := map[string]string{
+			"framework":       "Laravel",
+			"component":       "TelescopeAPI",
+			"endpoint":        endpointURL,
+			"http_status":     fmt.Sprintf("%d", resp.StatusCode),
+			"observed_access": "restricted",
+			"scope_note":      "restriction confirmed on probed route; other Telescope endpoints were not independently evaluated",
+		}
+		for k, v := range details {
+			if secrets.IsSensitiveKey(k) || secrets.IsSensitiveHeader(k) {
+				details[k] = "[REDACTED]"
+			} else {
+				details[k] = secrets.RedactText(v)
+			}
+		}
 		return &APIFinding{
 			Category:         CategoryLaravelTelescopeProtected,
 			Endpoint:         endpointURL,
 			Method:           http.MethodGet,
-			Description:      "Laravel Telescope API access restricted",
+			Description:      "Laravel Telescope API access restricted on probed endpoint (observed route restriction)",
 			Evidence:         secrets.RedactText(ev),
-			NegativeEvidence: fmt.Sprintf("HTTP %d challenge active; unauthenticated API access denied.", resp.StatusCode),
+			NegativeEvidence: secrets.RedactText(negEv),
 			Severity:         SeverityInfo,
 			Confidence:       ConfidenceHigh,
 			Fingerprint:      GenerateFingerprint(CategoryLaravelTelescopeProtected, endpointURL, http.MethodGet),
 			Classification:   ClassAdmin,
-			Details: map[string]string{
-				"framework":   "Laravel",
-				"component":   "TelescopeAPI",
-				"http_status": fmt.Sprintf("%d", resp.StatusCode),
-				"protected":   "true",
-			},
-			HTTPStatus: resp.StatusCode,
+			Details:          details,
+			HTTPStatus:       resp.StatusCode,
 		}
 	}
 
@@ -568,25 +623,36 @@ func InspectTelescopeAPI(resp *ProbeResponse, endpointURL string) *APIFinding {
 		if strings.Contains(redirectURL, "login") || strings.Contains(redirectURL, "auth") {
 			ev := fmt.Sprintf("HTTP %d redirect observed on %s to %s. Laravel Telescope API requires authentication.",
 				resp.InitialStatusCode, endpointURL, resp.RedirectURL)
+			negEv := "Authentication redirect active on probed route; unauthenticated access to this API endpoint is not permitted."
+			details := map[string]string{
+				"framework":       "Laravel",
+				"component":       "TelescopeAPI",
+				"endpoint":        endpointURL,
+				"redirect_url":    resp.RedirectURL,
+				"http_status":     fmt.Sprintf("%d", resp.InitialStatusCode),
+				"observed_access": "restricted",
+				"scope_note":      "restriction confirmed on probed route; other Telescope endpoints were not independently evaluated",
+			}
+			for k, v := range details {
+				if secrets.IsSensitiveKey(k) || secrets.IsSensitiveHeader(k) {
+					details[k] = "[REDACTED]"
+				} else {
+					details[k] = secrets.RedactText(v)
+				}
+			}
 			return &APIFinding{
 				Category:         CategoryLaravelTelescopeProtected,
 				Endpoint:         endpointURL,
 				Method:           http.MethodGet,
-				Description:      "Laravel Telescope API requires authentication (redirect)",
+				Description:      "Laravel Telescope API requires authentication (observed login redirect)",
 				Evidence:         secrets.RedactText(ev),
-				NegativeEvidence: "Authentication redirect active; unauthenticated API access denied.",
+				NegativeEvidence: secrets.RedactText(negEv),
 				Severity:         SeverityInfo,
 				Confidence:       ConfidenceHigh,
 				Fingerprint:      GenerateFingerprint(CategoryLaravelTelescopeProtected, endpointURL, http.MethodGet),
 				Classification:   ClassAdmin,
-				Details: map[string]string{
-					"framework":    "Laravel",
-					"component":    "TelescopeAPI",
-					"redirect_url": resp.RedirectURL,
-					"http_status":  fmt.Sprintf("%d", resp.InitialStatusCode),
-					"protected":    "true",
-				},
-				HTTPStatus: resp.InitialStatusCode,
+				Details:          details,
+				HTTPStatus:       resp.InitialStatusCode,
 			}
 		}
 	}
@@ -601,119 +667,243 @@ func InspectTelescopeAPI(resp *ProbeResponse, endpointURL string) *APIFinding {
 		if len(apiData.Entries) == 0 {
 			// API is reachable, but zero entries are recorded
 			ev := fmt.Sprintf("HTTP 200 OK on %s. Laravel Telescope API is reachable but contains 0 diagnostic entries.", endpointURL)
+			details := map[string]string{
+				"framework":     "Laravel",
+				"component":     "TelescopeAPI",
+				"endpoint":      endpointURL,
+				"http_status":   "200",
+				"entries":       "0",
+				"data_exposure": "none_demonstrated",
+			}
+			for k, v := range details {
+				if secrets.IsSensitiveKey(k) || secrets.IsSensitiveHeader(k) {
+					details[k] = "[REDACTED]"
+				} else {
+					details[k] = secrets.RedactText(v)
+				}
+			}
 			return &APIFinding{
 				Category:         CategoryLaravelTelescopeExposed,
 				Endpoint:         endpointURL,
 				Method:           http.MethodGet,
 				Description:      "Laravel Telescope API accessible (zero entries recorded)",
 				Evidence:         secrets.RedactText(ev),
-				NegativeEvidence: "API is accessible without authentication, but no sensitive monitoring records or telemetry were disclosed.",
+				NegativeEvidence: secrets.RedactText("API is accessible without authentication, but no sensitive monitoring records or telemetry were disclosed."),
 				Severity:         SeverityInfo,
 				Confidence:       ConfidenceLow,
 				Fingerprint:      GenerateFingerprint(CategoryLaravelTelescopeExposed, endpointURL, http.MethodGet),
 				Classification:   ClassAdmin,
-				Details: map[string]string{
-					"framework":   "Laravel",
-					"component":   "TelescopeAPI",
-					"http_status": "200",
-					"entries":     "0",
-				},
-				HTTPStatus: http.StatusOK,
+				Details:          details,
+				HTTPStatus:       http.StatusOK,
 			}
 		}
 
 		// Demonstrated unauthenticated disclosure of active monitoring telemetry
-		hasQueries := false
-		hasRequestsWithData := false
-		hasExceptions := false
-		hasLogs := false
+		hasUnmaskedSecret := false
+		var secretKeywords []string
+		hasMaskedCredentials := false
+		hasSensitiveQueries := false
+		hasRoutineQueries := false
+		hasSensitiveExceptions := false
+		hasRoutineExceptions := false
+		hasSensitiveRequests := false
+		hasRoutineRequests := false
+		hasOperationalEntries := false
+
+		// Recursive helper to inspect nested content maps/slices for secrets, masked creds, and PII
+		var inspectNestedContent func(key string, val interface{})
+		inspectNestedContent = func(key string, val interface{}) {
+			switch v := val.(type) {
+			case string:
+				if isGenuineUnmaskedSecret(key, v) {
+					hasUnmaskedSecret = true
+					secretKeywords = append(secretKeywords, key)
+				} else if isMaskedCredentialOrPlaceholder(v) && (isCredentialSecretKey(key) || isPIIKey(key)) {
+					hasMaskedCredentials = true
+				} else if isPIIKey(key) && len(v) >= 4 {
+					hasSensitiveRequests = true
+				}
+			case map[string]interface{}:
+				for subK, subV := range v {
+					inspectNestedContent(subK, subV)
+				}
+			case []interface{}:
+				for _, item := range v {
+					inspectNestedContent(key, item)
+				}
+			}
+		}
 
 		for _, entry := range apiData.Entries {
 			entryType, _ := entry["type"].(string)
 			lowerType := strings.ToLower(entryType)
 			content, _ := entry["content"].(map[string]interface{})
 
-			if lowerType == "query" || (content != nil && content["sql"] != nil) {
-				hasQueries = true
-			}
-			if lowerType == "exception" || (content != nil && (content["class"] != nil || content["trace"] != nil)) {
-				hasExceptions = true
-			}
-			if lowerType == "request" {
-				if content != nil {
-					if _, hasH := content["headers"]; hasH {
-						hasRequestsWithData = true
-					}
-					if _, hasP := content["payload"]; hasP {
-						hasRequestsWithData = true
-					}
-					if _, hasU := content["uri"]; hasU {
-						hasRequestsWithData = true
-					}
+			if content != nil {
+				for k, v := range content {
+					inspectNestedContent(k, v)
 				}
 			}
-			if lowerType == "log" || lowerType == "dump" {
-				hasLogs = true
+
+			switch lowerType {
+			case "query":
+				sql := ""
+				if content != nil {
+					if s, ok := content["sql"].(string); ok {
+						sql = s
+					}
+				}
+				if isSensitiveSQLQuery(sql) {
+					hasSensitiveQueries = true
+				} else {
+					hasRoutineQueries = true
+				}
+
+			case "exception":
+				excClass := ""
+				if content != nil {
+					if c, ok := content["class"].(string); ok {
+						excClass = c
+					}
+				}
+				if isRoutineException(excClass) {
+					hasRoutineExceptions = true
+				} else {
+					hasSensitiveExceptions = true
+				}
+
+			case "request":
+				isReqSensitive := false
+				if content != nil {
+					// Check headers
+					if headers, ok := content["headers"].(map[string]interface{}); ok {
+						for hk, hv := range headers {
+							lowerHK := strings.ToLower(hk)
+							if lowerHK == "authorization" || lowerHK == "cookie" ||
+								strings.Contains(lowerHK, "token") || strings.Contains(lowerHK, "auth") {
+								strVal := fmt.Sprintf("%v", hv)
+								if isGenuineUnmaskedSecret(hk, strVal) {
+									hasUnmaskedSecret = true
+									secretKeywords = append(secretKeywords, hk)
+								} else if isMaskedCredentialOrPlaceholder(strVal) {
+									hasMaskedCredentials = true
+								} else if strings.Contains(strings.ToLower(strVal), "bearer") ||
+									strings.Contains(lowerHK, "cookie") {
+									isReqSensitive = true
+								}
+							}
+						}
+					}
+					// Check payload
+					if payload, ok := content["payload"].(map[string]interface{}); ok {
+						for pk, pv := range payload {
+							strVal := fmt.Sprintf("%v", pv)
+							if isGenuineUnmaskedSecret(pk, strVal) {
+								hasUnmaskedSecret = true
+								secretKeywords = append(secretKeywords, pk)
+							} else if isMaskedCredentialOrPlaceholder(strVal) && (isCredentialSecretKey(pk) || isPIIKey(pk)) {
+								hasMaskedCredentials = true
+							} else if isPIIKey(pk) && len(strVal) >= 4 {
+								isReqSensitive = true
+							} else if isCredentialSecretKey(pk) {
+								isReqSensitive = true
+							}
+						}
+					}
+				}
+				if isReqSensitive {
+					hasSensitiveRequests = true
+				} else {
+					hasRoutineRequests = true
+				}
+
+			default:
+				hasOperationalEntries = true
 			}
 		}
 
-		hasUnmaskedSecret := false
-		var secretKeywords []string
-
-		// Traverse entries checking for unmasked secrets in headers or payloads
+		// Also check raw JSON with regex for unmasked environment/secret assignments
 		rawJSON := string(resp.Body)
 		for _, m := range laravelEnvRowRegex.FindAllStringSubmatch(rawJSON, -1) {
 			if len(m) > 2 {
 				k := strings.TrimSpace(m[1])
 				v := strings.TrimSpace(m[2])
-				if isLaravelSecretKey(k) && (isDefensibleSecretValue(k, v) || (len(v) >= 8 && !secrets.IsPlaceholder(v))) {
+				if isGenuineUnmaskedSecret(k, v) {
 					hasUnmaskedSecret = true
 					secretKeywords = append(secretKeywords, k)
+				} else if isMaskedCredentialOrPlaceholder(v) && (isCredentialSecretKey(k) || isPIIKey(k)) {
+					hasMaskedCredentials = true
+				} else if isPIIKey(k) && len(v) >= 4 {
+					hasSensitiveRequests = true
 				}
 			}
 		}
+
+		// Deduplicate observed secret keywords
+		seenKeys := make(map[string]struct{})
+		var uniqueSecretKeys []string
+		for _, sk := range secretKeywords {
+			if _, exists := seenKeys[sk]; !exists {
+				seenKeys[sk] = struct{}{}
+				uniqueSecretKeys = append(uniqueSecretKeys, sk)
+			}
+		}
+		sort.Strings(uniqueSecretKeys)
 
 		severity := SeverityMedium
 		desc := "Laravel Telescope unauthenticated monitoring telemetry disclosure (operational event entries)"
 		if hasUnmaskedSecret {
 			severity = SeverityCritical
 			desc = "Laravel Telescope unauthenticated monitoring telemetry exposes unmasked credentials"
-		} else if hasQueries || hasExceptions || hasRequestsWithData {
+		} else if hasSensitiveQueries || hasSensitiveExceptions || hasSensitiveRequests {
 			severity = SeverityHigh
-			desc = "Laravel Telescope unauthenticated monitoring telemetry disclosure (queries/requests/exceptions)"
+			desc = "Laravel Telescope unauthenticated monitoring telemetry disclosure (sensitive application data)"
 		}
 
 		ev := fmt.Sprintf("HTTP 200 OK on %s. Laravel Telescope API disclosed %d active diagnostic record(s). Monitored operational telemetry exposed.",
 			endpointURL, len(apiData.Entries))
-		if hasQueries || hasExceptions || hasRequestsWithData {
-			ev = fmt.Sprintf("HTTP 200 OK on %s. Laravel Telescope API disclosed %d active diagnostic record(s). Monitored HTTP requests, queries, and execution metadata exposed.",
+		if hasSensitiveQueries || hasSensitiveExceptions || hasSensitiveRequests {
+			ev = fmt.Sprintf("HTTP 200 OK on %s. Laravel Telescope API disclosed %d active diagnostic record(s). Monitored application telemetry (sensitive queries/requests/exceptions) exposed.",
 				endpointURL, len(apiData.Entries))
 		}
 		if hasUnmaskedSecret {
 			ev += fmt.Sprintf(" Unmasked credential(s) observed in captured telemetry: [%s] (secret values redacted).",
-				strings.Join(secretKeywords, ", "))
+				strings.Join(uniqueSecretKeys, ", "))
 		}
 
 		var sensitiveTypes []string
-		if hasQueries {
-			sensitiveTypes = append(sensitiveTypes, "database_queries")
+		if hasUnmaskedSecret {
+			sensitiveTypes = append(sensitiveTypes, "unmasked_credentials")
 		}
-		if hasRequestsWithData {
-			sensitiveTypes = append(sensitiveTypes, "http_requests")
+		if hasMaskedCredentials {
+			sensitiveTypes = append(sensitiveTypes, "masked_credentials")
 		}
-		if hasExceptions {
-			sensitiveTypes = append(sensitiveTypes, "exception_traces")
+		if hasSensitiveQueries {
+			sensitiveTypes = append(sensitiveTypes, "sensitive_database_queries")
 		}
-		if hasLogs {
-			sensitiveTypes = append(sensitiveTypes, "logs_dumps")
+		if hasRoutineQueries {
+			sensitiveTypes = append(sensitiveTypes, "routine_database_queries")
 		}
-		if len(sensitiveTypes) == 0 {
+		if hasSensitiveRequests {
+			sensitiveTypes = append(sensitiveTypes, "sensitive_http_requests")
+		}
+		if hasRoutineRequests {
+			sensitiveTypes = append(sensitiveTypes, "routine_http_requests")
+		}
+		if hasSensitiveExceptions {
+			sensitiveTypes = append(sensitiveTypes, "application_exceptions")
+		}
+		if hasRoutineExceptions {
+			sensitiveTypes = append(sensitiveTypes, "routine_exceptions")
+		}
+		if hasOperationalEntries || len(sensitiveTypes) == 0 {
 			sensitiveTypes = append(sensitiveTypes, "event_metadata")
 		}
 
 		details := map[string]string{
 			"framework":                "Laravel",
 			"component":                "TelescopeAPI",
+			"endpoint":                 endpointURL,
 			"entries_count":            fmt.Sprintf("%d", len(apiData.Entries)),
 			"http_status":              "200",
 			"auth_context":             "unauthenticated",
@@ -721,20 +911,29 @@ func InspectTelescopeAPI(resp *ProbeResponse, endpointURL string) *APIFinding {
 			"verification_limitations": "Passive read-only query; backend state was not altered and active credential authorization was not verified",
 		}
 		if hasUnmaskedSecret {
-			details["unmasked_secrets_count"] = fmt.Sprintf("%d", len(secretKeywords))
+			details["unmasked_secrets_count"] = fmt.Sprintf("%d", len(uniqueSecretKeys))
 			details["credential_active_status"] = "unverified"
 		}
 		if resp.Truncated {
 			details["limitations"] = "Response exceeded 512 KiB and was bounded to preserve system resources"
 		}
 
+		// Ensure recursive secret redaction across all detail values
+		for k, v := range details {
+			if secrets.IsSensitiveKey(k) || secrets.IsSensitiveHeader(k) {
+				details[k] = "[REDACTED]"
+			} else {
+				details[k] = secrets.RedactText(v)
+			}
+		}
+
 		return &APIFinding{
 			Category:         CategoryLaravelTelescopeData,
 			Endpoint:         endpointURL,
 			Method:           http.MethodGet,
-			Description:      desc,
+			Description:      secrets.RedactText(desc),
 			Evidence:         secrets.RedactText(ev),
-			NegativeEvidence: "All captured request headers, payloads, query parameters, and telemetry entries were bounded and redacted; credential validity was not tested.",
+			NegativeEvidence: secrets.RedactText("All captured request headers, payloads, query parameters, and telemetry entries were bounded and redacted; credential validity was not tested."),
 			Severity:         severity,
 			Confidence:       ConfidenceHigh,
 			Fingerprint:      GenerateFingerprint(CategoryLaravelTelescopeData, endpointURL, http.MethodGet),
@@ -748,7 +947,7 @@ func InspectTelescopeAPI(resp *ProbeResponse, endpointURL string) *APIFinding {
 }
 
 func isLaravelSecretKey(key string) bool {
-	lower := strings.ToLower(key)
+	lower := strings.ToLower(strings.TrimSpace(key))
 	return strings.Contains(lower, "password") ||
 		strings.Contains(lower, "secret") ||
 		strings.Contains(lower, "token") ||
@@ -764,4 +963,197 @@ func isLaravelSecretKey(key string) bool {
 		strings.Contains(lower, "redis_password") ||
 		strings.Contains(lower, "aws_secret") ||
 		strings.Contains(lower, "private_key")
+}
+
+// isMaskedCredentialOrPlaceholder checks if a candidate string is masked or a placeholder.
+func isMaskedCredentialOrPlaceholder(val string) bool {
+	clean := strings.TrimSpace(val)
+	if clean == "" {
+		return true
+	}
+	lower := strings.ToLower(clean)
+	if lower == "null" || lower == "nil" || lower == "none" || lower == "undefined" ||
+		lower == "true" || lower == "false" || lower == "0" || lower == "1" {
+		return true
+	}
+	if secrets.IsPlaceholder(clean) {
+		return true
+	}
+	// Masked indicators: '******', '********', '[REDACTED]', '[FILTERED]', '***MASKED***', '••••••••'
+	if strings.Count(clean, "*") >= 3 || strings.Count(clean, "•") >= 3 {
+		return true
+	}
+	if strings.Contains(lower, "redact") || strings.Contains(lower, "filter") || strings.Contains(lower, "masked") {
+		return true
+	}
+	// Trivial repeating characters like 'xxxxxx', '000000', '------'
+	if len(clean) > 2 {
+		allSame := true
+		for i := 1; i < len(clean); i++ {
+			if clean[i] != clean[0] {
+				allSame = false
+				break
+			}
+		}
+		if allSame {
+			return true
+		}
+	}
+	return false
+}
+
+// isGenuineUnmaskedSecret validates if a key-value pair represents a confirmed unmasked secret.
+func isGenuineUnmaskedSecret(key, val string) bool {
+	cleanVal := strings.TrimSpace(val)
+	if cleanVal == "" || len(cleanVal) < 8 {
+		return false
+	}
+	if isMaskedCredentialOrPlaceholder(cleanVal) {
+		return false
+	}
+	lowerVal := strings.ToLower(cleanVal)
+	if strings.HasPrefix(lowerVal, "http://") || strings.HasPrefix(lowerVal, "https://") {
+		return strings.Contains(cleanVal, "@")
+	}
+
+	// Recognized synthetic canary or vendor patterns are always secrets
+	if strings.Contains(cleanVal, "felix_test_canary_secret") {
+		return true
+	}
+	if strings.HasPrefix(cleanVal, "sk_live_") || strings.HasPrefix(cleanVal, "ghp_") ||
+		strings.HasPrefix(cleanVal, "xoxb-") || strings.HasPrefix(cleanVal, "xoxp-") {
+		return true
+	}
+
+	// Non-secret metadata keys are explicitly exempt
+	lowerKey := strings.ToLower(strings.TrimSpace(key))
+	exemptKeys := map[string]struct{}{
+		"name": {}, "title": {}, "class": {}, "type": {}, "status": {},
+		"uri": {}, "url": {}, "path": {}, "method": {}, "file": {}, "line": {},
+		"action": {}, "controller": {}, "middleware": {}, "view": {}, "sql": {},
+		"message": {}, "trace": {}, "hostname": {}, "host": {}, "query": {},
+		"format": {}, "version": {}, "content_type": {}, "queue": {}, "listener": {},
+		"id": {}, "ip": {}, "email": {}, "user": {}, "description": {},
+	}
+	if _, exempt := exemptKeys[lowerKey]; exempt {
+		return false
+	}
+
+	// PII keys represent sensitive personal information (handled as SeverityHigh), not unmasked credential secrets (SeverityCritical)
+	if isPIIKey(lowerKey) {
+		return false
+	}
+
+	// The key must be an explicit sensitive/credential key
+	if isLaravelSecretKey(lowerKey) || (secrets.IsSensitiveKey(lowerKey) && isCredentialSecretKey(lowerKey)) {
+		return true
+	}
+
+	return false
+}
+
+// isSensitiveSQLQuery evaluates whether a captured SQL query targets sensitive tables, columns, or credentials.
+func isSensitiveSQLQuery(sql string) bool {
+	lower := strings.ToLower(strings.TrimSpace(sql))
+	if lower == "" {
+		return false
+	}
+	// Harmless / routine system queries
+	if lower == "select 1" || strings.HasPrefix(lower, "select 1 ") ||
+		strings.Contains(lower, "sqlite_master") || strings.Contains(lower, "information_schema") ||
+		strings.Contains(lower, "select version()") || strings.Contains(lower, "select now()") {
+		return false
+	}
+	if strings.Contains(lower, "from migrations") || strings.Contains(lower, "from `migrations`") ||
+		strings.Contains(lower, "from \"migrations\"") {
+		return false
+	}
+	if strings.Contains(lower, "from telescope_entries") || strings.Contains(lower, "from `telescope_entries`") ||
+		strings.Contains(lower, "from telescope_monitoring") || strings.Contains(lower, "from cache") ||
+		strings.Contains(lower, "from `cache`") || strings.Contains(lower, "from failed_jobs") ||
+		strings.Contains(lower, "from job_batches") {
+		return false
+	}
+
+	// Sensitive table targets
+	sensitiveTables := []string{
+		"users", "`users`", "\"users\"",
+		"accounts", "`accounts`", "\"accounts\"",
+		"oauth_", "personal_access_tokens", "password_resets",
+		"customers", "`customers`",
+		"payments", "`payments`",
+		"cards", "`cards`", "credit_cards",
+		"admins", "`admins`",
+		"credentials", "`credentials`",
+		"tokens", "`tokens`",
+		"billing", "`billing`",
+		"employees", "`employees`",
+	}
+	for _, tbl := range sensitiveTables {
+		if strings.Contains(lower, tbl) {
+			return true
+		}
+	}
+
+	// Sensitive column targets
+	sensitiveColumns := []string{
+		"password", "secret", "remember_token", "api_key", "apikey",
+		"credit_card", "card_number", "ssn", "cvv", "cvc", "salt", "hash",
+	}
+	for _, col := range sensitiveColumns {
+		if strings.Contains(lower, col) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// isRoutineException evaluates if an exception class represents a routine client/framework flow.
+func isRoutineException(excClass string) bool {
+	lower := strings.ToLower(strings.TrimSpace(excClass))
+	routineExceptions := []string{
+		"validationexception",
+		"notfoundhttpexception",
+		"modelnotfoundexception",
+		"authenticationexception",
+		"authorizationexception",
+		"tokenmismatchexception",
+		"methodnotallowedhttpexception",
+		"throttlerequestsexception",
+		"accessdeniedhttpexception",
+		"httpexception",
+	}
+	for _, r := range routineExceptions {
+		if strings.Contains(lower, r) {
+			return true
+		}
+	}
+	return false
+}
+
+// isCredentialSecretKey returns true if a key name suggests an authentication credential or secret.
+func isCredentialSecretKey(key string) bool {
+	lower := strings.ToLower(strings.TrimSpace(key))
+	clean := strings.ReplaceAll(strings.ReplaceAll(lower, "_", ""), "-", "")
+	return strings.Contains(clean, "password") ||
+		strings.Contains(clean, "passwd") ||
+		strings.Contains(clean, "secret") ||
+		strings.Contains(clean, "apikey") ||
+		strings.Contains(clean, "privatekey") ||
+		strings.Contains(clean, "privkey") ||
+		strings.Contains(clean, "appkey") ||
+		strings.Contains(clean, "dbpass") ||
+		strings.Contains(clean, "token") ||
+		strings.Contains(clean, "auth") ||
+		strings.Contains(clean, "bearer")
+}
+
+// isPIIKey returns true if a key name suggests sensitive personally identifiable information.
+func isPIIKey(key string) bool {
+	lower := strings.ToLower(strings.TrimSpace(key))
+	clean := strings.ReplaceAll(strings.ReplaceAll(lower, "_", ""), "-", "")
+	return clean == "ssn" || clean == "socialsecurity" || clean == "socialsecuritynumber" ||
+		clean == "creditcard" || clean == "cardnumber" || clean == "cvv" || clean == "cvc" ||
+		clean == "email" || clean == "phone" || clean == "dob" || clean == "dateofbirth"
 }

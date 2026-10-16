@@ -715,7 +715,12 @@ func FromAPIFinding(target string, f api.APIFinding) Finding {
 
 	case cat == "laravel-ignition-debug":
 		detMethod = "active_probe"
-		if f.Confidence == api.ConfidenceMedium {
+		if f.Severity == api.SeverityInfo {
+			detStatus = "OBSERVED"
+			verStatus = VerificationObserved
+			verResult = f.Description
+			negEvidence = "Diagnostic endpoint observed; command execution was not tested and exploitability remains unconfirmed."
+		} else if f.Confidence == api.ConfidenceMedium {
 			detStatus = "OBSERVED"
 			verStatus = VerificationObserved
 			verResult = "Laravel framework exception traceback observed exposing internal filesystem paths (suspected debug mode; Ignition template unconfirmed)."
