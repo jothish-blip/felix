@@ -65,6 +65,20 @@ The repository is now fully prepared to transition directly to **Phase 3: Backen
 3. **SSRF and Transport Safety:**
    - Pre-dial IP resolution and validation reject loopback, link-local, RFC 1918 private subnets, cloud metadata endpoints (`169.254.169.254`, `fd00:ec2::254`), and CGNAT.
    - All resolved IP addresses are validated, defeating dual-homed DNS rebinding. Direct IP dialing prevents TOCTOU rebinding.
+
+### 3.1 Custom Transport Chain SSRF Verification
+1. **Production Transport Invariant:**
+   - In production (`cmd/felix/scan_cmd.go`, `cmd/felix/assessment_cmd.go`, `pkg/assessment/controller.go`, `pkg/update`), HTTP clients are initialized strictly around `crawler.NewSafeTransport` (which configures `crawler.NewSafeDialContext`) and wrapped by `crawler.NewRateLimitedTransport`.
+   - The outbound request call stack is guaranteed: `http.Client.Do` -> `RateLimitedTransport.RoundTrip` -> `SafeTransport.RoundTrip` -> `SafeDialContext`.
+   - Every destination address is resolved prior to dialing, all resolved IPs are validated against prohibited IP policies, and connections are established directly to the validated IP literal.
+2. **Custom Client Injection Hardening:**
+   - In `pkg/api/client.go`, `pkg/cloud/client.go`, and `pkg/crawler/crawler.go`, when a caller provides a custom `*http.Client`:
+     - If `customHTTP.Transport == nil`, FELIX automatically assigns `crawler.NewSafeTransport` with configured timeout and IP permissions before wrapping.
+     - If `customHTTP.Transport` is not already a `RateLimitedTransport`, it is wrapped in `RateLimitedTransport`.
+     - In `crawler.RateLimitedTransport.RoundTrip`, an unconditional defense-in-depth IP inspection executes on every request: destinations matching cloud metadata addresses (`169.254.169.254` and `fd00:ec2::254`) are rejected immediately with an `SSRFError`, regardless of the underlying transport implementation.
+     - If `customHTTP.CheckRedirect == nil`, FELIX injects a scope-safe and SSRF-safe redirect validator that inspects redirect destination IPs, blocks unparseable/prohibited IPs, restricts schemes to `http`/`https`, and prevents credential leakage.
+3. **Automated Verification:**
+   - Verified via `TestRateLimitedTransport_BlocksCloudMetadata` in `pkg/crawler/rate_limiter_test.go` and comprehensive client initialization tests in `pkg/api/api_test.go` and `pkg/cloud/cloud_test.go`.
 4. **Secrets Redaction & Key Classification:**
    - Differentiates public publishable client keys (`sb_publishable_`, `sb_p`) from confidential secrets (`sb_secret_`).
    - Comprehensive redaction in CLI output, logs, error strings, and JSON/HTML/SARIF reports.
@@ -138,9 +152,21 @@ As established in the FELIX Master Roadmap (`docs/engineering/PHASE_0_REPOSITORY
   - `pkg/api/actuator.go`: Implement Actuator probe dispatch, response content-type validation (`application/vnd.spring-boot.actuator*`, `application/json`), sensitive property extraction, and finding mapping.
   - `pkg/api/detector.go`: Wire Actuator auditor into `Detector.Audit` pipeline while adhering to subpath scope and rate-limiting controls.
   - `pkg/api/actuator_test.go`: Comprehensive unit tests with local HTTP mock servers.
+- **Safety Constraints & Invariants (Mandatory):**
+  1. **Heap Dump Exposure Safety (`/actuator/heapdump`):**
+     - Heap dumps must **never** be downloaded, persisted to disk, or buffered in memory.
+     - Verification must be non-invasive: either an HTTP `HEAD` request checking for `Content-Type: application/octet-stream` or `Content-Disposition: attachment; filename=...heapdump...`, or a strictly bounded `GET` request reading at most 512 bytes (`io.LimitReader(resp.Body, 512)`) to verify JVM HPROF magic header bytes (`JAVA PROFILE 1.0.1` or `JAVA PROFILE 1.0.2`), followed by an immediate connection close.
+  2. **Environment & Configuration Property Safeguards (`/actuator/env`, `/actuator/configprops`):**
+     - All response body reads must be strictly bounded via `io.LimitReader` (max 512 KB) to prevent denial-of-service / memory exhaustion.
+     - Extracted values and environment secrets must always pass through `secrets.RedactText` / `secrets.RedactSecret`. Raw production credentials, keys, or tokens must never appear in unredacted reports, console logs, or error strings.
+  3. **Hermetic Test Isolation:**
+     - All automated and unit tests must execute against local mock servers (`httptest.NewServer`) exclusively. Default tests must make zero outbound or external network calls.
+  4. **Custom 404 / SPA Shell Suppression:**
+     - Heuristic verification must analyze `Content-Type` headers and response body structure to distinguish true Actuator endpoints from Single Page Application (SPA) HTML error shells returning HTTP 200 OK.
 - **Completion Criteria for Task 1:**
   - Automated tests pass with zero external network access.
   - Positive detection of exposed `/actuator/env`, `/actuator/heapdump`, `/actuator/mappings`.
   - Secondary verification confirms that custom 200 OK HTML error pages are rejected and produce 0 findings.
-  - High/Critical findings generated when sensitive credentials (passwords, tokens, keys) are discovered in `/actuator/env` or `/actuator/configprops`.
+  - High/Critical findings generated when sensitive credentials (passwords, tokens, keys) are discovered in `/actuator/env` or `/actuator/configprops`, with sensitive values properly redacted.
+  - Zero heap dump payloads downloaded or saved to disk.
   - Zero regressions across existing test suites (`go test -count=1 ./pkg/... ./cmd/...`).

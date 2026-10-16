@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -374,5 +375,31 @@ func TestRateLimitedTransport_IndependentHostsNotBlocked(t *testing.T) {
 	}
 	if rt.TotalRequests() != 2 {
 		t.Errorf("expected 2 total requests, got %d", rt.TotalRequests())
+	}
+}
+
+func TestRateLimitedTransport_BlocksCloudMetadata(t *testing.T) {
+	// Even with a dummy RoundTripper, RateLimitedTransport must block metadata endpoints
+	dummyTransport := http.DefaultTransport
+	rt := NewRateLimitedTransport(dummyTransport, RateLimitOptions{
+		Rate: 10.0,
+	})
+	client := &http.Client{Transport: rt}
+
+	metadataURLs := []string{
+		"http://169.254.169.254/latest/meta-data/",
+		"http://169.254.169.254:80/computeMetadata/v1/",
+		"http://[fd00:ec2::254]/latest/meta-data/",
+	}
+
+	for _, u := range metadataURLs {
+		req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, u, nil)
+		_, err := client.Do(req)
+		if err == nil {
+			t.Fatalf("expected request to metadata endpoint %q to be blocked, but succeeded", u)
+		}
+		if !strings.Contains(err.Error(), "cloud metadata service address") {
+			t.Errorf("expected cloud metadata SSRF error, got: %v", err)
+		}
 	}
 }

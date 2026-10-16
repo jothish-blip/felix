@@ -132,7 +132,15 @@ func NewClient(opts ...ClientOptions) *Client {
 				return nil
 			},
 		}
-	} else if customHTTP.Transport != nil {
+	} else {
+		// Custom HTTP client provided: ensure underlying transport cannot bypass SSRF protections or rate limiting
+		if customHTTP.Transport == nil {
+			customHTTP.Transport = crawler.NewSafeTransport(crawler.SafeTransportOptions{
+				Timeout:         timeout,
+				AllowLoopback:   allowLoopback,
+				AllowPrivateIPs: allowPrivate,
+			})
+		}
 		if _, ok := customHTTP.Transport.(*crawler.RateLimitedTransport); !ok {
 			var rateVal float64
 			var concVal int
@@ -144,6 +152,34 @@ func NewClient(opts ...ClientOptions) *Client {
 				Rate:           rateVal,
 				MaxConcurrency: concVal,
 			})
+		}
+		if customHTTP.CheckRedirect == nil {
+			customHTTP.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 5 {
+					return fmt.Errorf("stopped after 5 redirects")
+				}
+				scheme := strings.ToLower(req.URL.Scheme)
+				if scheme != "http" && scheme != "https" {
+					return fmt.Errorf("redirect to unsupported scheme %q blocked", req.URL.Scheme)
+				}
+				if req.URL.User != nil {
+					return fmt.Errorf("redirect with embedded credentials blocked")
+				}
+				destHost := req.URL.Hostname()
+				if ip := net.ParseIP(destHost); ip != nil {
+					if prohibited, reason := crawler.ProhibitedIPReason(ip, allowLoopback, allowPrivate); prohibited {
+						return &crawler.SSRFError{Host: destHost, IP: ip, Reason: reason}
+					}
+				}
+				nextURL := req.URL.String()
+				if isExcluded != nil && isExcluded(nextURL) {
+					return fmt.Errorf("redirect to %s blocked: matches exclusion rule", nextURL)
+				}
+				if isAllowed != nil && !isAllowed(nextURL) {
+					return fmt.Errorf("redirect to %s blocked: out of approved scope", nextURL)
+				}
+				return nil
+			}
 		}
 	}
 

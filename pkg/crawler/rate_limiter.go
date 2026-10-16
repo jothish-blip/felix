@@ -2,6 +2,8 @@ package crawler
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -90,6 +92,18 @@ func NewRateLimitedTransport(base http.RoundTripper, opts RateLimitOptions) *Rat
 
 // RoundTrip coordinates rate limits, concurrency limits, and request dispatch.
 func (t *RateLimitedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Defense-in-depth: Unconditionally reject cloud metadata endpoints (169.254.169.254, fd00:ec2::254)
+	if req.URL != nil {
+		host := req.URL.Hostname()
+		if host != "" {
+			if ip := net.ParseIP(host); ip != nil {
+				if ip.Equal(cloudMetadataIPv4) || ip.Equal(cloudMetadataIPv6) {
+					return nil, &SSRFError{Host: host, IP: ip, Reason: fmt.Sprintf("cloud metadata service address (%s)", ip.String())}
+				}
+			}
+		}
+	}
+
 	ctx := req.Context()
 
 	// 1. Enforce overall concurrency cap (if configured)

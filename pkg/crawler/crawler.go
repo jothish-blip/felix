@@ -98,7 +98,15 @@ func New(cfg Config) *Crawler {
 				return nil
 			},
 		}
-	} else if client.Transport != nil {
+	} else {
+		if client.Transport == nil {
+			client.Transport = NewSafeTransport(SafeTransportOptions{
+				Timeout:            cfg.Timeout,
+				AllowLoopback:      cfg.AllowLoopback,
+				AllowPrivateIPs:    cfg.AllowPrivateIPs,
+				InsecureSkipVerify: cfg.InsecureSkipVerify,
+			})
+		}
 		if _, ok := client.Transport.(*RateLimitedTransport); !ok {
 			client.Transport = NewRateLimitedTransport(client.Transport, RateLimitOptions{
 				Rate:           cfg.RateLimit,
