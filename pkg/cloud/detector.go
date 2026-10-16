@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"felix/pkg/crawler"
 	"felix/pkg/secrets"
@@ -44,11 +45,12 @@ type AuditResult struct {
 
 // Detector identifies cloud vendor configurations and coordinates safe verification.
 type Detector struct {
-	client            *Client
-	engine            *ServiceDiscoveryEngine
-	accessEngine      *AccessVerificationEngine
-	indicatorDetector *IndicatorDetector
-	isAllowed         func(string) bool
+	client                  *Client
+	engine                  *ServiceDiscoveryEngine
+	accessEngine            *AccessVerificationEngine
+	indicatorDetector       *IndicatorDetector
+	isAllowed               func(string) bool
+	allowActiveVerification bool
 }
 
 // NewDetector initializes a new Cloud & BaaS auditor with optional scope authorization checker.
@@ -57,8 +59,9 @@ func NewDetector(client *Client, isAllowed ...func(string) bool) *Detector {
 		client = NewClient()
 	}
 	d := &Detector{
-		client:            client,
-		indicatorDetector: NewIndicatorDetector(),
+		client:                  client,
+		indicatorDetector:       NewIndicatorDetector(),
+		allowActiveVerification: true,
 	}
 	if len(isAllowed) > 0 && isAllowed[0] != nil {
 		d.isAllowed = isAllowed[0]
@@ -69,6 +72,16 @@ func NewDetector(client *Client, isAllowed ...func(string) bool) *Detector {
 		IsAllowed: d.isAllowed,
 	})
 	return d
+}
+
+// SetAllowActiveVerification configures whether active access verification probes may be executed.
+func (d *Detector) SetAllowActiveVerification(allow bool) {
+	d.allowActiveVerification = allow
+}
+
+// AllowActiveVerification returns whether active verification is permitted.
+func (d *Detector) AllowActiveVerification() bool {
+	return d.allowActiveVerification
 }
 
 // AccessEngine returns the associated AccessVerificationEngine.
@@ -284,6 +297,24 @@ func (d *Detector) Audit(ctx context.Context, assets []crawler.Asset, secretFind
 			continue
 		}
 
+		if !d.allowActiveVerification {
+			f := CloudFinding{
+				Provider:    svc.Provider,
+				Category:    "Discovered Cloud Service (Unverified)",
+				Endpoint:    svc.URL,
+				Description: fmt.Sprintf("Discovered %s service reference in client assets; active probing skipped (active verification disabled)", svc.Provider),
+				Evidence:    fmt.Sprintf("Discovered in %s: %s", svc.Source, svc.URL),
+				Severity:    SeverityInfo,
+				Confidence:  ConfidenceHigh,
+				Fingerprint: GenerateFingerprint(svc.Provider, svc.URL, "Discovered Cloud Service (Unverified)"),
+			}
+			if _, exists := seenFindingFPs[f.Fingerprint]; !exists {
+				seenFindingFPs[f.Fingerprint] = struct{}{}
+				allFindings = append(allFindings, f)
+			}
+			continue
+		}
+
 		var svcFindings []CloudFinding
 
 		switch svc.Provider {
@@ -357,13 +388,38 @@ func (d *Detector) Audit(ctx context.Context, assets []crawler.Asset, secretFind
 			}
 		}
 		if len(inScopeServices) > 0 {
-			accessRecords = d.accessEngine.VerifyServicesConcurrently(ctx, inScopeServices, nil, nil, nil)
-			for _, rec := range accessRecords {
-				if f, ok := rec.ToCloudFinding(); ok {
-					if _, exists := seenFindingFPs[f.Fingerprint]; !exists {
-						seenFindingFPs[f.Fingerprint] = struct{}{}
-						allFindings = append(allFindings, f)
+			if d.allowActiveVerification {
+				accessRecords = d.accessEngine.VerifyServicesConcurrently(ctx, inScopeServices, nil, nil, nil)
+				for _, rec := range accessRecords {
+					if f, ok := rec.ToCloudFinding(); ok {
+						if _, exists := seenFindingFPs[f.Fingerprint]; !exists {
+							seenFindingFPs[f.Fingerprint] = struct{}{}
+							allFindings = append(allFindings, f)
+						}
 					}
+				}
+			} else {
+				for _, ds := range inScopeServices {
+					target := ds.Endpoint
+					if target == "" && ds.Host != "" {
+						if ds.Port > 0 {
+							target = fmt.Sprintf("%s:%d", ds.Host, ds.Port)
+						} else {
+							target = ds.Host
+						}
+					}
+					accessRecords = append(accessRecords, AccessVerificationRecord{
+						Target:              target,
+						Technology:          ds.Technology,
+						Family:              ds.Family,
+						Status:              StatusVerificationSkipped,
+						Decision:            DecisionSkipped,
+						AuthContext:         AuthContextUnauthenticated,
+						Operation:           OpMetadataRead,
+						ErrorClassification: ErrClassNone,
+						Limitations:         "active access verification disabled (enable with --active flag)",
+						VerifiedAt:          time.Now().UTC(),
+					})
 				}
 			}
 		}

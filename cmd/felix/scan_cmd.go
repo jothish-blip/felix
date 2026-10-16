@@ -530,6 +530,7 @@ func runScan(args []string) int {
 		AllowPrivateIPs: allowPrivate,
 		IsAllowed:       isTargetAuthorized,
 	}), isTargetAuthorized)
+	cloudAuditor.SetAllowActiveVerification(activeVerif)
 	apiAuditor := api.NewDetector(api.NewClient(api.ClientOptions{
 		Timeout:         timeoutDuration,
 		MaxResponseSize: maxSizeBytes,
@@ -672,7 +673,7 @@ func runScan(args []string) int {
 			if len(cloudResult.DiscoveredServices) > 0 {
 				fmt.Printf("Discovered services (%d):\n", len(cloudResult.DiscoveredServices))
 				for _, ds := range cloudResult.DiscoveredServices {
-					statusStr := FormatServiceAccessState(ds)
+					statusStr := FormatServiceAccessState(ds, cloudResult.AccessRecords)
 					target := ds.Endpoint
 					if target == "" {
 						target = fmt.Sprintf("%s:%d", ds.Host, ds.Port)
@@ -1043,10 +1044,49 @@ func formatBytes(b int64) string {
 }
 
 // FormatServiceAccessState returns an evidence-supported display string for discovered service access status.
-func FormatServiceAccessState(ds cloud.DiscoveredService) string {
+func FormatServiceAccessState(ds cloud.DiscoveredService, accessRecords ...[]cloud.AccessVerificationRecord) string {
 	if !ds.InScope {
 		return "Outside authorized scope"
 	}
+	target := ds.Endpoint
+	if target == "" && ds.Host != "" {
+		if ds.Port > 0 {
+			target = net.JoinHostPort(ds.Host, strconv.Itoa(ds.Port))
+		} else {
+			target = ds.Host
+		}
+	}
+
+	if len(accessRecords) > 0 {
+		for _, rec := range accessRecords[0] {
+			if rec.Technology == ds.Technology && (rec.Target == target || rec.Target == ds.Endpoint || rec.Target == ds.Host) {
+				switch rec.Status {
+				case cloud.StatusReadAllowed:
+					if rec.ResourceScope != "" {
+						return fmt.Sprintf("Read verified (%s)", rec.ResourceScope)
+					}
+					return "Read access verified"
+				case cloud.StatusUnauthenticatedAccess:
+					return "Unauthenticated access verified"
+				case cloud.StatusAuthenticatedAccess:
+					return "Authenticated access verified"
+				case cloud.StatusWriteVerified:
+					return "Write access verified"
+				case cloud.StatusAuthChallenged:
+					return "Authentication challenge observed"
+				case cloud.StatusReadDenied, cloud.StatusWriteDenied:
+					return "Access restricted (denied)"
+				case cloud.StatusServiceReachable:
+					return "Service reachable (data access not verified)"
+				case cloud.StatusVerificationSkipped:
+					return "Verification skipped (active verify disabled)"
+				case cloud.StatusAccessInconclusive:
+					return "Access inconclusive"
+				}
+			}
+		}
+	}
+
 	if ds.PublicAccess {
 		return "Access verified"
 	}

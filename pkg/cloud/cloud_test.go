@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -642,6 +644,95 @@ func TestDetector_ScopeExclusion(t *testing.T) {
 		}
 		if !strings.Contains(f.Description, "outside authorized assessment scope") {
 			t.Errorf("expected description to mention outside authorized scope, got: %s", f.Description)
+		}
+	}
+}
+
+type mockRoundTripper func(*http.Request) (*http.Response, error)
+
+func (m mockRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return m(req)
+}
+
+// TestDetector_AllowActiveVerificationGate verifies that when allowActiveVerification is false,
+// active probes against discovered services are completely skipped and recorded as skipped records.
+func TestDetector_AllowActiveVerificationGate(t *testing.T) {
+	var probeAttempts atomic.Int32
+	mockTransport := mockRoundTripper(func(req *http.Request) (*http.Response, error) {
+		probeAttempts.Add(1)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{}`)),
+			Header:     make(http.Header),
+		}, nil
+	})
+
+	customHTTP := &http.Client{Transport: mockTransport}
+	client := NewClient(ClientOptions{
+		HTTPClient: customHTTP,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			probeAttempts.Add(1)
+			return nil, errors.New("probes blocked")
+		},
+		AllowLoopback: true,
+	})
+	detector := NewDetector(client, func(u string) bool { return true })
+
+	// Verify default is true
+	if !detector.AllowActiveVerification() {
+		t.Errorf("expected default allowActiveVerification to be true")
+	}
+
+	// Disable active verification
+	detector.SetAllowActiveVerification(false)
+	if detector.AllowActiveVerification() {
+		t.Errorf("expected allowActiveVerification to be false after SetAllowActiveVerification(false)")
+	}
+
+	// Discovered asset referencing in-scope cloud services
+	assetContent := `
+		const awsBucket = "https://internal-backup.s3.amazonaws.com";
+		const firebase = "https://internal-app.firebaseio.com";
+	`
+	assets := []crawler.Asset{
+		{
+			URL:     "https://target.com/config.js",
+			Content: []byte(assetContent),
+			InScope: true,
+		},
+	}
+
+	res := detector.Audit(context.Background(), assets, nil)
+
+	// Assert only safe discovery probes occurred (2 candidates), and exactly zero
+	// active access verification or legacy vulnerability probes occurred.
+	if attempts := probeAttempts.Load(); attempts != 2 {
+		t.Fatalf("expected exactly 2 discovery probes and 0 active access probes, got %d", attempts)
+	}
+
+	// Assert access records contain StatusVerificationSkipped
+	if len(res.AccessRecords) == 0 {
+		t.Fatalf("expected skipped access records, got 0")
+	}
+	for _, rec := range res.AccessRecords {
+		if rec.Status != StatusVerificationSkipped {
+			t.Errorf("expected StatusVerificationSkipped, got %s", rec.Status)
+		}
+		if !strings.Contains(rec.Limitations, "active access verification disabled") {
+			t.Errorf("expected limitations note about active verification disabled, got: %s", rec.Limitations)
+		}
+	}
+
+	// Now re-run with active verification enabled: active probes must execute
+	probeAttempts.Store(0)
+	detector.SetAllowActiveVerification(true)
+	resActive := detector.Audit(context.Background(), assets, nil)
+	if attempts := probeAttempts.Load(); attempts <= 2 {
+		t.Fatalf("expected active access probes to execute when active verification enabled, got %d attempts", attempts)
+	}
+	for _, rec := range resActive.AccessRecords {
+		if rec.Status == StatusVerificationSkipped {
+			t.Errorf("expected active access verification not to be skipped when enabled, got %s", rec.Status)
 		}
 	}
 }

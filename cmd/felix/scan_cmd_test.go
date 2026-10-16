@@ -457,9 +457,10 @@ func TestRunScan_ScopeSafetyAndMetadataBlocking(t *testing.T) {
 
 func TestFormatServiceAccessState(t *testing.T) {
 	tests := []struct {
-		name     string
-		ds       cloud.DiscoveredService
-		expected string
+		name          string
+		ds            cloud.DiscoveredService
+		accessRecords []cloud.AccessVerificationRecord
+		expected      string
 	}{
 		{
 			name: "outside authorized scope",
@@ -518,11 +519,101 @@ func TestFormatServiceAccessState(t *testing.T) {
 			},
 			expected: "Access not verified",
 		},
+		{
+			name: "access record ReadAllowed with scope",
+			ds: cloud.DiscoveredService{
+				Technology: cloud.TechAWSS3,
+				Endpoint:   "test-bucket.s3.amazonaws.com",
+				InScope:    true,
+			},
+			accessRecords: []cloud.AccessVerificationRecord{
+				{
+					Technology:    cloud.TechAWSS3,
+					Target:        "test-bucket.s3.amazonaws.com",
+					Status:        cloud.StatusReadAllowed,
+					ResourceScope: "bucket-read",
+				},
+			},
+			expected: "Read verified (bucket-read)",
+		},
+		{
+			name: "access record AuthChallenged",
+			ds: cloud.DiscoveredService{
+				Technology: cloud.TechRedis,
+				Host:       "127.0.0.1",
+				Port:       6379,
+				InScope:    true,
+			},
+			accessRecords: []cloud.AccessVerificationRecord{
+				{
+					Technology: cloud.TechRedis,
+					Target:     "127.0.0.1:6379",
+					Status:     cloud.StatusAuthChallenged,
+				},
+			},
+			expected: "Authentication challenge observed",
+		},
+		{
+			name: "access record ReadDenied",
+			ds: cloud.DiscoveredService{
+				Technology: cloud.TechPostgreSQL,
+				Host:       "127.0.0.1",
+				Port:       5432,
+				InScope:    true,
+			},
+			accessRecords: []cloud.AccessVerificationRecord{
+				{
+					Technology: cloud.TechPostgreSQL,
+					Target:     "127.0.0.1:5432",
+					Status:     cloud.StatusReadDenied,
+				},
+			},
+			expected: "Access restricted (denied)",
+		},
+		{
+			name: "access record ServiceReachable",
+			ds: cloud.DiscoveredService{
+				Technology: cloud.TechRedis,
+				Host:       "127.0.0.1",
+				Port:       6379,
+				InScope:    true,
+			},
+			accessRecords: []cloud.AccessVerificationRecord{
+				{
+					Technology: cloud.TechRedis,
+					Target:     "127.0.0.1:6379",
+					Status:     cloud.StatusServiceReachable,
+				},
+			},
+			expected: "Service reachable (data access not verified)",
+		},
+		{
+			name: "access record VerificationSkipped",
+			ds: cloud.DiscoveredService{
+				Technology: cloud.TechRedis,
+				Host:       "127.0.0.1",
+				Port:       6379,
+				InScope:    true,
+			},
+			accessRecords: []cloud.AccessVerificationRecord{
+				{
+					Technology: cloud.TechRedis,
+					Target:     "127.0.0.1:6379",
+					Status:     cloud.StatusVerificationSkipped,
+				},
+			},
+			expected: "Verification skipped (active verify disabled)",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := FormatServiceAccessState(tt.ds)
+			var got string
+			if len(tt.accessRecords) > 0 {
+				got = FormatServiceAccessState(tt.ds, tt.accessRecords)
+			} else {
+				got = FormatServiceAccessState(tt.ds)
+			}
 			if got != tt.expected {
 				t.Errorf("FormatServiceAccessState() = %q, want %q", got, tt.expected)
 			}

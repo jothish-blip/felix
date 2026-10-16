@@ -28,6 +28,8 @@ func Correlate(target string, findings []Finding) ([]Finding, []SecurityStory) {
 	var generalSecrets []Finding
 
 	var corsCredentialed []Finding
+	var indicatorFindings []Finding
+	var discoveryFindings []Finding
 
 	for i := range findings {
 		f := &findings[i]
@@ -71,6 +73,14 @@ func Correlate(target string, findings []Finding) ([]Finding, []SecurityStory) {
 		// Case F: CORS with credentials
 		if cat == "cors-origin-reflection" && f.Severity == SeverityHigh {
 			corsCredentialed = append(corsCredentialed, *f)
+		}
+
+		// Case G: Connection Indicators & Service Discovery
+		if strings.Contains(strings.ToLower(cat), "connection indicator") || strings.Contains(strings.ToLower(cat), "connection-indicator") {
+			indicatorFindings = append(indicatorFindings, *f)
+		}
+		if strings.Contains(strings.ToLower(cat), "service discovery") || strings.Contains(strings.ToLower(cat), "service-discovery") {
+			discoveryFindings = append(discoveryFindings, *f)
 		}
 	}
 
@@ -243,6 +253,48 @@ func Correlate(target string, findings []Finding) ([]Finding, []SecurityStory) {
 			RelatedIDs:       []string{cors.ID},
 		}
 		stories = append(stories, story)
+	}
+
+	// 7. Case G — Connection Indicator Correlated with Discovered Service
+	for _, ind := range indicatorFindings {
+		for _, disc := range discoveryFindings {
+			indTech := ind.EvidenceDetails.Details["technology"]
+			discTech := disc.EvidenceDetails.Details["technology"]
+			match := false
+			if indTech != "" && discTech != "" && strings.EqualFold(indTech, discTech) {
+				match = true
+			} else if ind.Endpoint != "" && disc.Endpoint != "" && (ind.Endpoint == disc.Endpoint || strings.Contains(ind.Endpoint, disc.Endpoint) || strings.Contains(disc.Endpoint, ind.Endpoint)) {
+				match = true
+			}
+			if match {
+				hasCreds := ind.EvidenceDetails.Details["has_credentials"] == "true" || strings.Contains(ind.Category, "Credentials")
+				severity := SeverityMedium
+				if hasCreds {
+					severity = SeverityHigh
+				}
+
+				story := SecurityStory{
+					ID:               fmt.Sprintf("STORY-IND-%s-%s", shortHash(ind.ID), shortHash(disc.ID)),
+					Title:            fmt.Sprintf("Connection Indicator Correlated with Discovered %s Service", disc.Category),
+					Summary:          fmt.Sprintf("A connection indicator reference in client assets correlates with discovered infrastructure (%s). Service reachability and access remain unverified.", disc.Endpoint),
+					Description:      fmt.Sprintf("Static connection indicator (%s) correlates directly with discovered service infrastructure at %s. Service connectivity and credential validity remain unverified.", ind.Title, disc.Endpoint),
+					Evidence: []string{
+						fmt.Sprintf("Connection Indicator: %s (%s)", ind.Title, ind.Endpoint),
+						fmt.Sprintf("Discovered Infrastructure Service: %s (%s)", disc.Title, disc.Endpoint),
+						"Static correlation only: live authentication validity and exposure remain unverified.",
+					},
+					Impact:           "Client-accessible reference reveals internal infrastructure endpoint and credentials; live reachability and access boundaries remain unverified.",
+					Severity:         severity,
+					Confidence:       ConfidenceMedium, // Strictly preserved as Medium to prevent incorrect confidence upgrade
+					RiskContribution: 5,
+					InvestigateFirst: "Verify whether the referenced infrastructure endpoint should be exposed in client assets, and confirm whether declared credentials are active or deprecated.",
+					Remediation:      "Remove sensitive database and cloud connection references from client-accessible files and enforce environment-variable separation in server-side configuration.",
+					RelatedIDs:       []string{ind.ID, disc.ID},
+				}
+				stories = append(stories, story)
+				break
+			}
+		}
 	}
 
 	return findings, stories

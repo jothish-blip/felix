@@ -421,3 +421,61 @@ func TestConnectionIndicatorFinding_NonConflationClassification(t *testing.T) {
 		t.Errorf("expected NegativeEvidence in EvidenceDetails to state zero network connections: %s", finding.EvidenceDetails.NegativeEvidence)
 	}
 }
+
+func TestCorrelate_ConnectionIndicatorWithDiscoveredService(t *testing.T) {
+	target := "https://target.com"
+
+	indFinding := Finding{
+		ID:         "FND-IND-01",
+		RuleID:     "CLD-POSTGRESQL-CONNECTION-INDICATOR",
+		Title:      "Connection Indicator (postgresql) with Credentials",
+		Category:   "Connection Indicator (postgresql) with Credentials",
+		Severity:   SeverityHigh,
+		Confidence: ConfidenceHigh,
+		Endpoint:   "postgres.internal:5432",
+		EvidenceDetails: EvidenceDetails{
+			Details: map[string]string{
+				"technology":      "postgresql",
+				"has_credentials": "true",
+			},
+		},
+	}
+
+	discFinding := Finding{
+		ID:         "FND-DISC-01",
+		RuleID:     "CLD-POSTGRESQL-DISCOVERY",
+		Title:      "Discovered postgresql service (direct_database)",
+		Category:   "Service Discovery: postgresql",
+		Severity:   SeverityInfo,
+		Confidence: ConfidenceHigh,
+		Endpoint:   "postgres.internal:5432",
+		EvidenceDetails: EvidenceDetails{
+			Details: map[string]string{
+				"technology": "postgresql",
+			},
+		},
+	}
+
+	findings, stories := Correlate(target, []Finding{indFinding, discFinding})
+	if len(findings) != 2 {
+		t.Fatalf("expected 2 findings returned, got %d", len(findings))
+	}
+	if len(stories) != 1 {
+		t.Fatalf("expected 1 correlated security story, got %d", len(stories))
+	}
+
+	story := stories[0]
+	// Invariant: Indicator correlation must NOT incorrectly upgrade confidence (remains MEDIUM)
+	if story.Confidence != ConfidenceMedium {
+		t.Errorf("expected story Confidence to be %s (not upgraded), got %s", ConfidenceMedium, story.Confidence)
+	}
+	if story.Severity != SeverityHigh {
+		t.Errorf("expected story Severity to be %s, got %s", SeverityHigh, story.Severity)
+	}
+	if len(story.RelatedIDs) != 2 {
+		t.Errorf("expected 2 related IDs in story, got %d", len(story.RelatedIDs))
+	}
+	if !strings.Contains(story.Description, "remain unverified") {
+		t.Errorf("expected story Description to state that connectivity and credential validity remain unverified: %s", story.Description)
+	}
+}
