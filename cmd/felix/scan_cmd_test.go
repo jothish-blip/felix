@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"felix/pkg/cloud"
 	"felix/pkg/config"
 	"felix/pkg/crawler"
 )
@@ -451,5 +452,80 @@ func TestRunScan_ScopeSafetyAndMetadataBlocking(t *testing.T) {
 	code = runScan([]string{"--quiet", "http://canaryuser:CANARY_PASS@target.local/path"})
 	if code != 2 {
 		t.Errorf("expected exit code 2 when embedded credentials are in target URL, got %d", code)
+	}
+}
+
+func TestFormatServiceAccessState(t *testing.T) {
+	tests := []struct {
+		name     string
+		ds       cloud.DiscoveredService
+		expected string
+	}{
+		{
+			name: "outside authorized scope",
+			ds: cloud.DiscoveredService{
+				Technology: cloud.TechAWSS3,
+				InScope:    false,
+			},
+			expected: "Outside authorized scope",
+		},
+		{
+			name: "access verified when public access confirmed",
+			ds: cloud.DiscoveredService{
+				Technology:   cloud.TechAWSS3,
+				InScope:      true,
+				PublicAccess: true,
+			},
+			expected: "Access verified",
+		},
+		{
+			name: "authentication observed when auth is required",
+			ds: cloud.DiscoveredService{
+				Technology:   cloud.TechRedis,
+				InScope:      true,
+				AuthRequired: true,
+				PublicAccess: false,
+			},
+			expected: "Authentication observed",
+		},
+		{
+			name: "access not verified when service reachable but data access not verified (Redis PONG)",
+			ds: cloud.DiscoveredService{
+				Technology:   cloud.TechRedis,
+				InScope:      true,
+				AuthRequired: false,
+				PublicAccess: false,
+			},
+			expected: "Access not verified",
+		},
+		{
+			name: "access not verified for PostgreSQL SSL negotiation",
+			ds: cloud.DiscoveredService{
+				Technology:   cloud.TechPostgreSQL,
+				InScope:      true,
+				AuthRequired: false,
+				PublicAccess: false,
+			},
+			expected: "Access not verified",
+		},
+		{
+			name: "access not verified for MinIO health check 200 OK",
+			ds: cloud.DiscoveredService{
+				Technology:   cloud.TechMinIO,
+				InScope:      true,
+				AuthRequired: false,
+				PublicAccess: false,
+			},
+			expected: "Access not verified",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := FormatServiceAccessState(tt.ds)
+			if got != tt.expected {
+				t.Errorf("FormatServiceAccessState() = %q, want %q", got, tt.expected)
+			}
+		})
 	}
 }

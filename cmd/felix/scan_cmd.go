@@ -672,15 +672,12 @@ func runScan(args []string) int {
 			if len(cloudResult.DiscoveredServices) > 0 {
 				fmt.Printf("Discovered services (%d):\n", len(cloudResult.DiscoveredServices))
 				for _, ds := range cloudResult.DiscoveredServices {
-					authStr := "Auth required"
-					if !ds.AuthRequired && ds.PublicAccess {
-						authStr = "OPEN / NO AUTH"
-					}
+					statusStr := FormatServiceAccessState(ds)
 					target := ds.Endpoint
 					if target == "" {
 						target = fmt.Sprintf("%s:%d", ds.Host, ds.Port)
 					}
-					fmt.Printf("  [%-10s] %-14s -> %s (%s)\n", ds.Outcome, ds.Technology, target, authStr)
+					fmt.Printf("  [%-10s] %-14s -> %s (%s)\n", ds.Outcome, ds.Technology, target, statusStr)
 				}
 				fmt.Println()
 			} else {
@@ -1031,4 +1028,18 @@ func formatBytes(b int64) string {
 		return fmt.Sprintf("%.1fKB", float64(b)/1024)
 	}
 	return fmt.Sprintf("%dB", b)
+}
+
+// FormatServiceAccessState returns an evidence-supported display string for discovered service access status.
+func FormatServiceAccessState(ds cloud.DiscoveredService) string {
+	if !ds.InScope {
+		return "Outside authorized scope"
+	}
+	if ds.PublicAccess {
+		return "Access verified"
+	}
+	if ds.AuthRequired {
+		return "Authentication observed"
+	}
+	return "Access not verified"
 }
