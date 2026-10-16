@@ -723,7 +723,7 @@ func FromAPIFinding(target string, f api.APIFinding) Finding {
 		} else {
 			detStatus = "DETECTED"
 			verStatus = VerificationVerified
-			verResult = "Laravel Ignition debug page confirmed (APP_DEBUG=true). Interactive stack trace and environment data exposed."
+			verResult = "Laravel Ignition developer diagnostic page confirmed. Interactive stack trace and framework metadata exposed."
 			negEvidence = "All traceback paths and settings values were bounded and redacted."
 		}
 
@@ -731,8 +731,8 @@ func FromAPIFinding(target string, f api.APIFinding) Finding {
 		detMethod = "active_probe"
 		detStatus = "OBSERVED"
 		verStatus = VerificationNotExposed
-		verResult = "Laravel Telescope interface is protected by authentication gate or access controls (HTTP 401/403 or redirect to login)."
-		negEvidence = "Authentication challenge or authorization refusal active; unauthenticated access denied."
+		verResult = "Laravel Telescope interface access is restricted on probed route (HTTP 401/403 or redirect to login)."
+		negEvidence = "Authentication challenge or authorization refusal active on probed route; sub-resources were not independently evaluated."
 
 	case cat == "laravel-telescope-exposure":
 		detMethod = "active_probe"

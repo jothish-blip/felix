@@ -55,8 +55,14 @@ window.data = {"report":{"message":"Database connection refused","laravel_versio
 			if f.Confidence != ConfidenceHigh {
 				t.Errorf("expected ConfidenceHigh, got %s", f.Confidence)
 			}
-			if f.Details["debug_mode"] != "confirmed" {
-				t.Errorf("expected debug_mode confirmed, got %s", f.Details["debug_mode"])
+			if f.Description != "Laravel Ignition developer diagnostic page exposed" {
+				t.Errorf("expected description 'Laravel Ignition developer diagnostic page exposed', got %q", f.Description)
+			}
+			if f.Details["debug_mode"] != "diagnostic_page_confirmed" {
+				t.Errorf("expected debug_mode diagnostic_page_confirmed, got %s", f.Details["debug_mode"])
+			}
+			if f.Details["app_debug_setting"] != "unconfirmed" {
+				t.Errorf("expected app_debug_setting unconfirmed, got %s", f.Details["app_debug_setting"])
 			}
 			if f.Details["laravel_version"] != "10.15.0" {
 				t.Errorf("expected Laravel version 10.15.0, got %s", f.Details["laravel_version"])
@@ -217,7 +223,7 @@ func TestLaravel_IgnitionHealthCheck(t *testing.T) {
 	}
 }
 
-// Test 6: Ignition health check endpoint with command execution enabled -> SeverityHigh
+// Test 6: Ignition health check endpoint with command execution enabled -> SeverityMedium (unconfirmed exploitability)
 func TestLaravel_IgnitionHealthCheckCommandExecution(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/_ignition/health-check" {
@@ -241,8 +247,14 @@ func TestLaravel_IgnitionHealthCheckCommandExecution(t *testing.T) {
 	for _, f := range findings {
 		if strings.Contains(f.Endpoint, "/_ignition/health-check") {
 			found = true
-			if f.Severity != SeverityHigh {
-				t.Errorf("expected SeverityHigh when can_execute_commands is true, got %s", f.Severity)
+			if f.Severity != SeverityMedium {
+				t.Errorf("expected SeverityMedium when can_execute_commands is true, got %s", f.Severity)
+			}
+			if f.Details["exploitability"] != "unconfirmed" {
+				t.Errorf("expected exploitability unconfirmed, got %s", f.Details["exploitability"])
+			}
+			if f.Details["command_execution_tested"] != "false" {
+				t.Errorf("expected command_execution_tested false, got %s", f.Details["command_execution_tested"])
 			}
 			break
 		}
@@ -283,8 +295,11 @@ func TestLaravel_TelescopeProtectedForbidden403(t *testing.T) {
 			if f.Confidence != ConfidenceHigh {
 				t.Errorf("expected ConfidenceHigh, got %s", f.Confidence)
 			}
-			if !strings.Contains(f.NegativeEvidence, "denied") {
-				t.Errorf("expected negative evidence explaining access denied, got %s", f.NegativeEvidence)
+			if f.Details["scope_note"] == "" {
+				t.Errorf("expected scope_note explaining route restriction scope")
+			}
+			if !strings.Contains(f.NegativeEvidence, "probed route") {
+				t.Errorf("expected negative evidence explaining probed route restriction, got %s", f.NegativeEvidence)
 			}
 			break
 		}
@@ -353,6 +368,9 @@ func TestLaravel_TelescopeProtectedRedirectLogin(t *testing.T) {
 	}
 	if f.Severity != SeverityInfo {
 		t.Errorf("expected SeverityInfo, got %s", f.Severity)
+	}
+	if f.Details["scope_note"] == "" {
+		t.Errorf("expected scope_note explaining route restriction scope")
 	}
 	if !strings.Contains(f.Evidence, "redirect") {
 		t.Errorf("expected evidence to mention redirect, got %s", f.Evidence)
@@ -729,5 +747,69 @@ func TestLaravel_DetectorIntegration(t *testing.T) {
 
 	if result.LaravelCount == 0 {
 		t.Errorf("expected LaravelCount > 0 in AuditResult, got %d", result.LaravelCount)
+	}
+}
+
+// Test 22: Telescope unauthenticated API disclosing operational entries without queries/headers/exceptions -> SeverityMedium
+func TestLaravel_TelescopeOperationalEventEntries(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/telescope/telescope-api/requests" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{
+  "entries": [
+    {
+      "id": "1",
+      "type": "event",
+      "content": {
+        "name": "App\\Events\\UserRegistered",
+        "listener": "App\\Listeners\\SendWelcomeEmail"
+      }
+    },
+    {
+      "id": "2",
+      "type": "job",
+      "content": {
+        "name": "App\\Jobs\\ProcessReport",
+        "queue": "default"
+      }
+    }
+  ],
+  "status": "enabled"
+}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOptions{HTTPClient: server.Client(), AllowLoopback: true})
+	findings := AuditLaravelDiagnostics(context.Background(), client, server.URL, nil)
+
+	if len(findings) == 0 {
+		t.Fatalf("expected Telescope operational telemetry finding, got 0")
+	}
+
+	found := false
+	for _, f := range findings {
+		if f.Category == CategoryLaravelTelescopeData {
+			found = true
+			if f.Severity != SeverityMedium {
+				t.Errorf("expected SeverityMedium for operational event entries without queries/headers, got %s", f.Severity)
+			}
+			if f.Details["auth_context"] != "unauthenticated" {
+				t.Errorf("expected auth_context unauthenticated, got %s", f.Details["auth_context"])
+			}
+			if f.Details["verification_limitations"] == "" {
+				t.Errorf("expected verification_limitations in details")
+			}
+			if !strings.Contains(f.Description, "operational event entries") {
+				t.Errorf("expected operational description, got %s", f.Description)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected CategoryLaravelTelescopeData finding for operational entries")
 	}
 }

@@ -256,13 +256,21 @@ func InspectLaravelIgnition(resp *ProbeResponse, endpointURL string) *APIFinding
 		}
 	}
 
+	hasAppDebugSetting := strings.Contains(bodyStr, `"APP_DEBUG": "true"`) ||
+		strings.Contains(bodyStr, `"APP_DEBUG": true`) ||
+		strings.Contains(bodyStr, `'APP_DEBUG' => true`)
+	appDebugVal := "unconfirmed"
+	if hasAppDebugSetting {
+		appDebugVal = "true"
+	}
+
 	debugModeStatus := "suspected"
 	confidence := ConfidenceMedium
 	desc := "Laravel framework exception traceback observed (suspected debug mode)"
 	if hasDirectIgnition {
-		debugModeStatus = "confirmed"
+		debugModeStatus = "diagnostic_page_confirmed"
 		confidence = ConfidenceHigh
-		desc = "Laravel Ignition debug page exposed (APP_DEBUG=true confirmed)"
+		desc = "Laravel Ignition developer diagnostic page exposed"
 	}
 
 	// Evaluate severity based on actual sensitivity of disclosed content
@@ -290,7 +298,7 @@ func InspectLaravelIgnition(resp *ProbeResponse, endpointURL string) *APIFinding
 
 	statusPrefix := "HTTP %d Laravel exception traceback observed exposing internal filesystem paths (suspected debug mode)."
 	if hasDirectIgnition {
-		statusPrefix = "HTTP %d Laravel Ignition debug page confirmed (APP_DEBUG=true)."
+		statusPrefix = "HTTP %d Laravel Ignition developer diagnostic page observed exposing interactive stack trace and framework metadata."
 	}
 	evidence := fmt.Sprintf(statusPrefix, resp.StatusCode)
 	if pathSummary != "" {
@@ -309,17 +317,18 @@ func InspectLaravelIgnition(resp *ProbeResponse, endpointURL string) *APIFinding
 
 	var negEv string
 	if !hasDirectIgnition {
-		negEv = "Traceback observed without official Laravel Ignition developer template; APP_DEBUG=true configuration remains unconfirmed."
+		negEv = "Traceback observed without official Laravel Ignition developer template; APP_DEBUG configuration remains unconfirmed."
 	} else if !hasUnmaskedSecret {
-		negEv = "Official Laravel Ignition debug page confirmed; no unmasked database passwords or application secrets were detected."
+		negEv = "Official Laravel Ignition developer diagnostic page confirmed; no unmasked database passwords or application secrets were detected. Underlying APP_DEBUG configuration setting was not directly evaluated."
 	} else {
 		negEv = "All detected credentials and secret values were bounded and redacted."
 	}
 
 	details := map[string]string{
-		"framework":   "Laravel",
-		"debug_mode":  debugModeStatus,
-		"http_status": fmt.Sprintf("%d", resp.StatusCode),
+		"framework":         "Laravel",
+		"debug_mode":        debugModeStatus,
+		"app_debug_setting": appDebugVal,
+		"http_status":       fmt.Sprintf("%d", resp.StatusCode),
 	}
 	if laravelVer != "" {
 		details["laravel_version"] = laravelVer
@@ -375,20 +384,22 @@ func InspectIgnitionHealthCheck(resp *ProbeResponse, endpointURL string) *APIFin
 
 	severity := SeverityInfo
 	desc := "Laravel Ignition health-check diagnostic endpoint reachable"
-	ev := fmt.Sprintf("HTTP 200 OK on %s. Laravel Ignition health-check endpoint responded with diagnostic status.", endpointURL)
+	ev := fmt.Sprintf("HTTP 200 OK on %s. Laravel Ignition health-check endpoint responded with diagnostic status (can_execute_commands: false).", endpointURL)
 
 	if canExecute {
-		severity = SeverityHigh
-		desc = "Laravel Ignition health-check endpoint reachable with command execution enabled"
-		ev = fmt.Sprintf("HTTP 200 OK on %s. Laravel Ignition health-check indicates can_execute_commands: true. Solution execution routes may be active.", endpointURL)
+		severity = SeverityMedium
+		desc = "Laravel Ignition health-check diagnostic endpoint reachable (can_execute_commands: true reported)"
+		ev = fmt.Sprintf("HTTP 200 OK on %s. Laravel Ignition health-check endpoint reports can_execute_commands: true. Diagnostic feature flag is enabled; remote command execution exploitability was not tested or verified.", endpointURL)
 	}
 
 	details := map[string]string{
-		"framework":            "Laravel",
-		"component":            "Ignition",
-		"endpoint":             endpointURL,
-		"can_execute_commands": fmt.Sprintf("%t", canExecute),
-		"http_status":          "200",
+		"framework":                "Laravel",
+		"component":                "Ignition",
+		"endpoint":                 endpointURL,
+		"can_execute_commands":     fmt.Sprintf("%t", canExecute),
+		"command_execution_tested": "false",
+		"exploitability":           "unconfirmed",
+		"http_status":              "200",
 	}
 
 	return &APIFinding{
@@ -397,7 +408,7 @@ func InspectIgnitionHealthCheck(resp *ProbeResponse, endpointURL string) *APIFin
 		Method:           http.MethodGet,
 		Description:      desc,
 		Evidence:         secrets.RedactText(ev),
-		NegativeEvidence: "Endpoint probed passively; command execution and solution execution were not invoked.",
+		NegativeEvidence: "Endpoint probed passively; command execution and solution execution were not invoked, and remote command execution was not tested or demonstrated.",
 		Severity:         severity,
 		Confidence:       ConfidenceHigh,
 		Fingerprint:      GenerateFingerprint(CategoryLaravelIgnitionDebug, endpointURL, http.MethodGet),
@@ -415,14 +426,14 @@ func InspectLaravelTelescope(resp *ProbeResponse, endpointURL string) *APIFindin
 
 	// Case 1: Protected by HTTP Status 401 Unauthorized or 403 Forbidden
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		ev := fmt.Sprintf("HTTP %d observed on %s. Laravel Telescope dashboard is protected by authentication gate or access controls.",
+		ev := fmt.Sprintf("HTTP %d observed on %s. Access to Laravel Telescope on this endpoint is restricted by authentication challenge or access controls.",
 			resp.StatusCode, endpointURL)
-		negEv := fmt.Sprintf("Authentication challenge or authorization gate active (HTTP %d); unauthenticated access is denied.", resp.StatusCode)
+		negEv := fmt.Sprintf("Authentication challenge or authorization gate active (HTTP %d) on probed route; unauthenticated access to this endpoint is denied. Access controls for other Telescope resources were not independently tested.", resp.StatusCode)
 		return &APIFinding{
 			Category:         CategoryLaravelTelescopeProtected,
 			Endpoint:         endpointURL,
 			Method:           http.MethodGet,
-			Description:      "Laravel Telescope monitoring dashboard access restricted",
+			Description:      "Laravel Telescope interface access restricted on probed endpoint (observed route restriction)",
 			Evidence:         secrets.RedactText(ev),
 			NegativeEvidence: negEv,
 			Severity:         SeverityInfo,
@@ -430,10 +441,11 @@ func InspectLaravelTelescope(resp *ProbeResponse, endpointURL string) *APIFindin
 			Fingerprint:      GenerateFingerprint(CategoryLaravelTelescopeProtected, endpointURL, http.MethodGet),
 			Classification:   ClassAdmin,
 			Details: map[string]string{
-				"framework":   "Laravel",
-				"component":   "Telescope",
-				"http_status": fmt.Sprintf("%d", resp.StatusCode),
-				"protected":   "true",
+				"framework":       "Laravel",
+				"component":       "Telescope",
+				"http_status":     fmt.Sprintf("%d", resp.StatusCode),
+				"observed_access": "restricted",
+				"scope_note":      "restriction confirmed on probed route; sub-resources were not independently evaluated",
 			},
 			HTTPStatus: resp.StatusCode,
 		}
@@ -443,14 +455,14 @@ func InspectLaravelTelescope(resp *ProbeResponse, endpointURL string) *APIFindin
 	if resp.Redirected {
 		redirectURL := strings.ToLower(resp.RedirectURL)
 		if strings.Contains(redirectURL, "login") || strings.Contains(redirectURL, "auth") {
-			ev := fmt.Sprintf("HTTP %d redirect observed on %s to %s. Laravel Telescope dashboard requires authentication.",
+			ev := fmt.Sprintf("HTTP %d redirect observed on %s to %s. Laravel Telescope route requires authentication.",
 				resp.InitialStatusCode, endpointURL, resp.RedirectURL)
-			negEv := "Authentication redirect active; unauthenticated access to monitoring interface is not permitted."
+			negEv := "Authentication redirect active on probed route; unauthenticated access to this endpoint is not permitted. Access controls for other Telescope resources were not independently tested."
 			return &APIFinding{
 				Category:         CategoryLaravelTelescopeProtected,
 				Endpoint:         endpointURL,
 				Method:           http.MethodGet,
-				Description:      "Laravel Telescope monitoring dashboard requires authentication (redirect)",
+				Description:      "Laravel Telescope interface requires authentication (observed login redirect)",
 				Evidence:         secrets.RedactText(ev),
 				NegativeEvidence: negEv,
 				Severity:         SeverityInfo,
@@ -458,11 +470,12 @@ func InspectLaravelTelescope(resp *ProbeResponse, endpointURL string) *APIFindin
 				Fingerprint:      GenerateFingerprint(CategoryLaravelTelescopeProtected, endpointURL, http.MethodGet),
 				Classification:   ClassAdmin,
 				Details: map[string]string{
-					"framework":    "Laravel",
-					"component":    "Telescope",
-					"redirect_url": resp.RedirectURL,
-					"http_status":  fmt.Sprintf("%d", resp.InitialStatusCode),
-					"protected":    "true",
+					"framework":       "Laravel",
+					"component":       "Telescope",
+					"redirect_url":    resp.RedirectURL,
+					"http_status":     fmt.Sprintf("%d", resp.InitialStatusCode),
+					"observed_access": "restricted",
+					"scope_note":      "restriction confirmed on probed route; sub-resources were not independently evaluated",
 				},
 				HTTPStatus: resp.InitialStatusCode,
 			}
@@ -486,12 +499,12 @@ func InspectLaravelTelescope(resp *ProbeResponse, endpointURL string) *APIFindin
 		}
 
 		ev := fmt.Sprintf("HTTP 200 OK on %s. Laravel Telescope dashboard interface shell is reachable.", endpointURL)
-		negEv := "Dashboard interface shell is reachable, but unauthenticated access to sensitive monitoring records or telemetry was not demonstrated on this endpoint."
+		negEv := "Dashboard interface shell is reachable, but unauthenticated access to sensitive monitoring records or operational telemetry was not demonstrated on this endpoint."
 		return &APIFinding{
 			Category:         CategoryLaravelTelescopeExposed,
 			Endpoint:         endpointURL,
 			Method:           http.MethodGet,
-			Description:      "Laravel Telescope monitoring dashboard reachable (interface shell)",
+			Description:      "Laravel Telescope monitoring dashboard reachable (interface shell observation)",
 			Evidence:         secrets.RedactText(ev),
 			NegativeEvidence: negEv,
 			Severity:         SeverityInfo,
@@ -610,6 +623,40 @@ func InspectTelescopeAPI(resp *ProbeResponse, endpointURL string) *APIFinding {
 		}
 
 		// Demonstrated unauthenticated disclosure of active monitoring telemetry
+		hasQueries := false
+		hasRequestsWithData := false
+		hasExceptions := false
+		hasLogs := false
+
+		for _, entry := range apiData.Entries {
+			entryType, _ := entry["type"].(string)
+			lowerType := strings.ToLower(entryType)
+			content, _ := entry["content"].(map[string]interface{})
+
+			if lowerType == "query" || (content != nil && content["sql"] != nil) {
+				hasQueries = true
+			}
+			if lowerType == "exception" || (content != nil && (content["class"] != nil || content["trace"] != nil)) {
+				hasExceptions = true
+			}
+			if lowerType == "request" {
+				if content != nil {
+					if _, hasH := content["headers"]; hasH {
+						hasRequestsWithData = true
+					}
+					if _, hasP := content["payload"]; hasP {
+						hasRequestsWithData = true
+					}
+					if _, hasU := content["uri"]; hasU {
+						hasRequestsWithData = true
+					}
+				}
+			}
+			if lowerType == "log" || lowerType == "dump" {
+				hasLogs = true
+			}
+		}
+
 		hasUnmaskedSecret := false
 		var secretKeywords []string
 
@@ -626,26 +673,56 @@ func InspectTelescopeAPI(resp *ProbeResponse, endpointURL string) *APIFinding {
 			}
 		}
 
-		severity := SeverityHigh
+		severity := SeverityMedium
+		desc := "Laravel Telescope unauthenticated monitoring telemetry disclosure (operational event entries)"
 		if hasUnmaskedSecret {
 			severity = SeverityCritical
+			desc = "Laravel Telescope unauthenticated monitoring telemetry exposes unmasked credentials"
+		} else if hasQueries || hasExceptions || hasRequestsWithData {
+			severity = SeverityHigh
+			desc = "Laravel Telescope unauthenticated monitoring telemetry disclosure (queries/requests/exceptions)"
 		}
 
-		ev := fmt.Sprintf("HTTP 200 OK on %s. Laravel Telescope API disclosed %d active diagnostic record(s). Monitored HTTP requests, queries, and execution metadata exposed.",
+		ev := fmt.Sprintf("HTTP 200 OK on %s. Laravel Telescope API disclosed %d active diagnostic record(s). Monitored operational telemetry exposed.",
 			endpointURL, len(apiData.Entries))
+		if hasQueries || hasExceptions || hasRequestsWithData {
+			ev = fmt.Sprintf("HTTP 200 OK on %s. Laravel Telescope API disclosed %d active diagnostic record(s). Monitored HTTP requests, queries, and execution metadata exposed.",
+				endpointURL, len(apiData.Entries))
+		}
 		if hasUnmaskedSecret {
 			ev += fmt.Sprintf(" Unmasked credential(s) observed in captured telemetry: [%s] (secret values redacted).",
 				strings.Join(secretKeywords, ", "))
 		}
 
+		var sensitiveTypes []string
+		if hasQueries {
+			sensitiveTypes = append(sensitiveTypes, "database_queries")
+		}
+		if hasRequestsWithData {
+			sensitiveTypes = append(sensitiveTypes, "http_requests")
+		}
+		if hasExceptions {
+			sensitiveTypes = append(sensitiveTypes, "exception_traces")
+		}
+		if hasLogs {
+			sensitiveTypes = append(sensitiveTypes, "logs_dumps")
+		}
+		if len(sensitiveTypes) == 0 {
+			sensitiveTypes = append(sensitiveTypes, "event_metadata")
+		}
+
 		details := map[string]string{
-			"framework":     "Laravel",
-			"component":     "TelescopeAPI",
-			"entries_count": fmt.Sprintf("%d", len(apiData.Entries)),
-			"http_status":   "200",
+			"framework":                "Laravel",
+			"component":                "TelescopeAPI",
+			"entries_count":            fmt.Sprintf("%d", len(apiData.Entries)),
+			"http_status":              "200",
+			"auth_context":             "unauthenticated",
+			"sensitive_data_types":     strings.Join(sensitiveTypes, ", "),
+			"verification_limitations": "Passive read-only query; backend state was not altered and active credential authorization was not verified",
 		}
 		if hasUnmaskedSecret {
 			details["unmasked_secrets_count"] = fmt.Sprintf("%d", len(secretKeywords))
+			details["credential_active_status"] = "unverified"
 		}
 		if resp.Truncated {
 			details["limitations"] = "Response exceeded 512 KiB and was bounded to preserve system resources"
@@ -655,9 +732,9 @@ func InspectTelescopeAPI(resp *ProbeResponse, endpointURL string) *APIFinding {
 			Category:         CategoryLaravelTelescopeData,
 			Endpoint:         endpointURL,
 			Method:           http.MethodGet,
-			Description:      "Laravel Telescope unauthenticated monitoring telemetry disclosure",
+			Description:      desc,
 			Evidence:         secrets.RedactText(ev),
-			NegativeEvidence: "All captured request headers, payloads, and query parameters were bounded and redacted.",
+			NegativeEvidence: "All captured request headers, payloads, query parameters, and telemetry entries were bounded and redacted; credential validity was not tested.",
 			Severity:         severity,
 			Confidence:       ConfidenceHigh,
 			Fingerprint:      GenerateFingerprint(CategoryLaravelTelescopeData, endpointURL, http.MethodGet),
