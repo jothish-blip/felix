@@ -33,6 +33,8 @@ type ClientOptions struct {
 	HTTPClient      *http.Client
 	AllowLoopback   bool
 	AllowPrivateIPs bool
+	RateLimit       float64
+	MaxConcurrency  int
 	DialContext     func(ctx context.Context, network, addr string) (net.Conn, error)
 	IsAllowed       func(string) bool
 	IsExcluded      func(string) bool
@@ -93,10 +95,20 @@ func NewClient(opts ...ClientOptions) *Client {
 	}
 
 	if customHTTP == nil {
-		transport := crawler.NewSafeTransport(crawler.SafeTransportOptions{
+		safeTransport := crawler.NewSafeTransport(crawler.SafeTransportOptions{
 			Timeout:         timeout,
 			AllowLoopback:   allowLoopback,
 			AllowPrivateIPs: allowPrivate,
+		})
+		var rateVal float64
+		var concVal int
+		if len(opts) > 0 {
+			rateVal = opts[0].RateLimit
+			concVal = opts[0].MaxConcurrency
+		}
+		transport := crawler.NewRateLimitedTransport(safeTransport, crawler.RateLimitOptions{
+			Rate:           rateVal,
+			MaxConcurrency: concVal,
 		})
 
 		customHTTP = &http.Client{

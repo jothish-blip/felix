@@ -226,13 +226,16 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 	if insecureSkip {
 		tlsConfig.InsecureSkipVerify = true
 	}
-	transport := crawler.NewSafeTransport(crawler.SafeTransportOptions{
+	safeTransport := crawler.NewSafeTransport(crawler.SafeTransportOptions{
 		Timeout:            timeoutDur,
 		KeepAlive:          30 * time.Second,
 		AllowLoopback:      opts.AllowLoopback || cfgStore.AllowLoopback,
 		AllowPrivateIPs:    opts.AllowPrivateIPs || cfgStore.AllowPrivateIPs,
 		InsecureSkipVerify: insecureSkip,
 		TLSConfig:          tlsConfig,
+	})
+	transport := crawler.NewRateLimitedTransport(safeTransport, crawler.RateLimitOptions{
+		MaxConcurrency: concurrency,
 	})
 	maxRedirects := opts.MaxRedirects
 	if maxRedirects <= 0 {

@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"felix/pkg/crawler"
 )
 
 // IdentityValidator coordinates identity verification and scope compliance.
@@ -16,7 +18,14 @@ type IdentityValidator struct {
 // NewIdentityValidator creates an identity validator.
 func NewIdentityValidator(client *http.Client) *IdentityValidator {
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{
+			Transport: crawler.NewRateLimitedTransport(http.DefaultTransport, crawler.RateLimitOptions{}),
+			Timeout:   10 * time.Second,
+		}
+	} else if client.Transport != nil {
+		if _, ok := client.Transport.(*crawler.RateLimitedTransport); !ok {
+			client.Transport = crawler.NewRateLimitedTransport(client.Transport, crawler.RateLimitOptions{})
+		}
 	}
 	return &IdentityValidator{client: client}
 }

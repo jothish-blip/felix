@@ -200,19 +200,20 @@ Target 3 was re-scanned in identical configuration (`reports/scan_target3_birthd
 - **Remediation:**
   1. Created `crawler.RateLimitedTransport` enforcing per-host token pacing (`minInterval = 1s / rate`) and global semaphore concurrency limits.
   2. Added `--rate-limit, -r <float>` CLI flag to `felix scan` and wired `RateLimitedTransport` into `SafeHTTPClient`.
-  3. Recorded accurate transport request counts via `rateLimitedTransport.TotalRequests()` in `rep.RequestCount`, `rep.Metadata["transport_requests_count"]`, and alias `rep.Metadata["wire_requests_count"]`.
+  3. Integrated `RateLimitedTransport` across all outbound HTTP clients, transports, and engines in the codebase (`api.Client`, `cloud.Client`, `cloudsec.Engine`, `sessionsec.Engine`, `webvuln.Engine`, `businesslogic.Engine`, `assessment.Controller`, `assessment_cmd`, `update.Checker`, and `update.Downloader`).
+  4. Recorded accurate transport request counts via `rateLimitedTransport.TotalRequests()` in `rep.RequestCount`, `rep.Metadata["transport_requests_count"]`, and alias `rep.Metadata["wire_requests_count"]`.
 - **Verification:** Regression tests `TestRateLimitedTransport_PerHostPacing`, `TestRateLimitedTransport_ConcurrentRequestsPaced`, `TestRateLimitedTransport_RetriesPaced`, and CLI test `TestRunScan_RateLimitingAndSubpathEnforcement` verified strict rate compliance and accurate transport request telemetry.
 
 ### `FELIX-DEFECT-003`: Scope Boundary Similar-Prefix Vulnerability, Traversal Escapes & Asset Containment
 - **Component:** `pkg/crawler/scope.go`, `cmd/felix/scan_cmd.go`
 - **Severity:** High (Boundary Integrity)
-- **Impact:** A simple string prefix check like `strings.HasPrefix(url, "/hithaone")` would incorrectly accept lookalike paths such as `/hithaone-admin` or `/hithaone_evil`. Furthermore, path traversal sequences (`/hithaone/../admin`, `%2e%2e`) could escape the subpath boundary. Conversely, strictly blocking all non-subpath URLs would prevent the crawler from fetching frontend static assets (e.g. `/_next/static/...` or `/assets/app.js`) hosted at the origin root.
-- **Root Cause:** Lack of path normalization (`path.Clean`, `url.PathUnescape`), missing delimiter checks (`/` or end-of-string), overly permissive client asset filters, and passing `isTargetAuthorized` instead of `isPathAuthorized` to `cloudAuditor`.
+- **Impact:** A simple string prefix check like `strings.HasPrefix(url, "/hithaone")` would incorrectly accept lookalike paths such as `/hithaone-admin` or `/hithaone_evil`. Furthermore, path traversal sequences (`/hithaone/../admin`, `%2e%2e`, `%252e%252e`, `\..\admin`) could escape the subpath boundary. Conversely, strictly blocking all non-subpath URLs would prevent the crawler from fetching frontend static assets (e.g. `/_next/static/...` or `/assets/app.js`) hosted at the origin root.
+- **Root Cause:** Lack of iterative path unescaping (`url.PathUnescape`), backslash un-normalization, missing forward-slash delimiter enforcement (`/` or end-of-string), overly permissive client asset filters, and passing `isTargetAuthorized` instead of `isPathAuthorized` to `cloudAuditor`.
 - **Remediation:**
-  1. Hardened `Scope.IsPathInScope(rawURL)` using `url.PathUnescape` and `path.Clean` to strictly defeat traversal escapes (`/hithaone/../admin`, `%2e%2e`) and require exact match or `/` delimiter after prefix.
-  2. Tightened `isClientAssetURL` in `scan_cmd.go` to strictly require recognized build asset directory prefixes (`/_next/`, `/assets/`, `/static/`, `/build/`, `/dist/`) or standard root icons (`/favicon.ico`), combined with recognized static asset file extensions.
+  1. Hardened `Scope.IsPathInScope(rawURL)` using iterative `url.PathUnescape` (up to 3 passes), backslash normalization, and `path.Clean` to strictly defeat single and double-encoded traversal escapes (`/hithaone/../admin`, `%2e%2e`, `%252e%252e`, `\..\admin`) and require exact match or strict `/` delimiter after prefix.
+  2. Tightened `isClientAssetURL` in `scan_cmd.go` with iterative unescaping, backslash normalization, and `path.Clean`, strictly requiring recognized build asset directory prefixes (`/_next/`, `/assets/`, `/static/`, `/build/`, `/dist/`) or standard root icons/manifests (`/favicon.ico`, `/favicon.png`, `/manifest.json`, `/robots.txt`), combined with recognized static asset file extensions (`.js`, `.css`, etc.).
   3. Configured `cloudAuditor`, `apiAuditor`, and `safeHTTPClient.CheckRedirect` to strictly use `isPathAuthorized`.
-- **Verification:** Regression tests `TestScope_IsPathInScope`, `TestRunScan_RateLimitingAndSubpathEnforcement`, and `TestRunScan_RedirectBlockedOutsidePathScope` verified complete rejection of traversal escapes, lookalike prefixes, out-of-scope active probes, and uncontained redirects.
+- **Verification:** Regression tests `TestScope_IsPathInScope`, `TestRunScan_RateLimitingAndSubpathEnforcement`, `TestRunScan_RedirectBlockedOutsidePathScope`, and `TestRunScan_HithaOneStrictBoundaryProof` verified complete rejection of traversal escapes, lookalike prefixes, out-of-scope active probes, and uncontained redirects while safely ingesting valid frontend assets.
 
 ### `FELIX-DEFECT-004`: False-Positive Informational Route Flooding on SPAs
 - **Component:** `pkg/api/authstate.go`, `pkg/api/detector.go`

@@ -747,3 +747,111 @@ func TestRunScan_RedirectBlockedOutsidePathScope(t *testing.T) {
 		t.Errorf("redirect out of subpath to /admin-secret was followed, but should have been blocked")
 	}
 }
+
+func TestRunScan_HithaOneStrictBoundaryProof(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("FELIX_DIR", tempDir)
+
+	var recordedRequests []string
+	var mu sync.Mutex
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		recordedRequests = append(recordedRequests, r.URL.Path)
+		mu.Unlock()
+
+		switch r.URL.Path {
+		case "/hithaone":
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`<!doctype html>
+<html>
+<head>
+    <script src="/assets/app-123.js"></script>
+    <script src="/admin.js"></script>
+    <script src="/_next/../admin.js"></script>
+    <script src="/assets/%2e%2e/secret.js"></script>
+    <script src="/assets/%252e%252e/secret2.js"></script>
+    <script src="/assets\..\evil.js"></script>
+    <a href="/root-page">Root Page</a>
+    <a href="/hithaone-admin">Lookalike Prefix</a>
+    <a href="/other/app">Other App</a>
+</head>
+<body>
+    <h1>HithaOne Application</h1>
+</body>
+</html>`))
+		case "/assets/app-123.js":
+			w.Header().Set("Content-Type", "application/javascript")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`
+console.log("HithaOne bundle loaded");
+const apiEndpoint = "/admin";
+const detailsEndpoint = "/hithaone/details";
+const userEndpoint = "/api/v1/users";
+`))
+		case "/hithaone/details":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status": "ok"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	code := runScan([]string{
+		"--allow-loopback",
+		"--rate-limit=20.0",
+		"--quiet",
+		ts.URL + "/hithaone",
+	})
+	if code != 0 && code != 1 {
+		t.Fatalf("expected scan exit code 0 or 1, got %d", code)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	prohibitedPaths := []string{
+		"/admin.js",
+		"/_next/../admin.js",
+		"/secret.js",
+		"/secret2.js",
+		"/evil.js",
+		"/root-page",
+		"/hithaone-admin",
+		"/other/app",
+		"/admin",
+		"/.env",
+		"/.git/HEAD",
+		"/api/v1/users",
+		"/swagger.json",
+		"/openapi.json",
+	}
+
+	for _, prohibited := range prohibitedPaths {
+		for _, req := range recordedRequests {
+			if req == prohibited {
+				t.Errorf("VIOLATION: prohibited out-of-scope path %q was requested by scanner!", prohibited)
+			}
+		}
+	}
+
+	foundTarget := false
+	foundAsset := false
+	for _, req := range recordedRequests {
+		if req == "/hithaone" {
+			foundTarget = true
+		}
+		if req == "/assets/app-123.js" {
+			foundAsset = true
+		}
+	}
+	if !foundTarget {
+		t.Errorf("expected target /hithaone to be requested")
+	}
+	if !foundAsset {
+		t.Errorf("expected referenced asset /assets/app-123.js to be downloaded")
+	}
+}

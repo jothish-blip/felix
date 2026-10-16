@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"felix/pkg/crawler"
 	"felix/pkg/report"
 	"github.com/google/uuid"
 )
@@ -24,7 +25,8 @@ type Engine struct {
 func NewEngine(client *http.Client, config Config) *Engine {
 	if client == nil {
 		client = &http.Client{
-			Timeout: config.Timeout,
+			Transport: crawler.NewRateLimitedTransport(http.DefaultTransport, crawler.RateLimitOptions{}),
+			Timeout:   config.Timeout,
 		}
 	}
 	return &Engine{
@@ -39,6 +41,9 @@ func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
 	transport := e.client.Transport
 	if transport == nil {
 		transport = http.DefaultTransport
+	}
+	if _, ok := transport.(*crawler.RateLimitedTransport); !ok {
+		transport = crawler.NewRateLimitedTransport(transport, crawler.RateLimitOptions{})
 	}
 	return &http.Client{
 		Transport: transport,

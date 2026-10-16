@@ -12,6 +12,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"felix/pkg/crawler"
 )
 
 const (
@@ -31,10 +33,14 @@ func NewDownloader(repo string) *Downloader {
 	if repo == "" {
 		repo = DefaultGitHubRepo
 	}
+	safeTransport := crawler.NewSafeTransport(crawler.SafeTransportOptions{
+		Timeout: DownloadTimeout,
+	})
 	return &Downloader{
 		AllowedRepo: repo,
 		HTTPClient: &http.Client{
-			Timeout: DownloadTimeout,
+			Transport: crawler.NewRateLimitedTransport(safeTransport, crawler.RateLimitOptions{}),
+			Timeout:   DownloadTimeout,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= 10 {
 					return fmt.Errorf("too many redirects during artifact download")

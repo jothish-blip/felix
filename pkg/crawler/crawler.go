@@ -70,7 +70,7 @@ func New(cfg Config) *Crawler {
 			tlsConfig.InsecureSkipVerify = true
 		}
 
-		transport := NewSafeTransport(SafeTransportOptions{
+		safeTransport := NewSafeTransport(SafeTransportOptions{
 			Timeout:            cfg.Timeout,
 			AllowLoopback:      cfg.AllowLoopback,
 			AllowPrivateIPs:    cfg.AllowPrivateIPs,
@@ -78,6 +78,10 @@ func New(cfg Config) *Crawler {
 			TLSConfig:          tlsConfig,
 			Resolver:           cfg.Resolver,
 			DialFunc:           cfg.DialFunc,
+		})
+		transport := NewRateLimitedTransport(safeTransport, RateLimitOptions{
+			Rate:           cfg.RateLimit,
+			MaxConcurrency: cfg.Concurrency,
 		})
 
 		redirectLimit := cfg.MaxRedirects

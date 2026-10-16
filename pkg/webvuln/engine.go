@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"felix/pkg/apisec"
+	"felix/pkg/crawler"
 	"felix/pkg/report"
 	"github.com/google/uuid"
 )
@@ -39,6 +40,9 @@ func NewEngine(client *http.Client, cfg Config) *Engine {
 
 	if client == nil {
 		client = &http.Client{
+			Transport: crawler.NewRateLimitedTransport(http.DefaultTransport, crawler.RateLimitOptions{
+				MaxConcurrency: cfg.Concurrency,
+			}),
 			Timeout: cfg.Timeout,
 		}
 	}
@@ -54,6 +58,11 @@ func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
 	transport := e.client.Transport
 	if transport == nil {
 		transport = http.DefaultTransport
+	}
+	if _, ok := transport.(*crawler.RateLimitedTransport); !ok {
+		transport = crawler.NewRateLimitedTransport(transport, crawler.RateLimitOptions{
+			MaxConcurrency: e.config.Concurrency,
+		})
 	}
 
 	return &http.Client{
@@ -1148,6 +1157,11 @@ func (e *Engine) assessOpenRedirect(ctx context.Context, actx *AssessmentContext
 	noRedirectTransport := e.client.Transport
 	if noRedirectTransport == nil {
 		noRedirectTransport = http.DefaultTransport
+	}
+	if _, ok := noRedirectTransport.(*crawler.RateLimitedTransport); !ok {
+		noRedirectTransport = crawler.NewRateLimitedTransport(noRedirectTransport, crawler.RateLimitOptions{
+			MaxConcurrency: e.config.Concurrency,
+		})
 	}
 	noRedirectClient := &http.Client{
 		Transport: noRedirectTransport,

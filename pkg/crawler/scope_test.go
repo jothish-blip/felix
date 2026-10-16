@@ -511,7 +511,16 @@ func TestScope_IsPathInScope(t *testing.T) {
 		"/hithaone/..",
 		"/hithaone/%2e%2e/admin",
 		"/hithaone/%2E%2E/admin",
+		"/hithaone/%252e%252e/admin",
+		"/hithaone/%252E%252E/admin",
+		"/hithaone\\..\\admin",
+		"/hithaone\\admin",
+		"/hithaone%5c%2e%2e%5cadmin",
 		"/hithaone%2dadmin",
+		"https://example.com/hithaone/../admin",
+		"https://example.com/hithaone/%2e%2e/admin",
+		"https://example.com/hithaone/%252e%252e/admin",
+		"https://example.com/hithaone\\..\\admin",
 	}
 	for _, u := range invalidSubpathCases {
 		if sSubpath.IsPathInScope(u) {
@@ -554,6 +563,8 @@ func TestScope_IsPathInScope(t *testing.T) {
 		"/app",
 		"/app/v1/../v2",
 		"/app/v1/%2e%2e/v2",
+		"/app/v1/%252e%252e/v2",
+		"/app/v1\\..\\v2",
 	}
 	for _, u := range invalidNestedCases {
 		if sNested.IsPathInScope(u) {

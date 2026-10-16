@@ -1980,9 +1980,9 @@ func runAssessmentAuthz(args []string) int {
 		}
 		scopeVal := assessment.NewScopeValidator(asm.ScopeMode, targetURLs, asm.ScopeRules, asm.Exclusions)
 		authzHTTPClient := &http.Client{
-			Transport: crawler.NewSafeTransport(crawler.SafeTransportOptions{
+			Transport: crawler.NewRateLimitedTransport(crawler.NewSafeTransport(crawler.SafeTransportOptions{
 				Timeout: 15 * time.Second,
-			}),
+			}), crawler.RateLimitOptions{}),
 			Timeout: 15 * time.Second,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= 10 {
@@ -2378,9 +2378,9 @@ func runAssessmentAPISec(args []string) int {
 			cfg.AllowWriteTests = true
 		}
 		apisecHTTPClient := &http.Client{
-			Transport: crawler.NewSafeTransport(crawler.SafeTransportOptions{
+			Transport: crawler.NewRateLimitedTransport(crawler.NewSafeTransport(crawler.SafeTransportOptions{
 				Timeout: cfg.Timeout,
-			}),
+			}), crawler.RateLimitOptions{}),
 			Timeout: cfg.Timeout,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= 10 {
@@ -2824,8 +2824,10 @@ func runAssessmentWebVuln(args []string) int {
 		}
 
 		webvulnHTTPClient := &http.Client{
-			Transport: crawler.NewSafeTransport(crawler.SafeTransportOptions{
+			Transport: crawler.NewRateLimitedTransport(crawler.NewSafeTransport(crawler.SafeTransportOptions{
 				Timeout: cfg.Timeout,
+			}), crawler.RateLimitOptions{
+				MaxConcurrency: cfg.Concurrency,
 			}),
 			Timeout: cfg.Timeout,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -3353,9 +3355,9 @@ func runAssessmentSessionSec(args []string) int {
 
 		cfg := sessionsec.DefaultConfig()
 		sessionHTTPClient := &http.Client{
-			Transport: crawler.NewSafeTransport(crawler.SafeTransportOptions{
+			Transport: crawler.NewRateLimitedTransport(crawler.NewSafeTransport(crawler.SafeTransportOptions{
 				Timeout: cfg.Timeout,
-			}),
+			}), crawler.RateLimitOptions{}),
 			Timeout: cfg.Timeout,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= 10 {
@@ -3884,9 +3886,9 @@ func runAssessmentCloudSec(args []string) int {
 
 		actx.ExecutionID = execID
 		cloudCfg := cloudsec.DefaultConfig()
-		cloudCfg.Transport = crawler.NewSafeTransport(crawler.SafeTransportOptions{
+		cloudCfg.Transport = crawler.NewRateLimitedTransport(crawler.NewSafeTransport(crawler.SafeTransportOptions{
 			Timeout: cloudCfg.Timeout,
-		})
+		}), crawler.RateLimitOptions{})
 		engine := cloudsec.NewEngine(cloudCfg)
 
 		fmt.Println("================================================================================")
@@ -4384,9 +4386,9 @@ func runAssessmentBusinessLogic(args []string) int {
 		}
 		scopeVal := assessment.NewScopeValidator(asm.ScopeMode, targetURLs, asm.ScopeRules, asm.Exclusions)
 		blogicHTTPClient := &http.Client{
-			Transport: crawler.NewSafeTransport(crawler.SafeTransportOptions{
+			Transport: crawler.NewRateLimitedTransport(crawler.NewSafeTransport(crawler.SafeTransportOptions{
 				Timeout: cfg.Timeout,
-			}),
+			}), crawler.RateLimitOptions{}),
 			Timeout: cfg.Timeout,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= 10 {

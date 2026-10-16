@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"felix/pkg/crawler"
 	"felix/pkg/report"
 )
 
@@ -24,6 +25,9 @@ func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
 	transport := e.config.Transport
 	if transport == nil {
 		transport = http.DefaultTransport
+	}
+	if _, ok := transport.(*crawler.RateLimitedTransport); !ok {
+		transport = crawler.NewRateLimitedTransport(transport, crawler.RateLimitOptions{})
 	}
 	return &http.Client{
 		Transport: transport,

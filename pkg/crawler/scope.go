@@ -315,7 +315,16 @@ func (s *Scope) IsPathInScope(rawURL string) bool {
 		}
 	}
 
-	targetPath := path.Clean(s.TargetURL.Path)
+	targetPath := s.TargetURL.Path
+	for i := 0; i < 3; i++ {
+		u, err := url.PathUnescape(targetPath)
+		if err != nil || u == targetPath {
+			break
+		}
+		targetPath = u
+	}
+	targetPath = strings.ReplaceAll(targetPath, "\\", "/")
+	targetPath = path.Clean(targetPath)
 	if targetPath == "." || targetPath == "/" || targetPath == "" {
 		return true
 	}
@@ -326,13 +335,25 @@ func (s *Scope) IsPathInScope(rawURL string) bool {
 		reqPath = "/"
 	}
 
-	// Unescape percent-encoding to detect encoded traversal (e.g. %2e%2e) or encoded slashes (%2f)
-	unescaped, err := url.PathUnescape(reqPath)
-	if err == nil {
-		reqPath = unescaped
+	// Iteratively unescape percent-encoding to defeat single/double-encoded traversal (%2e%2e, %252e%252e, %2f)
+	for i := 0; i < 3; i++ {
+		u, err := url.PathUnescape(reqPath)
+		if err != nil || u == reqPath {
+			break
+		}
+		reqPath = u
+	}
+	// The delimiter immediately following targetPath in raw unescaped path must be "/" or end-of-string.
+	// Non-slash separators (such as backslashes "\", dashes "-", underscores "_") are strictly rejected.
+	if strings.HasPrefix(reqPath, targetPath) {
+		remainder := reqPath[len(targetPath):]
+		if len(remainder) > 0 && !strings.HasPrefix(remainder, "/") {
+			return false
+		}
 	}
 
-	cleanReqPath := path.Clean(reqPath)
+	// Normalize backslashes to forward slashes to evaluate traversal resolution
+	cleanReqPath := path.Clean(strings.ReplaceAll(reqPath, "\\", "/"))
 	cleanReqPath = strings.TrimRight(cleanReqPath, "/")
 
 	// Exact match: e.g. "/hithaone" == "/hithaone"

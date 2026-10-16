@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"felix/pkg/crawler"
 )
 
 const (
@@ -60,11 +62,15 @@ func NewChecker(repo string) *Checker {
 	if repo == "" {
 		repo = DefaultGitHubRepo
 	}
+	safeTransport := crawler.NewSafeTransport(crawler.SafeTransportOptions{
+		Timeout: DefaultTimeout,
+	})
 	return &Checker{
 		Repository: repo,
 		APIBaseURL: "https://api.github.com",
 		HTTPClient: &http.Client{
-			Timeout: DefaultTimeout,
+			Transport: crawler.NewRateLimitedTransport(safeTransport, crawler.RateLimitOptions{}),
+			Timeout:   DefaultTimeout,
 		},
 		UserAgent: fmt.Sprintf("Felix-Auditor (+https://github.com/%s)", repo),
 	}

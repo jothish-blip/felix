@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"path/filepath"
+	"path"
 	"strconv"
 	"strings"
 	"syscall"
@@ -498,13 +498,26 @@ func runScan(args []string) int {
 	// isClientAssetURL detects common static web assets required for frontend analysis
 	// when a target is scoped to a subpath. It strictly requires both an asset directory prefix
 	// (e.g. /_next/, /assets/, /static/) or standard root icon/manifest and a recognized static asset extension.
+	// Normalization defeats path traversal (..), percent-encoded entities (%2e%2e), and separator bypasses.
 	isClientAssetURL := func(rawURL string) bool {
 		parsed, err := url.Parse(rawURL)
 		if err != nil {
 			return false
 		}
-		p := strings.ToLower(parsed.Path)
-		if p == "/favicon.ico" || p == "/favicon.png" || p == "/manifest.json" {
+		p := parsed.Path
+		// Iteratively unescape up to 3 times to prevent single or double percent-encoded traversal
+		for i := 0; i < 3; i++ {
+			u, err := url.PathUnescape(p)
+			if err != nil || u == p {
+				break
+			}
+			p = u
+		}
+		// Normalize backslashes to forward slashes to prevent Windows/IIS-style bypasses
+		p = strings.ReplaceAll(p, "\\", "/")
+		p = strings.ToLower(path.Clean(p))
+
+		if p == "/favicon.ico" || p == "/favicon.png" || p == "/manifest.json" || p == "/robots.txt" {
 			return true
 		}
 		inAssetDir := strings.HasPrefix(p, "/_next/") ||
@@ -515,7 +528,7 @@ func runScan(args []string) int {
 		if !inAssetDir {
 			return false
 		}
-		ext := strings.ToLower(filepath.Ext(p))
+		ext := strings.ToLower(path.Ext(p))
 		switch ext {
 		case ".js", ".mjs", ".css", ".map", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff", ".woff2", ".ttf", ".eot", ".json", ".webmanifest":
 			return true

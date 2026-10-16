@@ -28,6 +28,7 @@ type Config struct {
 	ScopeMode          ScopeMode               `json:"scope_mode"`
 	AllowedHosts       []string                `json:"allowed_hosts"`
 	InsecureSkipVerify bool                    `json:"insecure_skip_verify"`
+	RateLimit          float64                 `json:"rate_limit,omitempty"`
 	Client             *http.Client            `json:"-"`
 	IsAllowed          func(string) bool       `json:"-"`
 	IsExcluded         func(string) bool       `json:"-"`
