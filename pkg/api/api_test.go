@@ -794,3 +794,48 @@ func TestAPIClient_ScopeAndRedirectSafety(t *testing.T) {
 		t.Errorf("expected out-of-scope error, got: %v", err2)
 	}
 }
+
+func TestDetector_SubpathScopeEnforcement(t *testing.T) {
+	var mu sync.Mutex
+	var receivedPaths []string
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		receivedPaths = append(receivedPaths, r.URL.Path)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"status":"ok"}`)
+	}))
+	defer ts.Close()
+
+	client := NewClient(ClientOptions{
+		HTTPClient:    ts.Client(),
+		AllowLoopback: true,
+	})
+
+	d := NewDetector(client)
+
+	assets := []crawler.Asset{
+		{
+			URL:     ts.URL + "/hithaone/static/js/main.js",
+			InScope: true,
+			Content: []byte(`const apiRoute = "/api/v1/users"; const route2 = "/dashboard";`),
+		},
+	}
+
+	targetURL := ts.URL + "/hithaone"
+	result := d.Audit(context.Background(), targetURL, assets)
+	if result.EndpointsScanned == 0 && len(result.Findings) == 0 && len(receivedPaths) == 0 {
+		t.Fatal("expected audit activity against subpath target")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	for _, p := range receivedPaths {
+		if !strings.HasPrefix(p, "/hithaone") {
+			t.Errorf("SECURITY LEAK: request escaped authorized subpath boundary /hithaone: %s", p)
+		}
+	}
+}

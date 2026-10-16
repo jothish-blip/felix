@@ -164,7 +164,26 @@ func (d *Detector) Audit(ctx context.Context, targetURL string, assets []crawler
 	if err != nil {
 		return AuditResult{}
 	}
-	baseURL := strings.TrimRight(parsedTarget.Scheme+"://"+parsedTarget.Host, "/")
+	originURL := strings.TrimRight(parsedTarget.Scheme+"://"+parsedTarget.Host, "/")
+	targetPath := strings.TrimRight(parsedTarget.Path, "/")
+	if targetPath == "/" {
+		targetPath = ""
+	}
+	baseURL := originURL + targetPath
+
+	resolveEndpointURL := func(path string) string {
+		clean := path
+		if !strings.HasPrefix(clean, "/") {
+			clean = "/" + clean
+		}
+		if targetPath != "" {
+			if strings.HasPrefix(clean, targetPath+"/") || clean == targetPath {
+				return originURL + clean
+			}
+			return baseURL + clean
+		}
+		return originURL + clean
+	}
 
 	// 1. Discover, extract, and classify all endpoints across JS/SPA assets and source maps
 	discoveredEndpoints := d.ExtractAllEndpoints(targetURL, assets)
@@ -173,16 +192,21 @@ func (d *Detector) Audit(ctx context.Context, targetURL string, assets []crawler
 	var candidatePaths []string
 	var graphQLCandidates []string
 	for _, ep := range discoveredEndpoints {
-		fullURL := baseURL + ep.Path
+		fullURL := resolveEndpointURL(ep.Path)
 		if d.isExcluded != nil && d.isExcluded(fullURL) {
 			continue
 		}
 		if d.isAllowed != nil && !d.isAllowed(fullURL) {
 			continue
 		}
-		candidatePaths = append(candidatePaths, ep.Path)
+		// If ep.Path has targetPath prefix, strip it for relative concatenation with baseURL in sub-auditors
+		cleanCandidate := ep.Path
+		if targetPath != "" && strings.HasPrefix(cleanCandidate, targetPath+"/") {
+			cleanCandidate = strings.TrimPrefix(cleanCandidate, targetPath)
+		}
+		candidatePaths = append(candidatePaths, cleanCandidate)
 		if strings.Contains(strings.ToLower(ep.Path), "graphql") {
-			graphQLCandidates = append(graphQLCandidates, ep.Path)
+			graphQLCandidates = append(graphQLCandidates, cleanCandidate)
 		}
 	}
 
@@ -215,7 +239,7 @@ func (d *Detector) Audit(ctx context.Context, targetURL string, assets []crawler
 		corsTargets = append(corsTargets, baseURL)
 	}
 	for _, p := range candidatePaths {
-		fullURL := baseURL + p
+		fullURL := resolveEndpointURL(p)
 		if d.isExcluded != nil && d.isExcluded(fullURL) {
 			continue
 		}
@@ -251,7 +275,7 @@ func (d *Detector) Audit(ctx context.Context, targetURL string, assets []crawler
 			continue
 		}
 
-		probeURL := baseURL + ep.Path
+		probeURL := resolveEndpointURL(ep.Path)
 		if d.isExcluded != nil && d.isExcluded(probeURL) {
 			continue
 		}
