@@ -517,6 +517,26 @@ func RemediationFor(category, title string) string {
 	case cat == "actuator-mappings-exposure":
 		return "Disable /actuator/mappings in production (management.endpoints.web.exposure.exclude=mappings) or restrict access to internal management interfaces."
 
+	// Django Diagnostic Interfaces
+	case cat == "django-debug-mode":
+		return "Set DEBUG = False in production django settings.py. Configure secure error handlers (handler500) and never expose technical exception tracebacks or environment settings to unauthenticated users."
+
+	case cat == "django-urlconf-disclosure":
+		return "Set DEBUG = False in production django settings.py to serve standard 404 error responses instead of revealing internal URLconf routing patterns."
+
+	case cat == "django-browsable-api":
+		return "Configure DEFAULT_RENDERER_CLASSES in Django REST Framework settings to disable BrowsableAPIRenderer in production deployments, restricting API output to JSON."
+
+	// FastAPI / OpenAPI Documentation Interfaces
+	case cat == "fastapi-docs-exposure":
+		return "Determine whether FastAPI documentation interfaces (/docs, /redoc, /openapi.json) are intended for public consumers. If internal, configure docs_url=None, redoc_url=None, openapi_url=None or restrict access via authentication middleware."
+
+	case cat == "fastapi-sensitive-paths":
+		return "Set include_in_schema=False on internal, administrative, or debug route declarations in FastAPI to omit sensitive endpoints from public OpenAPI schemas."
+
+	case cat == "fastapi-sensitive-schema":
+		return "Remove sensitive credentials, tokens, passwords, or private configuration defaults from OpenAPI field descriptions, summaries, and schema examples."
+
 	// Defensive Security Headers
 	case cat == "missing-csp":
 		return "Deploy a robust Content-Security-Policy (CSP) header restricting script execution, styles, and object embeds to trusted sources. Begin with `Content-Security-Policy-Report-Only` during staging."

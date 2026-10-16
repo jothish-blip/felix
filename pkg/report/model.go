@@ -664,6 +664,48 @@ func FromAPIFinding(target string, f api.APIFinding) Finding {
 		verResult = "Spring Boot Actuator endpoint is protected by authentication or access controls (HTTP 401/403)."
 		negEvidence = "Authentication challenge or authorization refusal active."
 
+	case cat == "django-debug-mode":
+		detMethod = "active_probe"
+		detStatus = "DETECTED"
+		verStatus = VerificationVerified
+		verResult = "Django technical 500 debug page confirmed (DEBUG=True). Detailed traceback and environment data exposed."
+		negEvidence = "All traceback paths and settings values were bounded and redacted."
+
+	case cat == "django-urlconf-disclosure":
+		detMethod = "active_probe"
+		detStatus = "DETECTED"
+		verStatus = VerificationVerified
+		verResult = "Django technical 404 page exposed application URLconf routing patterns."
+		negEvidence = "URL patterns cataloged without recursive probing."
+
+	case cat == "django-browsable-api":
+		detMethod = "active_probe"
+		detStatus = "OBSERVED"
+		verStatus = VerificationObserved
+		verResult = "Django REST Framework browsable API interface is publicly accessible."
+		negEvidence = "Browsable API observed on endpoint; authorization checks apply to individual API operations."
+
+	case cat == "fastapi-docs-exposure":
+		detMethod = "active_probe"
+		detStatus = "OBSERVED"
+		verStatus = VerificationObserved
+		verResult = "Public FastAPI / OpenAPI documentation discovered and accessible."
+		negEvidence = "Informational API documentation disclosure; no internal administrative routes or credentials observed."
+
+	case cat == "fastapi-sensitive-paths":
+		detMethod = "active_probe"
+		detStatus = "DETECTED"
+		verStatus = VerificationVerified
+		verResult = "FastAPI OpenAPI specification revealed sensitive internal or administrative route paths."
+		negEvidence = "Disclosed route patterns cataloged without recursive probing."
+
+	case cat == "fastapi-sensitive-schema":
+		detMethod = "active_probe"
+		detStatus = "DETECTED"
+		verStatus = VerificationVerified
+		verResult = "FastAPI OpenAPI specification contains embedded credentials, tokens, or sensitive default values."
+		negEvidence = "All discovered secret values were redacted from output."
+
 	case cat == "sensitive-endpoint-protected":
 		detMethod = "active_probe"
 		detStatus = "OBSERVED"

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"felix/pkg/api"
 	"felix/pkg/cloud"
 	"felix/pkg/discovery"
 )
@@ -477,5 +478,137 @@ func TestCorrelate_ConnectionIndicatorWithDiscoveredService(t *testing.T) {
 	}
 	if !strings.Contains(story.Description, "remain unverified") {
 		t.Errorf("expected story Description to state that connectivity and credential validity remain unverified: %s", story.Description)
+	}
+}
+
+func TestFromAPIFinding_DjangoAndFastAPI(t *testing.T) {
+	target := "https://app.example.com"
+
+	cases := []struct {
+		apiFinding      api.APIFinding
+		expectedRule    string
+		expectedStatus  FindingStatus
+		expectedVer     VerificationStatus
+		expectedSev     string
+		expectedRemSub  string
+	}{
+		{
+			apiFinding: api.APIFinding{
+				Category:    api.CategoryDjangoDebugMode,
+				Endpoint:    "https://app.example.com/admin/login/",
+				Method:      "GET",
+				Description: "Django technical 500 debug page exposed (DEBUG=True)",
+				Severity:    api.SeverityHigh,
+				Confidence:  api.ConfidenceHigh,
+				Fingerprint: api.GenerateFingerprint(api.CategoryDjangoDebugMode, "https://app.example.com/admin/login/", "GET"),
+			},
+			expectedRule:   "API-DJANGO-DEBUG-MODE",
+			expectedStatus: FindingStatusConfirmed,
+			expectedVer:    VerificationVerified,
+			expectedSev:    SeverityHigh,
+			expectedRemSub: "DEBUG = False",
+		},
+		{
+			apiFinding: api.APIFinding{
+				Category:    api.CategoryDjangoURLConfDisclosure,
+				Endpoint:    "https://app.example.com/_felix_django_404_probe",
+				Method:      "GET",
+				Description: "Django technical 404 page exposed application URLconf routing patterns",
+				Severity:    api.SeverityMedium,
+				Confidence:  api.ConfidenceHigh,
+				Fingerprint: api.GenerateFingerprint(api.CategoryDjangoURLConfDisclosure, "https://app.example.com/_felix_django_404_probe", "GET"),
+			},
+			expectedRule:   "API-DJANGO-URLCONF-DISCLOSURE",
+			expectedStatus: FindingStatusConfirmed,
+			expectedVer:    VerificationVerified,
+			expectedSev:    SeverityMedium,
+			expectedRemSub: "URLconf",
+		},
+		{
+			apiFinding: api.APIFinding{
+				Category:    api.CategoryDjangoBrowsableAPI,
+				Endpoint:    "https://app.example.com/api/",
+				Method:      "GET",
+				Description: "Django REST Framework browsable API exposed publicly",
+				Severity:    api.SeverityLow,
+				Confidence:  api.ConfidenceHigh,
+				Fingerprint: api.GenerateFingerprint(api.CategoryDjangoBrowsableAPI, "https://app.example.com/api/", "GET"),
+			},
+			expectedRule:   "API-DJANGO-BROWSABLE-API",
+			expectedStatus: FindingStatusConfirmed,
+			expectedVer:    VerificationObserved,
+			expectedSev:    SeverityLow,
+			expectedRemSub: "BrowsableAPIRenderer",
+		},
+		{
+			apiFinding: api.APIFinding{
+				Category:    api.CategoryFastAPIDocs,
+				Endpoint:    "https://app.example.com/docs",
+				Method:      "GET",
+				Description: "Publicly accessible FastAPI interactive documentation (/docs)",
+				Severity:    api.SeverityInfo,
+				Confidence:  api.ConfidenceHigh,
+				Fingerprint: api.GenerateFingerprint(api.CategoryFastAPIDocs, "https://app.example.com/docs", "GET"),
+			},
+			expectedRule:   "API-FASTAPI-DOCS-EXPOSURE",
+			expectedStatus: FindingStatusConfirmed,
+			expectedVer:    VerificationObserved,
+			expectedSev:    SeverityInfo,
+			expectedRemSub: "docs_url=None",
+		},
+		{
+			apiFinding: api.APIFinding{
+				Category:    api.CategoryFastAPISensitivePaths,
+				Endpoint:    "https://app.example.com/openapi.json",
+				Method:      "GET",
+				Description: "FastAPI OpenAPI schema exposes internal or administrative route definitions",
+				Severity:    api.SeverityMedium,
+				Confidence:  api.ConfidenceHigh,
+				Fingerprint: api.GenerateFingerprint(api.CategoryFastAPISensitivePaths, "https://app.example.com/openapi.json", "GET"),
+			},
+			expectedRule:   "API-FASTAPI-SENSITIVE-PATHS",
+			expectedStatus: FindingStatusConfirmed,
+			expectedVer:    VerificationVerified,
+			expectedSev:    SeverityMedium,
+			expectedRemSub: "include_in_schema=False",
+		},
+		{
+			apiFinding: api.APIFinding{
+				Category:    api.CategoryFastAPISensitiveSchema,
+				Endpoint:    "https://app.example.com/openapi.json",
+				Method:      "GET",
+				Description: "FastAPI OpenAPI schema contains embedded credentials or sensitive defaults",
+				Severity:    api.SeverityHigh,
+				Confidence:  api.ConfidenceHigh,
+				Fingerprint: api.GenerateFingerprint(api.CategoryFastAPISensitiveSchema, "https://app.example.com/openapi.json", "GET"),
+			},
+			expectedRule:   "API-FASTAPI-SENSITIVE-SCHEMA",
+			expectedStatus: FindingStatusConfirmed,
+			expectedVer:    VerificationVerified,
+			expectedSev:    SeverityHigh,
+			expectedRemSub: "Remove sensitive credentials",
+		},
+	}
+
+	for _, tc := range cases {
+		f := FromAPIFinding(target, tc.apiFinding)
+
+		if f.RuleID != tc.expectedRule {
+			t.Errorf("category %s: expected RuleID %s, got %s", tc.apiFinding.Category, tc.expectedRule, f.RuleID)
+		}
+		if f.Status != tc.expectedStatus {
+			t.Errorf("category %s: expected Status %s, got %s", tc.apiFinding.Category, tc.expectedStatus, f.Status)
+		}
+		if f.Verification.Status != tc.expectedVer {
+			t.Errorf("category %s: expected Verification.Status %s, got %s", tc.apiFinding.Category, tc.expectedVer, f.Verification.Status)
+		}
+		if f.Severity != tc.expectedSev {
+			t.Errorf("category %s: expected Severity %s, got %s", tc.apiFinding.Category, tc.expectedSev, f.Severity)
+		}
+
+		rem := RemediationFor(tc.apiFinding.Category, f.Title)
+		if !strings.Contains(rem, tc.expectedRemSub) {
+			t.Errorf("category %s: expected remediation to contain %q, got: %s", tc.apiFinding.Category, tc.expectedRemSub, rem)
+		}
 	}
 }

@@ -47,6 +47,12 @@ const (
 	CategoryActuatorEnv                = "actuator-env-exposure"
 	CategoryActuatorMappings           = "actuator-mappings-exposure"
 	CategoryActuatorRestricted         = "actuator-endpoint-restricted"
+	CategoryDjangoDebugMode            = "django-debug-mode"
+	CategoryDjangoURLConfDisclosure    = "django-urlconf-disclosure"
+	CategoryDjangoBrowsableAPI         = "django-browsable-api"
+	CategoryFastAPIDocs                = "fastapi-docs-exposure"
+	CategoryFastAPISensitivePaths      = "fastapi-sensitive-paths"
+	CategoryFastAPISensitiveSchema     = "fastapi-sensitive-schema"
 )
 
 // APIFinding represents a verified API security exposure, configuration issue, or hardening observation.

@@ -17,6 +17,8 @@ type AuditResult struct {
 	DiscoveredEndpoints []DiscoveredEndpoint `json:"discovered_endpoints,omitempty"`
 	GraphQLCount        int                  `json:"graphql_count"`
 	ActuatorCount       int                  `json:"actuator_count,omitempty"`
+	DjangoCount         int                  `json:"django_count,omitempty"`
+	FastAPICount        int                  `json:"fastapi_count,omitempty"`
 	SensitiveCount      int                  `json:"sensitive_count"`
 	CORSCount           int                  `json:"cors_count"`
 	HeaderCount         int                  `json:"header_count"`
@@ -233,9 +235,32 @@ func (d *Detector) Audit(ctx context.Context, targetURL string, assets []crawler
 	actuatorFindings := AuditSpringActuator(ctx, client, baseURL, candidatePaths)
 	addFindings(actuatorFindings)
 
-	// 4. Audit Sensitive Endpoints (git, env, openapi, metrics, health)
+	// 4. Audit Django Diagnostic Interfaces (technical 500, technical 404, DRF browsable API)
+	djangoFindings := AuditDjangoDiagnostics(ctx, client, baseURL, candidatePaths)
+	addFindings(djangoFindings)
+
+	// 5. Audit FastAPI Documentation & OpenAPI Schema (/openapi.json, /docs, /redoc)
+	fastapiFindings := AuditFastAPIDocs(ctx, client, baseURL, candidatePaths)
+	addFindings(fastapiFindings)
+
+	// Track endpoints that already have documentation findings to prevent duplicate reporting
+	docEndpoints := make(map[string]struct{})
+	for _, f := range fastapiFindings {
+		docEndpoints[f.Endpoint] = struct{}{}
+	}
+
+	// 6. Audit Sensitive Endpoints (git, env, openapi, metrics, health)
 	sensitiveFindings := AuditSensitiveEndpoints(ctx, client, baseURL, candidatePaths)
-	addFindings(sensitiveFindings)
+	var filteredSensitive []APIFinding
+	for _, f := range sensitiveFindings {
+		if f.Category == CategoryAPIDocsExposure {
+			if _, exists := docEndpoints[f.Endpoint]; exists {
+				continue // Suppress duplicate generic docs finding when specialized FastAPI/OpenAPI audit already reported it
+			}
+		}
+		filteredSensitive = append(filteredSensitive, f)
+	}
+	addFindings(filteredSensitive)
 
 	// 4. Audit CORS on target base and initial API paths
 	var corsFindings []APIFinding
@@ -343,14 +368,16 @@ func (d *Detector) Audit(ctx context.Context, targetURL string, assets []crawler
 		addFindings([]APIFinding{invFinding})
 	}
 
-	totalAudited := 1 + len(candidatePaths) + len(DefaultSensitivePaths) + len(DefaultActuatorCandidatePaths)
+	totalAudited := 1 + len(candidatePaths) + len(DefaultSensitivePaths) + len(DefaultActuatorCandidatePaths) + len(DefaultDjangoCandidatePaths) + len(DefaultFastAPICandidatePaths)
 
 	return AuditResult{
 		EndpointsScanned:    totalAudited,
 		DiscoveredEndpoints: discoveredEndpoints,
 		GraphQLCount:        len(graphQLFindings),
 		ActuatorCount:       len(actuatorFindings),
-		SensitiveCount:      len(sensitiveFindings),
+		DjangoCount:         len(djangoFindings),
+		FastAPICount:        len(fastapiFindings),
+		SensitiveCount:      len(filteredSensitive),
 		CORSCount:           len(corsFindings),
 		HeaderCount:         len(headerFindings),
 		Findings:            allFindings,
