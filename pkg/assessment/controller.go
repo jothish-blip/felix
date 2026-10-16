@@ -303,6 +303,7 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 	}), func(u string) bool {
 		return scopeVal.IsAllowed(u)
 	})
+	cloudAuditor.SetAllowActiveVerification(opts.ActiveVerification)
 	apiAuditor := api.NewDetector(api.NewClient(api.ClientOptions{
 		Timeout:         timeoutDur,
 		MaxResponseSize: maxSizeBytes,

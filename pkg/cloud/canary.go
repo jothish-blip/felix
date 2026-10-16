@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -129,7 +130,7 @@ type CanaryOperation interface {
 }
 
 // ExecuteCanaryLifecycle executes the canary with pre-check and guaranteed non-destructive cleanup.
-func ExecuteCanaryLifecycle(ctx context.Context, op CanaryOperation) error {
+func ExecuteCanaryLifecycle(ctx context.Context, op CanaryOperation) (retErr error) {
 	if op == nil {
 		return errors.New("nil canary operation")
 	}
@@ -144,11 +145,17 @@ func ExecuteCanaryLifecycle(ctx context.Context, op CanaryOperation) error {
 		return fmt.Errorf("canary write failed: %w", err)
 	}
 
-	// Ensure cleanup is always attempted after execute succeeds
+	// Ensure cleanup is always attempted after execute succeeds, and report cleanup failures
 	defer func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = op.Cleanup(cleanupCtx)
+		if cleanErr := op.Cleanup(cleanupCtx); cleanErr != nil {
+			if retErr != nil {
+				retErr = fmt.Errorf("%w; additionally, canary cleanup failed: %v", retErr, cleanErr)
+			} else {
+				retErr = fmt.Errorf("canary cleanup failed: %w", cleanErr)
+			}
+		}
 	}()
 
 	// Step 3: Verify read-back of written canary
@@ -360,17 +367,18 @@ func (r *RedisCanaryOperation) Cleanup(ctx context.Context) error {
 	return fmt.Errorf("unexpected response from Redis compare-and-delete: %s", strings.TrimSpace(resp))
 }
 
-// S3CanaryOperation executes isolated, non-destructive canary writes on S3-compatible storage.
+// S3CanaryOperation executes isolated, non-destructive canary writes on S3 storage.
 type S3CanaryOperation struct {
-	Client      *Client
-	TargetURL   string
-	Resource    string
-	Payload     string
-	Cred        *CredentialProfile
-	canaryToken string
-	createdETag string
-	written     bool
-	cleaned     bool
+	Client           *Client
+	TargetURL        string
+	Resource         string
+	Payload          string
+	Cred             *CredentialProfile
+	canaryToken      string
+	createdETag      string
+	createdVersionID string
+	written          bool
+	cleaned          bool
 }
 
 func (s *S3CanaryOperation) PreCheck(ctx context.Context) error {
@@ -404,6 +412,7 @@ func (s *S3CanaryOperation) Execute(ctx context.Context) error {
 	}
 	req.Header.Set("If-None-Match", "*") // Prevent overwrite
 	req.Header.Set("x-amz-meta-felix-canary", s.canaryToken)
+	req.Header.Set("x-amz-meta-felix-ownership", "verified")
 	if s.Cred != nil && s.Cred.Headers != nil {
 		for k, v := range s.Cred.Headers {
 			req.Header.Set(k, v)
@@ -415,6 +424,10 @@ func (s *S3CanaryOperation) Execute(ctx context.Context) error {
 		s.written = false
 		return err
 	}
+	if resp.StatusCode == http.StatusPreconditionFailed {
+		s.written = false
+		return fmt.Errorf("S3 PUT canary rejected: resource collision (HTTP 412 Precondition Failed)")
+	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
 		s.written = false
 		return fmt.Errorf("S3 PUT canary rejected (HTTP %d)", resp.StatusCode)
@@ -422,6 +435,7 @@ func (s *S3CanaryOperation) Execute(ctx context.Context) error {
 
 	s.written = true
 	s.createdETag = resp.Header.Get("ETag")
+	s.createdVersionID = resp.Header.Get("x-amz-version-id")
 	return nil
 }
 
@@ -451,9 +465,18 @@ func (s *S3CanaryOperation) Verify(ctx context.Context) error {
 
 	// Verify ETag matches the created object if ETag was captured
 	if s.createdETag != "" {
-		currETag := resp.Header.Get("ETag")
-		if currETag != "" && currETag != s.createdETag {
-			return fmt.Errorf("canary verification ETag mismatch: expected %s, got %s", s.createdETag, currETag)
+		currETag := strings.Trim(resp.Header.Get("ETag"), "\"")
+		expETag := strings.Trim(s.createdETag, "\"")
+		if currETag == "" || currETag != expETag {
+			return fmt.Errorf("canary verification ETag mismatch: expected %s, got %s", s.createdETag, resp.Header.Get("ETag"))
+		}
+	}
+
+	// Verify metadata token
+	if s.canaryToken != "" {
+		metaToken := resp.Header.Get("x-amz-meta-felix-canary")
+		if metaToken != s.canaryToken {
+			return fmt.Errorf("canary verification token mismatch: expected %s, got %s", s.canaryToken, metaToken)
 		}
 	}
 
@@ -472,37 +495,48 @@ func (s *S3CanaryOperation) Cleanup(ctx context.Context) error {
 
 	cleanURL := strings.TrimRight(s.TargetURL, "/") + "/" + strings.TrimLeft(s.Resource, "/")
 
-	// Concurrency & Ownership Guardrail: Verify object identity before deletion
+	// Concurrency & Demonstrable Ownership Guardrail: Verify object identity before deletion
 	checkReq, err := http.NewRequestWithContext(ctx, "HEAD", cleanURL, nil)
-	if err == nil {
-		if s.Cred != nil && s.Cred.Headers != nil {
-			for k, v := range s.Cred.Headers {
-				checkReq.Header.Set(k, v)
-			}
+	if err != nil {
+		return fmt.Errorf("S3 pre-cleanup request creation failed: %w", err)
+	}
+	if s.Cred != nil && s.Cred.Headers != nil {
+		for k, v := range s.Cred.Headers {
+			checkReq.Header.Set(k, v)
 		}
-		checkResp, err := s.Client.Do(ctx, checkReq)
-		if err == nil {
-			if checkResp.StatusCode == http.StatusNotFound {
-				// Object already removed
-				s.cleaned = true
-				s.written = false
-				return nil
-			}
-			if checkResp.StatusCode == http.StatusOK {
-				currETag := checkResp.Header.Get("ETag")
-				if s.createdETag != "" && currETag != "" && currETag != s.createdETag {
-					return fmt.Errorf("canary object ownership mismatch for %q: expected ETag %s, found %s (concurrent replacement detected); cleanup aborted to prevent deleting foreign object", s.Resource, s.createdETag, currETag)
-				}
-				metaToken := checkResp.Header.Get("x-amz-meta-felix-canary")
-				if s.canaryToken != "" && metaToken != "" && metaToken != s.canaryToken {
-					return fmt.Errorf("canary object token mismatch for %q: expected %s, found %s (concurrent replacement detected); cleanup aborted to prevent deleting foreign object", s.Resource, s.canaryToken, metaToken)
-				}
-			}
-		}
+	}
+	checkResp, err := s.Client.Do(ctx, checkReq)
+	if err != nil {
+		return fmt.Errorf("S3 pre-cleanup ownership check failed: %w", err)
+	}
+
+	if checkResp.StatusCode == http.StatusNotFound {
+		// Object already removed
+		s.cleaned = true
+		s.written = false
+		return nil
+	}
+	if checkResp.StatusCode != http.StatusOK {
+		return fmt.Errorf("S3 pre-cleanup check returned unexpected status HTTP %d; cleanup aborted", checkResp.StatusCode)
+	}
+
+	currETag := strings.Trim(checkResp.Header.Get("ETag"), "\"")
+	expETag := strings.Trim(s.createdETag, "\"")
+	if expETag != "" && (currETag == "" || currETag != expETag) {
+		return fmt.Errorf("canary object ownership mismatch for %q: expected ETag %s, found %s (concurrent replacement detected); cleanup aborted to prevent deleting foreign object", s.Resource, s.createdETag, checkResp.Header.Get("ETag"))
+	}
+	metaToken := checkResp.Header.Get("x-amz-meta-felix-canary")
+	if s.canaryToken != "" && (metaToken == "" || metaToken != s.canaryToken) {
+		return fmt.Errorf("canary object token mismatch for %q: expected %s, found %s (ownership not demonstrated); cleanup aborted to prevent deleting foreign object", s.Resource, s.canaryToken, metaToken)
 	}
 
 	// Conditional deletion
-	req, err := http.NewRequestWithContext(ctx, "DELETE", cleanURL, nil)
+	delURL := cleanURL
+	if s.createdVersionID != "" {
+		delURL = fmt.Sprintf("%s?versionId=%s", cleanURL, url.QueryEscape(s.createdVersionID))
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "DELETE", delURL, nil)
 	if err != nil {
 		return err
 	}
@@ -517,7 +551,7 @@ func (s *S3CanaryOperation) Cleanup(ctx context.Context) error {
 
 	resp, err := s.Client.Do(ctx, req)
 	if err != nil {
-		return err
+		return fmt.Errorf("S3 DELETE request failed: %w", err)
 	}
 	if resp.StatusCode == http.StatusPreconditionFailed {
 		return fmt.Errorf("canary conditional deletion rejected (HTTP 412 Precondition Failed): object was replaced concurrently")
@@ -526,8 +560,241 @@ func (s *S3CanaryOperation) Cleanup(ctx context.Context) error {
 		return fmt.Errorf("canary cleanup rejected (HTTP %d)", resp.StatusCode)
 	}
 
+	// Post-cleanup verification: confirm object is gone
+	postReq, _ := http.NewRequestWithContext(ctx, "HEAD", cleanURL, nil)
+	if s.Cred != nil && s.Cred.Headers != nil {
+		for k, v := range s.Cred.Headers {
+			postReq.Header.Set(k, v)
+		}
+	}
+	if postResp, err := s.Client.Do(ctx, postReq); err == nil && postResp.StatusCode == http.StatusOK {
+		return fmt.Errorf("canary post-cleanup verification failed: object %q still exists after DELETE", s.Resource)
+	}
+
 	s.cleaned = true
 	s.written = false
+	return nil
+}
+
+// MinIOCanaryOperation executes isolated, non-destructive canary writes on MinIO storage
+// with atomic overwrite protection, demonstrable ownership verification, and race-safe conditional cleanup.
+type MinIOCanaryOperation struct {
+	Client           *Client
+	TargetURL        string
+	Resource         string
+	Payload          string
+	Cred             *CredentialProfile
+	canaryToken      string
+	createdETag      string
+	createdVersionID string
+	written          bool
+	cleaned          bool
+}
+
+func (m *MinIOCanaryOperation) PreCheck(ctx context.Context) error {
+	cleanURL := strings.TrimRight(m.TargetURL, "/") + "/" + strings.TrimLeft(m.Resource, "/")
+	req, err := http.NewRequestWithContext(ctx, "HEAD", cleanURL, nil)
+	if err != nil {
+		return err
+	}
+	if m.Cred != nil && m.Cred.Headers != nil {
+		for k, v := range m.Cred.Headers {
+			req.Header.Set(k, v)
+		}
+	}
+
+	resp, err := m.Client.Do(ctx, req)
+	if err == nil && resp.StatusCode == http.StatusOK {
+		return fmt.Errorf("canary object %q already exists in MinIO; write aborted to prevent overwrite", m.Resource)
+	}
+	return nil
+}
+
+func (m *MinIOCanaryOperation) Execute(ctx context.Context) error {
+	if m.canaryToken == "" {
+		m.canaryToken = fmt.Sprintf("felix-minio-token-%d", time.Now().UnixNano())
+	}
+
+	cleanURL := strings.TrimRight(m.TargetURL, "/") + "/" + strings.TrimLeft(m.Resource, "/")
+	req, err := http.NewRequestWithContext(ctx, "PUT", cleanURL, bytes.NewReader([]byte(m.Payload)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("If-None-Match", "*") // Prevent overwrite
+	req.Header.Set("x-amz-meta-felix-canary", m.canaryToken)
+	req.Header.Set("x-amz-meta-felix-ownership", "verified")
+	if m.Cred != nil && m.Cred.Headers != nil {
+		for k, v := range m.Cred.Headers {
+			req.Header.Set(k, v)
+		}
+	}
+
+	resp, err := m.Client.Do(ctx, req)
+	if err != nil {
+		m.written = false
+		return err
+	}
+	if resp.StatusCode == http.StatusPreconditionFailed {
+		m.written = false
+		return fmt.Errorf("MinIO PUT canary rejected: resource collision (HTTP 412 Precondition Failed)")
+	}
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
+		m.written = false
+		return fmt.Errorf("MinIO PUT canary rejected (HTTP %d)", resp.StatusCode)
+	}
+
+	m.written = true
+	m.createdETag = resp.Header.Get("ETag")
+	m.createdVersionID = resp.Header.Get("x-amz-version-id")
+	return nil
+}
+
+func (m *MinIOCanaryOperation) Verify(ctx context.Context) error {
+	if !m.written {
+		return errors.New("canary write was not executed")
+	}
+
+	cleanURL := strings.TrimRight(m.TargetURL, "/") + "/" + strings.TrimLeft(m.Resource, "/")
+	req, err := http.NewRequestWithContext(ctx, "HEAD", cleanURL, nil)
+	if err != nil {
+		return err
+	}
+	if m.Cred != nil && m.Cred.Headers != nil {
+		for k, v := range m.Cred.Headers {
+			req.Header.Set(k, v)
+		}
+	}
+
+	resp, err := m.Client.Do(ctx, req)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("MinIO HEAD verify returned HTTP %d", resp.StatusCode)
+	}
+
+	// Verify ETag matches the created object
+	if m.createdETag != "" {
+		currETag := strings.Trim(resp.Header.Get("ETag"), "\"")
+		expETag := strings.Trim(m.createdETag, "\"")
+		if currETag == "" || currETag != expETag {
+			return fmt.Errorf("MinIO canary verification ETag mismatch: expected %s, got %s", m.createdETag, resp.Header.Get("ETag"))
+		}
+	}
+
+	// Verify metadata canary token
+	if m.canaryToken != "" {
+		metaToken := resp.Header.Get("x-amz-meta-felix-canary")
+		if metaToken != m.canaryToken {
+			return fmt.Errorf("MinIO canary verification token mismatch: expected %s, got %s", m.canaryToken, metaToken)
+		}
+	}
+
+	// Verify version ID if versioned
+	if m.createdVersionID != "" {
+		currVer := resp.Header.Get("x-amz-version-id")
+		if currVer != "" && currVer != m.createdVersionID {
+			return fmt.Errorf("MinIO canary verification version mismatch: expected %s, got %s", m.createdVersionID, currVer)
+		}
+	}
+
+	return nil
+}
+
+func (m *MinIOCanaryOperation) Cleanup(ctx context.Context) error {
+	if !m.written {
+		// Object was never written by this operation; cleanup must not touch the server
+		return nil
+	}
+	if m.cleaned {
+		// Repeated cleanup is a safe no-op
+		return nil
+	}
+
+	cleanURL := strings.TrimRight(m.TargetURL, "/") + "/" + strings.TrimLeft(m.Resource, "/")
+
+	// Concurrency & Demonstrable Ownership Guardrail: Verify object identity before deletion
+	checkReq, err := http.NewRequestWithContext(ctx, "HEAD", cleanURL, nil)
+	if err != nil {
+		return fmt.Errorf("MinIO pre-cleanup request creation failed: %w", err)
+	}
+	if m.Cred != nil && m.Cred.Headers != nil {
+		for k, v := range m.Cred.Headers {
+			checkReq.Header.Set(k, v)
+		}
+	}
+
+	checkResp, err := m.Client.Do(ctx, checkReq)
+	if err != nil {
+		return fmt.Errorf("MinIO pre-cleanup ownership check failed: %w", err)
+	}
+
+	if checkResp.StatusCode == http.StatusNotFound {
+		// Object already removed
+		m.cleaned = true
+		m.written = false
+		return nil
+	}
+	if checkResp.StatusCode != http.StatusOK {
+		return fmt.Errorf("MinIO pre-cleanup check returned unexpected status HTTP %d; cleanup aborted", checkResp.StatusCode)
+	}
+
+	// Strict ETag check
+	currETag := strings.Trim(checkResp.Header.Get("ETag"), "\"")
+	expETag := strings.Trim(m.createdETag, "\"")
+	if expETag != "" && (currETag == "" || currETag != expETag) {
+		return fmt.Errorf("canary object ownership mismatch for %q: expected ETag %s, found %s (concurrent replacement detected); cleanup aborted to prevent deleting foreign object", m.Resource, m.createdETag, checkResp.Header.Get("ETag"))
+	}
+
+	// Strict metadata token check: cannot delete without demonstrable ownership token
+	metaToken := checkResp.Header.Get("x-amz-meta-felix-canary")
+	if m.canaryToken != "" && (metaToken == "" || metaToken != m.canaryToken) {
+		return fmt.Errorf("canary object token mismatch for %q: expected %s, found %s (ownership not demonstrated); cleanup aborted to prevent deleting foreign object", m.Resource, m.canaryToken, metaToken)
+	}
+
+	// Conditional / versioned deletion
+	delURL := cleanURL
+	if m.createdVersionID != "" {
+		delURL = fmt.Sprintf("%s?versionId=%s", cleanURL, url.QueryEscape(m.createdVersionID))
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "DELETE", delURL, nil)
+	if err != nil {
+		return err
+	}
+	if m.createdETag != "" {
+		req.Header.Set("If-Match", m.createdETag)
+	}
+	if m.Cred != nil && m.Cred.Headers != nil {
+		for k, v := range m.Cred.Headers {
+			req.Header.Set(k, v)
+		}
+	}
+
+	resp, err := m.Client.Do(ctx, req)
+	if err != nil {
+		return fmt.Errorf("MinIO DELETE request failed: %w", err)
+	}
+	if resp.StatusCode == http.StatusPreconditionFailed {
+		return fmt.Errorf("canary conditional deletion rejected (HTTP 412 Precondition Failed): object was replaced concurrently")
+	}
+	if resp.StatusCode >= 400 && resp.StatusCode != http.StatusNotFound {
+		return fmt.Errorf("canary cleanup rejected (HTTP %d)", resp.StatusCode)
+	}
+
+	// Post-cleanup verification: confirm object is gone
+	postReq, _ := http.NewRequestWithContext(ctx, "HEAD", cleanURL, nil)
+	if m.Cred != nil && m.Cred.Headers != nil {
+		for k, v := range m.Cred.Headers {
+			postReq.Header.Set(k, v)
+		}
+	}
+	if postResp, err := m.Client.Do(ctx, postReq); err == nil && postResp.StatusCode == http.StatusOK {
+		return fmt.Errorf("MinIO post-cleanup verification failed: object %q still exists after DELETE", m.Resource)
+	}
+
+	m.cleaned = true
+	m.written = false
 	return nil
 }
 
@@ -557,13 +824,28 @@ func BuildCanaryOperation(
 			Cred:      cred,
 		}, nil
 
-	case TechAWSS3, TechMinIO:
+	case TechAWSS3:
 		val := canary.CanaryValue
 		if val == "" {
 			val = fmt.Sprintf("felix-canary-%d", time.Now().UnixNano())
 		}
 		token := fmt.Sprintf("felix-token-%d", time.Now().UnixNano())
 		return &S3CanaryOperation{
+			Client:      client,
+			TargetURL:   target,
+			Resource:    canary.TargetResource,
+			Payload:     val,
+			canaryToken: token,
+			Cred:        cred,
+		}, nil
+
+	case TechMinIO:
+		val := canary.CanaryValue
+		if val == "" {
+			val = fmt.Sprintf("felix-minio-canary-%d", time.Now().UnixNano())
+		}
+		token := fmt.Sprintf("felix-minio-token-%d", time.Now().UnixNano())
+		return &MinIOCanaryOperation{
 			Client:      client,
 			TargetURL:   target,
 			Resource:    canary.TargetResource,

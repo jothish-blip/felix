@@ -397,14 +397,21 @@ func TestCanary_S3_LifecycleSafety(t *testing.T) {
 	// 5. Repeated cleanup: must be safe no-op
 	t.Run("S3_RepeatedCleanup", func(t *testing.T) {
 		var deleteCount int
+		var deleted bool
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == "HEAD" {
+				if deleted {
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
 				w.Header().Set("ETag", `"etag-valid"`)
+				w.Header().Set("x-amz-meta-felix-canary", "token-valid")
 				w.WriteHeader(http.StatusOK)
 				return
 			}
 			if r.Method == "DELETE" {
 				deleteCount++
+				deleted = true
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}
@@ -416,6 +423,7 @@ func TestCanary_S3_LifecycleSafety(t *testing.T) {
 			TargetURL:   ts.URL,
 			Resource:    "felix-canary/repeat-del.txt",
 			Payload:     "content",
+			canaryToken: "token-valid",
 			createdETag: `"etag-valid"`,
 			written:     true,
 		}
@@ -434,6 +442,330 @@ func TestCanary_S3_LifecycleSafety(t *testing.T) {
 		}
 		if deleteCount != 1 {
 			t.Fatalf("expected exactly 1 DELETE request, got %d", deleteCount)
+		}
+	})
+}
+
+// TestCanary_MinIO_LifecycleSafety verifies all 8 mandatory MinIO canary lifecycle safety cases.
+func TestCanary_MinIO_LifecycleSafety(t *testing.T) {
+	client := NewClient(ClientOptions{AllowLoopback: true})
+
+	// 1. Pre-existing resource collision: pre-check must abort before writing
+	t.Run("MinIO_PreExistingResourceCollision", func(t *testing.T) {
+		var writeAttempted bool
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == "HEAD" {
+				w.WriteHeader(http.StatusOK) // Resource already exists
+				return
+			}
+			if r.Method == "PUT" {
+				writeAttempted = true
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+		}))
+		defer ts.Close()
+
+		op := &MinIOCanaryOperation{
+			Client:    client,
+			TargetURL: ts.URL,
+			Resource:  "felix-canary/collision.txt",
+			Payload:   "content",
+		}
+
+		err := ExecuteCanaryLifecycle(context.Background(), op)
+		if err == nil {
+			t.Fatal("expected ExecuteCanaryLifecycle to fail on pre-existing resource")
+		}
+		if !strings.Contains(err.Error(), "already exists in MinIO") {
+			t.Fatalf("unexpected error message: %v", err)
+		}
+		if writeAttempted {
+			t.Fatal("PUT must NOT be attempted when resource already exists")
+		}
+		if op.written {
+			t.Fatal("expected op.written to be false")
+		}
+	})
+
+	// 2. Creation failure: PUT rejected (e.g. 412 collision or 500 error)
+	t.Run("MinIO_FailedCreation", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == "HEAD" {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			if r.Method == "PUT" {
+				w.WriteHeader(http.StatusPreconditionFailed) // 412
+				return
+			}
+		}))
+		defer ts.Close()
+
+		op := &MinIOCanaryOperation{
+			Client:    client,
+			TargetURL: ts.URL,
+			Resource:  "felix-canary/fail-put.txt",
+			Payload:   "content",
+		}
+
+		err := ExecuteCanaryLifecycle(context.Background(), op)
+		if err == nil {
+			t.Fatal("expected ExecuteCanaryLifecycle to fail when PUT rejected")
+		}
+		if !strings.Contains(err.Error(), "HTTP 412") {
+			t.Fatalf("unexpected error message: %v", err)
+		}
+		if op.written {
+			t.Fatal("expected op.written to be false")
+		}
+		// Calling cleanup on unwritten operation must be a safe no-op
+		if err := op.Cleanup(context.Background()); err != nil {
+			t.Fatalf("cleanup on unwritten operation must be safe no-op, got %v", err)
+		}
+	})
+
+	// 3. Verification failure: ETag or token mismatch on read-back
+	t.Run("MinIO_FailedVerification_ETagMismatch", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == "HEAD" {
+				w.Header().Set("ETag", `"etag-altered"`)
+				w.Header().Set("x-amz-meta-felix-canary", "my-token")
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			if r.Method == "PUT" {
+				w.Header().Set("ETag", `"etag-original"`)
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+		}))
+		defer ts.Close()
+
+		op := &MinIOCanaryOperation{
+			Client:      client,
+			TargetURL:   ts.URL,
+			Resource:    "felix-canary/verify-fail.txt",
+			Payload:     "content",
+			canaryToken: "my-token",
+			createdETag: `"etag-original"`,
+			written:     true,
+		}
+
+		err := op.Verify(context.Background())
+		if err == nil {
+			t.Fatal("expected verify to fail on ETag mismatch")
+		}
+		if !strings.Contains(err.Error(), "ETag mismatch") {
+			t.Fatalf("unexpected error message: %v", err)
+		}
+	})
+
+	// 4. Resource replacement between verification and cleanup: must refuse cleanup and NOT issue DELETE
+	t.Run("MinIO_ResourceReplacement_CleanupRefused", func(t *testing.T) {
+		var deleteIssued bool
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == "HEAD" {
+				// Object was replaced: new ETag and no felix canary token
+				w.Header().Set("ETag", `"etag-foreign-actor"`)
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			if r.Method == "DELETE" {
+				deleteIssued = true
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+		}))
+		defer ts.Close()
+
+		op := &MinIOCanaryOperation{
+			Client:      client,
+			TargetURL:   ts.URL,
+			Resource:    "felix-canary/replaced-race.txt",
+			Payload:     "content",
+			canaryToken: "felix-token-12345",
+			createdETag: `"etag-felix-created"`,
+			written:     true,
+		}
+
+		err := op.Cleanup(context.Background())
+		if err == nil {
+			t.Fatal("expected cleanup to fail when object was replaced concurrently")
+		}
+		if !strings.Contains(err.Error(), "ownership mismatch") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if deleteIssued {
+			t.Fatal("SECURITY VIOLATION: DELETE was issued against a replaced foreign object!")
+		}
+	})
+
+	// 5. ETag or ownership mismatch: token mismatch refuses deletion
+	t.Run("MinIO_OwnershipMismatch_TokenMismatchRefusesDeletion", func(t *testing.T) {
+		var deleteIssued bool
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == "HEAD" {
+				// Same ETag, but wrong token
+				w.Header().Set("ETag", `"etag-same"`)
+				w.Header().Set("x-amz-meta-felix-canary", "foreign-token-999")
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			if r.Method == "DELETE" {
+				deleteIssued = true
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+		}))
+		defer ts.Close()
+
+		op := &MinIOCanaryOperation{
+			Client:      client,
+			TargetURL:   ts.URL,
+			Resource:    "felix-canary/token-mismatch.txt",
+			Payload:     "content",
+			canaryToken: "my-felix-token",
+			createdETag: `"etag-same"`,
+			written:     true,
+		}
+
+		err := op.Cleanup(context.Background())
+		if err == nil {
+			t.Fatal("expected cleanup to fail on token mismatch")
+		}
+		if !strings.Contains(err.Error(), "token mismatch") {
+			t.Fatalf("unexpected error message: %v", err)
+		}
+		if deleteIssued {
+			t.Fatal("SECURITY VIOLATION: DELETE was issued when token did not match!")
+		}
+	})
+
+	// 6. Repeated cleanup: must be safe idempotent no-op
+	t.Run("MinIO_RepeatedCleanup", func(t *testing.T) {
+		var deleteCount int
+		var deleted bool
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == "HEAD" {
+				if deleted {
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+				w.Header().Set("ETag", `"etag-valid"`)
+				w.Header().Set("x-amz-meta-felix-canary", "token-minio-1")
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			if r.Method == "DELETE" {
+				deleteCount++
+				deleted = true
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+		}))
+		defer ts.Close()
+
+		op := &MinIOCanaryOperation{
+			Client:      client,
+			TargetURL:   ts.URL,
+			Resource:    "felix-canary/repeat-minio.txt",
+			Payload:     "content",
+			canaryToken: "token-minio-1",
+			createdETag: `"etag-valid"`,
+			written:     true,
+		}
+
+		// First cleanup
+		if err := op.Cleanup(context.Background()); err != nil {
+			t.Fatalf("first cleanup failed: %v", err)
+		}
+		if !op.cleaned {
+			t.Fatal("expected op.cleaned to be true")
+		}
+
+		// Second cleanup call
+		if err := op.Cleanup(context.Background()); err != nil {
+			t.Fatalf("second cleanup should be safe no-op, got %v", err)
+		}
+		if deleteCount != 1 {
+			t.Fatalf("expected exactly 1 DELETE request, got %d", deleteCount)
+		}
+	})
+
+	// 7. Cleanup failure: reported honestly without pretending success
+	t.Run("MinIO_CleanupFailure_ReportedHonest", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == "HEAD" {
+				w.Header().Set("ETag", `"etag-valid"`)
+				w.Header().Set("x-amz-meta-felix-canary", "token-valid")
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			if r.Method == "DELETE" {
+				w.WriteHeader(http.StatusInternalServerError) // 500
+				return
+			}
+		}))
+		defer ts.Close()
+
+		op := &MinIOCanaryOperation{
+			Client:      client,
+			TargetURL:   ts.URL,
+			Resource:    "felix-canary/cleanup-fail.txt",
+			Payload:     "content",
+			canaryToken: "token-valid",
+			createdETag: `"etag-valid"`,
+			written:     true,
+		}
+
+		err := op.Cleanup(context.Background())
+		if err == nil {
+			t.Fatal("expected cleanup to return error on HTTP 500")
+		}
+		if !strings.Contains(err.Error(), "HTTP 500") {
+			t.Fatalf("unexpected error message: %v", err)
+		}
+		if op.cleaned {
+			t.Fatal("expected op.cleaned to remain false on failure")
+		}
+	})
+
+	// 8. Confirmation that cleanup cannot delete a resource it does not demonstrably own
+	t.Run("MinIO_CannotDeleteResourceWithoutDemonstratedOwnership", func(t *testing.T) {
+		var deleteIssued bool
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == "HEAD" {
+				// Resource exists on server, but has no felix metadata token
+				w.Header().Set("ETag", `"foreign-etag"`)
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			if r.Method == "DELETE" {
+				deleteIssued = true
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+		}))
+		defer ts.Close()
+
+		// Attempting cleanup on an operation where token is missing or ownership cannot be demonstrated
+		op := &MinIOCanaryOperation{
+			Client:      client,
+			TargetURL:   ts.URL,
+			Resource:    "felix-canary/unowned-object.txt",
+			Payload:     "content",
+			canaryToken: "my-felix-canary-token",
+			createdETag: `"my-felix-etag"`,
+			written:     true,
+		}
+
+		err := op.Cleanup(context.Background())
+		if err == nil {
+			t.Fatal("expected cleanup to abort on unowned object")
+		}
+		if deleteIssued {
+			t.Fatal("SECURITY VIOLATION: cleanup issued DELETE against resource without demonstrated ownership!")
 		}
 	})
 }
