@@ -713,6 +713,41 @@ func FromAPIFinding(target string, f api.APIFinding) Finding {
 		verResult = "FastAPI OpenAPI specification contains embedded credentials, tokens, or sensitive default values."
 		negEvidence = "All discovered secret values were redacted from output; credential validity and active authorization status were not verified."
 
+	case cat == "laravel-ignition-debug":
+		detMethod = "active_probe"
+		if f.Confidence == api.ConfidenceMedium {
+			detStatus = "OBSERVED"
+			verStatus = VerificationObserved
+			verResult = "Laravel framework exception traceback observed exposing internal filesystem paths (suspected debug mode; Ignition template unconfirmed)."
+			negEvidence = "Traceback observed without official Laravel Ignition developer template; APP_DEBUG=true configuration remains unconfirmed."
+		} else {
+			detStatus = "DETECTED"
+			verStatus = VerificationVerified
+			verResult = "Laravel Ignition debug page confirmed (APP_DEBUG=true). Interactive stack trace and environment data exposed."
+			negEvidence = "All traceback paths and settings values were bounded and redacted."
+		}
+
+	case cat == "laravel-telescope-restricted":
+		detMethod = "active_probe"
+		detStatus = "OBSERVED"
+		verStatus = VerificationNotExposed
+		verResult = "Laravel Telescope interface is protected by authentication gate or access controls (HTTP 401/403 or redirect to login)."
+		negEvidence = "Authentication challenge or authorization refusal active; unauthenticated access denied."
+
+	case cat == "laravel-telescope-exposure":
+		detMethod = "active_probe"
+		detStatus = "OBSERVED"
+		verStatus = VerificationObserved
+		verResult = "Laravel Telescope monitoring dashboard interface shell is publicly accessible."
+		negEvidence = "Interface shell observed without demonstrated unauthenticated access to sensitive monitoring records or telemetry."
+
+	case cat == "laravel-telescope-sensitive-data":
+		detMethod = "active_probe"
+		detStatus = "DETECTED"
+		verStatus = VerificationVerified
+		verResult = "Laravel Telescope monitoring interface exposed unauthenticated application telemetry and diagnostic entries."
+		negEvidence = "All recorded telemetry, request payloads, and query parameters were bounded and redacted."
+
 	case cat == "sensitive-endpoint-protected":
 		detMethod = "active_probe"
 		detStatus = "OBSERVED"

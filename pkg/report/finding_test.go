@@ -628,3 +628,119 @@ func TestFromAPIFinding_DjangoAndFastAPI(t *testing.T) {
 		}
 	}
 }
+
+func TestFromAPIFinding_Laravel(t *testing.T) {
+	target := "https://app.example.com"
+
+	cases := []struct {
+		apiFinding     api.APIFinding
+		expectedRule   string
+		expectedStatus FindingStatus
+		expectedVer    VerificationStatus
+		expectedSev    string
+		expectedRemSub string
+	}{
+		{
+			apiFinding: api.APIFinding{
+				Category:    api.CategoryLaravelIgnitionDebug,
+				Endpoint:    "https://app.example.com/_felix_ignition_probe",
+				Method:      "GET",
+				Description: "Laravel Ignition debug page exposed (APP_DEBUG=true confirmed)",
+				Severity:    api.SeverityHigh,
+				Confidence:  api.ConfidenceHigh,
+				Fingerprint: api.GenerateFingerprint(api.CategoryLaravelIgnitionDebug, "https://app.example.com/_felix_ignition_probe", "GET"),
+			},
+			expectedRule:   "API-LARAVEL-IGNITION-DEBUG",
+			expectedStatus: FindingStatusConfirmed,
+			expectedVer:    VerificationVerified,
+			expectedSev:    SeverityHigh,
+			expectedRemSub: "APP_DEBUG=false",
+		},
+		{
+			apiFinding: api.APIFinding{
+				Category:    api.CategoryLaravelIgnitionDebug,
+				Endpoint:    "https://app.example.com/api/error",
+				Method:      "GET",
+				Description: "Laravel framework exception traceback observed (suspected debug mode)",
+				Severity:    api.SeverityMedium,
+				Confidence:  api.ConfidenceMedium,
+				Fingerprint: api.GenerateFingerprint(api.CategoryLaravelIgnitionDebug, "https://app.example.com/api/error", "GET"),
+			},
+			expectedRule:   "API-LARAVEL-IGNITION-DEBUG",
+			expectedStatus: FindingStatusConfirmed,
+			expectedVer:    VerificationObserved,
+			expectedSev:    SeverityMedium,
+			expectedRemSub: "APP_DEBUG=false",
+		},
+		{
+			apiFinding: api.APIFinding{
+				Category:    api.CategoryLaravelTelescopeProtected,
+				Endpoint:    "https://app.example.com/telescope",
+				Method:      "GET",
+				Description: "Laravel Telescope monitoring dashboard access restricted",
+				Severity:    api.SeverityInfo,
+				Confidence:  api.ConfidenceHigh,
+				Fingerprint: api.GenerateFingerprint(api.CategoryLaravelTelescopeProtected, "https://app.example.com/telescope", "GET"),
+			},
+			expectedRule:   "API-LARAVEL-TELESCOPE-RESTRICTED",
+			expectedStatus: FindingStatusInconclusive,
+			expectedVer:    VerificationNotExposed,
+			expectedSev:    SeverityInfo,
+			expectedRemSub: "Telescope::auth",
+		},
+		{
+			apiFinding: api.APIFinding{
+				Category:    api.CategoryLaravelTelescopeExposed,
+				Endpoint:    "https://app.example.com/telescope",
+				Method:      "GET",
+				Description: "Laravel Telescope monitoring dashboard reachable (interface shell)",
+				Severity:    api.SeverityInfo,
+				Confidence:  api.ConfidenceMedium,
+				Fingerprint: api.GenerateFingerprint(api.CategoryLaravelTelescopeExposed, "https://app.example.com/telescope", "GET"),
+			},
+			expectedRule:   "API-LARAVEL-TELESCOPE-EXPOSURE",
+			expectedStatus: FindingStatusConfirmed,
+			expectedVer:    VerificationObserved,
+			expectedSev:    SeverityInfo,
+			expectedRemSub: "Telescope::auth",
+		},
+		{
+			apiFinding: api.APIFinding{
+				Category:    api.CategoryLaravelTelescopeData,
+				Endpoint:    "https://app.example.com/telescope/telescope-api/requests",
+				Method:      "GET",
+				Description: "Laravel Telescope unauthenticated monitoring telemetry disclosure",
+				Severity:    api.SeverityHigh,
+				Confidence:  api.ConfidenceHigh,
+				Fingerprint: api.GenerateFingerprint(api.CategoryLaravelTelescopeData, "https://app.example.com/telescope/telescope-api/requests", "GET"),
+			},
+			expectedRule:   "API-LARAVEL-TELESCOPE-SENSITIVE-DATA",
+			expectedStatus: FindingStatusConfirmed,
+			expectedVer:    VerificationVerified,
+			expectedSev:    SeverityHigh,
+			expectedRemSub: "Telescope::auth",
+		},
+	}
+
+	for _, tc := range cases {
+		f := FromAPIFinding(target, tc.apiFinding)
+
+		if f.RuleID != tc.expectedRule {
+			t.Errorf("category %s: expected RuleID %s, got %s", tc.apiFinding.Category, tc.expectedRule, f.RuleID)
+		}
+		if f.Status != tc.expectedStatus {
+			t.Errorf("category %s: expected Status %s, got %s", tc.apiFinding.Category, tc.expectedStatus, f.Status)
+		}
+		if f.Verification.Status != tc.expectedVer {
+			t.Errorf("category %s: expected Verification.Status %s, got %s", tc.apiFinding.Category, tc.expectedVer, f.Verification.Status)
+		}
+		if f.Severity != tc.expectedSev {
+			t.Errorf("category %s: expected Severity %s, got %s", tc.apiFinding.Category, tc.expectedSev, f.Severity)
+		}
+
+		rem := RemediationFor(tc.apiFinding.Category, f.Title)
+		if !strings.Contains(rem, tc.expectedRemSub) {
+			t.Errorf("category %s: expected remediation to contain %q, got: %s", tc.apiFinding.Category, tc.expectedRemSub, rem)
+		}
+	}
+}

@@ -53,6 +53,10 @@ const (
 	CategoryFastAPIDocs                = "fastapi-docs-exposure"
 	CategoryFastAPISensitivePaths      = "fastapi-sensitive-paths"
 	CategoryFastAPISensitiveSchema     = "fastapi-sensitive-schema"
+	CategoryLaravelIgnitionDebug      = "laravel-ignition-debug"
+	CategoryLaravelTelescopeExposed   = "laravel-telescope-exposure"
+	CategoryLaravelTelescopeProtected = "laravel-telescope-restricted"
+	CategoryLaravelTelescopeData      = "laravel-telescope-sensitive-data"
 )
 
 // APIFinding represents a verified API security exposure, configuration issue, or hardening observation.

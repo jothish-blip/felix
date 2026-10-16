@@ -19,6 +19,7 @@ type AuditResult struct {
 	ActuatorCount       int                  `json:"actuator_count,omitempty"`
 	DjangoCount         int                  `json:"django_count,omitempty"`
 	FastAPICount        int                  `json:"fastapi_count,omitempty"`
+	LaravelCount        int                  `json:"laravel_count,omitempty"`
 	SensitiveCount      int                  `json:"sensitive_count"`
 	CORSCount           int                  `json:"cors_count"`
 	HeaderCount         int                  `json:"header_count"`
@@ -243,6 +244,10 @@ func (d *Detector) Audit(ctx context.Context, targetURL string, assets []crawler
 	fastapiFindings := AuditFastAPIDocs(ctx, client, baseURL, candidatePaths)
 	addFindings(fastapiFindings)
 
+	// 6. Audit Laravel Ignition & Telescope Diagnostic Interfaces
+	laravelFindings := AuditLaravelDiagnostics(ctx, client, baseURL, candidatePaths)
+	addFindings(laravelFindings)
+
 	// Track endpoints that already have documentation findings to prevent duplicate reporting
 	docEndpoints := make(map[string]struct{})
 	for _, f := range fastapiFindings {
@@ -368,7 +373,7 @@ func (d *Detector) Audit(ctx context.Context, targetURL string, assets []crawler
 		addFindings([]APIFinding{invFinding})
 	}
 
-	totalAudited := 1 + len(candidatePaths) + len(DefaultSensitivePaths) + len(DefaultActuatorCandidatePaths) + len(DefaultDjangoCandidatePaths) + len(DefaultFastAPICandidatePaths)
+	totalAudited := 1 + len(candidatePaths) + len(DefaultSensitivePaths) + len(DefaultActuatorCandidatePaths) + len(DefaultDjangoCandidatePaths) + len(DefaultFastAPICandidatePaths) + len(DefaultLaravelCandidatePaths)
 
 	return AuditResult{
 		EndpointsScanned:    totalAudited,
@@ -377,6 +382,7 @@ func (d *Detector) Audit(ctx context.Context, targetURL string, assets []crawler
 		ActuatorCount:       len(actuatorFindings),
 		DjangoCount:         len(djangoFindings),
 		FastAPICount:        len(fastapiFindings),
+		LaravelCount:        len(laravelFindings),
 		SensitiveCount:      len(filteredSensitive),
 		CORSCount:           len(corsFindings),
 		HeaderCount:         len(headerFindings),

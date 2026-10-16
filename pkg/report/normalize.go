@@ -537,6 +537,16 @@ func RemediationFor(category, title string) string {
 	case cat == "fastapi-sensitive-schema":
 		return "Remove sensitive credentials, tokens, passwords, or private configuration defaults from OpenAPI field descriptions, summaries, and schema examples."
 
+	// Laravel Ignition & Telescope Diagnostic Interfaces
+	case cat == "laravel-ignition-debug":
+		return "Set APP_DEBUG=false in production .env configuration and ensure ignition is installed strictly as a development dependency (--dev) in composer.json."
+
+	case cat == "laravel-telescope-exposure", cat == "laravel-telescope-sensitive-data":
+		return "Restrict access to Laravel Telescope using the Telescope::auth gate in TelescopeServiceProvider to authorize only specific administrators, or disable the package in production."
+
+	case cat == "laravel-telescope-restricted":
+		return "Ensure Laravel Telescope access rules continue to be enforced strictly via Telescope::auth with multi-factor administrative authentication."
+
 	// Defensive Security Headers
 	case cat == "missing-csp":
 		return "Deploy a robust Content-Security-Policy (CSP) header restricting script execution, styles, and object embeds to trusted sources. Begin with `Content-Security-Policy-Report-Only` during staging."
