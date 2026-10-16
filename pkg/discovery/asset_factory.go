@@ -827,3 +827,229 @@ func IngestAPKArtifact(inv *Inventory, asmID, execID, targetID, rootAppID string
 
 	return id
 }
+
+// IngestDiscoveredServices ingests standardized DiscoveredService records into the Common Asset Model inventory.
+func IngestDiscoveredServices(inv *Inventory, asmID, execID, targetID, rootAppID string, services []cloud.DiscoveredService) []string {
+	if inv == nil || len(services) == 0 {
+		return nil
+	}
+
+	var createdIDs []string
+	now := time.Now().UTC()
+
+	for _, ds := range services {
+		if ds.Outcome == cloud.OutcomeError {
+			continue
+		}
+
+		techStr := string(ds.Technology)
+		status := StatusInferred
+		if ds.Outcome == cloud.OutcomeDetected {
+			status = StatusObserved
+		} else if ds.Outcome == cloud.OutcomeInconclusive {
+			status = StatusUnavailable
+		}
+		if !ds.InScope {
+			status = StatusOutOfScope
+		}
+
+		conf := ConfidenceMedium
+		if ds.Confidence == "HIGH" || ds.Confidence == "High" {
+			conf = ConfidenceHigh
+		} else if ds.Confidence == "LOW" || ds.Confidence == "Low" {
+			conf = ConfidenceLow
+		}
+
+		host := ds.Host
+		if host == "" && ds.Endpoint != "" {
+			if u, err := url.Parse(ds.Endpoint); err == nil && u.Hostname() != "" {
+				host = u.Hostname()
+			} else {
+				host = ds.Endpoint
+			}
+		}
+
+		var (
+			astID   string
+			relType RelationType
+		)
+
+		switch ds.Family {
+		case cloud.FamilyDirectDatabase, cloud.FamilyFirebase:
+			instanceName := ""
+			if ds.Metadata != nil {
+				if proj, ok := ds.Metadata["project"].(string); ok {
+					instanceName = proj
+				} else if projID, ok := ds.Metadata["project_id"].(string); ok {
+					instanceName = projID
+				} else if cluster, ok := ds.Metadata["cluster_name"].(string); ok {
+					instanceName = cluster
+				}
+			}
+
+			dbDetails := DatabaseDetails{
+				Engine:             techStr,
+				InstanceName:       instanceName,
+				Host:               host,
+				Port:               ds.Port,
+				PubliclyAccessible: ds.PublicAccess,
+				AuthRequired:       ds.AuthRequired,
+			}
+
+			dbAsset := NewDatabaseAsset(asmID, execID, targetID, techStr, host, ds.Port, instanceName, dbDetails)
+			dbAsset.SourceAsset = ds.SourceAsset
+			dbAsset.DiscoveryMethod = ds.DetectionMethod
+			dbAsset.DiscoveryStatus = status
+			dbAsset.Confidence = conf
+			dbAsset.InScope = ds.InScope
+			dbAsset.Evidence = map[string]any{
+				"raw_evidence": ds.Evidence,
+				"outcome":      string(ds.Outcome),
+				"version":      ds.Version,
+				"limitations":  ds.Limitations,
+			}
+			astID = inv.AddAsset(dbAsset)
+			relType = RelUsesDatabase
+
+		case cloud.FamilyObjectStorage:
+			bucketName := ""
+			if ds.Metadata != nil {
+				if b, ok := ds.Metadata["bucket"].(string); ok {
+					bucketName = b
+				} else if acc, ok := ds.Metadata["account"].(string); ok {
+					bucketName = acc
+				}
+			}
+			if bucketName == "" {
+				bucketName = ds.Endpoint
+			}
+
+			stDetails := StorageDetails{
+				Provider:      techStr,
+				BucketName:    bucketName,
+				ResourceURL:   ds.Endpoint,
+				PublicListing: ds.PublicAccess,
+				PublicRead:    ds.PublicAccess,
+			}
+
+			stAsset := NewStorageAsset(asmID, execID, targetID, techStr, bucketName, stDetails)
+			stAsset.SourceAsset = ds.SourceAsset
+			stAsset.DiscoveryMethod = ds.DetectionMethod
+			stAsset.DiscoveryStatus = status
+			stAsset.Confidence = conf
+			stAsset.InScope = ds.InScope
+			stAsset.Evidence = map[string]any{
+				"raw_evidence": ds.Evidence,
+				"outcome":      string(ds.Outcome),
+				"limitations":  ds.Limitations,
+			}
+			astID = inv.AddAsset(stAsset)
+			relType = RelUsesStorage
+
+		case cloud.FamilyDatabaseAdmin, cloud.FamilyBackendInterface:
+			protocol := ds.Protocol
+			if protocol == "" {
+				if strings.HasPrefix(ds.Endpoint, "https") {
+					protocol = "https"
+				} else {
+					protocol = "http"
+				}
+			}
+
+			svcDetails := ServiceDetails{
+				ServiceName: techStr,
+				Port:        ds.Port,
+				Protocol:    protocol,
+				Version:     ds.Version,
+			}
+
+			svcAsset := NewServiceAsset(asmID, execID, targetID, host, ds.Port, protocol, svcDetails)
+			if ds.Endpoint != "" {
+				svcAsset.CanonicalID = ds.CanonicalID()
+			}
+			svcAsset.SourceAsset = ds.SourceAsset
+			svcAsset.DiscoveryMethod = ds.DetectionMethod
+			svcAsset.DiscoveryStatus = status
+			svcAsset.Confidence = conf
+			svcAsset.InScope = ds.InScope
+			svcAsset.Evidence = map[string]any{
+				"raw_evidence": ds.Evidence,
+				"outcome":      string(ds.Outcome),
+				"version":      ds.Version,
+				"limitations":  ds.Limitations,
+			}
+			astID = inv.AddAsset(svcAsset)
+			relType = RelExposesService
+
+			// Also link Host -> RelHostsService -> Service if host is known
+			if host != "" {
+				hostAsset := NewHostAsset(asmID, execID, targetID, host, HostDetails{
+					Hostname: host,
+				})
+				hostID := inv.AddAsset(hostAsset)
+				if hostID != "" {
+					inv.AddRelation(Relation{
+						AssessmentID:  asmID,
+						ExecutionID:   execID,
+						SourceAssetID: hostID,
+						TargetAssetID: astID,
+						RelationType:  RelHostsService,
+						Evidence:      fmt.Sprintf("Service %s hosted on %s", techStr, host),
+						Confidence:    conf,
+						CreatedAt:     now,
+					})
+				}
+			}
+
+		default:
+			canonID := ds.CanonicalID()
+			ast := Asset{
+				ID:              ComputeStableAssetID(AssetTypeCloudService, canonID),
+				AssessmentID:    asmID,
+				ExecutionID:     execID,
+				TargetID:        targetID,
+				Type:            AssetTypeCloudService,
+				CanonicalID:     canonID,
+				DisplayName:     fmt.Sprintf("%s (%s)", techStr, ds.Family),
+				SourceAsset:     ds.SourceAsset,
+				DiscoveryMethod: ds.DetectionMethod,
+				DiscoveryStatus: status,
+				Confidence:      conf,
+				InScope:         ds.InScope,
+				Metadata: map[string]any{
+					"technology": techStr,
+					"family":     string(ds.Family),
+					"endpoint":   ds.Endpoint,
+					"metadata":   ds.Metadata,
+				},
+				Evidence: map[string]any{
+					"raw_evidence": ds.Evidence,
+					"outcome":      string(ds.Outcome),
+					"limitations":  ds.Limitations,
+				},
+				FirstSeen: now,
+				LastSeen:  now,
+			}
+			astID = inv.AddAsset(ast)
+			relType = RelUsesStorage
+		}
+
+		if astID != "" {
+			createdIDs = append(createdIDs, astID)
+			if rootAppID != "" && rootAppID != astID {
+				inv.AddRelation(Relation{
+					AssessmentID:  asmID,
+					ExecutionID:   execID,
+					SourceAssetID: rootAppID,
+					TargetAssetID: astID,
+					RelationType:  relType,
+					Evidence:      fmt.Sprintf("Discovered %s (%s) via %s", techStr, ds.Family, ds.DetectionMethod),
+					Confidence:    conf,
+					CreatedAt:     now,
+				})
+			}
+		}
+	}
+
+	return createdIDs
+}

@@ -667,14 +667,30 @@ func runScan(args []string) int {
 		}
 
 		if !quiet && !jsonBare {
-			fmt.Println("CLOUD & BaaS INTELLIGENCE")
+			fmt.Println("CLOUD, DATABASE & STORAGE DISCOVERY")
 			fmt.Println("────────────────────────────────────────")
-			fmt.Println("Providers discovered:")
-			fmt.Printf("  Supabase: %d\n", sbCount)
-			fmt.Printf("  Firebase: %d\n", fbCount)
-			fmt.Printf("  AWS:      %d\n", awsCount)
-			fmt.Printf("  GCP:      %d\n", gcpCount)
-			fmt.Println()
+			if len(cloudResult.DiscoveredServices) > 0 {
+				fmt.Printf("Discovered services (%d):\n", len(cloudResult.DiscoveredServices))
+				for _, ds := range cloudResult.DiscoveredServices {
+					authStr := "Auth required"
+					if !ds.AuthRequired && ds.PublicAccess {
+						authStr = "OPEN / NO AUTH"
+					}
+					target := ds.Endpoint
+					if target == "" {
+						target = fmt.Sprintf("%s:%d", ds.Host, ds.Port)
+					}
+					fmt.Printf("  [%-10s] %-14s -> %s (%s)\n", ds.Outcome, ds.Technology, target, authStr)
+				}
+				fmt.Println()
+			} else {
+				fmt.Println("Providers discovered:")
+				fmt.Printf("  Supabase: %d\n", sbCount)
+				fmt.Printf("  Firebase: %d\n", fbCount)
+				fmt.Printf("  AWS:      %d\n", awsCount)
+				fmt.Printf("  GCP:      %d\n", gcpCount)
+				fmt.Println()
+			}
 
 			if len(cloudResult.Findings) > 0 {
 				fmt.Println("Findings:")

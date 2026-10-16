@@ -446,7 +446,9 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 		if len(apiRes.DiscoveredEndpoints) > 0 {
 			discovery.IngestAPIEndpoints(targetInv, assessmentID, execID, targetRecord.ID, res.Target, rootAppID, apiRes.DiscoveredEndpoints)
 		}
-		if len(cloudRes.Services) > 0 {
+		if len(cloudRes.DiscoveredServices) > 0 {
+			discovery.IngestDiscoveredServices(targetInv, assessmentID, execID, targetRecord.ID, rootAppID, cloudRes.DiscoveredServices)
+		} else if len(cloudRes.Services) > 0 {
 			discovery.IngestCloudServices(targetInv, assessmentID, execID, targetRecord.ID, rootAppID, cloudRes.Services)
 		}
 

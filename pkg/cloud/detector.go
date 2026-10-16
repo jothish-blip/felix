@@ -35,13 +35,15 @@ var (
 
 // AuditResult encapsulates discovered cloud services and evaluated risk findings.
 type AuditResult struct {
-	Services []Service      `json:"services"`
-	Findings []CloudFinding `json:"findings"`
+	Services           []Service           `json:"services"`
+	DiscoveredServices []DiscoveredService `json:"discovered_services"`
+	Findings           []CloudFinding      `json:"findings"`
 }
 
 // Detector identifies cloud vendor configurations and coordinates safe verification.
 type Detector struct {
 	client    *Client
+	engine    *ServiceDiscoveryEngine
 	isAllowed func(string) bool
 }
 
@@ -56,6 +58,7 @@ func NewDetector(client *Client, isAllowed ...func(string) bool) *Detector {
 	if len(isAllowed) > 0 && isAllowed[0] != nil {
 		d.isAllowed = isAllowed[0]
 	}
+	d.engine = NewServiceDiscoveryEngine(client, d.isAllowed)
 	return d
 }
 
@@ -291,9 +294,36 @@ func (d *Detector) Audit(ctx context.Context, assets []crawler.Asset, secretFind
 		}
 	}
 
+	// Universal Cloud, Database and Storage Discovery Engine execution
+	var discoveredServices []DiscoveredService
+	if d.engine != nil {
+		discoveredServices = d.engine.DiscoverServices(ctx, assets)
+		seenLegacy := make(map[string]struct{})
+		for _, s := range services {
+			seenLegacy[s.CanonicalID()] = struct{}{}
+		}
+
+		for _, ds := range discoveredServices {
+			if ds.InScope && (ds.Outcome == OutcomeDetected || ds.Outcome == OutcomePossible) {
+				legSvc := ds.ToLegacyService()
+				if _, exists := seenLegacy[legSvc.CanonicalID()]; !exists && legSvc.URL != "" {
+					seenLegacy[legSvc.CanonicalID()] = struct{}{}
+					services = append(services, legSvc)
+				}
+				if f, ok := ds.ToFinding(); ok {
+					if _, exists := seenFindingFPs[f.Fingerprint]; !exists {
+						seenFindingFPs[f.Fingerprint] = struct{}{}
+						allFindings = append(allFindings, f)
+					}
+				}
+			}
+		}
+	}
+
 	return AuditResult{
-		Services: services,
-		Findings: allFindings,
+		Services:           services,
+		DiscoveredServices: discoveredServices,
+		Findings:           allFindings,
 	}
 }
 

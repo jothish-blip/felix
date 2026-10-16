@@ -33,16 +33,20 @@ type ClientOptions struct {
 	HTTPClient      *http.Client
 	AllowLoopback   bool
 	AllowPrivateIPs bool
+	DialContext     func(ctx context.Context, network, addr string) (net.Conn, error)
 	IsAllowed       func(string) bool
 	IsExcluded      func(string) bool
 }
 
-// Client manages safe, bounded outbound HTTP requests for cloud service verification.
+// Client manages safe, bounded outbound HTTP requests and TCP probes for cloud service verification.
 type Client struct {
 	httpClient      *http.Client
 	timeout         time.Duration
 	maxResponseSize int64
 	userAgent       string
+	allowLoopback   bool
+	allowPrivate    bool
+	dialContext     func(ctx context.Context, network, addr string) (net.Conn, error)
 	isAllowed       func(string) bool
 	isExcluded      func(string) bool
 }
@@ -57,6 +61,8 @@ func NewClient(opts ...ClientOptions) *Client {
 	var allowPrivate bool
 	var isAllowed func(string) bool
 	var isExcluded func(string) bool
+
+	var customDial func(ctx context.Context, network, addr string) (net.Conn, error)
 
 	if len(opts) > 0 {
 		if opts[0].Timeout > 0 {
@@ -73,8 +79,17 @@ func NewClient(opts ...ClientOptions) *Client {
 		}
 		allowLoopback = opts[0].AllowLoopback
 		allowPrivate = opts[0].AllowPrivateIPs
+		customDial = opts[0].DialContext
 		isAllowed = opts[0].IsAllowed
 		isExcluded = opts[0].IsExcluded
+	}
+
+	if customDial == nil {
+		customDial = crawler.NewSafeDialContext(crawler.SafeDialerOptions{
+			Timeout:         timeout,
+			AllowLoopback:   allowLoopback,
+			AllowPrivateIPs: allowPrivate,
+		})
 	}
 
 	if customHTTP == nil {
@@ -128,9 +143,38 @@ func NewClient(opts ...ClientOptions) *Client {
 		timeout:         timeout,
 		maxResponseSize: maxSize,
 		userAgent:       ua,
+		allowLoopback:   allowLoopback,
+		allowPrivate:    allowPrivate,
+		dialContext:     customDial,
 		isAllowed:       isAllowed,
 		isExcluded:      isExcluded,
 	}
+}
+
+// SafeDialContext performs a safe, SSRF-protected TCP connection subject to scope rules.
+func (c *Client) SafeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+
+	targetURL := "tcp://" + addr
+	if c.isExcluded != nil && (c.isExcluded(targetURL) || c.isExcluded(host)) {
+		return nil, fmt.Errorf("connection to %s blocked: matches exclusion rule", addr)
+	}
+	if c.isAllowed != nil && !c.isAllowed(targetURL) && !c.isAllowed(host) && !c.isAllowed("http://"+addr) && !c.isAllowed("https://"+addr) {
+		return nil, fmt.Errorf("connection to %s blocked: target outside authorized scope", addr)
+	}
+
+	if c.dialContext == nil {
+		c.dialContext = crawler.NewSafeDialContext(crawler.SafeDialerOptions{
+			Timeout:         c.timeout,
+			AllowLoopback:   c.allowLoopback,
+			AllowPrivateIPs: c.allowPrivate,
+		})
+	}
+
+	return c.dialContext(ctx, network, addr)
 }
 
 // ProbeResponse captures bounded response metadata without storing uncontrolled payloads.

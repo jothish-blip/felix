@@ -757,3 +757,178 @@ func TestControllerProductionFlowSimulation(t *testing.T) {
 		}
 	}
 }
+
+func TestIngestDiscoveredServices(t *testing.T) {
+	inv := NewInventory()
+	asmID := "asm-discovery-test"
+	execID := "exec-discovery-test"
+	tgtID := "tgt-discovery-test"
+
+	rootApp := NewApplicationAsset(asmID, execID, tgtID, "https://app.corp.internal", ApplicationDetails{
+		AppType: "web",
+		RootURL: "https://app.corp.internal",
+	})
+	rootAppID := inv.AddAsset(rootApp)
+
+	discovered := []cloud.DiscoveredService{
+		// Group A: Direct Database
+		{
+			Technology:      cloud.TechRedis,
+			Family:          cloud.FamilyDirectDatabase,
+			Outcome:         cloud.OutcomeDetected,
+			Confidence:      "HIGH",
+			Host:            "redis.internal",
+			Port:            6379,
+			Protocol:        "tcp",
+			DetectionMethod: "TCP_PROBE",
+			AuthRequired:    false,
+			PublicAccess:    true,
+			Evidence:        "PONG response",
+			InScope:         true,
+		},
+		{
+			Technology:      cloud.TechPostgreSQL,
+			Family:          cloud.FamilyDirectDatabase,
+			Outcome:         cloud.OutcomeDetected,
+			Confidence:      "HIGH",
+			Host:            "pg.internal",
+			Port:            5432,
+			Protocol:        "tcp",
+			DetectionMethod: "TCP_PROBE",
+			AuthRequired:    true,
+			PublicAccess:    false,
+			Evidence:        "PostgreSQL SSLRequest 'S'",
+			InScope:         true,
+		},
+		// Group B: Database Admin
+		{
+			Technology:      cloud.TechMongoExpress,
+			Family:          cloud.FamilyDatabaseAdmin,
+			Outcome:         cloud.OutcomeDetected,
+			Confidence:      "HIGH",
+			Endpoint:        "http://mongo-express.internal:8081",
+			Host:            "mongo-express.internal",
+			Port:            8081,
+			Protocol:        "http",
+			DetectionMethod: "HTTP_PROBE",
+			AuthRequired:    false,
+			PublicAccess:    true,
+			Evidence:        "Mongo Express title match",
+			InScope:         true,
+		},
+		// Group C: Backend Interface
+		{
+			Technology:      cloud.TechHasura,
+			Family:          cloud.FamilyBackendInterface,
+			Outcome:         cloud.OutcomeDetected,
+			Confidence:      "HIGH",
+			Endpoint:        "https://graphql.corp.internal/v1/graphql",
+			Host:            "graphql.corp.internal",
+			Protocol:        "https",
+			DetectionMethod: "HTTP_PROBE",
+			Version:         "v2.18.0",
+			InScope:         true,
+		},
+		// Group D: Firebase RTDB
+		{
+			Technology:      cloud.TechFirebaseRTDB,
+			Family:          cloud.FamilyFirebase,
+			Outcome:         cloud.OutcomeDetected,
+			Confidence:      "HIGH",
+			Endpoint:        "https://my-db.firebaseio.com",
+			Host:            "my-db.firebaseio.com",
+			Protocol:        "https",
+			DetectionMethod: "HTTP_PROBE",
+			AuthRequired:    true,
+			InScope:         true,
+		},
+		// Group E: Object Storage
+		{
+			Technology:      cloud.TechAWSS3,
+			Family:          cloud.FamilyObjectStorage,
+			Outcome:         cloud.OutcomeDetected,
+			Confidence:      "HIGH",
+			Endpoint:        "https://mybucket.s3.amazonaws.com",
+			DetectionMethod: "HTTP_PROBE",
+			Metadata: map[string]any{
+				"bucket": "mybucket",
+			},
+			AuthRequired: true,
+			InScope:      true,
+		},
+		// Out of scope service
+		{
+			Technology:      cloud.TechAzureBlob,
+			Family:          cloud.FamilyObjectStorage,
+			Outcome:         cloud.OutcomePossible,
+			Confidence:      "HIGH",
+			Endpoint:        "https://unauthorized.blob.core.windows.net",
+			DetectionMethod: "PASSIVE_ANALYSIS",
+			InScope:         false,
+			Limitations:     "outside authorized scope",
+		},
+	}
+
+	createdIDs := IngestDiscoveredServices(inv, asmID, execID, tgtID, rootAppID, discovered)
+	if len(createdIDs) != len(discovered) {
+		t.Fatalf("expected %d created asset IDs, got %d", len(discovered), len(createdIDs))
+	}
+
+	// Verify Database Assets
+	dbAssets := inv.FilterByType(AssetTypeDatabase)
+	if len(dbAssets) < 3 { // Redis, PostgreSQL, Firebase RTDB
+		t.Fatalf("expected at least 3 database assets, got %d", len(dbAssets))
+	}
+
+	// Verify Storage Assets
+	stAssets := inv.FilterByType(AssetTypeStorage)
+	if len(stAssets) < 2 { // S3, Azure Blob
+		t.Fatalf("expected at least 2 storage assets, got %d", len(stAssets))
+	}
+
+	// Verify Out-of-Scope Status on Azure Blob
+	var outOfScopeAsset *Asset
+	for i := range stAssets {
+		if !stAssets[i].InScope {
+			outOfScopeAsset = &stAssets[i]
+			break
+		}
+	}
+	if outOfScopeAsset == nil {
+		t.Fatalf("expected an out-of-scope storage asset")
+	}
+	if outOfScopeAsset.DiscoveryStatus != StatusOutOfScope {
+		t.Errorf("expected StatusOutOfScope, got %s", outOfScopeAsset.DiscoveryStatus)
+	}
+
+	// Verify Services Assets (Mongo Express, Hasura)
+	svcAssets := inv.FilterByType(AssetTypeService)
+	if len(svcAssets) < 2 {
+		t.Fatalf("expected at least 2 service assets, got %d", len(svcAssets))
+	}
+
+	// Verify Relations
+	dbRelations := 0
+	stRelations := 0
+	svcRelations := 0
+	for _, rel := range inv.Relations {
+		switch rel.RelationType {
+		case RelUsesDatabase:
+			dbRelations++
+		case RelUsesStorage:
+			stRelations++
+		case RelHostsService:
+			svcRelations++
+		}
+	}
+
+	if dbRelations < 3 {
+		t.Errorf("expected at least 3 RelUsesDatabase relations, got %d", dbRelations)
+	}
+	if stRelations < 2 {
+		t.Errorf("expected at least 2 RelUsesStorage relations, got %d", stRelations)
+	}
+	if svcRelations < 2 {
+		t.Errorf("expected at least 2 RelHostsService relations, got %d", svcRelations)
+	}
+}
