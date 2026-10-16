@@ -181,11 +181,55 @@ func TestActuator_EnvironmentStructuralMetadata(t *testing.T) {
 	if f.Category != CategoryActuatorEnv {
 		t.Errorf("expected category %s, got %s", CategoryActuatorEnv, f.Category)
 	}
-	if f.Severity != SeverityMedium {
-		t.Errorf("expected severity MEDIUM for general environment properties, got %s", f.Severity)
+	if f.Severity != SeverityLow {
+		t.Errorf("expected severity LOW for general environment properties, got %s", f.Severity)
 	}
 	if !strings.Contains(f.Evidence, "systemProperties") || !strings.Contains(f.Evidence, "server.port") {
 		t.Errorf("expected evidence to mention property sources and property names: %s", f.Evidence)
+	}
+}
+
+// Test 4b: Masked sensitive property names must be classified as MEDIUM, NOT HIGH
+func TestActuator_EnvironmentMaskedSensitiveKeys_SeverityMedium(t *testing.T) {
+	maskedEnvJSON := `{
+		"activeProfiles": ["production"],
+		"propertySources": [
+			{
+				"name": "applicationConfiguration",
+				"properties": {
+					"spring.datasource.password": {"value": "******"},
+					"aws.secret.key": {"value": "******"},
+					"jwt.secret": {"value": "******"},
+					"server.port": {"value": 8080}
+				}
+			}
+		]
+	}`
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/actuator/env" {
+			w.Header().Set("Content-Type", ActuatorVendorContentTypeV3)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(maskedEnvJSON))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	client := NewClient(ClientOptions{HTTPClient: ts.Client(), AllowLoopback: true})
+	findings := AuditSpringActuator(context.Background(), client, ts.URL, nil)
+
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding for masked sensitive env, got %d", len(findings))
+	}
+	f := findings[0]
+	if f.Category != CategoryActuatorEnv {
+		t.Errorf("expected category %s, got %s", CategoryActuatorEnv, f.Category)
+	}
+	// Defensible severity invariant: Masked sensitive keys alone must NOT trigger High severity!
+	if f.Severity != SeverityMedium {
+		t.Errorf("expected severity MEDIUM for masked sensitive keys (not High), got %s", f.Severity)
 	}
 }
 

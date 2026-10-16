@@ -66,9 +66,9 @@ To prevent Single Page Applications (SPAs) and custom error pages returning HTTP
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | `/actuator/health` | Status only (`UP`/`DOWN`), no components | `health-endpoint` | **INFO** | `High` | Standard operational status; intentional for public health checks and load balancers. |
 | `/actuator/health` | Detailed components (`db`, `diskSpace`, `redis`, DB queries) | `actuator-health-detailed` | **LOW** | `High` | Internal infrastructure telemetry exposed; aids attacker reconnaissance. |
-| `/actuator/env` | General environment properties | `actuator-env-exposure` | **MEDIUM** | `High` | Application property names and source architectures exposed. |
-| `/actuator/env` | Sensitive configuration keys declared (passwords, tokens, keys) | `actuator-env-exposure` | **HIGH** | `High` | Critical credential configuration names exposed, even if values masked (`******`). |
-| `/actuator/env` | Unmasked secrets / connection strings observed | `actuator-env-exposure` | **CRITICAL** | `High` | Live production secrets leaked without masking. |
+| `/actuator/env` | General environment properties | `actuator-env-exposure` | **LOW** | `High` | Operational property names and source architectures exposed without credentials. |
+| `/actuator/env` | Sensitive configuration keys declared, values masked (`******`) | `actuator-env-exposure` | **MEDIUM** | `High` | Sensitive property names and configuration architecture declared; underlying values protected by masking. |
+| `/actuator/env` | Unmasked secrets / connection strings observed | `actuator-env-exposure` | **CRITICAL** | `High` | Live production credentials / secret tokens leaked in cleartext without masking. |
 | `/actuator/mappings` | Standard application route inventory | `actuator-mappings-exposure` | **LOW** | `High` | Internal route enumeration without administrative paths. |
 | `/actuator/mappings` | Administrative or management routes (`/admin/*`, `/internal/*`) | `actuator-mappings-exposure` | **MEDIUM** | `High` | Hidden administrative and operational attack surface disclosed. |
 
@@ -95,9 +95,9 @@ To prevent Single Page Applications (SPAs) and custom error pages returning HTTP
 Executed deterministic unit tests against hermetic local `httptest.Server` instances covering all 16 required test scenarios:
 - `TestActuator_GenuineMinimalHealth`: **PASS** (Minimal `UP` status classified as `INFO` `health-endpoint`).
 - `TestActuator_DetailedComponentHealth`: **PASS** (Components `db`, `diskSpace`, `redis` classified as `LOW` `actuator-health-detailed`).
-- `TestActuator_AccessRestrictedEndpoints`: **PASS** (401 and 403 endpoints produce 0 vulnerability findings and record `ActuatorAccessRestricted`).
-- `TestActuator_EnvironmentStructuralMetadata`: **PASS** (Metadata properties classified as `MEDIUM` `actuator-env-exposure`).
-- `TestActuator_EnvironmentSecretRedaction_ZeroLeaks`: **PASS** (Canary secrets verified: 0 raw secret leaks in evidence, details, or logs; severity upgraded to `CRITICAL`).
+- `TestActuator_EnvironmentStructuralMetadata`: **PASS** (General metadata properties classified as `LOW` `actuator-env-exposure`).
+- `TestActuator_EnvironmentMaskedSensitiveKeys_SeverityMedium`: **PASS** (Masked sensitive property names classified as `MEDIUM`, not `HIGH`).
+- `TestActuator_EnvironmentSecretRedaction_ZeroLeaks`: **PASS** (Unmasked credentials classified as `CRITICAL`; canary secrets verified 100% redacted).
 - `TestActuator_ValidMappings`: **PASS** (Dispatcher servlets and `/admin/users` classified as `MEDIUM` `actuator-mappings-exposure`).
 - `TestActuator_GenericHTMLSPAShell_Suppressed`: **PASS** (200 OK HTML SPA shell produces 0 findings).
 - `TestActuator_Custom404ErrorPage_Suppressed`: **PASS** (200 OK custom 404 HTML proxy page produces 0 findings).

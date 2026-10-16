@@ -434,9 +434,8 @@ func assessEnvEndpoint(res *ActuatorProbeResult, body []byte) {
 
 				// Inspect value safely without retaining it
 				valStr := extractPropertyValueString(propVal)
-				if valStr != "" && valStr != "******" && valStr != "[PROTECTED]" && valStr != "[SECRET]" && !strings.HasPrefix(valStr, "***") && !secrets.IsPlaceholder(valStr) {
-					// Check if unmasked value contains credential indicators
-					if secrets.IsSensitiveKey(lowerKey) || (secrets.ShannonEntropy(valStr) >= 3.5 && len(valStr) >= 16) {
+				if valStr != "" && valStr != "******" && valStr != "[PROTECTED]" && valStr != "[SECRET]" && !strings.HasPrefix(valStr, "***") {
+					if isDefensibleSecretValue(propKey, valStr) {
 						unmaskedSecret = true
 					}
 				}
@@ -465,8 +464,8 @@ func assessEnvEndpoint(res *ActuatorProbeResult, body []byte) {
 						}
 					}
 					valStr := fmt.Sprintf("%v", v)
-					if valStr != "" && valStr != "******" && valStr != "[PROTECTED]" && !strings.HasPrefix(valStr, "***") && !secrets.IsPlaceholder(valStr) {
-						if secrets.IsSensitiveKey(lowerKey) || (secrets.ShannonEntropy(valStr) >= 3.5 && len(valStr) >= 16) {
+					if valStr != "" && valStr != "******" && valStr != "[PROTECTED]" && !strings.HasPrefix(valStr, "***") {
+						if isDefensibleSecretValue(k, valStr) {
 							unmaskedSecret = true
 						}
 					}
@@ -501,11 +500,11 @@ func assessEnvEndpoint(res *ActuatorProbeResult, body []byte) {
 		displayProps = append(displayProps[:6], fmt.Sprintf("...+%d more", len(displayProps)-6))
 	}
 
-	severity := SeverityMedium
+	severity := SeverityLow
 	if unmaskedSecret {
 		severity = SeverityCritical
 	} else if len(sensitiveKeys) > 0 {
-		severity = SeverityHigh
+		severity = SeverityMedium
 	}
 
 	evidenceStr := fmt.Sprintf("HTTP %d OK. Spring Boot Actuator /env disclosed %d environment properties across sources [%s]. Discovered properties: [%s]. Secret values redacted.",
@@ -719,4 +718,36 @@ func deduplicateStrings(input []string) []string {
 		}
 	}
 	return result
+}
+
+// isDefensibleSecretValue checks if an unmasked property value represents genuine credential evidence.
+func isDefensibleSecretValue(key, val string) bool {
+	cleanVal := strings.TrimSpace(val)
+	if cleanVal == "" || len(cleanVal) < 6 {
+		return false
+	}
+	lowerVal := strings.ToLower(cleanVal)
+	// Suppress common non-secret configuration constants and identifiers
+	if lowerVal == "true" || lowerVal == "false" || lowerVal == "none" ||
+		lowerVal == "null" || lowerVal == "nil" || lowerVal == "default" ||
+		lowerVal == "disabled" || lowerVal == "enabled" || lowerVal == "memory" ||
+		lowerVal == "jdbc" || lowerVal == "redis" || lowerVal == "hazelcast" {
+		return false
+	}
+	if strings.HasPrefix(lowerVal, "http://") || strings.HasPrefix(lowerVal, "https://") {
+		// URLs are not secrets unless they contain user:pass credentials
+		return strings.Contains(cleanVal, "@")
+	}
+	if secrets.IsPlaceholder(cleanVal) {
+		return false
+	}
+	// If the key is an explicit credential field (password, secret, token, apikey, private_key)
+	lowerKey := strings.ToLower(key)
+	if strings.Contains(lowerKey, "password") || strings.Contains(lowerKey, "secret") ||
+		strings.Contains(lowerKey, "token") || strings.Contains(lowerKey, "apikey") ||
+		strings.Contains(lowerKey, "private") {
+		return len(cleanVal) >= 6
+	}
+	// For other keys, require high Shannon entropy and minimum length 16
+	return len(cleanVal) >= 16 && secrets.ShannonEntropy(cleanVal) >= 3.5
 }
