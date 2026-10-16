@@ -276,3 +276,49 @@ ok      felix/cmd/felix         3.577s
 1. **Scope Boundary:** Phase 2.3 is strictly confined to connection indicators, structural parsing, and secret redaction for the 16 target services. Active vulnerability exploitation, automated lateral movement, and Phase 3 (Advanced API/Cloud Security) are strictly deferred to subsequent roadmap phases.
 2. **Static Indicator Limitation:** The presence of a connection string or credential in code or configuration does not prove that the database or storage service is active, reachable on the network, or that the credentials are valid. Active verification remains governed by the Phase 2.2 access verification engine.
 3. **Encrypted or Obfuscated Values:** Custom proprietary encryption schemes (e.g. encrypted configuration vaults) without plaintext indicators cannot be statically detected by regular pattern analysis.
+
+---
+
+## 11. Security Audit, Remediation, and Final Acceptance Gate
+
+### 11.1 Security Audit Findings and Actions Taken
+1. **Zero Secret Leakage in Test Failure Messages:**
+   - *Finding:* In `pkg/cloud/connection_indicators_test.go`, several `t.Fatalf` and `t.Errorf` formatting strings printed raw canary secret values.
+   - *Remediation:* Scrubbed all failure messages across `connection_indicators_test.go` to report leaks generically without printing raw canary strings or values containing secrets.
+2. **Azure Blob SAS Parameter Extraction & Credential Tagging:**
+   - *Finding:* `azureBlobEndpointRegex` previously matched only through container path segments, ignoring SAS query parameters (`?sig=...`).
+   - *Remediation:* Updated regex to capture full path and query string (`(?i)https://([a-zA-Z0-9_\-]+)\.blob\.core\.windows\.net(/[^\s"'` + "`" + `<>]*)?`). Added SAS signature detection, `HasCredentials = true`, `RedactedFields = ["sig"]`, and context line redaction.
+3. **Firebase RTDB Token Query Extraction & Context Sanitization:**
+   - *Finding:* `firebaseRTDBRegex` matched host only, causing fallback line replacement that could truncate or leave raw context snippets.
+   - *Remediation:* Updated regex to capture path and query (`(?i)https://([a-zA-Z0-9_\-]+)\.firebaseio\.com(/[^\s"'` + "`" + `<>]*)?`). Ensured `secrets.SanitizeURL` operates on the exact URL and cleanly substitutes `[REDACTED]` into context lines.
+4. **Standalone Redis Token Redaction:**
+   - *Finding:* Standalone tokens in Redis URIs (`redis://token@host:6379`) were treated as usernames if no password colon was present.
+   - *Remediation:* Hardened Redis URL handling in `RedactText` (via `redisTokenURLPattern`), `SanitizeURL`, and `parseStandardURI` so single tokens are strictly redacted as credentials.
+5. **Percent-Encoded Credential Redaction:**
+   - *Finding:* Passwords containing percent-encoded symbols (e.g. `%40` for `@`) could cause greedy delimiter mismatches in raw text regexes.
+   - *Remediation:* Hardened `userPassURLPattern` to match authority credentials up to the final `@` delimiter preceding host/path/whitespace.
+6. **Malformed & Truncated URI Fallback:**
+   - *Finding:* URIs with invalid host syntax failed `url.Parse` without emitting an indicator, potentially bypassing structured scrubbing.
+   - *Remediation:* Added safe fallback parser in `parseStandardURI` leveraging `secrets.SanitizeURL` to preserve technology classification and ensure credential scrubbing.
+7. **Intermediate Struct Inspection:**
+   - *Finding:* Direct verification of intermediate struct fields was needed to confirm no leaks in unexported or intermediate representation.
+   - *Remediation:* Added automated assertions validating `Endpoint`, `Host`, `Database`, `CredentialUsername`, and `Fingerprint` for zero canary leakage.
+
+### 11.2 Verification Suite Audit Results
+| Check | Command | Result |
+| :--- | :--- | :--- |
+| Cloud Package Tests | `go test -v -count=1 ./pkg/cloud/...` | **PASS** (100% passing) |
+| Secrets Package Tests | `go test -v -count=1 ./pkg/secrets/...` | **PASS** (100% passing) |
+| Full Test Suite | `go test -count=1 ./pkg/... ./cmd/...` | **PASS** (21/21 packages, 0 failures) |
+| Go Vet | `go vet ./cmd/... ./pkg/...` | **PASS** (0 warnings) |
+| Binary Compilation | `go build -o bin/felix.exe ./cmd/felix` | **PASS** (Successful build) |
+| Git Whitespace Check | `git diff --check` | **PASS** (0 issues) |
+| Baseline Benchmark | `git status -- benchmarks/results/latest.json` | **PASS** (Untouched) |
+
+### 11.3 Audit Commits
+- Implementation Commit: `38a94ef` (`feat(cloud): detect connection indicators and safely redact secrets`)
+- Audit Remediation Commit: `9eaf1e0` (`fix(cloud): sanitize test failure messages and harden SAS and malformed URI redaction`)
+
+### 11.4 Final Acceptance Gate Decision
+**PASS — PHASE 2.3 FORMALLY CLOSED**
+All 16 database, backend, Firebase, and cloud-storage services have complete, verified connection indicator detection and structural redaction with zero network I/O, zero credential leaks, and complete non-conflation classification semantics.
