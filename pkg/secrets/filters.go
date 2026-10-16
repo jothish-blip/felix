@@ -87,6 +87,12 @@ func IsFalsePositive(candidate string, sType SecretType, surroundingContext stri
 		return true
 	}
 
+	// 1b. Supabase publishable client keys (sb_publishable_..., sb_p...) are public client configurations,
+	// analogous to anon JWTs. They should not be flagged as unverified high-entropy secret leaks.
+	if strings.HasPrefix(clean, "sb_publishable_") || strings.HasPrefix(clean, "sb_p") {
+		return true
+	}
+
 	// 2. Private keys and recognized provider signatures are not false positives unless they match placeholders
 	if sType == SecretPrivateKey || sType == SecretAWSAccessKey || sType == SecretStripeLiveKey ||
 		sType == SecretGitHubToken || sType == SecretSlackToken || sType == SecretOpenAIKey ||

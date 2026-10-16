@@ -26,8 +26,9 @@ var (
 	stripeKeyPattern    = regexp.MustCompile(`(?:\b|_)(?:sk|rk)_(?:live|test)_[0-9a-zA-Z_]{16,}\b`)
 	githubTokenPattern  = regexp.MustCompile(`(?:\b|_)(?:ghp|gho|ghu|ghs|ghr|github_pat)_[0-9a-zA-Z_]{20,}\b`)
 	slackTokenPattern   = regexp.MustCompile(`(?:\b|_)(?:xox[baprs]-[0-9a-zA-Z_]{10,}(?:-[0-9a-zA-Z_]{10,})*)\b`)
-	openaiKeyPattern    = regexp.MustCompile(`(?:\b|_)(?:sk-(?:proj-)?[0-9a-zA-Z_-]{20,})\b`)
-	awsAccessKeyPattern = regexp.MustCompile(`(?:\b|_)(AKIA|ABIA|ACCA|ASIA)[0-9A-Z]{16,28}\b`)
+	openaiKeyPattern      = regexp.MustCompile(`(?:\b|_)(?:sk-(?:proj-)?[0-9a-zA-Z_-]{20,})\b`)
+	awsAccessKeyPattern   = regexp.MustCompile(`(?:\b|_)(AKIA|ABIA|ACCA|ASIA)[0-9A-Z]{16,28}\b`)
+	supabaseSecretPattern = regexp.MustCompile(`(?:\b|_)(?:sb_secret_[0-9a-zA-Z_-]{20,})\b`)
 
 	// Payment card numbers (Visa, Mastercard, Amex, Discover, formatted or unformatted).
 	creditCardPattern = regexp.MustCompile(`\b(?:\d{4}[-\s]?){3}\d{4}\b|\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|6(?:011|5[0-9]{2})[0-9]{12})\b`)
@@ -120,6 +121,12 @@ func RedactText(input string) string {
 			return prefix + m[:4] + "[REDACTED]"
 		}
 		return prefix + "[REDACTED]"
+	})
+	s = supabaseSecretPattern.ReplaceAllStringFunc(s, func(m string) string {
+		if strings.HasPrefix(m, "_") {
+			return "_[REDACTED]"
+		}
+		return "[REDACTED]"
 	})
 
 	// 5. Redact credit card numbers and personal identity numbers (SSN)

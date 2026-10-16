@@ -473,3 +473,67 @@ func TestNormalizeTargetURL_IPv6(t *testing.T) {
 		})
 	}
 }
+
+func TestScope_IsPathInScope(t *testing.T) {
+	// Subpath target
+	sSubpath, err := NewScope("https://example.com/hithaone", ScopeSameOrigin)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	validSubpathCases := []string{
+		"/hithaone",
+		"/hithaone/",
+		"/hithaone/dashboard",
+		"/hithaone/api/v1/users",
+		"/hithaone?query=1",
+		"https://example.com/hithaone",
+		"https://example.com/hithaone/",
+		"https://example.com/hithaone/reports",
+	}
+	for _, u := range validSubpathCases {
+		if !sSubpath.IsPathInScope(u) {
+			t.Errorf("expected %q to be in path scope for /hithaone target", u)
+		}
+	}
+
+	invalidSubpathCases := []string{
+		"/hithaone-admin",
+		"/hithaone_evil",
+		"/hithaone-settings",
+		"/admin",
+		"/.env",
+		"/api/v1/users",
+		"https://example.com/hithaone-admin",
+		"https://example.com/dashboard",
+		"https://attacker.com/hithaone/dashboard",
+	}
+	for _, u := range invalidSubpathCases {
+		if sSubpath.IsPathInScope(u) {
+			t.Errorf("expected %q to be OUT of path scope for /hithaone target", u)
+		}
+	}
+
+	// Root target
+	sRoot, err := NewScope("https://example.com", ScopeSameOrigin)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rootCases := []string{
+		"/",
+		"/admin",
+		"/hithaone",
+		"/api/v1/users",
+		"https://example.com/reports",
+	}
+	for _, u := range rootCases {
+		if !sRoot.IsPathInScope(u) {
+			t.Errorf("expected %q to be in path scope for root target", u)
+		}
+	}
+
+	if sRoot.IsPathInScope("https://attacker.com/reports") {
+		t.Errorf("expected attacker.com to be OUT of path scope for root target")
+	}
+}

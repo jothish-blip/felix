@@ -90,6 +90,28 @@ func DefaultPatterns() []Pattern {
 			Confidence: ConfidenceMedium,
 			Validator:  validateAndInspectJWT,
 		},
+
+		// 8. Supabase Secret Key (confidential server-side key)
+		{
+			Name:       "Supabase Secret Key",
+			Type:       SecretSupabaseServiceKey,
+			Regex:      regexp.MustCompile(`\b(sb_secret_[0-9a-zA-Z_-]{20,})\b`),
+			Severity:   SeverityCritical,
+			Confidence: ConfidenceHigh,
+		},
+
+		// 9. Supabase Publishable Key (client-side public identifier)
+		{
+			Name:       "Supabase Publishable Key",
+			Type:       "supabase-publishable-key",
+			Regex:      regexp.MustCompile(`\b(sb_publishable_[0-9a-zA-Z_-]{20,}|sb_p[0-9a-zA-Z_-]{20,})\b`),
+			Severity:   SeverityInfo,
+			Confidence: ConfidenceHigh,
+			Validator: func(match string) (bool, SecretType, string, string, string) {
+				// Supabase publishable keys are designed for public client use and are not secrets
+				return false, "", "", "", ""
+			},
+		},
 	}
 }
 

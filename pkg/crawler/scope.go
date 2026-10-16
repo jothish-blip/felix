@@ -285,3 +285,54 @@ func (s *Scope) IsAllowed(rawURL string) bool {
 		return assetHost == targetHost
 	}
 }
+
+// IsPathInScope checks if a URL or path is strictly within the target's authorized path boundary.
+// If the target has a root path ("" or "/"), any path on the authorized origin is in path scope.
+// If the target has a subpath (e.g. "/hithaone" or "/app/v1"), the URL/path must equal the subpath
+// or have the subpath followed immediately by a path separator ("/" or end of string).
+// Similar-looking prefixes (e.g. "/hithaone-admin" or "/hithaone_evil") are STRICTLY REJECTED.
+func (s *Scope) IsPathInScope(rawURL string) bool {
+	if s == nil || s.TargetURL == nil {
+		return false
+	}
+
+	trimmed := strings.TrimSpace(rawURL)
+	if trimmed == "" {
+		return false
+	}
+
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return false
+	}
+
+	// If an absolute URL is given, check host/origin first
+	if parsed.Hostname() != "" {
+		if !s.IsAllowed(trimmed) {
+			return false
+		}
+	}
+
+	targetPath := strings.TrimRight(s.TargetURL.Path, "/")
+	if targetPath == "" || targetPath == "/" {
+		return true
+	}
+
+	reqPath := parsed.Path
+	if reqPath == "" {
+		reqPath = "/"
+	}
+	cleanReqPath := strings.TrimRight(reqPath, "/")
+
+	// Exact match: e.g. "/hithaone" == "/hithaone"
+	if cleanReqPath == targetPath {
+		return true
+	}
+
+	// Subpath match: must start with targetPath + "/"
+	if strings.HasPrefix(cleanReqPath, targetPath+"/") {
+		return true
+	}
+
+	return false
+}

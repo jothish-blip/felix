@@ -839,3 +839,97 @@ func TestDetector_SubpathScopeEnforcement(t *testing.T) {
 		}
 	}
 }
+
+func TestDetector_Suppresses404sAndGenericHTMLShells(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/nonexistent":
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte("404 page not found"))
+		case "/dashboard":
+			// Public generic HTML shell
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("<!doctype html><html><body><div id='__next'>Dashboard SPA</div></body></html>"))
+		case "/api/admin/secrets":
+			// Admin sensitive route returning HTML login
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("<!doctype html><html><body><form><input type='password' /></form></body></html>"))
+		case "/api/v1/data":
+			// Real JSON API
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"items": [1, 2, 3]}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer ts.Close()
+
+	client := NewClient(ClientOptions{
+		HTTPClient:    ts.Client(),
+		AllowLoopback: true,
+	})
+	d := NewDetector(client)
+
+	assets := []crawler.Asset{
+		{
+			URL:     ts.URL + "/app.js",
+			InScope: true,
+			Content: []byte(`
+				const r1 = "/api/nonexistent";
+				const r2 = { path: "/dashboard" };
+				const r3 = "/api/admin/secrets";
+				const r4 = "/api/v1/data";
+			`),
+		},
+	}
+
+	res := d.Audit(context.Background(), ts.URL, assets)
+
+	// All 4 endpoints must be tracked in DiscoveredEndpoints inventory
+	if len(res.DiscoveredEndpoints) < 4 {
+		t.Fatalf("expected at least 4 discovered endpoints in inventory, got %d", len(res.DiscoveredEndpoints))
+	}
+
+	// Verify findings:
+	// - /api/nonexistent (404) must NOT produce an APIFinding
+	// - /dashboard (generic HTML SPA shell) must NOT produce an APIFinding
+	// - /api/admin/secrets (Admin route) MUST produce an APIFinding
+	// - /api/v1/data (JSON API) MUST produce an APIFinding
+	foundNonexistent := false
+	foundDashboard := false
+	foundAdmin := false
+	foundData := false
+
+	for _, f := range res.Findings {
+		if f.Category == CategoryEndpointDiscovered {
+			if strings.Contains(f.Endpoint, "/api/nonexistent") {
+				foundNonexistent = true
+			}
+			if strings.Contains(f.Endpoint, "/dashboard") {
+				foundDashboard = true
+			}
+			if strings.Contains(f.Endpoint, "/api/admin/secrets") {
+				foundAdmin = true
+			}
+			if strings.Contains(f.Endpoint, "/api/v1/data") {
+				foundData = true
+			}
+		}
+	}
+
+	if foundNonexistent {
+		t.Errorf("expected 404 route /api/nonexistent to NOT produce an APIFinding")
+	}
+	if foundDashboard {
+		t.Errorf("expected generic HTML SPA shell /dashboard to NOT produce an APIFinding")
+	}
+	if !foundAdmin {
+		t.Errorf("expected sensitive Admin route /api/admin/secrets to produce an APIFinding")
+	}
+	if !foundData {
+		t.Errorf("expected JSON API route /api/v1/data to produce an APIFinding")
+	}
+}

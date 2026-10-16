@@ -24,6 +24,7 @@ type AuthStateObservation struct {
 	HTTPStatus       int       `json:"http_status"`
 	NegativeEvidence string    `json:"negative_evidence,omitempty"`
 	Reason           string    `json:"reason"`
+	IsHTMLShell      bool      `json:"is_html_shell,omitempty"`
 }
 
 // ReasonAuthState determines the access state based strictly on non-destructive HTTP responses.
@@ -32,13 +33,32 @@ func ReasonAuthState(statusCode int, respHeaders http.Header, respBody []byte) A
 	switch {
 	case statusCode == http.StatusOK:
 		bodyStr := strings.ToLower(string(respBody))
+		var contentType string
+		if respHeaders != nil {
+			contentType = strings.ToLower(respHeaders.Get("Content-Type"))
+		}
+		isHTML := strings.Contains(contentType, "text/html") ||
+			strings.Contains(bodyStr, "<!doctype html") ||
+			strings.Contains(bodyStr, "<html")
+
 		// If response is a generic HTML login form or single-page app shell redirecting in JS
 		if strings.Contains(bodyStr, "login") && strings.Contains(bodyStr, "password") && strings.Contains(bodyStr, "<form") {
 			return AuthStateObservation{
 				State:            AuthStatePublic,
 				HTTPStatus:       statusCode,
 				NegativeEvidence: "Endpoint returned public HTML login interface; unauthenticated private data not exposed.",
-				Reason:           "Endpoint is publicly accessible but serves an unauthenticated authentication interface.",
+				Reason:           "Endpoint serves an unauthenticated authentication interface.",
+				IsHTMLShell:      true,
+			}
+		}
+
+		if isHTML {
+			return AuthStateObservation{
+				State:            AuthStatePublic,
+				HTTPStatus:       statusCode,
+				NegativeEvidence: "Endpoint returned public HTML document or SPA shell rather than API response data.",
+				Reason:           "Endpoint serves a public HTML page or client-side SPA shell.",
+				IsHTMLShell:      true,
 			}
 		}
 
@@ -47,6 +67,7 @@ func ReasonAuthState(statusCode int, respHeaders http.Header, respBody []byte) A
 			HTTPStatus:       statusCode,
 			NegativeEvidence: "",
 			Reason:           "Endpoint responded with HTTP 200 OK without requiring authentication.",
+			IsHTMLShell:      false,
 		}
 
 	case statusCode == http.StatusUnauthorized:

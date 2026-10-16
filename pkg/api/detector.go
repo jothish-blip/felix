@@ -301,6 +301,18 @@ func (d *Detector) Audit(ctx context.Context, targetURL string, assets []crawler
 		ep.AuthState = obs.State
 		ep.HTTPStatus = resp.StatusCode
 
+		// Do not flood findings register with 404s (non-existent routes)
+		// Discovery != Vulnerability, and non-existent endpoints are not security findings.
+		if obs.State == AuthStateNotFound {
+			continue
+		}
+
+		// Suppress informational findings for generic public HTML pages / SPA shells
+		// unless the endpoint is classified as sensitive (e.g., Admin, Payment, Auth).
+		if obs.IsHTMLShell && ep.Classification != ClassAdmin && ep.Classification != ClassPayment && ep.Classification != ClassAuth {
+			continue
+		}
+
 		// Record informational inventory finding for discovered endpoint
 		// (Discovery and Classification are NEVER vulnerabilities by themselves)
 		findingMethod := ep.Method

@@ -612,3 +612,43 @@ func TestHighEntropyWithSecretContext(t *testing.T) {
 	}
 }
 
+func TestSupabaseKeyClassification(t *testing.T) {
+	d := NewDetector()
+
+	// 1. Supabase publishable keys (sb_publishable_... and sb_p...) must NOT be reported as secrets
+	publishableSamples := []string{
+		`const supabaseKey = "sb_publishable_abc123def456ghi789jkl012mno345pqr";`,
+		`const key = "sb_pABCDEF1234567890abcdefghijklmnopqrstuvwxyz";`,
+		`export const config = { supabase_publishable_key: "sb_publishable_eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" };`,
+	}
+	for _, sample := range publishableSamples {
+		findings := d.ScanContent("client.js", []byte(sample))
+		if len(findings) != 0 {
+			t.Errorf("expected 0 findings for publishable client key %q, got: %+v", sample, findings)
+		}
+	}
+
+	// 2. Supabase secret keys (sb_secret_...) MUST be detected as SecretSupabaseServiceKey with CRITICAL severity
+	secretSample := `const supabaseSecret = "sb_secret_ABCDEF1234567890abcdefghijklmnopqrstuvwxyz";`
+	findings := d.ScanContent("server.js", []byte(secretSample))
+	if len(findings) == 0 {
+		t.Fatalf("expected finding for Supabase secret key, got 0")
+	}
+	f := findings[0]
+	if f.Type != SecretSupabaseServiceKey {
+		t.Errorf("expected SecretSupabaseServiceKey, got %s", f.Type)
+	}
+	if f.Severity != SeverityCritical {
+		t.Errorf("expected SeverityCritical, got %s", f.Severity)
+	}
+	if f.Confidence != ConfidenceHigh {
+		t.Errorf("expected ConfidenceHigh, got %s", f.Confidence)
+	}
+	if strings.Contains(f.Redacted, "ABCDEF1234567890abcdefghijklmnopqrstuvwxyz") {
+		t.Errorf("raw secret leaked in Redacted: %s", f.Redacted)
+	}
+	if strings.Contains(f.Evidence, "ABCDEF1234567890abcdefghijklmnopqrstuvwxyz") {
+		t.Errorf("raw secret leaked in Evidence: %s", f.Evidence)
+	}
+}
+

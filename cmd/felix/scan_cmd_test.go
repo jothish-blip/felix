@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"felix/pkg/cloud"
 	"felix/pkg/config"
 	"felix/pkg/crawler"
+	"felix/pkg/report"
 )
 
 func TestParseTimeout(t *testing.T) {
@@ -618,5 +620,66 @@ func TestFormatServiceAccessState(t *testing.T) {
 				t.Errorf("FormatServiceAccessState() = %q, want %q", got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestRunScan_RateLimitingAndSubpathEnforcement(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("FELIX_DIR", tempDir)
+
+	jsonOut := filepath.Join(tempDir, "result.json")
+
+	// Server with subpath app and outside paths
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/subapp":
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`<!doctype html><html><head><script src="/assets/app.js"></script></head><body><h1>SubApp</h1></body></html>`))
+		case "/assets/app.js":
+			w.Header().Set("Content-Type", "application/javascript")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`console.log("loaded");`))
+		case "/outside":
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"admin": true}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	// 1. Invalid rate-limit flag value returns exit code 2
+	code := runScan([]string{"--allow-loopback", "--rate-limit=-1", "--quiet", ts.URL + "/subapp"})
+	if code != 2 {
+		t.Errorf("expected exit code 2 for negative --rate-limit, got %d", code)
+	}
+
+	// 2. Scan with valid rate-limit and subpath
+	code = runScan([]string{
+		"--allow-loopback",
+		"--rate-limit=10.0",
+		"--json=" + jsonOut,
+		"--quiet",
+		ts.URL + "/subapp",
+	})
+	if code != 0 && code != 1 {
+		t.Fatalf("expected exit code 0 or 1 for completed scan, got %d", code)
+	}
+
+	// Verify JSON output records wire_requests_count
+	data, err := os.ReadFile(jsonOut)
+	if err != nil {
+		t.Fatalf("failed reading result JSON: %v", err)
+	}
+	var rep report.Report
+	if err := json.Unmarshal(data, &rep); err != nil {
+		t.Fatalf("failed unmarshaling report JSON: %v", err)
+	}
+	if rep.RequestCount <= 0 {
+		t.Errorf("expected rep.RequestCount > 0, got %d", rep.RequestCount)
+	}
+	if wireCount, ok := rep.Metadata["wire_requests_count"].(float64); !ok || wireCount <= 0 {
+		t.Errorf("expected Metadata.wire_requests_count > 0, got %v", rep.Metadata["wire_requests_count"])
 	}
 }

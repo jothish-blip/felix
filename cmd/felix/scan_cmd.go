@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -32,6 +34,7 @@ func runScan(args []string) int {
 	var (
 		timeoutStr     string
 		concurrencyStr string
+		rateLimitStr   string
 		scopeStr       string
 		maxAssetsStr   string
 		maxSizeStr     string
@@ -103,6 +106,29 @@ func runScan(args []string) int {
 		}
 		if strings.HasPrefix(arg, "-c=") {
 			concurrencyStr = strings.TrimPrefix(arg, "-c=")
+			continue
+		}
+
+		// --rate-limit / -r / --rate
+		if arg == "--rate-limit" || arg == "-r" || arg == "--rate" {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				fmt.Fprintf(os.Stderr, "[-] error: %s requires a positive number (requests per second)\n", arg)
+				return 2
+			}
+			i++
+			rateLimitStr = args[i]
+			continue
+		}
+		if strings.HasPrefix(arg, "--rate-limit=") {
+			rateLimitStr = strings.TrimPrefix(arg, "--rate-limit=")
+			continue
+		}
+		if strings.HasPrefix(arg, "-r=") {
+			rateLimitStr = strings.TrimPrefix(arg, "-r=")
+			continue
+		}
+		if strings.HasPrefix(arg, "--rate=") {
+			rateLimitStr = strings.TrimPrefix(arg, "--rate=")
 			continue
 		}
 
@@ -376,12 +402,23 @@ func runScan(args []string) int {
 		maxSizeBytes = sz
 	}
 
-	// 7. User Agent
+	// 7. Rate Limit Validation
+	var rateLimitVal float64
+	if rateLimitStr != "" {
+		parsedRate, err := strconv.ParseFloat(rateLimitStr, 64)
+		if err != nil || parsedRate < 0 {
+			fmt.Fprintf(os.Stderr, "[-] error: invalid --rate-limit %q: must be a non-negative number\n", rateLimitStr)
+			return 2
+		}
+		rateLimitVal = parsedRate
+	}
+
+	// 8. User Agent
 	if userAgent == "" {
 		userAgent = cfgStore.UserAgent
 	}
 
-	// 8. Read targets from input file if supplied
+	// 9. Read targets from input file if supplied
 	if inputFile != "" {
 		fileTargets, err := readLines(inputFile)
 		if err != nil {
@@ -391,7 +428,7 @@ func runScan(args []string) int {
 		targets = append(targets, fileTargets...)
 	}
 
-	// 9. Ensure at least one target is specified
+	// 10. Ensure at least one target is specified
 	if len(targets) == 0 {
 		fmt.Fprintf(os.Stderr, "[-] Error: no target URLs specified\n\n")
 		printScanHelp()
@@ -421,6 +458,9 @@ func runScan(args []string) int {
 			fmt.Printf("[*] Active Scan Configuration:\n")
 			fmt.Printf("    Targets:          %d\n", len(targets))
 			fmt.Printf("    Concurrency:      %d workers\n", concurrencyVal)
+			if rateLimitVal > 0 {
+				fmt.Printf("    Rate Limit:       %.1f req/s per host\n", rateLimitVal)
+			}
 			fmt.Printf("    Timeout:          %s\n", timeoutDuration)
 			fmt.Printf("    Scope:            %s\n", scopeMode)
 			if maxAssetsVal > 0 {
@@ -438,8 +478,13 @@ func runScan(args []string) int {
 			}
 			fmt.Println()
 		} else if !jsonBare {
-			fmt.Printf("[*] Loaded %d target(s) | Concurrency: %d | Timeout: %s | Scope: %s\n\n",
-				len(targets), concurrencyVal, timeoutDuration, scopeMode)
+			if rateLimitVal > 0 {
+				fmt.Printf("[*] Loaded %d target(s) | Concurrency: %d | Rate: %.1f req/s | Timeout: %s | Scope: %s\n\n",
+					len(targets), concurrencyVal, rateLimitVal, timeoutDuration, scopeMode)
+			} else {
+				fmt.Printf("[*] Loaded %d target(s) | Concurrency: %d | Timeout: %s | Scope: %s\n\n",
+					len(targets), concurrencyVal, timeoutDuration, scopeMode)
+			}
 		}
 	}
 	_ = activeVerif
@@ -450,13 +495,56 @@ func runScan(args []string) int {
 		JSONMode: jsonBare,
 	})
 
-	// Build target authorization checker
+	// isClientAssetURL detects common static web assets required for frontend analysis.
+	isClientAssetURL := func(rawURL string) bool {
+		parsed, err := url.Parse(rawURL)
+		if err != nil {
+			return false
+		}
+		p := strings.ToLower(parsed.Path)
+		if strings.HasPrefix(p, "/_next/") || strings.HasPrefix(p, "/assets/") ||
+			strings.HasPrefix(p, "/static/") || strings.HasPrefix(p, "/favicon.") {
+			return true
+		}
+		ext := strings.ToLower(filepath.Ext(p))
+		switch ext {
+		case ".js", ".mjs", ".css", ".map", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff", ".woff2", ".ttf", ".eot":
+			return true
+		}
+		return false
+	}
+
+	// isPathAuthorized strictly requires target origin and subpath containment.
+	// Similar-prefix escapes (e.g. /hithaone-admin vs /hithaone) and cross-path routes are rejected.
+	isPathAuthorized := func(u string) bool {
+		for _, t := range targets {
+			s, err := crawler.NewScope(t, scopeMode)
+			if err == nil && s.IsPathInScope(u) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// isTargetAuthorized permits in-path resources and necessary static client assets (JS/CSS)
+	// on the authorized host required for frontend application analysis.
 	isTargetAuthorized := func(u string) bool {
 		for _, t := range targets {
 			s, err := crawler.NewScope(t, scopeMode)
-			if err == nil && s.IsAllowed(u) {
-				return true
+			if err != nil {
+				continue
 			}
+			if !s.IsAllowed(u) {
+				continue
+			}
+			// If target has a subpath, candidate must be in path scope or be a client asset
+			if s.TargetURL != nil && strings.TrimRight(s.TargetURL.Path, "/") != "" {
+				if s.IsPathInScope(u) || isClientAssetURL(u) {
+					return true
+				}
+				continue
+			}
+			return true
 		}
 		return false
 	}
@@ -466,15 +554,19 @@ func runScan(args []string) int {
 		maxRedirects = config.DefaultMaxRedirects
 	}
 
-	// Initialize SafeTransport and Safe HTTP Client for Crawler, Cloud Detector, and API Detector
+	// Initialize SafeTransport and wrap with RateLimitedTransport
 	safeTransport := crawler.NewSafeTransport(crawler.SafeTransportOptions{
 		Timeout:            timeoutDuration,
 		AllowLoopback:      allowLoopback,
 		AllowPrivateIPs:    allowPrivate,
 		InsecureSkipVerify: insecure,
 	})
+	rateLimitedTransport := crawler.NewRateLimitedTransport(safeTransport, crawler.RateLimitOptions{
+		Rate:           rateLimitVal,
+		MaxConcurrency: concurrencyVal,
+	})
 	safeHTTPClient := &http.Client{
-		Transport: safeTransport,
+		Transport: rateLimitedTransport,
 		Timeout:   timeoutDuration,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= maxRedirects {
@@ -493,8 +585,8 @@ func runScan(args []string) int {
 					return &crawler.SSRFError{Host: destHost, IP: ip, Reason: reason}
 				}
 			}
-			if !isTargetAuthorized(req.URL.String()) {
-				return fmt.Errorf("redirect to %s blocked: target is outside authorized scope", req.URL.String())
+			if !isPathAuthorized(req.URL.String()) {
+				return fmt.Errorf("redirect to %s blocked: target is outside authorized path scope", req.URL.String())
 			}
 			return nil
 		},
@@ -538,9 +630,9 @@ func runScan(args []string) int {
 		HTTPClient:      safeHTTPClient,
 		AllowLoopback:   allowLoopback,
 		AllowPrivateIPs: allowPrivate,
-		IsAllowed:       isTargetAuthorized,
+		IsAllowed:       isPathAuthorized,
 	}), api.DetectorOptions{
-		IsAllowed: isTargetAuthorized,
+		IsAllowed: isPathAuthorized,
 	})
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -828,12 +920,23 @@ func runScan(args []string) int {
 	rep := report.BuildMultiTargetReport(targets, allReportFindings)
 	rep.Duration = duration.Round(time.Millisecond).String()
 	rep.DurationMs = duration.Milliseconds()
-	rep.RequestCount = totalDiscovered + totalEndpointsAudited
+
+	wireRequests := int(rateLimitedTransport.TotalRequests())
+	if wireRequests > 0 {
+		rep.RequestCount = wireRequests
+	} else {
+		rep.RequestCount = totalDiscovered + totalEndpointsAudited
+	}
 	rep.CompletionStatus = assessmentState
 	if rep.Metadata == nil {
 		rep.Metadata = make(map[string]any)
 	}
 	rep.Metadata["crawled_assets_count"] = totalDiscovered
+	rep.Metadata["wire_requests_count"] = wireRequests
+	rep.Metadata["peak_concurrency"] = rateLimitedTransport.PeakConcurrency()
+	if duration.Seconds() > 0 && wireRequests > 0 {
+		rep.Metadata["effective_req_per_sec"] = float64(wireRequests) / duration.Seconds()
+	}
 	report.RecalculateReportRisk(&rep)
 
 	var exported []string
@@ -940,6 +1043,7 @@ func printScanHelp() {
 	fmt.Println("\nOptions:")
 	fmt.Println("  --timeout <duration>        Network timeout per target (e.g. 10s, 30s, 1m) [default: 10s]")
 	fmt.Println("  --concurrency <int>         Number of concurrent workers [default: 10]")
+	fmt.Println("  --rate-limit, -r <float>    Maximum requests per second per host (0 = unlimited)")
 	fmt.Println("  --scope <mode>              Crawl scope mode (same-origin, subdomains, explicit) [default: same-origin]")
 	fmt.Println("  --max-assets <int>          Maximum number of assets to process/discover")
 	fmt.Println("  --max-response-size <size>  Maximum asset response size (e.g. 10MB, 512KB) [default: 10MB]")

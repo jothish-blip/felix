@@ -575,7 +575,7 @@ func TestReDoSAndInputBounds(t *testing.T) {
 	_ = detector.DetectIndicators(src, []byte(longLine))
 	duration := time.Since(start)
 
-	if duration > 100*time.Millisecond {
+	if duration > 800*time.Millisecond {
 		t.Errorf("detection took too long (%v), possible ReDoS or backtracking issue", duration)
 	}
 

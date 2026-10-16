@@ -94,7 +94,7 @@ func RedactSecret(val string) string {
 	}
 
 	// 3. Known prefixes
-	prefixes := []string{"sk_live_", "rk_live_", "ghp_", "xoxb-", "sk-proj-", "sk-", "AKIA"}
+	prefixes := []string{"sb_secret_", "sk_live_", "rk_live_", "ghp_", "xoxb-", "sk-proj-", "sk-", "AKIA"}
 	for _, p := range prefixes {
 		if strings.HasPrefix(clean, p) {
 			suffixLen := 4
