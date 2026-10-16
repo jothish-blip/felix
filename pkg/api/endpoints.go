@@ -170,19 +170,11 @@ func AuditSensitiveEndpoints(ctx context.Context, client *Client, targetBaseURL 
 
 		// 5. Spring Boot Actuator health
 		if p == "/actuator/health" {
-			if strings.Contains(lowerBody, `"status"`) && (strings.Contains(lowerBody, `"up"`) || strings.Contains(lowerBody, `"down"`)) {
-				findings = append(findings, APIFinding{
-					Category:    CategoryHealthExposure,
-					Endpoint:    endpointURL,
-					Method:      http.MethodGet,
-					Description: "Public application health monitoring endpoint",
-					Evidence:    "HTTP 200 OK. Standard operational health status observed.",
-					Severity:    SeverityInfo,
-					Confidence:  ConfidenceHigh,
-					Fingerprint: GenerateFingerprint(CategoryHealthExposure, endpointURL, http.MethodGet),
-				})
-				continue
+			probeRes := ProbeActuatorEndpoint(ctx, client, endpointURL)
+			if probeRes.Finding != nil {
+				findings = append(findings, *probeRes.Finding)
 			}
+			continue
 		}
 
 		// 6. Prometheus / OpenMetrics

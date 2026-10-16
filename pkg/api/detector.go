@@ -16,6 +16,7 @@ type AuditResult struct {
 	EndpointsScanned    int                  `json:"endpoints_scanned"`
 	DiscoveredEndpoints []DiscoveredEndpoint `json:"discovered_endpoints,omitempty"`
 	GraphQLCount        int                  `json:"graphql_count"`
+	ActuatorCount       int                  `json:"actuator_count,omitempty"`
 	SensitiveCount      int                  `json:"sensitive_count"`
 	CORSCount           int                  `json:"cors_count"`
 	HeaderCount         int                  `json:"header_count"`
@@ -228,7 +229,11 @@ func (d *Detector) Audit(ctx context.Context, targetURL string, assets []crawler
 	graphQLFindings := AuditGraphQL(ctx, client, baseURL, graphQLCandidates)
 	addFindings(graphQLFindings)
 
-	// 3. Audit Sensitive Endpoints (git, env, openapi, metrics, health)
+	// 3. Audit Spring Boot Actuator Endpoints (/actuator/health, /actuator/env, /actuator/mappings)
+	actuatorFindings := AuditSpringActuator(ctx, client, baseURL, candidatePaths)
+	addFindings(actuatorFindings)
+
+	// 4. Audit Sensitive Endpoints (git, env, openapi, metrics, health)
 	sensitiveFindings := AuditSensitiveEndpoints(ctx, client, baseURL, candidatePaths)
 	addFindings(sensitiveFindings)
 
@@ -338,12 +343,13 @@ func (d *Detector) Audit(ctx context.Context, targetURL string, assets []crawler
 		addFindings([]APIFinding{invFinding})
 	}
 
-	totalAudited := 1 + len(candidatePaths) + len(DefaultSensitivePaths)
+	totalAudited := 1 + len(candidatePaths) + len(DefaultSensitivePaths) + len(DefaultActuatorCandidatePaths)
 
 	return AuditResult{
 		EndpointsScanned:    totalAudited,
 		DiscoveredEndpoints: discoveredEndpoints,
 		GraphQLCount:        len(graphQLFindings),
+		ActuatorCount:       len(actuatorFindings),
 		SensitiveCount:      len(sensitiveFindings),
 		CORSCount:           len(corsFindings),
 		HeaderCount:         len(headerFindings),

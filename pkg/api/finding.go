@@ -43,6 +43,10 @@ const (
 	CategoryWeakReferrerPolicy         = "weak-referrer-policy"
 	CategoryGraphQLIntrospectionDenied = "graphql-introspection-denied"
 	CategoryGraphQLSensitiveSchema     = "graphql-sensitive-schema"
+	CategoryActuatorHealthDetailed     = "actuator-health-detailed"
+	CategoryActuatorEnv                = "actuator-env-exposure"
+	CategoryActuatorMappings           = "actuator-mappings-exposure"
+	CategoryActuatorRestricted         = "actuator-endpoint-restricted"
 )
 
 // APIFinding represents a verified API security exposure, configuration issue, or hardening observation.

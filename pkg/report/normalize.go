@@ -508,6 +508,15 @@ func RemediationFor(category, title string) string {
 	case cat == "health-endpoint", cat == "metrics-exposure":
 		return "Restrict access to internal monitoring endpoints (/actuator, /metrics). Place them on private network interfaces or behind strict administrative authentication."
 
+	case cat == "actuator-health-detailed":
+		return "Set management.endpoint.health.show-details=never (or when-authorized) in Spring Boot configuration to prevent leaking internal component, database, and infrastructure status."
+
+	case cat == "actuator-env-exposure":
+		return "Disable /actuator/env in production (management.endpoints.web.exposure.exclude=env) or place it behind strict administrative authentication with restrictive access controls."
+
+	case cat == "actuator-mappings-exposure":
+		return "Disable /actuator/mappings in production (management.endpoints.web.exposure.exclude=mappings) or restrict access to internal management interfaces."
+
 	// Defensive Security Headers
 	case cat == "missing-csp":
 		return "Deploy a robust Content-Security-Policy (CSP) header restricting script execution, styles, and object embeds to trusted sources. Begin with `Content-Security-Policy-Report-Only` during staging."

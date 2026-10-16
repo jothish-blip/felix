@@ -636,6 +636,34 @@ func FromAPIFinding(target string, f api.APIFinding) Finding {
 		verResult = "Operational monitoring telemetry endpoint responded with HTTP 200 OK."
 		negEvidence = "Standard service health/metrics data; no administrative credential access demonstrated."
 
+	case cat == "actuator-health-detailed":
+		detMethod = "active_probe"
+		detStatus = "DETECTED"
+		verStatus = VerificationVerified
+		verResult = "Spring Boot Actuator health endpoint exposed internal component and infrastructure telemetry."
+		negEvidence = "Component telemetry observed; administrative credential access not verified."
+
+	case cat == "actuator-env-exposure":
+		detMethod = "active_probe"
+		detStatus = "DETECTED"
+		verStatus = VerificationVerified
+		verResult = "Spring Boot Actuator environment endpoint exposed configuration properties."
+		negEvidence = "All environment property values were bounded and redacted."
+
+	case cat == "actuator-mappings-exposure":
+		detMethod = "active_probe"
+		detStatus = "DETECTED"
+		verStatus = VerificationVerified
+		verResult = "Spring Boot Actuator mappings endpoint exposed internal application route definitions."
+		negEvidence = "Route patterns cataloged without recursive probe requests."
+
+	case cat == "actuator-endpoint-restricted":
+		detMethod = "active_probe"
+		detStatus = "OBSERVED"
+		verStatus = VerificationNotExposed
+		verResult = "Spring Boot Actuator endpoint is protected by authentication or access controls (HTTP 401/403)."
+		negEvidence = "Authentication challenge or authorization refusal active."
+
 	case cat == "sensitive-endpoint-protected":
 		detMethod = "active_probe"
 		detStatus = "OBSERVED"

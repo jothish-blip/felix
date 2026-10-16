@@ -195,14 +195,22 @@ func NewClient(opts ...ClientOptions) *Client {
 
 // ProbeResponse captures bounded response data.
 type ProbeResponse struct {
-	StatusCode int
-	Header     http.Header
-	Body       []byte
-	Truncated  bool
+	StatusCode        int
+	Header            http.Header
+	Body              []byte
+	Truncated         bool
+	Redirected        bool
+	RedirectURL       string
+	InitialStatusCode int
 }
 
-// Do executes a bounded request subject to size limits, rate limiting, and scope preservation.
-func (c *Client) Do(ctx context.Context, req *http.Request) (*ProbeResponse, error) {
+// DoBounded executes a request with an explicit maximum response size limit (e.g. 512 KiB for Actuator auditing).
+func (c *Client) DoBounded(ctx context.Context, req *http.Request, maxBytes int64) (*ProbeResponse, error) {
+	effectiveLimit := c.maxResponseSize
+	if maxBytes > 0 && maxBytes < effectiveLimit {
+		effectiveLimit = maxBytes
+	}
+
 	if req.URL != nil {
 		reqURL := req.URL.String()
 		if c.isExcluded != nil && c.isExcluded(reqURL) {
@@ -217,11 +225,27 @@ func (c *Client) Do(ctx context.Context, req *http.Request) (*ProbeResponse, err
 		req.Header.Set("User-Agent", c.userAgent)
 	}
 
-	resp, err := c.httpClient.Do(req.WithContext(ctx))
+	reqCtx := ctx
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline && c.timeout > 0 {
+		var cancel context.CancelFunc
+		reqCtx, cancel = context.WithTimeout(ctx, c.timeout)
+		defer cancel()
+	}
+
+	resp, err := c.httpClient.Do(req.WithContext(reqCtx))
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+
+	redirected := false
+	redirectURL := ""
+	initialStatus := resp.StatusCode
+	if resp.Request != nil && resp.Request.Response != nil {
+		redirected = true
+		redirectURL = resp.Request.URL.String()
+		initialStatus = resp.Request.Response.StatusCode
+	}
 
 	// Rate limiting: halt immediately on 429
 	if resp.StatusCode == http.StatusTooManyRequests {
@@ -229,27 +253,35 @@ func (c *Client) Do(ctx context.Context, req *http.Request) (*ProbeResponse, err
 	}
 
 	// Size limit validation on Content-Length header
-	if resp.ContentLength > c.maxResponseSize {
+	if resp.ContentLength > effectiveLimit {
 		return nil, ErrResponseTooLarge
 	}
 
 	// Bounded read via io.LimitReader
-	lr := io.LimitReader(resp.Body, c.maxResponseSize+1)
+	lr := io.LimitReader(resp.Body, effectiveLimit+1)
 	body, err := io.ReadAll(lr)
 	if err != nil {
 		return nil, fmt.Errorf("failed reading response: %w", err)
 	}
 
 	truncated := false
-	if int64(len(body)) > c.maxResponseSize {
+	if int64(len(body)) > effectiveLimit {
 		truncated = true
-		body = body[:c.maxResponseSize]
+		body = body[:effectiveLimit]
 	}
 
 	return &ProbeResponse{
-		StatusCode: resp.StatusCode,
-		Header:     resp.Header,
-		Body:       body,
-		Truncated:  truncated,
+		StatusCode:        resp.StatusCode,
+		Header:            resp.Header,
+		Body:              body,
+		Truncated:         truncated,
+		Redirected:        redirected,
+		RedirectURL:       redirectURL,
+		InitialStatusCode: initialStatus,
 	}, nil
+}
+
+// Do executes a bounded request subject to size limits, rate limiting, and scope preservation.
+func (c *Client) Do(ctx context.Context, req *http.Request) (*ProbeResponse, error) {
+	return c.DoBounded(ctx, req, c.maxResponseSize)
 }
