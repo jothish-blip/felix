@@ -3,7 +3,9 @@
 **Repository:** `C:\Jothish\felix`  
 **GitHub:** `jothish-blip/felix`  
 **Branch:** `main`  
-**Latest Audit Commit:** `c514904`  
+**Initial Baseline Commit:** `59aa886`  
+**Remediation Commit 1:** `c514904`  
+**Final Remediation Commit:** `4489b8d`  
 **Scope Under Review:** Phase 2 — Universal Cloud, Database and Storage Intelligence (Subphases 2.1, 2.2, and 2.3)  
 **Date of Audit:** October 16, 2026  
 **Final Acceptance Decision:** **PASS WITH DOCUMENTED LIMITATIONS**
@@ -63,33 +65,41 @@ Phase 2.2 distinguishes explicitly between reachability, authentication challeng
 
 ---
 
-## 4. Canary Lifecycle Verification Results
+## 4. Canary Lifecycle Verification Results (Redis, AWS S3, and MinIO)
 
 The canary framework in `pkg/cloud/canary.go` enforces 8 mandatory guardrails (`CanaryGuardrailChecker.EvaluateConditions`):
-1. Explicit active opt-in.
-2. Explicit provider authorization.
-3. Target within authorized assessment scope.
-4. Target not in excluded targets list.
-5. Explicit resource identifier provided.
-6. Supported technology for write canaries (Strictly restricted to Redis, AWS S3, and MinIO).
-7. Cleanup permitted and deletion mechanism available.
-8. Least-privilege identity verified.
+1. Global/User explicit opt-in (`AllowWriteVerification` + `CanaryConfig.Enabled`).
+2. Explicit run configuration authorization (`CanaryConfig.ExplicitlyAuthorized`).
+3. Target within authorized assessment scope and not excluded.
+4. Explicit test resource configured (never root or wildcard).
+5. Provider supports a safe, isolated canary operation (`TechRedis`, `TechAWSS3`, `TechMinIO`).
+6. No-overwrite guarantee enabled (`PreventOverwriteCheck`).
+7. Defined non-destructive cleanup behavior verified (`AllowCleanup`).
+8. Least-privilege identity confirmed (`IdentityLeastPrivilegeVerified`).
 
-### Provider Lifecycle Audits:
-- **Redis Canary Lifecycle:**
+### Provider Lifecycle Audits & Race Safety:
+- **Redis Canary Lifecycle (`RedisCanaryOperation`):**
   - Pre-check: Validates target is Redis with write permissions configured.
   - Creation: Uses atomic `SETNX <canary_key> <unique_token> EX 60` ensuring zero risk of overwriting existing data.
   - Verification: Reads key and verifies exact matching of `<unique_token>`.
   - Cleanup: Executes atomic Lua script (`if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end`) ensuring the canary key is only deleted if it matches the generated token.
-- **AWS S3 Canary Lifecycle:**
+- **AWS S3 Canary Lifecycle (`S3CanaryOperation`):**
   - Pre-check: HEAD request verifies bucket presence.
-  - Creation: PUT request includes `If-None-Match: *` to prevent overwriting existing objects.
-  - Verification: Compares ETag and object SHA-256 with generated canary payload.
-  - Cleanup: Executes conditional DELETE with `If-Match: <etag>`.
-- **MinIO Canary Lifecycle:**
-  - Pre-check & Creation: Safe multipart / bounded PUT with unique prefix `felix-canary-<uuid>`.
-  - Verification: Compares ETag.
-  - Cleanup: Deletes verified canary object.
+  - Creation: PUT request includes `If-None-Match: *` to prevent overwriting existing objects. Captures `ETag`, `x-amz-version-id`, and sets `x-amz-meta-felix-canary`.
+  - Verification: Compares ETag and object token.
+  - Cleanup: Validates demonstrable ownership (matching ETag and canary token) before issuing conditional DELETE (`If-Match` + version ID).
+- **MinIO Canary Lifecycle (`MinIOCanaryOperation`):**
+  - Creation: Pre-check HEAD ensures no pre-existing object exists. PUT request specifies `If-None-Match: *`, setting `x-amz-meta-felix-canary: canaryToken` and capturing `ETag` and `x-amz-version-id`.
+  - Demonstrable Ownership Verification:
+    - Pre-cleanup HEAD check strictly validates that the object exists (HTTP 200).
+    - Mismatched or missing ETag: cleanup aborts with `"canary object ownership mismatch"`, and zero DELETE requests are issued.
+    - Mismatched or missing `x-amz-meta-felix-canary` token: cleanup aborts with `"canary object token mismatch (ownership not demonstrated)"`, and zero DELETE requests are issued.
+  - Atomic / Conditional Deletion:
+    - Versioned: Appends `?versionId=<id>` for atomic version-specific deletion.
+    - Conditional: Sets `If-Match: createdETag`.
+    - Returns error if server returns HTTP 412 (concurrent replacement).
+  - Post-Cleanup Verification: Sends HEAD request to prove object was actually removed.
+  - Cleanup Failure Reporting: `ExecuteCanaryLifecycle` captures cleanup errors via named return and never pretends cleanup succeeded if `op.Cleanup()` fails.
 - **Unsupported Providers:**
   - Databases (PostgreSQL, MySQL, MongoDB), Firebase, Supabase, Hasura, Prisma: Attempted writes are strictly rejected with `StatusVerificationSkipped` and `DecisionSkipped`.
 
@@ -139,25 +149,32 @@ A fundamental architectural invariant of FELIX is that static indicator detectio
 
 ---
 
-## 8. End-to-End Data-Flow Verification
+## 8. Active-Probe Authorization Boundary Audit
 
-The end-to-end data pipeline was verified across all phases:
-`Scope Authorization -> Discovery -> Access Verification -> Indicator Detection -> Normalized Evidence -> Finding Classification -> Correlation -> Report & CLI Output`
+The complete authorization and control flow pipeline was mapped across all 4 operational tiers:
+
+```
+[Tier 1: Passive Indicators] ──> Zero Network Activity (0 dials, 0 requests, 0 DNS lookups)
+[Tier 2: Service Discovery]  ──> Safe protocol identification probes (strictly gated by target scope)
+[Tier 3: Access Verification] ─> Empirically verifies data access (strictly gated by target scope AND --active)
+[Tier 4: Canary Operations]  ──> Write verification (requires separate explicit opt-in + 8 guardrails)
+```
 
 ### Audited Gaps & Remediations Applied:
 1. **Active Verification CLI Gating (`cmd/felix/scan_cmd.go` & `pkg/cloud/detector.go`):**
-   - Discovered that the `--active` flag and `cfgStore.ActiveVerification` were parsed into `activeVerif` but suppressed (`_ = activeVerif`) without being passed to `cloud.Detector`.
-   - Added `allowActiveVerification bool` (default `true` for backwards-compatible programmatic usage) with `SetAllowActiveVerification(bool)` and `AllowActiveVerification() bool` to `pkg/cloud/Detector`.
-   - Wired `cloudAuditor.SetAllowActiveVerification(activeVerif)` in `cmd/felix/scan_cmd.go`.
-   - When active verification is disabled, `Detector.Audit()` suppresses active probes against in-scope services and produces `StatusVerificationSkipped` records with limitation note `"active access verification disabled (enable with --active flag)"`.
-2. **CLI Access State Display Correlation (`cmd/felix/scan_cmd.go`):**
+   - Wired `activeVerif` from `--active` and `cfgStore.ActiveVerification` into `cloud.Detector`.
+   - Gated legacy active probes (`AuditSupabase`, `AuditFirebase`, `AuditStorage`) and Phase 2.2 access verification (`accessEngine.VerifyServicesConcurrently`), emitting `StatusVerificationSkipped` when disabled.
+2. **Assessment Controller Active Verification Wiring (`pkg/assessment/controller.go`):**
+   - Wired `opts.ActiveVerification` into `cloudAuditor.SetAllowActiveVerification(opts.ActiveVerification)`.
+3. **CLI Access State Display Correlation (`cmd/felix/scan_cmd.go`):**
    - Updated `FormatServiceAccessState(ds, cloudResult.AccessRecords)` to cross-reference verified access records and display granular Phase 2.2 statuses (`Read verified`, `Authentication challenge observed`, `Access restricted (denied)`, `Service reachable (data access not verified)`, `Verification skipped (active verify disabled)`).
-3. **Indicator & Infrastructure Correlation (`pkg/report/correlate.go`):**
-   - Added Case G to `Correlate()`, linking static connection indicators with discovered service infrastructure. Preserved `ConfidenceMedium` to prevent false confidence inflation.
-4. **Regression Tests Added:**
-   - `pkg/cloud/cloud_test.go`: `TestDetector_AllowActiveVerificationGate` verifying gate suppression and skipped access records.
-   - `cmd/felix/scan_cmd_test.go`: Test cases in `TestFormatServiceAccessState` verifying granular access state formatting from `AccessVerificationRecord` entries.
-   - `pkg/report/finding_test.go`: `TestCorrelate_ConnectionIndicatorWithDiscoveredService` verifying Case G correlation and confidence preservation.
+4. **Indicator & Infrastructure Correlation (`pkg/report/correlate.go`):**
+   - Added Case G to `Correlate()`, linking static connection indicators with discovered service infrastructure while preserving `ConfidenceMedium`.
+5. **MinIO Canary Cleanup Ownership & Race Safety (`pkg/cloud/canary.go`):**
+   - Implemented dedicated `MinIOCanaryOperation` with atomic overwrite prevention (`If-None-Match: *`), demonstrable ownership validation (ETag + `x-amz-meta-felix-canary` token), conditional deletion (`If-Match` + version ID), post-cleanup verification, and honest cleanup error reporting in `ExecuteCanaryLifecycle`.
+6. **Regression Tests Added:**
+   - `pkg/cloud/canary_audit_test.go`: `TestCanary_MinIO_LifecycleSafety` verifying all 8 MinIO lifecycle safety requirements (pre-existing collision, creation failure, verify failure, resource replacement, ETag/token mismatch, repeated cleanup, cleanup failure reporting, and unowned resource refusal).
+   - `pkg/cloud/authorization_boundary_test.go`: Instrumented tests verifying zero network activity during passive analysis, scope gating for discovery, active verification flag gating, separate canary write authorization, and provider restrictions.
 
 ---
 
@@ -176,33 +193,37 @@ The end-to-end data pipeline was verified across all phases:
 4. `pkg/cloud/cloud_test.go`: Added `TestDetector_AllowActiveVerificationGate` asserting zero active access probes when disabled, and active execution when enabled.
 5. `pkg/report/correlate.go`: Implemented Case G correlation linking connection indicators with discovered service infrastructure while preserving `ConfidenceMedium`.
 6. `pkg/report/finding_test.go`: Added `TestCorrelate_ConnectionIndicatorWithDiscoveredService`.
+7. `pkg/cloud/canary.go`: Added `MinIOCanaryOperation`, hardened `S3CanaryOperation`, and updated `ExecuteCanaryLifecycle` to report cleanup errors honestly.
+8. `pkg/cloud/canary_audit_test.go`: Added `TestCanary_MinIO_LifecycleSafety` covering all 8 MinIO lifecycle scenarios.
+9. `pkg/cloud/authorization_boundary_test.go`: Added instrumented tests verifying the 4-tier authorization boundary.
+10. `pkg/assessment/controller.go`: Wired `opts.ActiveVerification` into `cloudAuditor.SetAllowActiveVerification(opts.ActiveVerification)`.
 
 ---
 
 ## 11. Full Test Execution Log Summary
 
-- **Unit and Integration Test Suite across All 21 Packages:**
-  - `felix/pkg/api`: PASS (9.468s)
-  - `felix/pkg/apisec`: PASS (65.415s)
-  - `felix/pkg/assessment`: PASS (23.748s)
-  - `felix/pkg/auth`: PASS (3.974s)
-  - `felix/pkg/authz`: PASS (3.924s)
-  - `felix/pkg/businesslogic`: PASS (33.356s)
-  - `felix/pkg/cloud`: PASS (16.915s)
-  - `felix/pkg/cloudsec`: PASS (4.429s)
-  - `felix/pkg/config`: PASS (2.436s)
-  - `felix/pkg/correlation`: PASS (1.608s)
-  - `felix/pkg/crawler`: PASS (9.486s)
-  - `felix/pkg/discovery`: PASS (7.604s)
-  - `felix/pkg/operator`: PASS (7.855s)
-  - `felix/pkg/report`: PASS (4.673s)
-  - `felix/pkg/secrets`: PASS (5.944s)
-  - `felix/pkg/sessionsec`: PASS (3.950s)
-  - `felix/pkg/ui`: PASS (1.651s)
-  - `felix/pkg/update`: PASS (4.583s)
-  - `felix/pkg/verification`: PASS (1.695s)
-  - `felix/pkg/webvuln`: PASS (3.447s)
-  - `felix/cmd/felix`: PASS (4.844s)
+- **Unit and Integration Test Suite across All 21 Packages (`go test -count=1 ./pkg/... ./cmd/...`):**
+  - `felix/pkg/api`: PASS (2.395s)
+  - `felix/pkg/apisec`: PASS (10.145s)
+  - `felix/pkg/assessment`: PASS (17.630s)
+  - `felix/pkg/auth`: PASS (2.006s)
+  - `felix/pkg/authz`: PASS (1.136s)
+  - `felix/pkg/businesslogic`: PASS (6.552s)
+  - `felix/pkg/cloud`: PASS (4.678s)
+  - `felix/pkg/cloudsec`: PASS (1.454s)
+  - `felix/pkg/config`: PASS (0.896s)
+  - `felix/pkg/correlation`: PASS (0.888s)
+  - `felix/pkg/crawler`: PASS (7.653s)
+  - `felix/pkg/discovery`: PASS (3.279s)
+  - `felix/pkg/operator`: PASS (4.644s)
+  - `felix/pkg/report`: PASS (3.741s)
+  - `felix/pkg/secrets`: PASS (3.344s)
+  - `felix/pkg/sessionsec`: PASS (1.339s)
+  - `felix/pkg/ui`: PASS (0.585s)
+  - `felix/pkg/update`: PASS (2.086s)
+  - `felix/pkg/verification`: PASS (1.319s)
+  - `felix/pkg/webvuln`: PASS (3.015s)
+  - `felix/cmd/felix`: PASS (4.500s)
 - **Static Analysis & Build Verification:**
   - `go vet ./cmd/... ./pkg/...`: PASS (0 warnings or errors)
   - `go build -o bin/felix.exe ./cmd/felix`: PASS (binary compiled successfully)
@@ -215,14 +236,16 @@ The end-to-end data pipeline was verified across all phases:
 ### Final Verdict: **PASS WITH DOCUMENTED LIMITATIONS**
 
 ### Rationale:
-Phase 2 (Subphases 2.1, 2.2, and 2.3) satisfies all core security and functional requirements:
-- All 16 service targets are discovered and classified accurately without unsafe data access.
-- Safe access verification cleanly separates reachability from authenticated and unauthenticated read access.
-- Canary writes are rigorously restricted to Redis, AWS S3, and MinIO with complete atomic and conditional lifecycles.
-- All secrets and credentials in connection indicators are scrubbed across UI, logs, fingerprints, and reports.
-- CLI flags and active verification options are fully wired, preventing unexpected outbound probes.
+Phase 2 (Subphases 2.1, 2.2, and 2.3) satisfies all core architectural, functional, and safety requirements:
+1. All 16 service targets are discovered and classified accurately without unsafe data access.
+2. Safe access verification cleanly separates reachability from authenticated and unauthenticated read access.
+3. Canary writes are rigorously restricted to Redis, AWS S3, and MinIO with complete atomic and conditional lifecycles. MinIO canary operations enforce demonstrable ownership tokens and conditional/versioned deletion, preventing TOCTOU deletion of foreign or replaced objects.
+4. All secrets and credentials in connection indicators are scrubbed across UI, logs, fingerprints, and reports.
+5. CLI flags, configuration stores, and assessment controller active verification options are fully wired, preventing unexpected outbound probes.
+6. The 4-tier authorization boundary is verified: passive parsing makes 0 network connections; service discovery respects target scope; access verification requires `--active`; and write canaries require separate explicit opt-in.
 
 ### Documented Operational Limitations:
-1. **Canary Provider Bounds:** Write canary operations are strictly supported only on Redis (atomic `SETNX`/Lua delete), AWS S3 (`If-None-Match: *`/`If-Match`), and MinIO. Relational databases (PostgreSQL, MySQL), document databases (MongoDB), and GraphQL/BaaS endpoints (Supabase, Hasura, Prisma, Firebase) are strictly read/metadata probed and deliberately do not support write canaries to protect target integrity.
-2. **Active Verification Scope Requirement:** Active verification requires explicit target inclusion in assessment scope. Out-of-scope targets and targets without `--active` are recorded as `StatusVerificationSkipped` with informational discovery findings only.
-3. **Static Indicator Non-Conflation:** Static connection strings are classified as `STATIC_ANALYSIS` and contribute zero points to verified risk scores until empirical verification is performed. Correlated stories strictly remain capped at `ConfidenceMedium`.
+1. **Canary Provider Bounds:** Write canary operations are strictly supported only on Redis (atomic `SETNX`/Lua delete), AWS S3 (`If-None-Match: *`/`If-Match`), and MinIO (atomic `If-None-Match: *`/demonstrable token + conditional/versioned delete). Relational databases (PostgreSQL, MySQL), document databases (MongoDB), and GraphQL/BaaS endpoints (Supabase, Hasura, Prisma, Firebase) are strictly read/metadata probed and deliberately do not support write canaries to protect target integrity.
+2. **Production Validation Boundary:** Verification was executed against controlled local fixtures and instrumented mock clients. Live writes, deletes, canaries, and penetration probes against live production third-party cloud environments were not executed during this task.
+3. **Active Verification Scope Requirement:** Active verification requires explicit target inclusion in assessment scope. Out-of-scope targets and targets scanned without `--active` are recorded as `StatusVerificationSkipped` with informational discovery findings only.
+4. **Static Indicator Non-Conflation:** Static connection strings are classified as `STATIC_ANALYSIS` and contribute zero points to verified risk scores until empirical verification is performed. Correlated stories strictly remain capped at `ConfidenceMedium`.
