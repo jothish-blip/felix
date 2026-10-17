@@ -45,7 +45,6 @@ func AuditGoDiagnostics(ctx context.Context, client *Client, targetBaseURL strin
 	var findings []APIFinding
 	resolvedCandidates := ResolveGoCandidateURLs(targetBaseURL, candidatePaths)
 
-	seenFP := make(map[string]struct{})
 	for _, targetURL := range resolvedCandidates {
 		if client.isExcluded != nil && client.isExcluded(targetURL) {
 			continue
@@ -56,14 +55,11 @@ func AuditGoDiagnostics(ctx context.Context, client *Client, targetBaseURL strin
 
 		endpointFindings := ProbeGoEndpoint(ctx, client, targetURL)
 		for _, f := range endpointFindings {
-			if _, exists := seenFP[f.Fingerprint]; !exists {
-				seenFP[f.Fingerprint] = struct{}{}
-				findings = append(findings, f)
-			}
+			findings = append(findings, NormalizeFrameworkFinding(f))
 		}
 	}
 
-	return findings
+	return DeduplicateFrameworkFindings(findings)
 }
 
 // ResolveGoCandidateURLs resolves candidate Go diagnostic URLs for a target base URL,

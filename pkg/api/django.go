@@ -50,10 +50,12 @@ func AuditDjangoDiagnostics(ctx context.Context, client *Client, targetBaseURL s
 		}
 
 		endpointFindings := ProbeDjangoEndpoint(ctx, client, targetURL)
-		findings = append(findings, endpointFindings...)
+		for _, f := range endpointFindings {
+			findings = append(findings, NormalizeFrameworkFinding(f))
+		}
 	}
 
-	return findings
+	return DeduplicateFrameworkFindings(findings)
 }
 
 // ResolveDjangoCandidateURLs resolves candidate Django diagnostic URLs for a target base URL,

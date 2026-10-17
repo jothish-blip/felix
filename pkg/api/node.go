@@ -39,7 +39,6 @@ func AuditNodeDiagnostics(ctx context.Context, client *Client, targetBaseURL str
 	var findings []APIFinding
 	resolvedCandidates := ResolveNodeCandidateURLs(targetBaseURL, candidatePaths)
 
-	seenFP := make(map[string]struct{})
 	for _, targetURL := range resolvedCandidates {
 		if client.isExcluded != nil && client.isExcluded(targetURL) {
 			continue
@@ -50,14 +49,11 @@ func AuditNodeDiagnostics(ctx context.Context, client *Client, targetBaseURL str
 
 		endpointFindings := ProbeNodeEndpoint(ctx, client, targetURL)
 		for _, f := range endpointFindings {
-			if _, exists := seenFP[f.Fingerprint]; !exists {
-				seenFP[f.Fingerprint] = struct{}{}
-				findings = append(findings, f)
-			}
+			findings = append(findings, NormalizeFrameworkFinding(f))
 		}
 	}
 
-	return findings
+	return DeduplicateFrameworkFindings(findings)
 }
 
 // ResolveNodeCandidateURLs resolves candidate Node.js diagnostic URLs for a target base URL,

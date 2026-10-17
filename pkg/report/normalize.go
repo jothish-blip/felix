@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"felix/pkg/api"
 	"felix/pkg/secrets"
 )
 
@@ -273,6 +274,42 @@ func NormalizeFinding(f Finding) Finding {
 		f.Status = FindingStatusFromVerification(f.Verification.Status)
 	} else {
 		f.Status = NormalizeFindingStatus(f.Status)
+	}
+
+	// Normalize Framework Classification fields
+	if f.ClassificationOutcome == "" {
+		switch f.Status {
+		case FindingStatusConfirmed:
+			if f.Severity == SeverityInfo || f.Severity == SeverityLow {
+				f.ClassificationOutcome = OutcomeInformational
+			} else {
+				f.ClassificationOutcome = OutcomeConfirmed
+			}
+		case FindingStatusSuspected:
+			f.ClassificationOutcome = OutcomeSuspected
+		case FindingStatusInconclusive:
+			f.ClassificationOutcome = OutcomeInconclusive
+		default:
+			f.ClassificationOutcome = OutcomeInconclusive
+		}
+	} else {
+		f.ClassificationOutcome = api.NormalizeClassificationOutcome(string(f.ClassificationOutcome))
+	}
+
+	if f.Reachability == "" {
+		f.Reachability = api.NormalizeReachability("", f.EvidenceDetails.HTTPStatus, nil)
+	} else {
+		f.Reachability = api.NormalizeReachability(string(f.Reachability), f.EvidenceDetails.HTTPStatus, nil)
+	}
+
+	if f.AuthContext == "" {
+		f.AuthContext = api.NormalizeAuthContext("", "", f.EvidenceDetails.HTTPStatus, nil, nil)
+	} else {
+		f.AuthContext = api.NormalizeAuthContext(string(f.AuthContext), "", f.EvidenceDetails.HTTPStatus, nil, nil)
+	}
+
+	if f.Framework == "" {
+		f.Framework, f.FrameworkVersion = api.DetectFramework(f.Category, f.EvidenceDetails.Details)
 	}
 
 	// Normalize AnalysisMethod

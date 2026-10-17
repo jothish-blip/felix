@@ -223,9 +223,10 @@ func (d *Detector) Audit(ctx context.Context, targetURL string, assets []crawler
 
 	addFindings := func(findings []APIFinding) {
 		for _, f := range findings {
-			if _, exists := seenFP[f.Fingerprint]; !exists {
-				seenFP[f.Fingerprint] = struct{}{}
-				allFindings = append(allFindings, f)
+			norm := NormalizeFrameworkFinding(f)
+			if _, exists := seenFP[norm.Fingerprint]; !exists {
+				seenFP[norm.Fingerprint] = struct{}{}
+				allFindings = append(allFindings, norm)
 			}
 		}
 	}

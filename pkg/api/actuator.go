@@ -111,11 +111,11 @@ func AuditSpringActuator(ctx context.Context, client *Client, targetBaseURL stri
 
 		result := ProbeActuatorEndpoint(ctx, client, targetURL)
 		if result.Finding != nil {
-			findings = append(findings, *result.Finding)
+			findings = append(findings, NormalizeFrameworkFinding(*result.Finding))
 		}
 	}
 
-	return findings
+	return DeduplicateFrameworkFindings(findings)
 }
 
 // ResolveActuatorCandidateURLs resolves candidate Actuator URLs for a given target base URL,

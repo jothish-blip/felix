@@ -942,3 +942,138 @@ func TestFromAPIFinding_NodeAndGo(t *testing.T) {
 		}
 	}
 }
+
+func TestFromAPIFinding_SharedFrameworkContract(t *testing.T) {
+	target := "https://app.example.com"
+
+	cases := []struct {
+		name              string
+		apiFinding        api.APIFinding
+		expectedOutcome   ClassificationOutcome
+		expectedReach     ReachabilityStatus
+		expectedAuth      AuthenticationContext
+		expectedFramework string
+	}{
+		{
+			name: "Spring_Actuator_Env",
+			apiFinding: api.APIFinding{
+				Category:   api.CategoryActuatorEnv,
+				Endpoint:   "https://app.example.com/actuator/env",
+				Method:     "GET",
+				HTTPStatus: 200,
+				Severity:   api.SeverityHigh,
+				Confidence: api.ConfidenceHigh,
+				Evidence:   "spring.datasource.password=[REDACTED]",
+			},
+			expectedOutcome:   OutcomeConfirmed,
+			expectedReach:     ReachabilityConfirmedReachable,
+			expectedAuth:      AuthContextNoChallenge,
+			expectedFramework: "Spring Boot",
+		},
+		{
+			name: "Django_Debug_Mode",
+			apiFinding: api.APIFinding{
+				Category:   api.CategoryDjangoDebugMode,
+				Endpoint:   "https://app.example.com/crash",
+				Method:     "GET",
+				HTTPStatus: 500,
+				Severity:   api.SeverityHigh,
+				Confidence: api.ConfidenceHigh,
+				Evidence:   "Django technical 500 template",
+			},
+			expectedOutcome:   OutcomeConfirmed,
+			expectedReach:     ReachabilityConfirmedReachable,
+			expectedAuth:      AuthContextNoChallenge,
+			expectedFramework: "Django",
+		},
+		{
+			name: "FastAPI_Public_Docs",
+			apiFinding: api.APIFinding{
+				Category:   api.CategoryFastAPIDocs,
+				Endpoint:   "https://app.example.com/docs",
+				Method:     "GET",
+				HTTPStatus: 200,
+				Severity:   api.SeverityInfo,
+				Confidence: api.ConfidenceHigh,
+				Evidence:   "Swagger UI documentation",
+			},
+			expectedOutcome:   OutcomeInformational,
+			expectedReach:     ReachabilityConfirmedReachable,
+			expectedAuth:      AuthContextNoChallenge,
+			expectedFramework: "FastAPI",
+		},
+		{
+			name: "Laravel_Telescope_Restricted",
+			apiFinding: api.APIFinding{
+				Category:   api.CategoryLaravelTelescopeProtected,
+				Endpoint:   "https://app.example.com/telescope",
+				Method:     "GET",
+				HTTPStatus: 403,
+				Severity:   api.SeverityInfo,
+				Confidence: api.ConfidenceHigh,
+				Evidence:   "HTTP 403 Forbidden",
+			},
+			expectedOutcome:   OutcomeInformational,
+			expectedReach:     ReachabilityConfirmedInaccessible,
+			expectedAuth:      AuthContextRequired,
+			expectedFramework: "Laravel",
+		},
+		{
+			name: "Node_Runtime_Header",
+			apiFinding: api.APIFinding{
+				Category:   api.CategoryNodeRuntimeExposure,
+				Endpoint:   "https://app.example.com",
+				Method:     "GET",
+				HTTPStatus: 200,
+				Severity:   api.SeverityInfo,
+				Confidence: api.ConfidenceHigh,
+				Evidence:   "X-Powered-By: Express",
+				Details: map[string]string{
+					"framework": "Express",
+				},
+			},
+			expectedOutcome:   OutcomeInformational,
+			expectedReach:     ReachabilityConfirmedReachable,
+			expectedAuth:      AuthContextNoChallenge,
+			expectedFramework: "Express",
+		},
+		{
+			name: "Go_Pprof_Inconclusive",
+			apiFinding: api.APIFinding{
+				Category:   api.CategoryGoPprofExposure,
+				Endpoint:   "https://app.example.com/debug/pprof/trace",
+				Method:     "GET",
+				HTTPStatus: 200,
+				Severity:   api.SeverityInfo,
+				Confidence: api.ConfidenceLow,
+				Evidence:   "Ambiguous response without profile markers",
+				Details: map[string]string{
+					"classification": "inconclusive",
+				},
+			},
+			expectedOutcome:   OutcomeInconclusive,
+			expectedReach:     ReachabilityConfirmedReachable,
+			expectedAuth:      AuthContextNoChallenge,
+			expectedFramework: "Go",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := FromAPIFinding(target, tc.apiFinding)
+
+			if f.ClassificationOutcome != tc.expectedOutcome {
+				t.Errorf("expected ClassificationOutcome %s, got %s", tc.expectedOutcome, f.ClassificationOutcome)
+			}
+			if f.Reachability != tc.expectedReach {
+				t.Errorf("expected Reachability %s, got %s", tc.expectedReach, f.Reachability)
+			}
+			if f.Framework != tc.expectedFramework {
+				t.Errorf("expected Framework %s, got %s", tc.expectedFramework, f.Framework)
+			}
+			if len(f.Verification.Limitations) == 0 && tc.expectedOutcome != OutcomeInformational {
+				t.Errorf("expected non-empty limitations on %s", tc.name)
+			}
+		})
+	}
+}

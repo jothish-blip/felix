@@ -83,8 +83,17 @@ type APIFinding struct {
 	LineNumber       int                    `json:"line_number,omitempty"`
 	Mechanism        string                 `json:"mechanism,omitempty"`
 	NegativeEvidence string                 `json:"negative_evidence,omitempty"`
-	HTTPStatus       int                    `json:"http_status,omitempty"`
-	Details          map[string]string      `json:"details,omitempty"`
+	HTTPStatus            int                    `json:"http_status,omitempty"`
+	Details               map[string]string      `json:"details,omitempty"`
+	Framework             string                 `json:"framework,omitempty"`
+	FrameworkVersion      string                 `json:"framework_version,omitempty"`
+	RuleID                string                 `json:"rule_id,omitempty"`
+	ContentType           string                 `json:"content_type,omitempty"`
+	ClassificationOutcome ClassificationOutcome  `json:"classification_outcome,omitempty"`
+	Reachability          ReachabilityStatus     `json:"reachability,omitempty"`
+	AuthContext           AuthenticationContext  `json:"auth_context,omitempty"`
+	Limitations           []string               `json:"limitations,omitempty"`
+	OriginalContext       string                 `json:"original_context,omitempty"`
 }
 
 // GenerateFingerprint generates a stable SHA-256 deduplication fingerprint for the finding.

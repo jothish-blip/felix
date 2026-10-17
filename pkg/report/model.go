@@ -83,6 +83,37 @@ func IsValidFindingStatusTransition(from, to FindingStatus) bool {
 // AnalysisMethod distinguishes how a security claim or artifact was analyzed.
 type AnalysisMethod string
 
+// ClassificationOutcome represents the four framework classification outcomes from pkg/api.
+type ClassificationOutcome = api.ClassificationOutcome
+
+const (
+	OutcomeInformational = api.OutcomeInformational
+	OutcomeConfirmed     = api.OutcomeConfirmed
+	OutcomeSuspected     = api.OutcomeSuspected
+	OutcomeInconclusive  = api.OutcomeInconclusive
+)
+
+// ReachabilityStatus represents the reachability state from pkg/api.
+type ReachabilityStatus = api.ReachabilityStatus
+
+const (
+	ReachabilityConfirmedReachable    = api.ReachabilityConfirmedReachable
+	ReachabilityConfirmedInaccessible = api.ReachabilityConfirmedInaccessible
+	ReachabilityInconclusive          = api.ReachabilityInconclusive
+	ReachabilityUnknown               = api.ReachabilityUnknown
+)
+
+// AuthenticationContext represents the access-control and authentication state from pkg/api.
+type AuthenticationContext = api.AuthenticationContext
+
+const (
+	AuthContextRequired      = api.AuthContextRequired
+	AuthContextNoChallenge   = api.AuthContextNoChallenge
+	AuthContextAuthenticated = api.AuthContextAuthenticated
+	AuthContextUnknown       = api.AuthContextUnknown
+	AuthContextInconclusive  = api.AuthContextInconclusive
+)
+
 const (
 	AnalysisMethodStatic AnalysisMethod = "STATIC_ANALYSIS"
 	AnalysisMethodActive AnalysisMethod = "ACTIVE_VERIFICATION"
@@ -185,8 +216,13 @@ type RemediationAdvice struct {
 type Finding struct {
 	ID                string              `json:"id"`
 	RuleID            string              `json:"rule_id,omitempty"`
-	Status            FindingStatus       `json:"status,omitempty"`
-	AnalysisMethod    AnalysisMethod      `json:"analysis_method,omitempty"`
+	Status                FindingStatus         `json:"status,omitempty"`
+	ClassificationOutcome ClassificationOutcome `json:"classification_outcome,omitempty"`
+	Reachability          ReachabilityStatus    `json:"reachability,omitempty"`
+	AuthContext           AuthenticationContext `json:"auth_context,omitempty"`
+	Framework             string                `json:"framework,omitempty"`
+	FrameworkVersion      string                `json:"framework_version,omitempty"`
+	AnalysisMethod        AnalysisMethod        `json:"analysis_method,omitempty"`
 	PrimaryAssetID    string              `json:"primary_asset_id,omitempty"`
 	AffectedAssetIDs  []string            `json:"affected_asset_ids,omitempty"`
 	Title             string              `json:"title"`
@@ -556,6 +592,9 @@ func FromCloudFinding(target string, f cloud.CloudFinding) Finding {
 
 // FromAPIFinding converts an Engine 4 API finding to the unified model.
 func FromAPIFinding(target string, f api.APIFinding) Finding {
+	// Ensure the finding passes through the shared framework normalization pipeline
+	f = api.NormalizeFrameworkFinding(f)
+
 	title := f.Description
 	if title == "" {
 		title = fmt.Sprintf("API observation: %s", f.Category)
@@ -883,6 +922,7 @@ func FromAPIFinding(target string, f api.APIFinding) Finding {
 		Location:         f.Endpoint,
 		HTTPMethod:       NormalizeMethod(f.Method),
 		HTTPStatus:       httpStatus,
+		ContentType:      f.ContentType,
 		DetectionMethod:  detMethod,
 		DetectionStatus:  detStatus,
 		NegativeEvidence: negEvidence,
@@ -901,7 +941,27 @@ func FromAPIFinding(target string, f api.APIFinding) Finding {
 		Result:          verResult,
 	}
 
-	ruleID := fmt.Sprintf("API-%s", strings.ToUpper(strings.ReplaceAll(f.Category, "_", "-")))
+	for _, lim := range f.Limitations {
+		clean := strings.TrimSpace(lim)
+		if clean == "" {
+			continue
+		}
+		has := false
+		for _, existing := range ver.Limitations {
+			if existing == clean {
+				has = true
+				break
+			}
+		}
+		if !has {
+			ver.Limitations = append(ver.Limitations, clean)
+		}
+	}
+
+	ruleID := f.RuleID
+	if ruleID == "" {
+		ruleID = fmt.Sprintf("API-%s", strings.ToUpper(strings.ReplaceAll(f.Category, "_", "-")))
+	}
 	fStatus := FindingStatusSuspected
 	if verStatus == VerificationVerified || verStatus == VerificationObserved {
 		fStatus = FindingStatusConfirmed
@@ -910,23 +970,28 @@ func FromAPIFinding(target string, f api.APIFinding) Finding {
 	}
 
 	finding := Finding{
-		ID:              fmt.Sprintf("API-%s", shortHash(f.Fingerprint)),
-		RuleID:          ruleID,
-		Status:          fStatus,
-		AnalysisMethod:  aMethod,
-		Title:           title,
-		Category:        f.Category,
-		Severity:        NormalizeSeverity(f.Severity),
-		Confidence:      NormalizeConfidence(f.Confidence),
-		Target:          target,
-		Endpoint:        f.Endpoint,
-		Method:          NormalizeMethod(f.Method),
-		Description:     f.Description,
-		Evidence:        f.Evidence,
-		EvidenceDetails: evDetails,
-		Verification:    ver,
-		Source:          SourceAPI,
-		Fingerprint:     f.Fingerprint,
+		ID:                    fmt.Sprintf("API-%s", shortHash(f.Fingerprint)),
+		RuleID:                ruleID,
+		Status:                fStatus,
+		ClassificationOutcome: f.ClassificationOutcome,
+		Reachability:          f.Reachability,
+		AuthContext:           f.AuthContext,
+		Framework:             f.Framework,
+		FrameworkVersion:      f.FrameworkVersion,
+		AnalysisMethod:        aMethod,
+		Title:                 title,
+		Category:              f.Category,
+		Severity:              NormalizeSeverity(f.Severity),
+		Confidence:            NormalizeConfidence(f.Confidence),
+		Target:                target,
+		Endpoint:              f.Endpoint,
+		Method:                NormalizeMethod(f.Method),
+		Description:           f.Description,
+		Evidence:              f.Evidence,
+		EvidenceDetails:       evDetails,
+		Verification:          ver,
+		Source:                SourceAPI,
+		Fingerprint:           f.Fingerprint,
 	}
 
 	prov := NewEvidenceProvenance(

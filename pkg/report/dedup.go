@@ -243,6 +243,23 @@ func DeduplicateFindings(findings []Finding) []Finding {
 				existing.Confidence = norm.Confidence
 			}
 
+			// 5. Merge Framework classification fields
+			if existing.Framework == "" && norm.Framework != "" {
+				existing.Framework = norm.Framework
+			}
+			if existing.FrameworkVersion == "" && norm.FrameworkVersion != "" {
+				existing.FrameworkVersion = norm.FrameworkVersion
+			}
+			if existing.ClassificationOutcome == "" || (norm.ClassificationOutcome == OutcomeConfirmed && existing.ClassificationOutcome != OutcomeConfirmed) {
+				existing.ClassificationOutcome = norm.ClassificationOutcome
+			}
+			if existing.Reachability == "" || (norm.Reachability == ReachabilityConfirmedReachable && existing.Reachability != ReachabilityConfirmedReachable) {
+				existing.Reachability = norm.Reachability
+			}
+			if existing.AuthContext == "" || existing.AuthContext == AuthContextUnknown {
+				existing.AuthContext = norm.AuthContext
+			}
+
 			// Update score with updated severity, confidence, and verification status
 			existing.Score = CalculateFindingScore(*existing)
 		} else {
