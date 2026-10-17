@@ -498,3 +498,83 @@ func TestCLI_APK_AnalyzeArtifacts_MalformedDEX(t *testing.T) {
 		t.Errorf("expected limitations recorded for malformed DEX")
 	}
 }
+
+func TestCLI_APK_Inventory_TextOutput(t *testing.T) {
+	apkPath := createCLIArtifactAPK(t, []string{
+		"AKIAIOSFODNN7EXAMPLE",
+		"https://api.mycorp.com/v1/users",
+		"https://api.mycorp.com/v1/posts",
+	})
+
+	// Test 1: --inventory flag
+	code, out := captureAPKOutput(func() int {
+		return runAPK([]string{"--inventory", apkPath})
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0 for --inventory, got %d, out:\n%s", code, out)
+	}
+
+	if !strings.Contains(out, "FELIX :: BACKEND INVENTORY") {
+		t.Errorf("expected BACKEND INVENTORY section in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Total Endpoints:") {
+		t.Errorf("expected Total Endpoints in output")
+	}
+	if !strings.Contains(out, "Backend Hosts:") {
+		t.Errorf("expected Backend Hosts in output")
+	}
+	if !strings.Contains(out, "Host: api.mycorp.com") {
+		t.Errorf("expected Host: api.mycorp.com in output, got:\n%s", out)
+	}
+
+	// Test 2: --analyze includes BACKEND INVENTORY
+	codeAnalyze, outAnalyze := captureAPKOutput(func() int {
+		return runAPK([]string{"--analyze", apkPath})
+	})
+
+	if codeAnalyze != 0 {
+		t.Fatalf("expected exit code 0 for --analyze, got %d, out:\n%s", codeAnalyze, outAnalyze)
+	}
+
+	if !strings.Contains(outAnalyze, "FELIX :: BACKEND INVENTORY") {
+		t.Errorf("expected BACKEND INVENTORY section in --analyze output")
+	}
+}
+
+func TestCLI_APK_Inventory_JSONOutput(t *testing.T) {
+	apkPath := createCLIArtifactAPK(t, []string{
+		"https://api.mycorp.com/v1/users?token=secret12345",
+	})
+
+	code, output := captureAPKOutput(func() int {
+		return runAPK([]string{"--json", "--inventory", apkPath})
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d, out:\n%s", code, output)
+	}
+
+	var res map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &res); err != nil {
+		t.Fatalf("failed to parse JSON: %v, raw:\n%s", err, output)
+	}
+
+	if res["security_assessment"] != "EVALUATED" {
+		t.Errorf("expected security_assessment=EVALUATED, got %v", res["security_assessment"])
+	}
+
+	inv, ok := res["backend_inventory"].(map[string]interface{})
+	if !ok || inv == nil {
+		t.Fatalf("expected backend_inventory in JSON output")
+	}
+
+	if inv["total_endpoints"].(float64) < 1 {
+		t.Errorf("expected at least 1 endpoint, got %v", inv["total_endpoints"])
+	}
+
+	// Verify sensitive token was redacted in JSON
+	if strings.Contains(output, "secret12345") {
+		t.Errorf("sensitive query token leaked in CLI JSON output!")
+	}
+}

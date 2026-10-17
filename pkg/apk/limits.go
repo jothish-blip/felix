@@ -42,6 +42,15 @@ const (
 
 	// DefaultMaxArtifactTotalBytes is 50 MiB bounding cumulative bytes of analyzed artifacts.
 	DefaultMaxArtifactTotalBytes int64 = 50 * 1024 * 1024
+
+	// DefaultMaxInventoryEndpoints bounds the maximum unique endpoints in a backend inventory.
+	DefaultMaxInventoryEndpoints int = 50000
+
+	// DefaultMaxInventoryHosts bounds the maximum backend host groups.
+	DefaultMaxInventoryHosts int = 10000
+
+	// DefaultMaxProvenancePerEndpoint bounds the maximum provenance records stored per endpoint entry.
+	DefaultMaxProvenancePerEndpoint int = 100
 )
 
 // Limits encapsulates the configurable resource bounds for APK archive ingestion.
@@ -78,6 +87,15 @@ type Limits struct {
 
 	// MaxArtifactTotalBytes bounds the cumulative size in bytes of all analyzed configuration and resource files.
 	MaxArtifactTotalBytes int64
+
+	// MaxInventoryEndpoints bounds the maximum unique endpoints in a backend inventory.
+	MaxInventoryEndpoints int
+
+	// MaxInventoryHosts bounds the maximum backend host groups.
+	MaxInventoryHosts int
+
+	// MaxProvenancePerEndpoint bounds the maximum provenance records stored per endpoint entry.
+	MaxProvenancePerEndpoint int
 }
 
 // DefaultLimits returns conservative, production-minded default bounds.
@@ -94,6 +112,9 @@ func DefaultLimits() Limits {
 		MaxArtifactFiles:              DefaultMaxArtifactFiles,
 		MaxArtifactFileSize:           DefaultMaxArtifactFileSize,
 		MaxArtifactTotalBytes:         DefaultMaxArtifactTotalBytes,
+		MaxInventoryEndpoints:         DefaultMaxInventoryEndpoints,
+		MaxInventoryHosts:             DefaultMaxInventoryHosts,
+		MaxProvenancePerEndpoint:      DefaultMaxProvenancePerEndpoint,
 	}
 }
 
@@ -136,7 +157,40 @@ func (l Limits) Validate() error {
 	if l.MaxArtifactTotalBytes < 0 {
 		return fmt.Errorf("%w: MaxArtifactTotalBytes cannot be negative, got %d", ErrLimitExceeded, l.MaxArtifactTotalBytes)
 	}
+	if l.MaxInventoryEndpoints < 0 {
+		return fmt.Errorf("%w: MaxInventoryEndpoints cannot be negative, got %d", ErrLimitExceeded, l.MaxInventoryEndpoints)
+	}
+	if l.MaxInventoryHosts < 0 {
+		return fmt.Errorf("%w: MaxInventoryHosts cannot be negative, got %d", ErrLimitExceeded, l.MaxInventoryHosts)
+	}
+	if l.MaxProvenancePerEndpoint < 0 {
+		return fmt.Errorf("%w: MaxProvenancePerEndpoint cannot be negative, got %d", ErrLimitExceeded, l.MaxProvenancePerEndpoint)
+	}
 	return nil
+}
+
+// EffectiveMaxInventoryEndpoints returns the configured MaxInventoryEndpoints or DefaultMaxInventoryEndpoints if unconfigured.
+func (l Limits) EffectiveMaxInventoryEndpoints() int {
+	if l.MaxInventoryEndpoints <= 0 {
+		return DefaultMaxInventoryEndpoints
+	}
+	return l.MaxInventoryEndpoints
+}
+
+// EffectiveMaxInventoryHosts returns the configured MaxInventoryHosts or DefaultMaxInventoryHosts if unconfigured.
+func (l Limits) EffectiveMaxInventoryHosts() int {
+	if l.MaxInventoryHosts <= 0 {
+		return DefaultMaxInventoryHosts
+	}
+	return l.MaxInventoryHosts
+}
+
+// EffectiveMaxProvenancePerEndpoint returns the configured MaxProvenancePerEndpoint or DefaultMaxProvenancePerEndpoint if unconfigured.
+func (l Limits) EffectiveMaxProvenancePerEndpoint() int {
+	if l.MaxProvenancePerEndpoint <= 0 {
+		return DefaultMaxProvenancePerEndpoint
+	}
+	return l.MaxProvenancePerEndpoint
 }
 
 // EffectiveMaxDEXStrings returns the configured MaxDEXStrings or DefaultMaxDEXStrings if unconfigured.

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +22,7 @@ func runAPK(args []string) int {
 		quiet            bool
 		analyzeManifest  bool
 		analyzeArtifacts bool
+		buildInventory   bool
 		apkPath          string
 		limits           = apk.DefaultLimits()
 	)
@@ -51,6 +53,11 @@ func runAPK(args []string) int {
 		if arg == "--analyze" {
 			analyzeManifest = true
 			analyzeArtifacts = true
+			buildInventory = true
+			continue
+		}
+		if arg == "--inventory" {
+			buildInventory = true
 			continue
 		}
 		if arg == "--analyze-manifest" {
@@ -121,7 +128,7 @@ func runAPK(args []string) int {
 
 	opts := apk.IntakeOptions{
 		Limits:  limits,
-		Extract: extract || analyzeManifest || analyzeArtifacts, // extract safe entries to enable manifest and artifact inspection
+		Extract: extract || analyzeManifest || analyzeArtifacts || buildInventory, // extract safe entries to enable manifest, artifact, and inventory inspection
 	}
 
 	res, err := apk.Intake(ctx, apkPath, opts)
@@ -137,9 +144,9 @@ func runAPK(args []string) int {
 
 	// Optional manifest static security analysis
 	var manifestRes *apk.ManifestAnalysisResult
-	if analyzeManifest {
+	if analyzeManifest || buildInventory {
 		manifestRes, err = apk.AnalyzeManifest(ctx, res.Workspace, limits)
-		if err != nil {
+		if err != nil && analyzeManifest {
 			fmt.Fprintf(os.Stderr, "[-] Manifest analysis failed: %v\n", err)
 			return 2
 		}
@@ -147,10 +154,20 @@ func runAPK(args []string) int {
 
 	// Optional application artifact static intelligence analysis
 	var artifactRes *apk.ArtifactAnalysisResult
-	if analyzeArtifacts {
+	if analyzeArtifacts || buildInventory {
 		artifactRes, err = apk.AnalyzeArtifacts(ctx, res.Workspace, limits)
-		if err != nil {
+		if err != nil && analyzeArtifacts {
 			fmt.Fprintf(os.Stderr, "[-] Artifact analysis failed: %v\n", err)
+			return 2
+		}
+	}
+
+	// Optional backend inventory synthesis
+	var inventoryRes *apk.BackendInventory
+	if buildInventory {
+		inventoryRes, err = apk.BuildBackendInventory(ctx, res.Workspace, manifestRes, artifactRes, limits)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Backend inventory failed: %v\n", err)
 			return 2
 		}
 	}
@@ -171,10 +188,10 @@ func runAPK(args []string) int {
 		if keepWorkspace {
 			outObj["workspace_dir"] = res.Workspace.Path()
 		}
-		if manifestRes != nil || artifactRes != nil {
+		if manifestRes != nil || artifactRes != nil || inventoryRes != nil {
 			outObj["security_assessment"] = "EVALUATED"
 		}
-		if manifestRes != nil {
+		if manifestRes != nil && analyzeManifest {
 			outObj["manifest_analysis"] = map[string]interface{}{
 				"format":         manifestRes.Document.Format,
 				"package_name":   manifestRes.Document.PackageName,
@@ -185,7 +202,7 @@ func runAPK(args []string) int {
 				"limitations":    manifestRes.Limitations,
 			}
 		}
-		if artifactRes != nil {
+		if artifactRes != nil && analyzeArtifacts {
 			outObj["artifact_analysis"] = map[string]interface{}{
 				"dex_files_analyzed":    artifactRes.DexFilesAnalyzed,
 				"configs_analyzed":      artifactRes.ConfigsAnalyzed,
@@ -196,6 +213,9 @@ func runAPK(args []string) int {
 				"partial_analysis":      artifactRes.PartialAnalysis,
 				"summary":               artifactRes.Summary,
 			}
+		}
+		if inventoryRes != nil {
+			outObj["backend_inventory"] = inventoryRes
 		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -285,7 +305,56 @@ func runAPK(args []string) int {
 			fmt.Println("===========================================================")
 		}
 
-		if manifestRes == nil && artifactRes == nil {
+		if inventoryRes != nil {
+			fmt.Println("===========================================================")
+			fmt.Println("  FELIX :: BACKEND INVENTORY")
+			fmt.Println("===========================================================")
+			fmt.Printf("  Total Endpoints:         %d\n", inventoryRes.TotalEndpoints)
+			fmt.Printf("  Backend Hosts:           %d\n", inventoryRes.TotalHosts)
+			fmt.Printf("  Confirmed References:    %d\n", inventoryRes.ConfirmedCount)
+			fmt.Printf("  Inferred Routes:         %d\n", inventoryRes.InferredCount)
+			if len(inventoryRes.Categories) > 0 {
+				var catList []string
+				for c, cnt := range inventoryRes.Categories {
+					catList = append(catList, fmt.Sprintf("%s: %d", c, cnt))
+				}
+				sort.Strings(catList)
+				fmt.Printf("  Categories:              %s\n", strings.Join(catList, ", "))
+			}
+			fmt.Println("-----------------------------------------------------------")
+
+			if len(inventoryRes.Hosts) == 0 {
+				fmt.Println("  No backend hosts or endpoints discovered in APK artifacts.")
+			} else {
+				for _, h := range inventoryRes.Hosts {
+					fmt.Printf("  Host: %s (%d endpoint(s))\n", h.HostIdentity, h.EndpointCount)
+					if len(h.ServiceIndicators) > 0 {
+						fmt.Printf("    Services:    %s\n", strings.Join(h.ServiceIndicators, ", "))
+					}
+					for _, ep := range h.Endpoints {
+						provStr := ""
+						if len(ep.Provenance) > 0 {
+							provStr = fmt.Sprintf(" [%s]", ep.Provenance[0].ArtifactPath)
+						}
+						fmt.Printf("    * [%s] %s%s\n", ep.Classification, ep.NormalizedURL, provStr)
+					}
+					fmt.Println()
+				}
+			}
+
+			if len(inventoryRes.Limitations) > 0 {
+				fmt.Println("  Limitations:")
+				for _, l := range inventoryRes.Limitations {
+					fmt.Printf("    * %s\n", l)
+				}
+				fmt.Println()
+			}
+			fmt.Println("===========================================================")
+			fmt.Println("  Status:                  PASS (Backend inventory complete; offline)")
+			fmt.Println("===========================================================")
+		}
+
+		if manifestRes == nil && artifactRes == nil && inventoryRes == nil {
 			fmt.Println("  Status:                  PASS (Intake boundary verified; offline static-only)")
 			fmt.Println("  Security Posture:        Unevaluated (Pass --analyze to run static security analysis)")
 			fmt.Println("===========================================================")
@@ -303,6 +372,7 @@ func printAPKHelp() {
 	fmt.Println("  --analyze                     Run complete static security analysis (manifest and artifacts)")
 	fmt.Println("  --analyze-manifest            Run static security analysis on AndroidManifest.xml")
 	fmt.Println("  --analyze-artifacts           Run static intelligence analysis on DEX and embedded artifacts")
+	fmt.Println("  --inventory                   Build backend endpoint and host inventory from APK artifacts")
 	fmt.Println("  --extract                     Extract all safe entries to the isolated workspace")
 	fmt.Println("  --keep-workspace, --keep      Retain the isolated temporary workspace directory on disk")
 	fmt.Println("  --json                        Output machine-readable validation results as JSON")
