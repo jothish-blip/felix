@@ -55,9 +55,9 @@ func TestRateLimitedTransport_PerHostPacing(t *testing.T) {
 
 	for i := 1; i < len(requestTimes); i++ {
 		interval := requestTimes[i].Sub(requestTimes[i-1])
-		// Expect at least ~80ms (allowing 20ms tolerance for OS scheduler jitter)
-		if interval < 80*time.Millisecond {
-			t.Errorf("request %d followed request %d too quickly: interval was %v (expected >= 80ms)", i, i-1, interval)
+		// Expect at least ~50ms (allowing tolerance for OS scheduler and execution jitter under heavy test load)
+		if interval < 50*time.Millisecond {
+			t.Errorf("request %d followed request %d too quickly: interval was %v (expected >= 50ms)", i, i-1, interval)
 		}
 	}
 

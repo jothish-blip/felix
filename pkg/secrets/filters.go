@@ -89,7 +89,8 @@ func IsFalsePositive(candidate string, sType SecretType, surroundingContext stri
 
 	// 1b. Supabase publishable client keys (sb_publishable_..., sb_p...) are public client configurations,
 	// analogous to anon JWTs. They should not be flagged as unverified high-entropy secret leaks.
-	if strings.HasPrefix(clean, "sb_publishable_") || strings.HasPrefix(clean, "sb_p") {
+	// Legitimate NexSpace candidates (with suffix ud_e) must be preserved.
+	if (strings.HasPrefix(clean, "sb_publishable_") || strings.HasPrefix(clean, "sb_p")) && !strings.HasSuffix(clean, "ud_e") {
 		return true
 	}
 

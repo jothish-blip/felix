@@ -40,7 +40,7 @@ func getFelixBinPath(t *testing.T) string {
 func runFelix(t *testing.T, args ...string) (string, int) {
 	binPath := getFelixBinPath(t)
 	cmd := exec.Command(binPath, args...)
-	cmd.Env = os.Environ()
+	cmd.Env = append(os.Environ(), "FELIX_ALLOW_LOOPBACK=true")
 	outBytes, err := cmd.CombinedOutput()
 	out := string(outBytes)
 

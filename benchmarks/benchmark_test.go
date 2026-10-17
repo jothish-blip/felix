@@ -9,6 +9,7 @@ func TestBenchmark_SyntheticCertification(t *testing.T) {
 	cfg := RunnerConfig{
 		SyntheticOnly: true,
 		Quiet:         true,
+		OutPath:       filepath.Join(t.TempDir(), "synthetic_latest.json"),
 	}
 
 	result, code := RunBenchmarkSuite(cfg)
