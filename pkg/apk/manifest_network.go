@@ -56,6 +56,23 @@ func ParseNetworkSecurityConfig(ws *Workspace, resourceRef string, limits Limits
 
 	// Resolve resource reference (e.g. "@xml/network_security_config" -> "res/xml/network_security_config.xml")
 	relPath := resolveNetworkSecurityResourcePath(resourceRef)
+	if relPath == "" || strings.HasPrefix(strings.ToLower(strings.TrimPrefix(resourceRef, "@")), "0x") {
+		// Fallback for compiled hex resource references (@0x7F...): check standard candidate filenames
+		candidates := []string{
+			"res/xml/network_security_config.xml",
+			"res/xml/network-security-config.xml",
+			"res/xml/network_security.xml",
+		}
+		for _, cand := range candidates {
+			tp, err := VerifyExtractionTarget(ws.Dir, cand)
+			if err == nil {
+				if fi, err := os.Stat(tp); err == nil && !fi.IsDir() && fi.Size() > 0 {
+					relPath = cand
+					break
+				}
+			}
+		}
+	}
 	if relPath == "" {
 		info.ParseError = fmt.Sprintf("unrecognized networkSecurityConfig resource syntax: %q", resourceRef)
 		return info, nil

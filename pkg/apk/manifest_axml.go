@@ -69,8 +69,8 @@ func ParseAXML(data []byte, limits Limits) (*RawElement, error) {
 	if headerSize < 8 || int(headerSize) > len(data) {
 		return nil, fmt.Errorf("%w: invalid AXML root header size %d", ErrMalformedArchive, headerSize)
 	}
-	if int(chunkSize) > len(data) {
-		return nil, fmt.Errorf("%w: declared AXML chunk size %d exceeds data length %d", ErrMalformedArchive, chunkSize, len(data))
+	if chunkSize < uint32(headerSize) || int(chunkSize) > len(data) {
+		return nil, fmt.Errorf("%w: declared AXML chunk size %d invalid (header %d, data %d)", ErrMalformedArchive, chunkSize, headerSize, len(data))
 	}
 
 	offset := int(headerSize)
@@ -95,9 +95,9 @@ func ParseAXML(data []byte, limits Limits) (*RawElement, error) {
 		cHeaderSize := binary.LittleEndian.Uint16(data[offset+2 : offset+4])
 		cSize := binary.LittleEndian.Uint32(data[offset+4 : offset+8])
 
-		if cSize < 8 || offset+int(cSize) > end {
-			return nil, fmt.Errorf("%w: invalid chunk size %d at offset %d (exceeds bounds %d)",
-				ErrMalformedArchive, cSize, offset, end)
+		if cSize < 8 || int(cHeaderSize) > int(cSize) || offset+int(cSize) > end {
+			return nil, fmt.Errorf("%w: invalid chunk size %d or header %d at offset %d (exceeds bounds %d)",
+				ErrMalformedArchive, cSize, cHeaderSize, offset, end)
 		}
 
 		chunkData := data[offset : offset+int(cSize)]
@@ -226,6 +226,9 @@ func parseAXMLStringPool(data []byte) (*axmlStringPool, error) {
 			}
 			// Skip UTF-16 length
 			if strData[pos]&0x80 != 0 {
+				if pos+2 > len(strData) {
+					continue
+				}
 				pos += 2
 			} else {
 				pos++
@@ -236,7 +239,7 @@ func parseAXMLStringPool(data []byte) (*axmlStringPool, error) {
 			// Read UTF-8 byte length
 			var u8len int
 			if strData[pos]&0x80 != 0 {
-				if pos+1 >= len(strData) {
+				if pos+2 > len(strData) {
 					continue
 				}
 				u8len = int(strData[pos]&0x7F)<<8 | int(strData[pos+1])
@@ -316,14 +319,20 @@ func parseAXMLStartElement(data []byte, pool *axmlStringPool, resMap []uint32, n
 		Line:      int(lineNum),
 	}
 
+	if int(attrStart) < 36 || int(attrStart) > len(data) {
+		return nil, fmt.Errorf("%w: invalid attribute start offset %d (chunk size %d)", ErrMalformedArchive, attrStart, len(data))
+	}
 	if attrCount > 256 {
 		return nil, fmt.Errorf("%w: attribute count %d exceeds limit", ErrLimitExceeded, attrCount)
+	}
+	if attrSize < 20 {
+		return nil, fmt.Errorf("%w: invalid attribute size %d (minimum 20)", ErrMalformedArchive, attrSize)
 	}
 
 	pos := int(attrStart)
 	for i := uint16(0); i < attrCount; i++ {
-		if pos+int(attrSize) > len(data) || attrSize < 20 {
-			break
+		if pos > len(data)-int(attrSize) {
+			return nil, fmt.Errorf("%w: attribute %d at offset %d exceeds chunk bounds %d", ErrMalformedArchive, i, pos, len(data))
 		}
 
 		aNsIdx := binary.LittleEndian.Uint32(data[pos : pos+4])
@@ -381,34 +390,31 @@ func parseAXMLStartElement(data []byte, pool *axmlStringPool, resMap []uint32, n
 	return elem, nil
 }
 
-// resolveKnownResourceID maps standard Android framework attribute IDs to attribute names.
+// resolveKnownResourceID maps standard Android framework attribute IDs to attribute names
+// according to Android platform public.xml / android.R.attr definitions.
 func resolveKnownResourceID(resID uint32) string {
 	switch resID {
 	case 0x01010003:
 		return "name"
 	case 0x01010006:
 		return "permission"
+	case 0x01010007:
+		return "readPermission"
+	case 0x01010008:
+		return "writePermission"
 	case 0x0101000E:
 		return "enabled"
+	case 0x0101000F:
+		return "debuggable"
 	case 0x01010010:
 		return "exported"
-	case 0x01010011:
-		return "debuggable"
-	case 0x01010017:
-		return "readPermission"
 	case 0x01010018:
-		return "writePermission"
-	case 0x01010019:
 		return "authorities"
 	case 0x0101001B:
 		return "grantUriPermissions"
-	case 0x0101001E:
-		return "allowBackup"
-	case 0x01010020:
-		return "targetSdkVersion"
-	case 0x0101020C:
-		return "minSdkVersion"
-	case 0x0101021B:
+	case 0x01010026:
+		return "mimeType"
+	case 0x01010027:
 		return "scheme"
 	case 0x01010028:
 		return "host"
@@ -420,15 +426,21 @@ func resolveKnownResourceID(resID uint32) string {
 		return "pathPrefix"
 	case 0x0101002C:
 		return "pathPattern"
-	case 0x01010026:
-		return "mimeType"
-	case 0x01010486:
+	case 0x0101020C:
+		return "minSdkVersion"
+	case 0x01010270:
+		return "targetSdkVersion"
+	case 0x01010280:
+		return "allowBackup"
+	case 0x010104EC:
+		return "usesCleartextTraffic"
+	case 0x010104EE:
 		return "autoVerify"
-	case 0x01010503:
+	case 0x01010505:
 		return "directBootAware"
-	case 0x01010528:
+	case 0x01010527:
 		return "networkSecurityConfig"
-	case 0x0101057A:
+	case 0x01010572, 0x0101057A:
 		return "compileSdkVersion"
 	default:
 		return fmt.Sprintf("attr_0x%08X", resID)

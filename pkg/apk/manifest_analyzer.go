@@ -123,6 +123,8 @@ func ParseAndAnalyzeManifest(ctx context.Context, data []byte, ws *Workspace, li
 	} else {
 		limitations = append(limitations, "Target SDK omitted; evaluated under legacy default compatibility rules")
 	}
+	limitations = append(limitations, "AXML parser verified via internal synthetic test suites; independent third-party fixture provenance remains incompletely verified in this repository environment")
+	limitations = append(limitations, "Network Security Config rules evaluate declarative policies; runtime TLS behavior of non-platform HTTP libraries (e.g. OkHttp, Flutter) cannot be verified from manifest alone")
 
 	return &ManifestAnalysisResult{
 		Document:              doc,
@@ -196,6 +198,31 @@ func analyzeComponentsAndPermissions(doc *ManifestDocument) []report.Finding {
 			return
 		}
 
+		// Android 12+ (API 31+) explicit export requirement for components with intent filters
+		if comp.Exported == nil && len(comp.IntentFilters) > 0 && doc.TargetSDK >= 31 {
+			findings = append(findings, buildFinding(
+				"APK-MAN-MISSING-EXPORTED-S",
+				"android-exported-component",
+				fmt.Sprintf("Omitted android:exported on Target SDK 31+ Component: %s", comp.ResolvedName),
+				report.SeverityLow,
+				report.ConfidenceHigh,
+				doc.PackageName,
+				comp.ResolvedName,
+				fmt.Sprintf("Component %s declares intent filters but omits android:exported. Apps targeting Android 12 (API 31)+ that omit this attribute fail installation with INSTALL_PARSE_FAILED_MANIFEST_MALFORMED. On legacy devices (< Android 12), the component defaults to exported without permissions.", comp.ResolvedName),
+				fmt.Sprintf("component=%s, targetSdkVersion=%d, intent_filters=%d, exported=omitted", comp.ResolvedName, doc.TargetSDK, len(comp.IntentFilters)),
+				"Explicitly declare android:exported=\"true\" or android:exported=\"false\" on all components with intent filters to prevent installation failure and specify intent visibility.",
+				map[string]string{
+					"component_type": string(comp.Type),
+					"declared_name":  comp.Name,
+					"resolved_name":  comp.ResolvedName,
+					"target_sdk":     fmt.Sprintf("%d", doc.TargetSDK),
+					"issue_type":     "manifest_compliance_and_installability",
+				},
+				report.FindingStatusConfirmed,
+			))
+			return
+		}
+
 		// Check permissions
 		hasPermission := comp.Permission != "" || app.Permission != ""
 		permName := comp.Permission
@@ -234,20 +261,14 @@ func analyzeComponentsAndPermissions(doc *ManifestDocument) []report.Finding {
 
 		if !hasPermission {
 			var (
-				sev      = report.SeverityMedium
-				ruleID   = "APK-MAN-EXPORTED-COMPONENT"
-				title    string
-				desc     string
-				remed    string
+				sev    = report.SeverityMedium
+				ruleID = "APK-MAN-EXPORTED-COMPONENT"
+				title  string
+				desc   string
+				remed  string
 			)
 
 			switch comp.Type {
-			case ComponentProvider:
-				sev = report.SeverityHigh
-				ruleID = "APK-MAN-EXPORTED-PROVIDER"
-				title = fmt.Sprintf("Exported Content Provider Without Permission: %s", comp.ResolvedName)
-				desc = fmt.Sprintf("Content Provider %s is exported without read or write permissions. Any application on the device can query or modify data through this provider.", comp.ResolvedName)
-				remed = "Set android:exported=\"false\" unless inter-app sharing is required. If sharing is required, enforce android:readPermission and android:writePermission with signature protection."
 			case ComponentService:
 				title = fmt.Sprintf("Exported Service Without Permission: %s", comp.ResolvedName)
 				desc = fmt.Sprintf("Service %s is exported without permission protection. Any application on the device can bind to or start this service, potentially triggering unauthorized actions.", comp.ResolvedName)
@@ -306,6 +327,127 @@ func analyzeComponentsAndPermissions(doc *ManifestDocument) []report.Finding {
 		}
 	}
 
+	checkProvider := func(p ProviderInfo) {
+		comp := p.ComponentInfo
+		isExported, reason := determineExportedState(comp, doc.TargetSDK)
+		if !isExported {
+			return
+		}
+
+		// Content Providers can be protected by:
+		// 1. Component android:permission or application-level android:permission (covers read & write)
+		// 2. Both android:readPermission and android:writePermission
+		hasGeneralPerm := comp.Permission != "" || app.Permission != ""
+		generalPerm := comp.Permission
+		if generalPerm == "" {
+			generalPerm = app.Permission
+		}
+
+		hasReadPerm := hasGeneralPerm || p.ReadPermission != ""
+		hasWritePerm := hasGeneralPerm || p.WritePermission != ""
+
+		if hasReadPerm && hasWritePerm {
+			permDesc := generalPerm
+			if permDesc == "" {
+				permDesc = fmt.Sprintf("read=%s, write=%s", p.ReadPermission, p.WritePermission)
+			}
+			findings = append(findings, buildFinding(
+				"APK-MAN-EXPORTED-PROTECTED",
+				"android-exported-component",
+				fmt.Sprintf("Exported Content Provider Protected by Permission: %s", comp.ResolvedName),
+				report.SeverityInfo,
+				report.ConfidenceHigh,
+				doc.PackageName,
+				comp.ResolvedName,
+				fmt.Sprintf("Content Provider %s is exported and protected by permissions (%s).", comp.ResolvedName, permDesc),
+				fmt.Sprintf("component=%s, permissions=%s", comp.ResolvedName, permDesc),
+				"Ensure the declared permissions use signature protection if provider access is intended only for trusted internal applications.",
+				map[string]string{
+					"component_type":   string(comp.Type),
+					"resolved_name":    comp.ResolvedName,
+					"permission":       permDesc,
+					"read_permission":  p.ReadPermission,
+					"write_permission": p.WritePermission,
+					"exported_reason":  reason,
+				},
+				report.FindingStatusConfirmed,
+			))
+			return
+		}
+
+		if !hasReadPerm && !hasWritePerm {
+			findings = append(findings, buildFinding(
+				"APK-MAN-EXPORTED-PROVIDER",
+				"android-exported-component",
+				fmt.Sprintf("Exported Content Provider Without Permission: %s", comp.ResolvedName),
+				report.SeverityHigh,
+				report.ConfidenceHigh,
+				doc.PackageName,
+				comp.ResolvedName,
+				fmt.Sprintf("Content Provider %s is exported without read or write permissions. Any application on the device can query or modify data through this provider.", comp.ResolvedName),
+				fmt.Sprintf("component=%s, exported=true (%s), permission=none", comp.ResolvedName, reason),
+				"Set android:exported=\"false\" unless inter-app sharing is required. If sharing is required, enforce android:readPermission and android:writePermission with signature protection.",
+				map[string]string{
+					"component_type":  string(comp.Type),
+					"declared_name":   comp.Name,
+					"resolved_name":   comp.ResolvedName,
+					"exported_reason": reason,
+					"permission":      "none",
+				},
+				report.FindingStatusConfirmed,
+			))
+			return
+		}
+
+		if !hasWritePerm {
+			findings = append(findings, buildFinding(
+				"APK-MAN-EXPORTED-PROVIDER-WRITE",
+				"android-exported-component",
+				fmt.Sprintf("Exported Content Provider Without Write Permission: %s", comp.ResolvedName),
+				report.SeverityHigh,
+				report.ConfidenceHigh,
+				doc.PackageName,
+				comp.ResolvedName,
+				fmt.Sprintf("Content Provider %s specifies read permission (%s) but lacks write permission. Any application on the device can insert, update, or delete data through this provider.", comp.ResolvedName, p.ReadPermission),
+				fmt.Sprintf("component=%s, readPermission=%s, writePermission=none", comp.ResolvedName, p.ReadPermission),
+				"Enforce android:writePermission on the content provider or set android:exported=\"false\".",
+				map[string]string{
+					"component_type":   string(comp.Type),
+					"resolved_name":    comp.ResolvedName,
+					"read_permission":  p.ReadPermission,
+					"write_permission": "none",
+					"exported_reason":  reason,
+				},
+				report.FindingStatusConfirmed,
+			))
+			return
+		}
+
+		if !hasReadPerm {
+			findings = append(findings, buildFinding(
+				"APK-MAN-EXPORTED-PROVIDER-READ",
+				"android-exported-component",
+				fmt.Sprintf("Exported Content Provider Without Read Permission: %s", comp.ResolvedName),
+				report.SeverityHigh,
+				report.ConfidenceHigh,
+				doc.PackageName,
+				comp.ResolvedName,
+				fmt.Sprintf("Content Provider %s specifies write permission (%s) but lacks read permission. Any application on the device can query sensitive data through this provider.", comp.ResolvedName, p.WritePermission),
+				fmt.Sprintf("component=%s, readPermission=none, writePermission=%s", comp.ResolvedName, p.WritePermission),
+				"Enforce android:readPermission on the content provider or set android:exported=\"false\".",
+				map[string]string{
+					"component_type":   string(comp.Type),
+					"resolved_name":    comp.ResolvedName,
+					"read_permission":  "none",
+					"write_permission": p.WritePermission,
+					"exported_reason":  reason,
+				},
+				report.FindingStatusConfirmed,
+			))
+			return
+		}
+	}
+
 	for _, act := range app.Activities {
 		checkComponent(act)
 	}
@@ -319,7 +461,7 @@ func analyzeComponentsAndPermissions(doc *ManifestDocument) []report.Finding {
 		checkComponent(r)
 	}
 	for _, p := range app.Providers {
-		checkComponent(p.ComponentInfo)
+		checkProvider(p)
 	}
 
 	return findings
@@ -394,10 +536,53 @@ func analyzeDeepLinks(doc *ManifestDocument) []report.Finding {
 
 	checkFilters := func(comp ComponentInfo) {
 		for _, filter := range comp.IntentFilters {
+			// Check if filter has VIEW and BROWSABLE (web link capability)
+			hasView := false
+			hasBrowsable := false
+			for _, a := range filter.Actions {
+				if a == "android.intent.action.VIEW" {
+					hasView = true
+				}
+			}
+			for _, c := range filter.Categories {
+				if c == "android.intent.category.BROWSABLE" {
+					hasBrowsable = true
+				}
+			}
+
+			// Aggregate schemes and hosts across data tags in this filter
+			var (
+				schemes []string
+				hosts   []string
+			)
 			for _, d := range filter.Data {
-				scheme := strings.ToLower(d.Scheme)
-				if scheme == "" {
-					continue
+				if d.Scheme != "" {
+					s := strings.ToLower(d.Scheme)
+					found := false
+					for _, existing := range schemes {
+						if existing == s {
+							found = true
+							break
+						}
+					}
+					if !found {
+						schemes = append(schemes, s)
+					}
+				}
+				if d.Host != "" {
+					hosts = append(hosts, d.Host)
+				}
+			}
+
+			primaryHost := ""
+			if len(hosts) > 0 {
+				primaryHost = hosts[0]
+			}
+
+			hasWebScheme := false
+			for _, scheme := range schemes {
+				if scheme == "http" || scheme == "https" {
+					hasWebScheme = true
 				}
 
 				// 1. Custom URI Scheme
@@ -411,11 +596,11 @@ func analyzeDeepLinks(doc *ManifestDocument) []report.Finding {
 						doc.PackageName,
 						comp.ResolvedName,
 						fmt.Sprintf("Activity %s registers a custom URI scheme (%s://). Custom schemes cannot be cryptographically verified to belong to a specific publisher, allowing potential scheme collision or link hijacking by other installed applications.", comp.ResolvedName, scheme),
-						fmt.Sprintf("scheme=%s, host=%s, component=%s", scheme, d.Host, comp.ResolvedName),
+						fmt.Sprintf("scheme=%s, host=%s, component=%s", scheme, primaryHost, comp.ResolvedName),
 						"Prefer Android App Links (verified HTTPS) over custom schemes. If custom schemes are required, thoroughly validate all incoming URI parameters and authenticate sensitive actions.",
 						map[string]string{
 							"scheme":         scheme,
-							"host":           d.Host,
+							"host":           primaryHost,
 							"component":      comp.ResolvedName,
 							"deep_link_type": "custom_scheme",
 						},
@@ -434,18 +619,20 @@ func analyzeDeepLinks(doc *ManifestDocument) []report.Finding {
 						doc.PackageName,
 						comp.ResolvedName,
 						fmt.Sprintf("Activity %s declares an intent filter accepting unencrypted http:// links. Network attackers can spoof or manipulate cleartext HTTP links.", comp.ResolvedName),
-						fmt.Sprintf("scheme=http, host=%s, component=%s", d.Host, comp.ResolvedName),
+						fmt.Sprintf("scheme=http, host=%s, component=%s", primaryHost, comp.ResolvedName),
 						"Upgrade deep links to HTTPS and enable Android App Links with android:autoVerify=\"true\".",
 						map[string]string{
 							"scheme":    "http",
-							"host":      d.Host,
+							"host":      primaryHost,
 							"component": comp.ResolvedName,
 						},
 						report.FindingStatusConfirmed,
 					))
 				}
+			}
 
-				// 3. Broad Wildcard Path Patterns
+			// 3. Broad Wildcard Path Patterns
+			for _, d := range filter.Data {
 				if d.PathPattern == ".*" || d.PathPattern == "/*" {
 					findings = append(findings, buildFinding(
 						"APK-MAN-DEEPLINK-BROAD-PATH",
@@ -468,25 +655,45 @@ func analyzeDeepLinks(doc *ManifestDocument) []report.Finding {
 				}
 			}
 
-			// 4. AutoVerify observation
-			if filter.AutoVerify != nil && *filter.AutoVerify {
-				findings = append(findings, buildFinding(
-					"APK-MAN-DEEPLINK-AUTOVERIFY",
-					"android-deep-link",
-					fmt.Sprintf("Android App Link AutoVerify Declared on %s", comp.ResolvedName),
-					report.SeverityInfo,
-					report.ConfidenceHigh,
-					doc.PackageName,
-					comp.ResolvedName,
-					"The intent filter declares android:autoVerify=\"true\". Android will attempt to verify domain association via /.well-known/assetlinks.json at installation time.",
-					"android:autoVerify=\"true\"",
-					"Ensure the host domains serve a valid, matching assetlinks.json file with the correct app certificate SHA-256 fingerprint.",
-					map[string]string{
-						"autoVerify": "true",
-						"component":  comp.ResolvedName,
-					},
-					report.FindingStatusConfirmed,
-				))
+			// 4. AutoVerify analysis on Web Links
+			if hasWebScheme && hasView && hasBrowsable {
+				if filter.AutoVerify != nil && *filter.AutoVerify {
+					findings = append(findings, buildFinding(
+						"APK-MAN-DEEPLINK-AUTOVERIFY",
+						"android-deep-link",
+						fmt.Sprintf("Android App Link AutoVerify Declared on %s", comp.ResolvedName),
+						report.SeverityInfo,
+						report.ConfidenceHigh,
+						doc.PackageName,
+						comp.ResolvedName,
+						"The intent filter declares android:autoVerify=\"true\". Static analysis establishes that the application requests automatic domain verification. Full App Links verification requires runtime confirmation that the specified domains host a matching /.well-known/assetlinks.json corresponding to the application's signing certificate.",
+						"android:autoVerify=\"true\"",
+						"Ensure the host domains serve a valid, matching assetlinks.json file with the correct app certificate SHA-256 fingerprint.",
+						map[string]string{
+							"autoVerify": "true",
+							"component":  comp.ResolvedName,
+						},
+						report.FindingStatusConfirmed,
+					))
+				} else {
+					findings = append(findings, buildFinding(
+						"APK-MAN-DEEPLINK-NO-AUTOVERIFY",
+						"android-deep-link",
+						fmt.Sprintf("Web Link Intent Filter Without autoVerify: %s", comp.ResolvedName),
+						report.SeverityInfo,
+						report.ConfidenceHigh,
+						doc.PackageName,
+						comp.ResolvedName,
+						fmt.Sprintf("Activity %s registers a web URL intent filter (http/https) without android:autoVerify=\"true\". Static analysis establishes that Android treats this as a standard Web Link rather than an Android App Link, showing a disambiguation chooser if another app claims the same web domain. This is not automatically exploitable by itself; determining whether link hijacking is viable requires domain verification, assetlinks.json inspection, and runtime testing.", comp.ResolvedName),
+						"web intent-filter without android:autoVerify=\"true\"",
+						"Declare android:autoVerify=\"true\" on web intent filters and host a valid Digital Asset Links file at https://<domain>/.well-known/assetlinks.json to enable exclusive Android App Links handling.",
+						map[string]string{
+							"component": comp.ResolvedName,
+							"host":      primaryHost,
+						},
+						report.FindingStatusConfirmed,
+					))
+				}
 			}
 		}
 	}
@@ -599,6 +806,75 @@ func analyzeNetworkSecurity(doc *ManifestDocument, netConfig *NetworkSecurityCon
 				report.FindingStatusConfirmed,
 			))
 		}
+
+		// Domain-specific cleartext rules
+		for _, d := range netConfig.Domains {
+			if d.CleartextPermitted != nil && *d.CleartextPermitted {
+				findings = append(findings, buildFinding(
+					"APK-MAN-NETSEC-DOMAIN-CLEARTEXT",
+					"android-network-security",
+					fmt.Sprintf("Network Security Config Permits Domain Cleartext: %s", d.Domain),
+					report.SeverityLow,
+					report.ConfidenceHigh,
+					doc.PackageName,
+					netConfig.ResolvedPath,
+					fmt.Sprintf("The network security configuration explicitly permits cleartext HTTP traffic to domain %q (includeSubdomains=%t).", d.Domain, d.IncludeSubdomains),
+					fmt.Sprintf("<domain-config cleartextTrafficPermitted=\"true\"> for domain %s", d.Domain),
+					fmt.Sprintf("Enforce HTTPS for domain %s and remove cleartextTrafficPermitted=\"true\".", d.Domain),
+					map[string]string{
+						"config_file":        netConfig.ResolvedPath,
+						"domain":             d.Domain,
+						"include_subdomains": fmt.Sprintf("%t", d.IncludeSubdomains),
+					},
+					report.FindingStatusConfirmed,
+				))
+			}
+			if d.UserTrustAnchors {
+				findings = append(findings, buildFinding(
+					"APK-MAN-NETSEC-DOMAIN-USER-CERTS",
+					"android-network-security",
+					fmt.Sprintf("Network Security Config Trusts User Certificates for Domain: %s", d.Domain),
+					report.SeverityHigh,
+					report.ConfidenceHigh,
+					doc.PackageName,
+					netConfig.ResolvedPath,
+					fmt.Sprintf("The network security configuration trusts user-installed CA certificates for domain %q (includeSubdomains=%t).", d.Domain, d.IncludeSubdomains),
+					fmt.Sprintf("<certificates src=\"user\"/> under domain %s", d.Domain),
+					fmt.Sprintf("Remove user certificate trust for domain %s in production builds.", d.Domain),
+					map[string]string{
+						"config_file": netConfig.ResolvedPath,
+						"domain":      d.Domain,
+					},
+					report.FindingStatusConfirmed,
+				))
+			}
+		}
+
+		// Certificate Pinning Declarations
+		if len(netConfig.PinSets) > 0 {
+			pinCount := 0
+			for _, ps := range netConfig.PinSets {
+				pinCount += len(ps.Pins)
+			}
+			findings = append(findings, buildFinding(
+				"APK-MAN-NETSEC-PINNING",
+				"android-network-security",
+				fmt.Sprintf("Certificate Pinning Declared in Network Security Config (%d pin(s))", pinCount),
+				report.SeverityInfo,
+				report.ConfidenceHigh,
+				doc.PackageName,
+				netConfig.ResolvedPath,
+				"The application declares certificate pinning policies in network_security_config.xml. Static analysis confirms the presence and syntax of declared pins. Note that runtime network clients (e.g. third-party HTTP libraries like OkHttp or Flutter) may bypass platform Network Security Config unless explicitly configured to use the system TrustManager.",
+				fmt.Sprintf("pin_sets=%d, total_pins=%d", len(netConfig.PinSets), pinCount),
+				"Ensure backup pins are defined and pin expiration dates are monitored to prevent denial of service upon certificate rotation.",
+				map[string]string{
+					"config_file": netConfig.ResolvedPath,
+					"pin_sets":    fmt.Sprintf("%d", len(netConfig.PinSets)),
+					"total_pins":  fmt.Sprintf("%d", pinCount),
+				},
+				report.FindingStatusConfirmed,
+			))
+		}
 	}
 
 	return findings
@@ -612,11 +888,31 @@ func analyzeBackup(doc *ManifestDocument) []report.Finding {
 	var findings []report.Finding
 	app := doc.Application
 
-	if app.AllowBackup != nil && *app.AllowBackup {
+	if app.AllowBackup == nil {
+		// Documented Android default is true
+		findings = append(findings, buildFinding(
+			"APK-MAN-BACKUP-DEFAULT",
+			"android-backup-config",
+			"Application Backup Enabled by Default (android:allowBackup Omitted)",
+			report.SeverityLow,
+			report.ConfidenceHigh,
+			doc.PackageName,
+			"AndroidManifest.xml",
+			"The application manifest does not declare android:allowBackup. In Android, android:allowBackup defaults to true when omitted, allowing local application data to be extracted via ADB backup or device-to-device transfers.",
+			"android:allowBackup omitted (defaults to true)",
+			"Explicitly declare android:allowBackup=\"false\" if the application stores sensitive user credentials, tokens, or databases, or define an XML backup rule policy excluding sensitive files.",
+			map[string]string{
+				"attribute": "android:allowBackup",
+				"status":    "omitted",
+				"default":   "true",
+			},
+			report.FindingStatusConfirmed,
+		))
+	} else if *app.AllowBackup {
 		findings = append(findings, buildFinding(
 			"APK-MAN-BACKUP-ENABLED",
 			"android-backup-config",
-			"Application Backup Enabled (android:allowBackup=\"true\")",
+			"Application Backup Explicitly Enabled (android:allowBackup=\"true\")",
 			report.SeverityLow,
 			report.ConfidenceHigh,
 			doc.PackageName,
@@ -627,6 +923,24 @@ func analyzeBackup(doc *ManifestDocument) []report.Finding {
 			map[string]string{
 				"attribute": "android:allowBackup",
 				"value":     "true",
+			},
+			report.FindingStatusConfirmed,
+		))
+	} else {
+		findings = append(findings, buildFinding(
+			"APK-MAN-BACKUP-DISABLED",
+			"android-backup-config",
+			"Application Backup Explicitly Disabled",
+			report.SeverityInfo,
+			report.ConfidenceHigh,
+			doc.PackageName,
+			"AndroidManifest.xml",
+			"The application explicitly declares android:allowBackup=\"false\", preventing extraction of application data via ADB backup.",
+			"android:allowBackup=\"false\"",
+			"Maintain android:allowBackup=\"false\" for production release artifacts handling sensitive data.",
+			map[string]string{
+				"attribute": "android:allowBackup",
+				"value":     "false",
 			},
 			report.FindingStatusConfirmed,
 		))

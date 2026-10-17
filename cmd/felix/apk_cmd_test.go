@@ -2,12 +2,39 @@ package main
 
 import (
 	"archive/zip"
+	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func captureAPKOutput(f func() int) (int, string) {
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		panic(err)
+	}
+	os.Stdout = w
+
+	outChan := make(chan string)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, r)
+		outChan <- buf.String()
+	}()
+
+	code := f()
+
+	_ = w.Close()
+	os.Stdout = oldStdout
+	output := <-outChan
+	_ = r.Close()
+
+	return code, output
+}
 
 func createCLIValidAPK(t *testing.T) string {
 	t.Helper()
@@ -68,23 +95,13 @@ func TestCLI_APK_ValidIntake(t *testing.T) {
 func TestCLI_APK_JSONOutput(t *testing.T) {
 	apkPath := createCLIValidAPK(t)
 
-	// Capture stdout
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	code := runAPK([]string{"--json", apkPath})
-
-	w.Close()
-	os.Stdout = oldStdout
+	code, output := captureAPKOutput(func() int {
+		return runAPK([]string{"--json", apkPath})
+	})
 
 	if code != 0 {
 		t.Fatalf("expected exit code 0 for json intake, got %d", code)
 	}
-
-	var buf [4096]byte
-	n, _ := r.Read(buf[:])
-	output := string(buf[:n])
 
 	var res map[string]interface{}
 	if err := json.Unmarshal([]byte(output), &res); err != nil {
@@ -105,23 +122,13 @@ func TestCLI_APK_JSONOutput(t *testing.T) {
 func TestCLI_APK_KeepWorkspace(t *testing.T) {
 	apkPath := createCLIValidAPK(t)
 
-	// Capture stdout
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	code := runAPK([]string{"--json", "--keep-workspace", apkPath})
-
-	w.Close()
-	os.Stdout = oldStdout
+	code, output := captureAPKOutput(func() int {
+		return runAPK([]string{"--json", "--keep-workspace", apkPath})
+	})
 
 	if code != 0 {
 		t.Fatalf("expected exit code 0, got %d", code)
 	}
-
-	var buf [4096]byte
-	n, _ := r.Read(buf[:])
-	output := string(buf[:n])
 
 	var res map[string]interface{}
 	if err := json.Unmarshal([]byte(output), &res); err != nil {
@@ -179,23 +186,13 @@ func TestCLI_APK_DiscloseNoSensitivePaths(t *testing.T) {
 func TestCLI_APK_Analyze_TextOutput(t *testing.T) {
 	apkPath := createCLIValidAPK(t)
 
-	// Capture stdout
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	code := runAPK([]string{"--analyze", apkPath})
-
-	w.Close()
-	os.Stdout = oldStdout
+	code, out := captureAPKOutput(func() int {
+		return runAPK([]string{"--analyze", apkPath})
+	})
 
 	if code != 0 {
 		t.Fatalf("expected exit code 0 for --analyze, got %d", code)
 	}
-
-	var buf [8192]byte
-	n, _ := r.Read(buf[:])
-	out := string(buf[:n])
 
 	if !strings.Contains(out, "ANDROID MANIFEST SECURITY ANALYSIS") {
 		t.Errorf("expected manifest security analysis header in output, got:\n%s", out)
@@ -208,22 +205,13 @@ func TestCLI_APK_Analyze_TextOutput(t *testing.T) {
 func TestCLI_APK_Analyze_JSONOutput(t *testing.T) {
 	apkPath := createCLIValidAPK(t)
 
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	code := runAPK([]string{"--json", "--analyze", apkPath})
-
-	w.Close()
-	os.Stdout = oldStdout
+	code, output := captureAPKOutput(func() int {
+		return runAPK([]string{"--json", "--analyze", apkPath})
+	})
 
 	if code != 0 {
 		t.Fatalf("expected exit code 0, got %d", code)
 	}
-
-	var buf [8192]byte
-	n, _ := r.Read(buf[:])
-	output := string(buf[:n])
 
 	var res map[string]interface{}
 	if err := json.Unmarshal([]byte(output), &res); err != nil {
@@ -260,22 +248,13 @@ func TestCLI_APK_Analyze_DebuggableDetected(t *testing.T) {
 	zw.Close()
 	f.Close()
 
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	code := runAPK([]string{"--json", "--analyze", apkPath})
-
-	w.Close()
-	os.Stdout = oldStdout
+	code, output := captureAPKOutput(func() int {
+		return runAPK([]string{"--json", "--analyze", apkPath})
+	})
 
 	if code != 0 {
 		t.Fatalf("expected exit code 0, got %d", code)
 	}
-
-	var buf [8192]byte
-	n, _ := r.Read(buf[:])
-	output := string(buf[:n])
 
 	var res map[string]interface{}
 	_ = json.Unmarshal([]byte(output), &res)

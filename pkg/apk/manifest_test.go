@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"unicode/utf16"
 
@@ -59,7 +60,7 @@ func (b *testAXMLBuilder) buildAXML(packageName string, debuggable, cleartext *b
 	b.resIDs = []uint32{
 		0x01010003, // name
 		0x01010010, // exported
-		0x01010011, // debuggable
+		0x0101000F, // debuggable
 	}
 
 	// 1. Build String Pool Chunk (UTF-16LE)
@@ -805,5 +806,481 @@ func TestAnalyze_BackupEnabled(t *testing.T) {
 	}
 	if !foundBackup {
 		t.Errorf("missing APK-MAN-BACKUP-ENABLED finding")
+	}
+}
+
+func TestAnalyze_BackupDefaults_OmittedAndExplicitFalse(t *testing.T) {
+	// Case 1: allowBackup omitted -> defaults to true (Low severity finding APK-MAN-BACKUP-DEFAULT)
+	xmlOmitted := []byte(`<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.test.backup.omitted">
+    <application/>
+</manifest>`)
+
+	resOmitted, err := ParseAndAnalyzeManifest(context.Background(), xmlOmitted, nil, DefaultLimits())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	foundDefault := false
+	for _, f := range resOmitted.Findings {
+		if f.RuleID == "APK-MAN-BACKUP-DEFAULT" {
+			foundDefault = true
+			if f.Severity != report.SeverityLow {
+				t.Errorf("expected Low severity for omitted allowBackup, got %s", f.Severity)
+			}
+		}
+	}
+	if !foundDefault {
+		t.Errorf("expected APK-MAN-BACKUP-DEFAULT finding when allowBackup is omitted")
+	}
+
+	// Case 2: allowBackup explicitly false -> Info finding APK-MAN-BACKUP-DISABLED
+	xmlDisabled := []byte(`<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.test.backup.disabled">
+    <application android:allowBackup="false"/>
+</manifest>`)
+
+	resDisabled, err := ParseAndAnalyzeManifest(context.Background(), xmlDisabled, nil, DefaultLimits())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	foundDisabled := false
+	for _, f := range resDisabled.Findings {
+		if f.RuleID == "APK-MAN-BACKUP-DISABLED" {
+			foundDisabled = true
+			if f.Severity != report.SeverityInfo {
+				t.Errorf("expected Info severity for allowBackup=false, got %s", f.Severity)
+			}
+		}
+	}
+	if !foundDisabled {
+		t.Errorf("expected APK-MAN-BACKUP-DISABLED finding when allowBackup is false")
+	}
+}
+
+// ============================================================================
+// 7. PROVIDER PERMISSION SEMANTICS & APPLICATION-LEVEL PERMISSIONS
+// ============================================================================
+
+func TestAnalyze_ContentProvider_PermissionsGranularity(t *testing.T) {
+	xmlData := []byte(`<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.test.provider.perms">
+    <uses-sdk android:targetSdkVersion="30"/>
+    <application>
+        <!-- P1: Both read and write protected -->
+        <provider android:name=".BothPermsProvider" android:authorities="com.test.both" android:exported="true"
+            android:readPermission="com.test.READ" android:writePermission="com.test.WRITE"/>
+        <!-- P2: Read protected, missing write -->
+        <provider android:name=".ReadOnlyProvider" android:authorities="com.test.read" android:exported="true"
+            android:readPermission="com.test.READ"/>
+        <!-- P3: Write protected, missing read -->
+        <provider android:name=".WriteOnlyProvider" android:authorities="com.test.write" android:exported="true"
+            android:writePermission="com.test.WRITE"/>
+        <!-- P4: Neither read nor write protected -->
+        <provider android:name=".UnprotectedProvider" android:authorities="com.test.none" android:exported="true"/>
+    </application>
+</manifest>`)
+
+	res, err := ParseAndAnalyzeManifest(context.Background(), xmlData, nil, DefaultLimits())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	foundBothProtected := false
+	foundWriteMissing := false
+	foundReadMissing := false
+	foundUnprotected := false
+
+	for _, f := range res.Findings {
+		if f.RuleID == "APK-MAN-EXPORTED-PROTECTED" && strings.Contains(f.Endpoint, "BothPermsProvider") {
+			foundBothProtected = true
+		}
+		if f.RuleID == "APK-MAN-EXPORTED-PROVIDER-WRITE" && strings.Contains(f.Endpoint, "ReadOnlyProvider") {
+			foundWriteMissing = true
+			if f.Severity != report.SeverityHigh {
+				t.Errorf("expected High severity for missing writePermission, got %s", f.Severity)
+			}
+		}
+		if f.RuleID == "APK-MAN-EXPORTED-PROVIDER-READ" && strings.Contains(f.Endpoint, "WriteOnlyProvider") {
+			foundReadMissing = true
+			if f.Severity != report.SeverityHigh {
+				t.Errorf("expected High severity for missing readPermission, got %s", f.Severity)
+			}
+		}
+		if f.RuleID == "APK-MAN-EXPORTED-PROVIDER" && strings.Contains(f.Endpoint, "UnprotectedProvider") {
+			foundUnprotected = true
+			if f.Severity != report.SeverityHigh {
+				t.Errorf("expected High severity for unprotected provider, got %s", f.Severity)
+			}
+		}
+	}
+
+	if !foundBothProtected {
+		t.Errorf("missing protected provider finding for BothPermsProvider")
+	}
+	if !foundWriteMissing {
+		t.Errorf("missing APK-MAN-EXPORTED-PROVIDER-WRITE for ReadOnlyProvider")
+	}
+	if !foundReadMissing {
+		t.Errorf("missing APK-MAN-EXPORTED-PROVIDER-READ for WriteOnlyProvider")
+	}
+	if !foundUnprotected {
+		t.Errorf("missing APK-MAN-EXPORTED-PROVIDER for UnprotectedProvider")
+	}
+}
+
+func TestAnalyze_ApplicationLevelPermission_Inherited(t *testing.T) {
+	xmlData := []byte(`<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.test.app.perm">
+    <application android:permission="com.test.SHARED_PERMISSION">
+        <!-- Inherits app-level permission requirement -->
+        <service android:name=".InheritingService" android:exported="true"/>
+        <provider android:name=".InheritingProvider" android:authorities="com.test.inh" android:exported="true"/>
+    </application>
+</manifest>`)
+
+	res, err := ParseAndAnalyzeManifest(context.Background(), xmlData, nil, DefaultLimits())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, f := range res.Findings {
+		if f.RuleID == "APK-MAN-EXPORTED-COMPONENT" || f.RuleID == "APK-MAN-EXPORTED-PROVIDER" {
+			t.Errorf("components inheriting application-level permission must not be flagged as unprotected: %+v", f)
+		}
+	}
+}
+
+// ============================================================================
+// 8. ANDROID 12+ (SDK 31+) EXPLICIT EXPORT REQUIREMENT
+// ============================================================================
+
+func TestAnalyze_TargetSDK31_OmittedExported_WithIntentFilters(t *testing.T) {
+	xmlData := []byte(`<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.test.sdk31">
+    <uses-sdk android:targetSdkVersion="31"/>
+    <application>
+        <!-- Has intent-filter, but omits android:exported -->
+        <activity android:name=".DetailActivity">
+            <intent-filter>
+                <action android:name="com.test.CUSTOM_ACTION"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>`)
+
+	res, err := ParseAndAnalyzeManifest(context.Background(), xmlData, nil, DefaultLimits())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	foundMissingExported := false
+	for _, f := range res.Findings {
+		if f.RuleID == "APK-MAN-MISSING-EXPORTED-S" {
+			foundMissingExported = true
+			if f.Severity != report.SeverityLow {
+				t.Errorf("expected Low severity compliance finding for missing exported on SDK 31+, got %s", f.Severity)
+			}
+		}
+		if f.RuleID == "APK-MAN-EXPORTED-COMPONENT" {
+			t.Errorf("SDK 31+ installability issue should not be classified as proven vulnerable component: %+v", f)
+		}
+	}
+	if !foundMissingExported {
+		t.Errorf("expected APK-MAN-MISSING-EXPORTED-S finding on targetSDK 31 with intent-filter")
+	}
+}
+
+// ============================================================================
+// 9. DEEP LINKS: AUTOVERIFY & WEB LINK ANALYSIS
+// ============================================================================
+
+func TestAnalyze_DeepLinks_AutoVerifyAndNoAutoVerify(t *testing.T) {
+	xmlData := []byte(`<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.test.autoverify">
+    <application>
+        <!-- Activity 1: Declares autoVerify="true" -->
+        <activity android:name=".VerifiedActivity" android:exported="true">
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="https" android:host="app.example.com"/>
+            </intent-filter>
+        </activity>
+        <!-- Activity 2: Web link without autoVerify -->
+        <activity android:name=".UnverifiedActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="https" android:host="web.example.com"/>
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>`)
+
+	res, err := ParseAndAnalyzeManifest(context.Background(), xmlData, nil, DefaultLimits())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	foundAutoVerify := false
+	foundNoAutoVerify := false
+
+	for _, f := range res.Findings {
+		if f.RuleID == "APK-MAN-DEEPLINK-AUTOVERIFY" && strings.Contains(f.Endpoint, "VerifiedActivity") {
+			foundAutoVerify = true
+			if f.Severity != report.SeverityInfo {
+				t.Errorf("expected Info severity for autoVerify=true, got %s", f.Severity)
+			}
+		}
+		if f.RuleID == "APK-MAN-DEEPLINK-NO-AUTOVERIFY" && strings.Contains(f.Endpoint, "UnverifiedActivity") {
+			foundNoAutoVerify = true
+			if f.Severity != report.SeverityInfo {
+				t.Errorf("expected Info severity for missing autoVerify, got %s", f.Severity)
+			}
+		}
+	}
+
+	if !foundAutoVerify {
+		t.Errorf("missing APK-MAN-DEEPLINK-AUTOVERIFY finding")
+	}
+	if !foundNoAutoVerify {
+		t.Errorf("missing APK-MAN-DEEPLINK-NO-AUTOVERIFY finding")
+	}
+}
+
+// ============================================================================
+// 10. NETWORK SECURITY CONFIG: DOMAIN RULES & CERTIFICATE PINNING
+// ============================================================================
+
+func TestAnalyze_NetworkSecurity_DomainRulesAndPinning(t *testing.T) {
+	tmpDir := t.TempDir()
+	ws, err := NewWorkspace(tmpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+
+	resXmlDir := filepath.Join(ws.Dir, "res", "xml")
+	if err := os.MkdirAll(resXmlDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	netXmlContent := []byte(`<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">api.insecure.com</domain>
+        <trust-anchors>
+            <certificates src="user"/>
+        </trust-anchors>
+        <pin-set expiration="2027-01-01">
+            <pin digest="SHA-256">AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=</pin>
+            <pin digest="SHA-256">BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=</pin>
+        </pin-set>
+    </domain-config>
+</network-security-config>`)
+
+	if err := os.WriteFile(filepath.Join(resXmlDir, "network_security_config.xml"), netXmlContent, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	manifestData := []byte(`<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.test.netsec.advanced">
+    <application android:networkSecurityConfig="@xml/network_security_config"/>
+</manifest>`)
+
+	res, err := ParseAndAnalyzeManifest(context.Background(), manifestData, ws, DefaultLimits())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	foundDomainCleartext := false
+	foundDomainUserCerts := false
+	foundPinning := false
+
+	for _, f := range res.Findings {
+		if f.RuleID == "APK-MAN-NETSEC-DOMAIN-CLEARTEXT" {
+			foundDomainCleartext = true
+		}
+		if f.RuleID == "APK-MAN-NETSEC-DOMAIN-USER-CERTS" {
+			foundDomainUserCerts = true
+			if f.Severity != report.SeverityHigh {
+				t.Errorf("expected High severity for domain user certs, got %s", f.Severity)
+			}
+		}
+		if f.RuleID == "APK-MAN-NETSEC-PINNING" {
+			foundPinning = true
+			if f.Severity != report.SeverityInfo {
+				t.Errorf("expected Info severity for certificate pinning declaration, got %s", f.Severity)
+			}
+		}
+	}
+
+	if !foundDomainCleartext {
+		t.Errorf("missing APK-MAN-NETSEC-DOMAIN-CLEARTEXT finding")
+	}
+	if !foundDomainUserCerts {
+		t.Errorf("missing APK-MAN-NETSEC-DOMAIN-USER-CERTS finding")
+	}
+	if !foundPinning {
+		t.Errorf("missing APK-MAN-NETSEC-PINNING finding")
+	}
+}
+
+// ============================================================================
+// 11. AXML PARSER: UTF-8 STRING POOL & RESOURCEMAP FALLBACK
+// ============================================================================
+
+func TestManifest_ParseAXML_UTF8StringPool(t *testing.T) {
+	// Programmatically build AXML with UTF-8 string pool
+	strings := []string{
+		AndroidNamespace,
+		"android",
+		"manifest",
+		"package",
+		"com.test.utf8",
+		"application",
+		"name",
+		"debuggable",
+	}
+
+	var strPoolBody bytes.Buffer
+	stringCount := uint32(len(strings))
+	flags := uint32(0x0100) // UTF-8 flag
+
+	offsets := make([]uint32, stringCount)
+	var strBytes bytes.Buffer
+	for i, s := range strings {
+		offsets[i] = uint32(strBytes.Len())
+		u16len := uint8(len(s))
+		u8len := uint8(len(s))
+		strBytes.WriteByte(u16len)
+		strBytes.WriteByte(u8len)
+		strBytes.WriteString(s)
+		strBytes.WriteByte(0) // null-terminated
+	}
+
+	headerSize := uint16(28)
+	stringsStart := uint32(int(headerSize) + len(offsets)*4)
+	chunkSize := stringsStart + uint32(strBytes.Len())
+
+	_ = binary.Write(&strPoolBody, binary.LittleEndian, uint16(axmlChunkStringPool))
+	_ = binary.Write(&strPoolBody, binary.LittleEndian, headerSize)
+	_ = binary.Write(&strPoolBody, binary.LittleEndian, chunkSize)
+	_ = binary.Write(&strPoolBody, binary.LittleEndian, stringCount)
+	_ = binary.Write(&strPoolBody, binary.LittleEndian, uint32(0)) // styleCount
+	_ = binary.Write(&strPoolBody, binary.LittleEndian, flags)
+	_ = binary.Write(&strPoolBody, binary.LittleEndian, stringsStart)
+	_ = binary.Write(&strPoolBody, binary.LittleEndian, uint32(0)) // stylesStart
+
+	for _, off := range offsets {
+		_ = binary.Write(&strPoolBody, binary.LittleEndian, off)
+	}
+	strPoolBody.Write(strBytes.Bytes())
+
+	// Build minimal AXML root containing UTF-8 string pool and <manifest package="com.test.utf8">
+	var manifestStart bytes.Buffer
+	_ = binary.Write(&manifestStart, binary.LittleEndian, uint16(axmlChunkStartElement))
+	_ = binary.Write(&manifestStart, binary.LittleEndian, uint16(16))
+	_ = binary.Write(&manifestStart, binary.LittleEndian, uint32(36+20))
+	_ = binary.Write(&manifestStart, binary.LittleEndian, uint32(1))
+	_ = binary.Write(&manifestStart, binary.LittleEndian, uint32(0xFFFFFFFF))
+	_ = binary.Write(&manifestStart, binary.LittleEndian, uint32(0xFFFFFFFF)) // ns
+	_ = binary.Write(&manifestStart, binary.LittleEndian, uint32(2))          // name: "manifest"
+	_ = binary.Write(&manifestStart, binary.LittleEndian, uint16(36))
+	_ = binary.Write(&manifestStart, binary.LittleEndian, uint16(20))
+	_ = binary.Write(&manifestStart, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&manifestStart, binary.LittleEndian, uint16(0))
+	_ = binary.Write(&manifestStart, binary.LittleEndian, uint16(0))
+	_ = binary.Write(&manifestStart, binary.LittleEndian, uint16(0))
+	// Attribute: package="com.test.utf8"
+	_ = binary.Write(&manifestStart, binary.LittleEndian, uint32(0xFFFFFFFF))
+	_ = binary.Write(&manifestStart, binary.LittleEndian, uint32(3)) // "package"
+	_ = binary.Write(&manifestStart, binary.LittleEndian, uint32(4)) // "com.test.utf8"
+	_ = binary.Write(&manifestStart, binary.LittleEndian, uint16(8))
+	_ = binary.Write(&manifestStart, binary.LittleEndian, uint8(0))
+	_ = binary.Write(&manifestStart, binary.LittleEndian, uint8(axmlTypeString))
+	_ = binary.Write(&manifestStart, binary.LittleEndian, uint32(4))
+
+	var manifestEnd bytes.Buffer
+	_ = binary.Write(&manifestEnd, binary.LittleEndian, uint16(axmlChunkEndElement))
+	_ = binary.Write(&manifestEnd, binary.LittleEndian, uint16(16))
+	_ = binary.Write(&manifestEnd, binary.LittleEndian, uint32(24))
+	_ = binary.Write(&manifestEnd, binary.LittleEndian, uint32(1))
+	_ = binary.Write(&manifestEnd, binary.LittleEndian, uint32(0xFFFFFFFF))
+	_ = binary.Write(&manifestEnd, binary.LittleEndian, uint32(0xFFFFFFFF))
+	_ = binary.Write(&manifestEnd, binary.LittleEndian, uint32(2)) // "manifest"
+
+	body := bytes.Join([][]byte{
+		strPoolBody.Bytes(),
+		manifestStart.Bytes(),
+		manifestEnd.Bytes(),
+	}, nil)
+
+	var fullXML bytes.Buffer
+	_ = binary.Write(&fullXML, binary.LittleEndian, uint16(axmlChunkXML))
+	_ = binary.Write(&fullXML, binary.LittleEndian, uint16(8))
+	_ = binary.Write(&fullXML, binary.LittleEndian, uint32(8+len(body)))
+	fullXML.Write(body)
+
+	root, err := ParseAXML(fullXML.Bytes(), DefaultLimits())
+	if err != nil {
+		t.Fatalf("failed parsing UTF-8 string pool AXML: %v", err)
+	}
+
+	doc := ExtractManifestDocument(root, FormatAXML)
+	if doc.PackageName != "com.test.utf8" {
+		t.Errorf("expected package com.test.utf8, got %q", doc.PackageName)
+	}
+}
+
+func TestManifest_ParseAXML_ResourceMapFallback(t *testing.T) {
+	// Verify that resolveKnownResourceID correctly resolves standard Android attributes
+	tests := []struct {
+		resID    uint32
+		expected string
+	}{
+		{0x01010003, "name"},
+		{0x01010006, "permission"},
+		{0x01010007, "readPermission"},
+		{0x01010008, "writePermission"},
+		{0x0101000E, "enabled"},
+		{0x0101000F, "debuggable"},
+		{0x01010010, "exported"},
+		{0x01010018, "authorities"},
+		{0x0101001B, "grantUriPermissions"},
+		{0x01010026, "mimeType"},
+		{0x01010027, "scheme"},
+		{0x01010028, "host"},
+		{0x01010029, "port"},
+		{0x0101002A, "path"},
+		{0x0101020C, "minSdkVersion"},
+		{0x01010270, "targetSdkVersion"},
+		{0x01010280, "allowBackup"},
+		{0x010104EC, "usesCleartextTraffic"},
+		{0x010104EE, "autoVerify"},
+		{0x01010505, "directBootAware"},
+		{0x01010527, "networkSecurityConfig"},
+		{0x01010572, "compileSdkVersion"},
+	}
+
+	for _, tc := range tests {
+		actual := resolveKnownResourceID(tc.resID)
+		if actual != tc.expected {
+			t.Errorf("resID 0x%08X: expected %q, got %q", tc.resID, tc.expected, actual)
+		}
+	}
+}
+
+func TestManifest_ParseAXML_BoundsChecking(t *testing.T) {
+	// Test 1: Chunk size exceeds data
+	data := []byte{0x03, 0x00, 0x08, 0x00, 0xFF, 0xFF, 0x00, 0x00}
+	_, err := ParseAXML(data, DefaultLimits())
+	if err == nil {
+		t.Errorf("expected error for oversized chunkSize")
+	}
+
+	// Test 2: Invalid root header size
+	data2 := []byte{0x03, 0x00, 0x04, 0x00, 0x08, 0x00, 0x00, 0x00}
+	_, err = ParseAXML(data2, DefaultLimits())
+	if err == nil {
+		t.Errorf("expected error for root headerSize < 8")
 	}
 }
