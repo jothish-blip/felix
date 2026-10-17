@@ -51,7 +51,7 @@ func DefaultPortForScheme(scheme string) int {
 		return 6379
 	case "rediss":
 		return 6380
-	case "mongodb":
+	case "mongodb", "mongodb+srv":
 		return 27017
 	case "postgres", "postgresql":
 		return 5432
@@ -348,7 +348,7 @@ func normalizeQueryString(rawQuery string) string {
 	var pairs []string
 	for _, k := range keys {
 		vals := params[k]
-		sort.Strings(vals) // Deterministic order for duplicate keys
+		// Retain original value ordering for repeated keys to preserve parameter semantics
 		isSens := secrets.IsSensitiveQueryParam(k) || secrets.IsSensitiveKey(k)
 		for _, v := range vals {
 			cleanVal := v

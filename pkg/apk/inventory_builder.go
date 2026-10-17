@@ -443,6 +443,15 @@ func harvestArtifactEndpoints(
 			continue
 		}
 
+		// Reclassify if telemetry or auth host
+		if isTelemetryHost(norm.Host) {
+			category = CategoryCloudService
+			rationale = "Discovered third-party telemetry or analytics host indicator"
+		} else if isAuthHost(norm.Host) {
+			category = CategoryAuthentication
+			rationale = "Discovered authentication / identity provider backend endpoint"
+		}
+
 		// Provenance tracking
 		fileOrigin := f.EvidenceDetails.Details["file_origin"]
 		if fileOrigin == "" {
@@ -487,32 +496,50 @@ func harvestArtifactEndpoints(
 
 // resolveInferredRoutes pairs relative route fragments with base URLs if an unambiguous candidate exists.
 func resolveInferredRoutes(endpointMap map[string]*EndpointEntry, limits Limits, inv *BackendInventory) {
-	// 1. Identify all confirmed, non-service API base URLs
-	baseURLSet := make(map[string]bool)
+	// 1. Identify confirmed, non-service API base URLs and dedicated authentication base URLs
+	apiBaseURLSet := make(map[string]bool)
+	authBaseURLSet := make(map[string]bool)
+
 	for _, ep := range endpointMap {
 		if ep.Classification == ClassificationConfirmedReference && ep.Scheme != "" && ep.Host != "" {
-			// Exclude storage buckets, static documentation, or firebase databases from API base inference
-			if ep.Category != CategoryStorage && ep.Category != CategoryFirebase {
-				base := fmt.Sprintf("%s://%s", ep.Scheme, ep.Host)
-				if ep.Port > 0 && ep.Port != DefaultPortForScheme(ep.Scheme) {
-					base = fmt.Sprintf("%s://%s:%d", ep.Scheme, ep.Host, ep.Port)
-				}
-				baseURLSet[base] = true
+			// Only consider HTTP/HTTPS schemes
+			if ep.Scheme != "http" && ep.Scheme != "https" {
+				continue
+			}
+			// Exclude storage, firebase, database, deep links, cloud services, and telemetry
+			if ep.Category == CategoryStorage ||
+				ep.Category == CategoryFirebase ||
+				ep.Category == CategoryDatabase ||
+				ep.Category == CategoryDeepLink ||
+				ep.Category == CategoryCloudService ||
+				isTelemetryHost(ep.Host) {
+				continue
+			}
+
+			base := fmt.Sprintf("%s://%s", ep.Scheme, ep.Host)
+			if ep.Port > 0 && ep.Port != DefaultPortForScheme(ep.Scheme) {
+				base = fmt.Sprintf("%s://%s:%d", ep.Scheme, ep.Host, ep.Port)
+			}
+
+			if ep.Category == CategoryAuthentication || isAuthHost(ep.Host) {
+				authBaseURLSet[base] = true
+			} else if ep.Category == CategoryAPI {
+				apiBaseURLSet[base] = true
 			}
 		}
 	}
 
-	uniqueBaseURLs := make([]string, 0, len(baseURLSet))
-	for b := range baseURLSet {
-		uniqueBaseURLs = append(uniqueBaseURLs, b)
+	apiBaseURLs := make([]string, 0, len(apiBaseURLSet))
+	for b := range apiBaseURLSet {
+		apiBaseURLs = append(apiBaseURLs, b)
 	}
-	sort.Strings(uniqueBaseURLs)
+	sort.Strings(apiBaseURLs)
 
-	isUnambiguous := len(uniqueBaseURLs) == 1
-	singleBaseURL := ""
-	if isUnambiguous {
-		singleBaseURL = uniqueBaseURLs[0]
+	authBaseURLs := make([]string, 0, len(authBaseURLSet))
+	for b := range authBaseURLSet {
+		authBaseURLs = append(authBaseURLs, b)
 	}
+	sort.Strings(authBaseURLs)
 
 	// 2. Process relative routes
 	var relativeRoutes []*EndpointEntry
@@ -524,18 +551,32 @@ func resolveInferredRoutes(endpointMap map[string]*EndpointEntry, limits Limits,
 
 	for _, rel := range relativeRoutes {
 		routePath := rel.Path
-		if isUnambiguous {
-			// Combine with unambiguous base URL to produce inferred absolute endpoint
+		isAuth := isAuthPath(routePath)
+
+		// Determine target candidate base URLs
+		var candidateBases []string
+		if isAuth && len(authBaseURLs) > 0 {
+			candidateBases = authBaseURLs
+		} else {
+			candidateBases = apiBaseURLs
+		}
+
+		if len(candidateBases) == 1 {
+			singleBaseURL := candidateBases[0]
 			candidateURL := singleBaseURL + routePath
 			norm, err := NormalizeEndpoint(candidateURL)
 			if err == nil && norm != nil {
-				// Remove the relative route entry from map and replace or merge with absolute inferred endpoint
 				delete(endpointMap, rel.NormalizedURL)
+
+				reason := "Combined relative route with unique discovered API base URL"
+				if isAuth && len(authBaseURLs) == 1 {
+					reason = "Combined relative authentication route with unique discovered authentication base URL"
+				}
 
 				details := &InferredRouteDetails{
 					BaseURL:   singleBaseURL,
 					RoutePath: routePath,
-					Reason:    "Combined relative route with unique discovered API base URL",
+					Reason:    reason,
 				}
 
 				rel.NormalizedURL = norm.NormalizedURL
@@ -546,10 +587,9 @@ func resolveInferredRoutes(endpointMap map[string]*EndpointEntry, limits Limits,
 				rel.RawQuery = norm.RawQuery
 				rel.HostIdentity = norm.HostIdentity
 				rel.Confidence = report.ConfidenceMedium
-				rel.Rationale = "Inferred route: combined relative path with unique discovered API base URL"
+				rel.Rationale = "Inferred route: " + reason
 				rel.InferredDetails = details
 
-				// If the absolute endpoint already exists in map (e.g. as confirmed), merge provenance
 				if existing, exists := endpointMap[norm.NormalizedURL]; exists {
 					mergeEndpointEntries(existing, rel, limits)
 				} else {
@@ -557,11 +597,10 @@ func resolveInferredRoutes(endpointMap map[string]*EndpointEntry, limits Limits,
 				}
 			}
 		} else {
-			// Ambiguous base URLs (0 or >1): retain route as unresolved rather than fabricating speculative endpoints
 			reason := "No API base URL identified; retained as unresolved relative route"
-			if len(uniqueBaseURLs) > 1 {
+			if len(candidateBases) > 1 {
 				reason = fmt.Sprintf("Base URL is ambiguous (%d candidates: %s); retained as unresolved relative route",
-					len(uniqueBaseURLs), strings.Join(uniqueBaseURLs, ", "))
+					len(candidateBases), strings.Join(candidateBases, ", "))
 			}
 
 			rel.HostIdentity = "(unresolved)"
@@ -731,4 +770,34 @@ func getAllComponents(doc *ManifestDocument) []ComponentInfo {
 		list = append(list, p.ComponentInfo)
 	}
 	return list
+}
+
+func isAuthHost(host string) bool {
+	h := strings.ToLower(host)
+	return strings.HasPrefix(h, "auth.") ||
+		strings.HasPrefix(h, "login.") ||
+		strings.HasPrefix(h, "identity.") ||
+		strings.HasPrefix(h, "oauth.") ||
+		strings.HasPrefix(h, "sso.")
+}
+
+func isTelemetryHost(host string) bool {
+	h := strings.ToLower(host)
+	telemetryVendors := []string{
+		"crashlytics.com", "firebaseinstallations.googleapis.com",
+		"app-measurement.com", "google-analytics.com", "analytics.google.com",
+		"sentry.io", "bugsnag.com", "mixpanel.com", "segment.io", "segment.com",
+		"adjust.com", "appsflyer.com", "branch.io", "flurry.com",
+		"amplitude.com", "count.ly", "datadoghq.com", "onesignal.com",
+		"instabug.com", "kochava.com",
+	}
+	for _, v := range telemetryVendors {
+		if h == v || strings.HasSuffix(h, "."+v) {
+			return true
+		}
+	}
+	if strings.Contains(h, "telemetry") || strings.Contains(h, "analytics") || strings.Contains(h, "tracking") {
+		return true
+	}
+	return false
 }

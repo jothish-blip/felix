@@ -895,3 +895,551 @@ func TestInventory_EndToEndSyntheticAPK(t *testing.T) {
 		t.Errorf("expected Firebase backend endpoint in inventory")
 	}
 }
+
+func TestInventory_Regression_URLSemantics(t *testing.T) {
+	// 1. /api//v1 versus /api/v1 (duplicate slashes collapsed)
+	normDoubleSlash, err := NormalizeEndpoint("https://api.example.com/api//v1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	normSingleSlash, err := NormalizeEndpoint("https://api.example.com/api/v1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if normDoubleSlash.NormalizedURL != normSingleSlash.NormalizedURL {
+		t.Errorf("expected /api//v1 to normalize to /api/v1, got %q vs %q", normDoubleSlash.NormalizedURL, normSingleSlash.NormalizedURL)
+	}
+
+	// 2. /a/../b versus /b (dot segment resolution)
+	normDotDot, err := NormalizeEndpoint("https://api.example.com/a/../b")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	normB, err := NormalizeEndpoint("https://api.example.com/b")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if normDotDot.NormalizedURL != normB.NormalizedURL {
+		t.Errorf("expected /a/../b to normalize to /b, got %q vs %q", normDotDot.NormalizedURL, normB.NormalizedURL)
+	}
+
+	// 3. /path versus /path/ (distinct endpoints: trailing slash preserved)
+	normNoSlash, err := NormalizeEndpoint("https://api.example.com/path")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	normWithSlash, err := NormalizeEndpoint("https://api.example.com/path/")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if normNoSlash.NormalizedURL == normWithSlash.NormalizedURL {
+		t.Errorf("expected /path and /path/ to remain distinct endpoints, but both got %q", normNoSlash.NormalizedURL)
+	}
+	if normNoSlash.Path != "/path" || normWithSlash.Path != "/path/" {
+		t.Errorf("paths not properly preserved: %q vs %q", normNoSlash.Path, normWithSlash.Path)
+	}
+
+	// 4. Repeated query keys with different ordering (value order preserved)
+	normRepeatedBA, err := NormalizeEndpoint("https://api.example.com/items?tag=beta&tag=alpha")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	normRepeatedAB, err := NormalizeEndpoint("https://api.example.com/items?tag=alpha&tag=beta")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if normRepeatedBA.NormalizedURL == normRepeatedAB.NormalizedURL {
+		t.Errorf("repeated query parameter values with different order should remain distinct, but both got: %s", normRepeatedBA.NormalizedURL)
+	}
+	if !strings.Contains(normRepeatedBA.NormalizedURL, "tag=beta&tag=alpha") {
+		t.Errorf("expected tag=beta&tag=alpha preserved in order, got: %s", normRepeatedBA.NormalizedURL)
+	}
+	if !strings.Contains(normRepeatedAB.NormalizedURL, "tag=alpha&tag=beta") {
+		t.Errorf("expected tag=alpha&tag=beta preserved in order, got: %s", normRepeatedAB.NormalizedURL)
+	}
+
+	// 5. Query parameters whose multiplicity affects semantics
+	normSingleParam, err := NormalizeEndpoint("https://api.example.com/items?id=1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	normDuplicateParam, err := NormalizeEndpoint("https://api.example.com/items?id=1&id=1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if normSingleParam.NormalizedURL == normDuplicateParam.NormalizedURL {
+		t.Errorf("expected ?id=1 and ?id=1&id=1 to remain distinct due to multiplicity, but both got %q", normSingleParam.NormalizedURL)
+	}
+
+	// 6. Percent-encoded reserved characters: %2F versus /
+	normEncodedSlash, err := NormalizeEndpoint("https://api.example.com/a%2Fb")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	normLiteralSlash, err := NormalizeEndpoint("https://api.example.com/a/b")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if normEncodedSlash.NormalizedURL == normLiteralSlash.NormalizedURL {
+		t.Errorf("expected /a%%2Fb and /a/b to remain distinct, but both got %q", normEncodedSlash.NormalizedURL)
+	}
+	if normEncodedSlash.Path != "/a%2Fb" {
+		t.Errorf("expected percent-encoded %%2F preserved in path, got %q", normEncodedSlash.Path)
+	}
+
+	// 7. Default and non-default ports across all supported schemes
+	schemePorts := []struct {
+		scheme      string
+		defaultPort int
+		altPort     int
+	}{
+		{"http", 80, 8080},
+		{"https", 443, 8443},
+		{"ws", 80, 8080},
+		{"wss", 443, 8443},
+		{"redis", 6379, 6380},
+		{"rediss", 6380, 6381},
+		{"postgres", 5432, 5433},
+		{"mysql", 3306, 3307},
+		{"mongodb", 27017, 27018},
+		{"mongodb+srv", 27017, 27018},
+	}
+
+	for _, sp := range schemePorts {
+		// Default port stripped
+		defURL := fmt.Sprintf("%s://srv.corp.internal:%d/db", sp.scheme, sp.defaultPort)
+		normDef, err := NormalizeEndpoint(defURL)
+		if err != nil {
+			t.Fatalf("failed normalizing %s: %v", defURL, err)
+		}
+		if strings.Contains(normDef.NormalizedURL, fmt.Sprintf(":%d", sp.defaultPort)) {
+			t.Errorf("scheme %s default port %d should be stripped, got: %s", sp.scheme, sp.defaultPort, normDef.NormalizedURL)
+		}
+		if normDef.Port != sp.defaultPort {
+			t.Errorf("scheme %s effective port mismatch: got %d, want %d", sp.scheme, normDef.Port, sp.defaultPort)
+		}
+
+		// Non-default port preserved
+		altURL := fmt.Sprintf("%s://srv.corp.internal:%d/db", sp.scheme, sp.altPort)
+		normAlt, err := NormalizeEndpoint(altURL)
+		if err != nil {
+			t.Fatalf("failed normalizing %s: %v", altURL, err)
+		}
+		if !strings.Contains(normAlt.NormalizedURL, fmt.Sprintf(":%d", sp.altPort)) {
+			t.Errorf("scheme %s non-default port %d should be preserved, got: %s", sp.scheme, sp.altPort, normAlt.NormalizedURL)
+		}
+		if normAlt.Port != sp.altPort {
+			t.Errorf("scheme %s alt port mismatch: got %d, want %d", sp.scheme, normAlt.Port, sp.altPort)
+		}
+	}
+}
+
+func TestInventory_Regression_InferenceCorrectness(t *testing.T) {
+	ws := &Workspace{
+		Dir:     t.TempDir(),
+		APKPath: "C:\\path\\to\\app.apk",
+		SHA256:  "sha-inference-audit",
+	}
+	limits := DefaultLimits()
+
+	// Scenario 1: One API URL and one unrelated telemetry URL
+	// Relative route MUST combine with the API URL, NOT telemetry, and NOT falsely marked ambiguous!
+	t.Run("API_URL_and_Unrelated_Telemetry_URL", func(t *testing.T) {
+		res := &ArtifactAnalysisResult{
+			Findings: []report.Finding{
+				{
+					ID:       "f-api",
+					RuleID:   "APK-ART-API-BASE-URL",
+					Endpoint: "https://api.mycorp.com",
+					EvidenceDetails: report.EvidenceDetails{
+						Details: map[string]string{"base_url": "https://api.mycorp.com", "file_origin": "classes.dex"},
+					},
+				},
+				{
+					ID:       "f-telemetry",
+					RuleID:   "APK-ART-API-BASE-URL",
+					Endpoint: "https://telemetry.analytics-cloud.com",
+					EvidenceDetails: report.EvidenceDetails{
+						Details: map[string]string{"base_url": "https://telemetry.analytics-cloud.com", "file_origin": "classes.dex"},
+					},
+				},
+				{
+					ID:       "f-route",
+					RuleID:   "APK-ART-API-ENDPOINT",
+					Endpoint: "/api/v1/orders",
+					EvidenceDetails: report.EvidenceDetails{
+						Details: map[string]string{"route": "/api/v1/orders", "file_origin": "classes.dex"},
+					},
+				},
+			},
+		}
+
+		inv, err := BuildBackendInventory(context.Background(), ws, nil, res, limits)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		var foundInferredAPI bool
+		for _, ep := range inv.Endpoints {
+			if ep.NormalizedURL == "https://api.mycorp.com/api/v1/orders" {
+				foundInferredAPI = true
+				if ep.Classification != ClassificationInferredRoute {
+					t.Errorf("expected ClassificationInferredRoute, got: %s", ep.Classification)
+				}
+				if ep.Confidence != report.ConfidenceMedium {
+					t.Errorf("expected ConfidenceMedium, got: %s", ep.Confidence)
+				}
+				if ep.InferredDetails == nil || ep.InferredDetails.BaseURL != "https://api.mycorp.com" {
+					t.Errorf("expected InferredDetails base URL https://api.mycorp.com, got: %+v", ep.InferredDetails)
+				}
+			}
+			// Verify route was NEVER combined with telemetry
+			if strings.Contains(ep.NormalizedURL, "telemetry.analytics-cloud.com/api/v1/orders") {
+				t.Fatalf("SECURITY/SEMANTIC DEFECT: API route was erroneously combined with telemetry vendor: %s", ep.NormalizedURL)
+			}
+		}
+		if !foundInferredAPI {
+			t.Fatalf("expected route /api/v1/orders combined with unique API base URL https://api.mycorp.com")
+		}
+	})
+
+	// Scenario 2: Authentication and API URLs together
+	// API routes pair with API URL; Auth routes pair with Auth URL
+	t.Run("Authentication_and_API_URLs_Together", func(t *testing.T) {
+		res := &ArtifactAnalysisResult{
+			Findings: []report.Finding{
+				{
+					ID:       "f-api",
+					RuleID:   "APK-ART-API-BASE-URL",
+					Endpoint: "https://api.mycorp.com",
+					EvidenceDetails: report.EvidenceDetails{
+						Details: map[string]string{"base_url": "https://api.mycorp.com", "file_origin": "classes.dex"},
+					},
+				},
+				{
+					ID:       "f-auth",
+					RuleID:   "APK-ART-API-BASE-URL",
+					Endpoint: "https://auth.mycorp.com",
+					EvidenceDetails: report.EvidenceDetails{
+						Details: map[string]string{"base_url": "https://auth.mycorp.com", "file_origin": "classes.dex"},
+					},
+				},
+				{
+					ID:       "f-api-route",
+					RuleID:   "APK-ART-API-ENDPOINT",
+					Endpoint: "/api/v1/users",
+					EvidenceDetails: report.EvidenceDetails{
+						Details: map[string]string{"route": "/api/v1/users", "file_origin": "classes.dex"},
+					},
+				},
+				{
+					ID:       "f-auth-route",
+					RuleID:   "APK-ART-API-ENDPOINT",
+					Endpoint: "/oauth/token",
+					EvidenceDetails: report.EvidenceDetails{
+						Details: map[string]string{"route": "/oauth/token", "file_origin": "classes.dex"},
+					},
+				},
+			},
+		}
+
+		inv, err := BuildBackendInventory(context.Background(), ws, nil, res, limits)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		var foundAPIRoute, foundAuthRoute bool
+		for _, ep := range inv.Endpoints {
+			if ep.NormalizedURL == "https://api.mycorp.com/api/v1/users" {
+				foundAPIRoute = true
+				if ep.Classification != ClassificationInferredRoute {
+					t.Errorf("expected InferredRoute for API route, got: %s", ep.Classification)
+				}
+			}
+			if ep.NormalizedURL == "https://auth.mycorp.com/oauth/token" {
+				foundAuthRoute = true
+				if ep.Classification != ClassificationInferredRoute {
+					t.Errorf("expected InferredRoute for Auth route, got: %s", ep.Classification)
+				}
+				if ep.Category != CategoryAuthentication {
+					t.Errorf("expected CategoryAuthentication, got: %s", ep.Category)
+				}
+			}
+		}
+
+		if !foundAPIRoute {
+			t.Errorf("expected API route https://api.mycorp.com/api/v1/users")
+		}
+		if !foundAuthRoute {
+			t.Errorf("expected Auth route https://auth.mycorp.com/oauth/token")
+		}
+	})
+
+	// Scenario 3: Multiple API base URLs -> routes remain unresolved (no fabricated URLs)
+	t.Run("Multiple_API_Base_URLs_Unresolved", func(t *testing.T) {
+		res := &ArtifactAnalysisResult{
+			Findings: []report.Finding{
+				{
+					ID:       "f-api1",
+					RuleID:   "APK-ART-API-BASE-URL",
+					Endpoint: "https://api-east.mycorp.com",
+					EvidenceDetails: report.EvidenceDetails{
+						Details: map[string]string{"base_url": "https://api-east.mycorp.com", "file_origin": "classes.dex"},
+					},
+				},
+				{
+					ID:       "f-api2",
+					RuleID:   "APK-ART-API-BASE-URL",
+					Endpoint: "https://api-west.mycorp.com",
+					EvidenceDetails: report.EvidenceDetails{
+						Details: map[string]string{"base_url": "https://api-west.mycorp.com", "file_origin": "classes.dex"},
+					},
+				},
+				{
+					ID:       "f-route",
+					RuleID:   "APK-ART-API-ENDPOINT",
+					Endpoint: "/api/v1/products",
+					EvidenceDetails: report.EvidenceDetails{
+						Details: map[string]string{"route": "/api/v1/products", "file_origin": "classes.dex"},
+					},
+				},
+			},
+		}
+
+		inv, err := BuildBackendInventory(context.Background(), ws, nil, res, limits)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		var foundUnresolved bool
+		for _, ep := range inv.Endpoints {
+			if ep.NormalizedURL == "/api/v1/products" {
+				foundUnresolved = true
+				if ep.HostIdentity != "(unresolved)" {
+					t.Errorf("expected HostIdentity (unresolved), got: %s", ep.HostIdentity)
+				}
+				if ep.Classification != ClassificationInferredRoute {
+					t.Errorf("expected ClassificationInferredRoute, got: %s", ep.Classification)
+				}
+				if ep.Confidence != report.ConfidenceLow {
+					t.Errorf("expected ConfidenceLow, got: %s", ep.Confidence)
+				}
+				if !strings.Contains(ep.InferredDetails.Reason, "ambiguous") {
+					t.Errorf("expected ambiguous reason, got: %s", ep.InferredDetails.Reason)
+				}
+			}
+		}
+		if !foundUnresolved {
+			t.Fatalf("expected route /api/v1/products to remain unresolved when multiple API bases exist")
+		}
+	})
+
+	// Scenario 4: No absolute base URL -> routes and GraphQL remain unresolved
+	t.Run("No_Absolute_Base_URL", func(t *testing.T) {
+		res := &ArtifactAnalysisResult{
+			Findings: []report.Finding{
+				{
+					ID:       "f-route",
+					RuleID:   "APK-ART-API-ENDPOINT",
+					Endpoint: "/api/v1/checkout",
+					EvidenceDetails: report.EvidenceDetails{
+						Details: map[string]string{"route": "/api/v1/checkout", "file_origin": "classes.dex"},
+					},
+				},
+				{
+					ID:       "f-gql",
+					RuleID:   "APK-ART-GRAPHQL",
+					Endpoint: "/graphql",
+					EvidenceDetails: report.EvidenceDetails{
+						Details: map[string]string{"reference": "/graphql", "file_origin": "classes.dex"},
+					},
+				},
+			},
+		}
+
+		inv, err := BuildBackendInventory(context.Background(), ws, nil, res, limits)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		for _, ep := range inv.Endpoints {
+			if ep.HostIdentity != "(unresolved)" {
+				t.Errorf("endpoint %s should have HostIdentity (unresolved), got %s", ep.NormalizedURL, ep.HostIdentity)
+			}
+			if ep.Classification != ClassificationInferredRoute {
+				t.Errorf("expected InferredRoute, got: %s", ep.Classification)
+			}
+			if ep.Confidence != report.ConfidenceLow {
+				t.Errorf("expected ConfidenceLow, got: %s", ep.Confidence)
+			}
+		}
+	})
+
+	// Scenario 5: Firebase and Cloud Storage URLs -> routes MUST NOT be combined with them
+	t.Run("Firebase_and_CloudStorage_URLs_Not_Combined", func(t *testing.T) {
+		res := &ArtifactAnalysisResult{
+			Findings: []report.Finding{
+				{
+					ID:       "f-fb",
+					RuleID:   "APK-ART-SERVICE-FIREBASE",
+					Endpoint: "https://app-firebase.firebaseio.com",
+					EvidenceDetails: report.EvidenceDetails{
+						Details: map[string]string{"firebase_url": "https://app-firebase.firebaseio.com", "file_origin": "google-services.json"},
+					},
+				},
+				{
+					ID:       "f-s3",
+					RuleID:   "APK-ART-SERVICE-AWS",
+					Endpoint: "https://my-bucket.s3.amazonaws.com",
+					EvidenceDetails: report.EvidenceDetails{
+						Details: map[string]string{"bucket_host": "my-bucket.s3.amazonaws.com", "file_origin": "classes.dex"},
+					},
+				},
+				{
+					ID:       "f-route",
+					RuleID:   "APK-ART-API-ENDPOINT",
+					Endpoint: "/api/v1/items",
+					EvidenceDetails: report.EvidenceDetails{
+						Details: map[string]string{"route": "/api/v1/items", "file_origin": "classes.dex"},
+					},
+				},
+			},
+		}
+
+		inv, err := BuildBackendInventory(context.Background(), ws, nil, res, limits)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		for _, ep := range inv.Endpoints {
+			// Verify route /api/v1/items was NEVER combined with Firebase or S3!
+			if strings.Contains(ep.NormalizedURL, "firebaseio.com/api/v1/items") {
+				t.Fatalf("SECURITY/SEMANTIC DEFECT: API route was combined with Firebase URL: %s", ep.NormalizedURL)
+			}
+			if strings.Contains(ep.NormalizedURL, "amazonaws.com/api/v1/items") {
+				t.Fatalf("SECURITY/SEMANTIC DEFECT: API route was combined with S3 URL: %s", ep.NormalizedURL)
+			}
+		}
+
+		// Ensure the route was retained as unresolved
+		var foundUnresolved bool
+		for _, ep := range inv.Endpoints {
+			if ep.NormalizedURL == "/api/v1/items" && ep.HostIdentity == "(unresolved)" {
+				foundUnresolved = true
+			}
+		}
+		if !foundUnresolved {
+			t.Fatalf("expected route /api/v1/items to be retained as unresolved")
+		}
+	})
+}
+
+func TestInventory_Regression_DeduplicationAndProvenanceIntegrity(t *testing.T) {
+	ws := &Workspace{
+		Dir:     t.TempDir(),
+		APKPath: "C:\\path\\to\\app.apk",
+		SHA256:  "sha-provenance-audit-12345",
+	}
+	limits := DefaultLimits()
+
+	// Same endpoint discovered from 3 distinct sources: Manifest, DEX bytecode, and Config
+	res := &ArtifactAnalysisResult{
+		Findings: []report.Finding{
+			{
+				ID:       "f-dex",
+				RuleID:   "APK-ART-API-BASE-URL",
+				Endpoint: "https://api.mycorp.com/v1/sync",
+				Evidence: "DEX string reference",
+				EvidenceDetails: report.EvidenceDetails{
+					Location: "classes.dex:0x1234",
+					Details: map[string]string{
+						"base_url":    "https://api.mycorp.com/v1/sync",
+						"file_origin": "classes.dex",
+					},
+				},
+				Confidence: report.ConfidenceHigh,
+			},
+			{
+				ID:       "f-cfg",
+				RuleID:   "APK-ART-API-BASE-URL",
+				Endpoint: "https://api.mycorp.com/v1/sync",
+				Evidence: "Configuration property reference",
+				EvidenceDetails: report.EvidenceDetails{
+					Location: "res/values/strings.xml:server_url",
+					Details: map[string]string{
+						"base_url":    "https://api.mycorp.com/v1/sync",
+						"file_origin": "res/values/strings.xml",
+					},
+				},
+				Confidence: report.ConfidenceHigh,
+			},
+		},
+	}
+
+	manifestRes := &ManifestAnalysisResult{
+		Document: &ManifestDocument{
+			Application: ApplicationInfo{
+				Activities: []ComponentInfo{
+					{
+						Type: ComponentActivity,
+						Name: "com.mycorp.SyncActivity",
+						IntentFilters: []IntentFilterInfo{
+							{
+								Data: []IntentFilterData{
+									{Scheme: "https", Host: "api.mycorp.com", Path: "/v1/sync"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	inv, err := BuildBackendInventory(context.Background(), ws, manifestRes, res, limits)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if inv.TotalEndpoints != 1 {
+		t.Fatalf("expected exactly 1 deduplicated canonical endpoint, got %d", inv.TotalEndpoints)
+	}
+
+	ep := inv.Endpoints[0]
+	if len(ep.Provenance) != 3 {
+		t.Fatalf("expected 3 distinct provenance records from 3 sources, got %d", len(ep.Provenance))
+	}
+
+	typesSeen := make(map[string]bool)
+	for _, p := range ep.Provenance {
+		typesSeen[p.ArtifactType] = true
+		if p.APKSHA256 != "sha-provenance-audit-12345" {
+			t.Errorf("APK SHA256 lost in provenance: %s", p.APKSHA256)
+		}
+	}
+
+	if !typesSeen["dex"] || !typesSeen["resource"] || !typesSeen["manifest"] {
+		t.Errorf("expected dex, resource, and manifest provenance types: %+v", typesSeen)
+	}
+
+	// Verify that sensitive value redaction cannot cause unrelated endpoints to be merged silently
+	// Endpoint A: action=create (different non-sensitive parameter)
+	// Endpoint B: action=delete
+	normA, err := NormalizeEndpoint("https://api.mycorp.com/v1/items?action=create&apiKey=SECRET_A")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	normB, err := NormalizeEndpoint("https://api.mycorp.com/v1/items?action=delete&apiKey=SECRET_B")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if normA.NormalizedURL == normB.NormalizedURL {
+		t.Fatalf("SECURITY/SEMANTIC DEFECT: Unrelated endpoints were merged due to sensitive value redaction! Both got %q", normA.NormalizedURL)
+	}
+	if !strings.Contains(normA.NormalizedURL, "action=create") || !strings.Contains(normB.NormalizedURL, "action=delete") {
+		t.Errorf("non-sensitive query parameters were lost: %s vs %s", normA.NormalizedURL, normB.NormalizedURL)
+	}
+	if !strings.Contains(normA.NormalizedURL, "apiKey=[REDACTED]") || !strings.Contains(normB.NormalizedURL, "apiKey=[REDACTED]") {
+		t.Errorf("sensitive apiKey was not redacted properly: %s vs %s", normA.NormalizedURL, normB.NormalizedURL)
+	}
+}
