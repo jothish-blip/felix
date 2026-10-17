@@ -27,6 +27,8 @@ func main() {
 	switch cmd {
 	case "scan":
 		os.Exit(runScan(os.Args[2:]))
+	case "apk":
+		os.Exit(runAPK(os.Args[2:]))
 	case "report":
 		os.Exit(runReport(os.Args[2:]))
 	case "client":
@@ -55,6 +57,8 @@ func main() {
 			switch sub {
 			case "scan":
 				os.Exit(runScan([]string{"--help"}))
+			case "apk":
+				os.Exit(runAPK([]string{"--help"}))
 			case "report":
 				os.Exit(runReport([]string{"--help"}))
 			case "client":
@@ -95,6 +99,7 @@ func printRootHelp() {
 	fmt.Println("  felix <command> [arguments]")
 	fmt.Println("\nCommands:")
 	fmt.Println("  scan        Audit target web applications for security exposures")
+	fmt.Println("  apk         Validate and isolate Android APK packages for security analysis")
 	fmt.Println("  report      Generate assessment reports from existing scan results (zero network)")
 	fmt.Println("  client      Manage clients and organizations for structured assessments")
 	fmt.Println("  assessment  Manage authorized security assessment projects and runs")
