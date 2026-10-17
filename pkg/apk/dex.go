@@ -66,7 +66,7 @@ type DEXFile struct {
 }
 
 // decodeULEB128 reads an unsigned Little-Endian Base 128 integer from data starting at offset.
-// It enforces bounds checking and caps the sequence at 5 bytes to prevent infinite loops or bit overflow.
+// It enforces bounds checking, caps the sequence at 5 bytes, and rejects 32-bit integer overflow.
 func decodeULEB128(data []byte, offset int) (uint32, int, error) {
 	var result uint32
 	var shift uint
@@ -76,6 +76,15 @@ func decodeULEB128(data []byte, offset int) (uint32, int, error) {
 			return 0, 0, fmt.Errorf("%w: unexpected EOF while decoding ULEB128 at offset 0x%x", ErrMalformedDEX, idx)
 		}
 		b := data[idx]
+		// At byte 5 (i == 4, shift == 28), only the lower 4 bits may be set to fit in a 32-bit unsigned integer
+		if i == 4 {
+			if b&0x80 != 0 {
+				return 0, 0, fmt.Errorf("%w: invalid ULEB128 sequence exceeds 5 bytes at offset 0x%x", ErrMalformedDEX, offset)
+			}
+			if b&0x70 != 0 {
+				return 0, 0, fmt.Errorf("%w: ULEB128 integer overflow beyond 32 bits at offset 0x%x", ErrMalformedDEX, offset)
+			}
+		}
 		result |= uint32(b&0x7f) << shift
 		if b&0x80 == 0 {
 			return result, i + 1, nil
@@ -154,13 +163,18 @@ func ParseDEX(ctx context.Context, fileName string, data []byte, limits Limits) 
 	}
 
 	stringTableBytes := uint64(stringIDsSize) * 4
-	if uint64(stringIDsOff)+stringTableBytes > uint64(len(data)) {
+	if uint64(stringIDsOff) > uint64(len(data)) || stringTableBytes > uint64(len(data))-uint64(stringIDsOff) {
 		return nil, fmt.Errorf("%w: file %q string_ids table [0x%x, 0x%x) exceeds file bounds (%d)",
 			ErrMalformedDEX, fileName, stringIDsOff, uint64(stringIDsOff)+stringTableBytes, len(data))
 	}
 
 	// 5. Parse String Pool with Memory and Boundary Guards
-	stringsList := make([]string, 0, stringIDsSize)
+	// Cap initial allocation capacity to avoid pre-allocating large slices on invalid or truncated data
+	initialCap := int(stringIDsSize)
+	if initialCap > 10000 {
+		initialCap = 10000
+	}
+	stringsList := make([]string, 0, initialCap)
 	var cumulativeStringBytes int64
 
 	for i := uint32(0); i < stringIDsSize; i++ {
@@ -184,10 +198,10 @@ func ParseDEX(ctx context.Context, fileName string, data []byte, limits Limits) 
 			return nil, fmt.Errorf("%w: file %q string[%d] at 0x%x: %v", ErrMalformedDEX, fileName, i, strDataOff, err)
 		}
 
-		strStart := int(strDataOff) + ulebBytes
-		if strStart > len(data) {
-			return nil, fmt.Errorf("%w: file %q string[%d] start 0x%x exceeds file bounds", ErrMalformedDEX, fileName, i, strStart)
+		if uint64(strDataOff)+uint64(ulebBytes) > uint64(len(data)) {
+			return nil, fmt.Errorf("%w: file %q string[%d] start exceeds file bounds", ErrMalformedDEX, fileName, i)
 		}
+		strStart := int(strDataOff) + ulebBytes
 
 		// Locate null terminator for MUTF-8
 		nullPos := bytes.IndexByte(data[strStart:], 0x00)
@@ -219,12 +233,22 @@ func ParseDEX(ctx context.Context, fileName string, data []byte, limits Limits) 
 
 	var classes []string
 	if classDefsSize > 0 && typeIDsSize > 0 {
+		if classDefsSize > 50000 {
+			classDefsSize = 50000
+		}
 		typeTableBytes := uint64(typeIDsSize) * 4
 		classTableBytes := uint64(classDefsSize) * 32
 
-		if uint64(typeIDsOff)+typeTableBytes <= uint64(len(data)) &&
-			uint64(classDefsOff)+classTableBytes <= uint64(len(data)) {
-			classes = make([]string, 0, classDefsSize)
+		if uint64(typeIDsOff) <= uint64(len(data)) &&
+			typeTableBytes <= uint64(len(data))-uint64(typeIDsOff) &&
+			uint64(classDefsOff) <= uint64(len(data)) &&
+			classTableBytes <= uint64(len(data))-uint64(classDefsOff) {
+
+			initialClassCap := int(classDefsSize)
+			if initialClassCap > 1000 {
+				initialClassCap = 1000
+			}
+			classes = make([]string, 0, initialClassCap)
 			for i := uint32(0); i < classDefsSize; i++ {
 				cLoc := int(classDefsOff) + int(i*32)
 				classIdx := order.Uint32(data[cLoc : cLoc+4])

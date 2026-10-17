@@ -407,7 +407,7 @@ func extractXMLStringResources(data []byte, result map[string]string) {
 	}
 }
 
-// extractLineKeyValues extracts simple key-value pairs from properties, INI, and YAML files.
+// extractLineKeyValues extracts key-value pairs from properties, INI, and YAML files using a bounded line scanner.
 func extractLineKeyValues(data []byte, result map[string]string) {
 	scanner := bufio.NewScanner(bytes.NewReader(data))
 	scanner.Buffer(make([]byte, 64*1024), 64*1024)
@@ -421,10 +421,28 @@ func extractLineKeyValues(data []byte, result map[string]string) {
 			continue
 		}
 
+		// Handle YAML list item prefix
+		line = strings.TrimPrefix(line, "- ")
+		line = strings.TrimSpace(line)
+
 		sepIdx := strings.IndexAny(line, "=:")
 		if sepIdx > 0 {
 			key := strings.TrimSpace(line[:sepIdx])
 			val := strings.TrimSpace(line[sepIdx+1:])
+
+			// Disregard standalone URLs being misinterpreted as key-value (e.g. "https://..." splitting at ':')
+			scheme := strings.ToLower(key)
+			if scheme == "http" || scheme == "https" || scheme == "mongodb" || scheme == "redis" || scheme == "rediss" || scheme == "postgres" || scheme == "mysql" || scheme == "ftp" {
+				continue
+			}
+
+			// Strip inline comments if present outside of quoted values
+			if !strings.HasPrefix(val, "\"") && !strings.HasPrefix(val, "'") {
+				if hashIdx := strings.Index(val, " #"); hashIdx != -1 {
+					val = strings.TrimSpace(val[:hashIdx])
+				}
+			}
+
 			// Strip surrounding quotes
 			val = strings.Trim(val, "\"'`")
 			if key != "" && val != "" {

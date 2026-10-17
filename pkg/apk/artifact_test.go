@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -575,5 +577,402 @@ func TestArtifact_EndToEndSyntheticAPK(t *testing.T) {
 	}
 	if artifactRes.Summary.EndpointsCount < 1 {
 		t.Errorf("expected at least 1 endpoint (/api/v1/users), got %d", artifactRes.Summary.EndpointsCount)
+	}
+}
+
+func TestDEXParser_IndependentD8Fixture(t *testing.T) {
+	fixturePath := filepath.Join("testdata", "dex", "sample_d8.dex")
+	data, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatalf("failed reading independent D8 DEX fixture %s: %v", fixturePath, err)
+	}
+
+	ctx := context.Background()
+	limits := DefaultLimits()
+
+	dexFile, err := ParseDEX(ctx, "sample_d8.dex", data, limits)
+	if err != nil {
+		t.Fatalf("failed parsing independent D8 DEX fixture: %v", err)
+	}
+
+	if dexFile.Version != "035" {
+		t.Errorf("expected version 035, got %s", dexFile.Version)
+	}
+	if dexFile.Endian != "little-endian" {
+		t.Errorf("expected little-endian, got %s", dexFile.Endian)
+	}
+	if dexFile.ClassCount < 1 {
+		t.Errorf("expected at least 1 class, got %d", dexFile.ClassCount)
+	}
+
+	foundSampleClass := false
+	for _, cls := range dexFile.Classes {
+		if cls == "com.felix.sample.SampleApp" {
+			foundSampleClass = true
+			break
+		}
+	}
+	if !foundSampleClass {
+		t.Errorf("expected class com.felix.sample.SampleApp in classes: %v", dexFile.Classes)
+	}
+
+	// Verify artifact intelligence analysis on the independent D8 fixture
+	tempDir := t.TempDir()
+	ws, err := NewWorkspace(tempDir)
+	if err != nil {
+		t.Fatalf("failed creating workspace: %v", err)
+	}
+	defer ws.Close()
+
+	if err := os.WriteFile(filepath.Join(ws.Dir, "classes.dex"), data, 0600); err != nil {
+		t.Fatalf("failed staging classes.dex: %v", err)
+	}
+	ws.DexFiles = []string{"classes.dex"}
+
+	res, err := AnalyzeArtifacts(ctx, ws, limits)
+	if err != nil {
+		t.Fatalf("AnalyzeArtifacts failed on D8 fixture: %v", err)
+	}
+
+	var foundAPI, foundS3, foundGoogleKey, foundGraphQL bool
+	for _, f := range res.Findings {
+		switch f.RuleID {
+		case "APK-ART-API-BASE-URL":
+			if strings.Contains(f.Evidence, "api.androidsample.com") {
+				foundAPI = true
+			}
+		case "APK-ART-SERVICE-AWS":
+			if strings.Contains(f.Evidence, "sample-bucket.s3.amazonaws.com") {
+				foundS3 = true
+			}
+		case "APK-ART-SECRET-GOOGLE-KEY":
+			foundGoogleKey = true
+			if strings.Contains(f.Evidence, "SampleGoogleAPIKey") {
+				t.Fatalf("Raw key leaked in evidence: %s", f.Evidence)
+			}
+		case "APK-ART-GRAPHQL":
+			foundGraphQL = true
+		}
+	}
+
+	if !foundAPI {
+		t.Errorf("expected API Base URL finding from independent D8 fixture")
+	}
+	if !foundS3 {
+		t.Errorf("expected AWS S3 finding from independent D8 fixture")
+	}
+	if !foundGoogleKey {
+		t.Errorf("expected Google API Key candidate from independent D8 fixture")
+	}
+	if !foundGraphQL {
+		t.Errorf("expected GraphQL finding from independent D8 fixture")
+	}
+}
+
+func TestDEXParser_ULEB128_OverflowAndBoundsGuard(t *testing.T) {
+	// 1. Test 5-byte ULEB128 with bits 4..6 set on the 5th byte (overflow beyond 32 bits)
+	overflowBytes := []byte{0x80, 0x80, 0x80, 0x80, 0x70} // 5th byte has b&0x70 != 0
+	_, _, err := decodeULEB128(overflowBytes, 0)
+	if err == nil || !strings.Contains(err.Error(), "overflow beyond 32 bits") {
+		t.Errorf("expected ULEB128 integer overflow error, got: %v", err)
+	}
+
+	// 2. Test 5-byte ULEB128 with continuation bit set on 5th byte (exceeds 5 bytes)
+	exceeds5Bytes := []byte{0x80, 0x80, 0x80, 0x80, 0x80, 0x01}
+	_, _, err = decodeULEB128(exceeds5Bytes, 0)
+	if err == nil || !strings.Contains(err.Error(), "exceeds 5 bytes") {
+		t.Errorf("expected ULEB128 sequence exceeds 5 bytes error, got: %v", err)
+	}
+
+	// 3. Test EOF during ULEB128 continuation
+	truncatedULEB := []byte{0x80, 0x80}
+	_, _, err = decodeULEB128(truncatedULEB, 0)
+	if err == nil || !strings.Contains(err.Error(), "unexpected EOF") {
+		t.Errorf("expected unexpected EOF error, got: %v", err)
+	}
+
+	// 4. Test integer overflow guards on string IDs table size calculation
+	ctx := context.Background()
+	dexBytes := buildSyntheticDEX([]string{"test"}, "035")
+	// Set string_ids_size to large value that would overflow 32-bit arithmetic if multiplied by 4
+	binary.LittleEndian.PutUint32(dexBytes[0x38:0x3C], 0x40000001) // 0x40000001 * 4 overflows 32-bit uint
+	_, err = ParseDEX(ctx, "classes.dex", dexBytes, DefaultLimits())
+	if err == nil {
+		t.Error("expected bounds/limit error for oversized string_ids_size, got nil")
+	}
+}
+
+func TestArtifact_ConfigurationFormats(t *testing.T) {
+	tempDir := t.TempDir()
+	ws, err := NewWorkspace(tempDir)
+	if err != nil {
+		t.Fatalf("failed creating workspace: %v", err)
+	}
+	defer ws.Close()
+
+	// 1. Nested JSON with arrays and escaped characters
+	jsonConfig := `{
+		"app": {
+			"endpoints": [
+				"https://nested.json-api.org/v1/auth",
+				"https://backup.json-api.org/v2/sync"
+			],
+			"env": "production",
+			"nested": {
+				"redis_cache": "redis://:CacheTokenABC123@redis.internal.org:6379"
+			}
+		}
+	}`
+	if err := os.WriteFile(filepath.Join(ws.Dir, "app_config.json"), []byte(jsonConfig), 0600); err != nil {
+		t.Fatalf("failed writing json config: %v", err)
+	}
+
+	// 2. YAML file with list items, inline comments, and URL values
+	yamlConfig := `
+# Production environment configuration
+services:
+  - backend_url: "https://yaml-api.service.net/v1/data" # Primary API gateway
+  - database_uri: "mongodb://service_user:SecurePass456!@mongo.cloud.internal:27017/db"
+  - public_info: "some-public-text"
+`
+	if err := os.WriteFile(filepath.Join(ws.Dir, "config.yaml"), []byte(yamlConfig), 0600); err != nil {
+		t.Fatalf("failed writing yaml config: %v", err)
+	}
+
+	// 3. INI / properties file with comments and colon-separated values
+	iniConfig := `
+; INI Configuration File
+[api]
+base_url = https://ini-api.service.net/api/v1
+graphql_url = https://ini-api.service.net/graphql
+timeout = 60
+`
+	if err := os.WriteFile(filepath.Join(ws.Dir, "settings.ini"), []byte(iniConfig), 0600); err != nil {
+		t.Fatalf("failed writing ini config: %v", err)
+	}
+
+	ctx := context.Background()
+	res, err := AnalyzeArtifacts(ctx, ws, DefaultLimits())
+	if err != nil {
+		t.Fatalf("unexpected error analyzing configuration formats: %v", err)
+	}
+
+	var foundJSONEndpoint, foundYAMLEndpoint, foundINIEndpoint bool
+	var foundMongoCreds, foundRedisCreds, foundGraphQL bool
+
+	for _, f := range res.Findings {
+		switch f.RuleID {
+		case "APK-ART-API-BASE-URL", "APK-ART-API-ENDPOINT":
+			if strings.Contains(f.Evidence, "nested.json-api.org") {
+				foundJSONEndpoint = true
+			}
+			if strings.Contains(f.Evidence, "yaml-api.service.net") {
+				foundYAMLEndpoint = true
+			}
+			if strings.Contains(f.Evidence, "ini-api.service.net") {
+				foundINIEndpoint = true
+			}
+		case "APK-ART-SECRET-DB-URI":
+			if strings.Contains(f.EvidenceDetails.Details["scheme"], "mongo") {
+				foundMongoCreds = true
+			}
+			if strings.Contains(f.EvidenceDetails.Details["scheme"], "redis") {
+				foundRedisCreds = true
+			}
+		case "APK-ART-GRAPHQL":
+			foundGraphQL = true
+		}
+	}
+
+	if !foundJSONEndpoint {
+		t.Error("expected JSON endpoint finding")
+	}
+	if !foundYAMLEndpoint {
+		t.Error("expected YAML endpoint finding")
+	}
+	if !foundINIEndpoint {
+		t.Error("expected INI endpoint finding")
+	}
+	if !foundMongoCreds {
+		t.Error("expected MongoDB credential finding from YAML")
+	}
+	if !foundRedisCreds {
+		t.Error("expected Redis credential finding from JSON")
+	}
+	if !foundGraphQL {
+		t.Error("expected GraphQL finding from INI")
+	}
+}
+
+func TestArtifact_StrictRedactionAssurance_Sentinels(t *testing.T) {
+	// Construct distinct synthetic sentinels for each secret category
+	sentinelAWS := "AKIA" + "SENTINELAWS123456"
+	sentinelGoogle := "AIzaSy" + "SENTINELGOOGLEAPIKEY1234567890abc"
+	sentinelStripe := "sk_live_" + "SENTINELSTRIPESECRET1234567890"
+	sentinelGitHub := "ghp_" + "SENTINELGITHUBTOKEN1234567890abcdefgh"
+	sentinelSlack := "xoxb-" + "SENTINELSLACKTOKEN12345678901234567890"
+	sentinelOpenAI := "sk-proj-" + "SENTINELOPENAIKEY1234567890abcdef1234567890abcdef"
+	sentinelMongoPass := "SENTINEL_DB_SECRET_PASS_999!"
+	sentinelRedisPass := "SENTINEL_REDIS_AUTH_KEY_888"
+
+	allSentinels := []string{
+		sentinelAWS,
+		sentinelGoogle,
+		sentinelStripe,
+		sentinelGitHub,
+		sentinelSlack,
+		sentinelOpenAI,
+		sentinelMongoPass,
+		sentinelRedisPass,
+	}
+
+	dexStrings := []string{
+		sentinelAWS,
+		sentinelGoogle,
+		sentinelStripe,
+		sentinelGitHub,
+		sentinelSlack,
+		sentinelOpenAI,
+	}
+
+	dexBytes := buildSyntheticDEX(dexStrings, "035")
+
+	tempDir := t.TempDir()
+	ws, err := NewWorkspace(tempDir)
+	if err != nil {
+		t.Fatalf("failed creating workspace: %v", err)
+	}
+	defer ws.Close()
+
+	if err := os.WriteFile(filepath.Join(ws.Dir, "classes.dex"), dexBytes, 0600); err != nil {
+		t.Fatalf("failed writing classes.dex: %v", err)
+	}
+	ws.DexFiles = []string{"classes.dex"}
+
+	// Stash connection strings with password sentinels in config
+	propsContent := fmt.Sprintf("db.uri=mongodb://admin:%s@db.corp.net:27017/prod\nredis.url=redis://:%s@cache.corp.net:6379",
+		sentinelMongoPass, sentinelRedisPass)
+	if err := os.WriteFile(filepath.Join(ws.Dir, "database.properties"), []byte(propsContent), 0600); err != nil {
+		t.Fatalf("failed writing properties: %v", err)
+	}
+
+	ctx := context.Background()
+	res, err := AnalyzeArtifacts(ctx, ws, DefaultLimits())
+	if err != nil {
+		t.Fatalf("AnalyzeArtifacts failed: %v", err)
+	}
+
+	// 1. Verify finding fields in memory
+	for _, f := range res.Findings {
+		for _, sentinel := range allSentinels {
+			if strings.Contains(f.Evidence, sentinel) {
+				t.Fatalf("SENTINEL LEAKED in finding.Evidence for %s: %s", f.RuleID, f.Evidence)
+			}
+			if strings.Contains(f.EvidenceDetails.Observation, sentinel) {
+				t.Fatalf("SENTINEL LEAKED in EvidenceDetails.Observation for %s: %s", f.RuleID, f.EvidenceDetails.Observation)
+			}
+			if strings.Contains(f.EvidenceDetails.Location, sentinel) {
+				t.Fatalf("SENTINEL LEAKED in EvidenceDetails.Location for %s: %s", f.RuleID, f.EvidenceDetails.Location)
+			}
+			if strings.Contains(f.Endpoint, sentinel) {
+				t.Fatalf("SENTINEL LEAKED in finding.Endpoint for %s: %s", f.RuleID, f.Endpoint)
+			}
+			if strings.Contains(f.Title, sentinel) {
+				t.Fatalf("SENTINEL LEAKED in finding.Title for %s: %s", f.RuleID, f.Title)
+			}
+			if strings.Contains(f.Description, sentinel) {
+				t.Fatalf("SENTINEL LEAKED in finding.Description for %s: %s", f.RuleID, f.Description)
+			}
+			if strings.Contains(f.Remediation, sentinel) {
+				t.Fatalf("SENTINEL LEAKED in finding.Remediation for %s: %s", f.RuleID, f.Remediation)
+			}
+			if f.RemediationAdvice != nil && strings.Contains(f.RemediationAdvice.Summary, sentinel) {
+				t.Fatalf("SENTINEL LEAKED in RemediationAdvice for %s: %s", f.RuleID, f.RemediationAdvice.Summary)
+			}
+			for dk, dv := range f.EvidenceDetails.Details {
+				if strings.Contains(dv, sentinel) {
+					t.Fatalf("SENTINEL LEAKED in Details[%s] for %s: %s", dk, f.RuleID, dv)
+				}
+			}
+		}
+	}
+
+	// 2. Verify complete JSON serialization output
+	jsonBytes, err := json.MarshalIndent(res, "", "  ")
+	if err != nil {
+		t.Fatalf("failed to marshal ArtifactAnalysisResult to JSON: %v", err)
+	}
+	jsonStr := string(jsonBytes)
+
+	for _, sentinel := range allSentinels {
+		if strings.Contains(jsonStr, sentinel) {
+			t.Fatalf("SECURITY VIOLATION: Sentinel %q leaked into JSON output:\n%s", sentinel, jsonStr)
+		}
+	}
+}
+
+func TestArtifact_ConfidenceAndFalsePositives(t *testing.T) {
+	// Create google-services.json containing intentionally public configuration identifiers
+	rawJSON := `{
+		"project_info": {
+			"project_number": "987654321098",
+			"project_id": "public-corp-android",
+			"storage_bucket": "public-corp-android.appspot.com",
+			"firebase_url": "https://public-corp-android.firebaseio.com"
+		},
+		"client": [
+			{
+				"client_info": {
+					"mobilesdk_app_id": "1:987654321098:android:1234567890abcdef123456",
+					"android_client_info": {
+						"package_name": "com.corp.publicapp"
+					}
+				},
+				"oauth_client": [
+					{
+						"client_id": "987654321098-abcdefghijklmnop.apps.googleusercontent.com",
+						"client_type": 3
+					}
+				]
+			}
+		]
+	}`
+
+	tempDir := t.TempDir()
+	ws, err := NewWorkspace(tempDir)
+	if err != nil {
+		t.Fatalf("failed creating workspace: %v", err)
+	}
+	defer ws.Close()
+
+	if err := os.WriteFile(filepath.Join(ws.Dir, "google-services.json"), []byte(rawJSON), 0600); err != nil {
+		t.Fatalf("failed writing google-services.json: %v", err)
+	}
+
+	ctx := context.Background()
+	res, err := AnalyzeArtifacts(ctx, ws, DefaultLimits())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Ensure NO secret findings were generated for the public identifiers
+	if res.Summary.SecretsCount != 0 {
+		t.Errorf("expected 0 secret findings for public Firebase identifiers, got %d", res.Summary.SecretsCount)
+	}
+
+	// Verify the Firebase finding is Informational with High confidence
+	if res.Summary.ServicesCount != 1 {
+		t.Fatalf("expected exactly 1 service indicator finding, got %d", res.Summary.ServicesCount)
+	}
+
+	f := res.Findings[0]
+	if f.RuleID != "APK-ART-SERVICE-FIREBASE" {
+		t.Errorf("expected RuleID APK-ART-SERVICE-FIREBASE, got %s", f.RuleID)
+	}
+	if f.Severity != report.SeverityInfo {
+		t.Errorf("expected Severity INFO, got %s", f.Severity)
+	}
+	if f.Confidence != report.ConfidenceHigh {
+		t.Errorf("expected Confidence HIGH, got %s", f.Confidence)
 	}
 }

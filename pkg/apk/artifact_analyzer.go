@@ -44,7 +44,7 @@ type ArtifactAnalysisSummary struct {
 // Pre-compiled regular expressions for static indicator discovery
 var (
 	awsAccessKeyRegex   = regexp.MustCompile(`\b(AKIA[0-9A-Z]{16})\b`)
-	googleAPIKeyRegex   = regexp.MustCompile(`\b(AIza[0-9A-Za-z-_]{35})\b`)
+	googleAPIKeyRegex   = regexp.MustCompile(`\b(AIza[0-9A-Za-z-_]{35,40})\b`)
 	stripeLiveKeyRegex  = regexp.MustCompile(`\b((?:sk|rk)_live_[0-9a-zA-Z]{24,})\b`)
 	githubTokenRegex    = regexp.MustCompile(`\b(ghp_[0-9a-zA-Z]{36}|github_pat_[0-9a-zA-Z_]{82})\b`)
 	slackTokenRegex     = regexp.MustCompile(`\b(xoxb-[0-9a-zA-Z-]{20,})\b`)
@@ -121,6 +121,7 @@ func isPublicConfigurationIdentifier(key, val string) bool {
 	if strings.Contains(kLower, "project_id") ||
 		strings.Contains(kLower, "project_number") ||
 		strings.Contains(kLower, "storage_bucket") ||
+		strings.Contains(kLower, "firebase_url") ||
 		strings.Contains(kLower, "mobilesdk_app_id") ||
 		strings.Contains(kLower, "client_type") ||
 		strings.Contains(kLower, "package_name") {
@@ -671,22 +672,23 @@ func inspectStringForIntelligence(s string, origin string, sources []string, tar
 		))
 	}
 
-	// 12. GraphQL Query Operation Strings
-	if graphqlQueryRegex.MatchString(s) {
-		obs := fmt.Sprintf("Discovered static GraphQL operation definition in %s", origin)
+	// 12. GraphQL Query Operation Strings and Path References
+	if graphqlQueryRegex.MatchString(s) || s == "/graphql" || (strings.HasPrefix(s, "/") && strings.HasSuffix(strings.ToLower(s), "/graphql")) {
+		obs := fmt.Sprintf("Discovered static GraphQL reference in %s: %s", origin, s)
 		addFinding(out, buildArtifactFinding(
 			"APK-ART-GRAPHQL",
 			"api-endpoint",
-			"Discovered Static GraphQL Query Operation",
+			"Discovered Static GraphQL Reference",
 			report.SeverityInfo,
 			report.ConfidenceHigh,
 			target,
 			origin,
-			"A static GraphQL query, mutation, or subscription operation definition was identified in application artifacts.",
+			"A static GraphQL query, endpoint path (/graphql), or operation definition was identified in application artifacts.",
 			obs,
 			"Ensure server-side GraphQL resolvers enforce strict field authorization.",
 			map[string]string{
 				"file_origin": origin,
+				"reference":   s,
 			},
 			report.FindingStatusConfirmed,
 		))
@@ -897,22 +899,28 @@ func buildArtifactFinding(
 	details map[string]string,
 	status report.FindingStatus,
 ) report.Finding {
-	hasher := sha256.New()
-	hasher.Write([]byte(ruleID))
-	hasher.Write([]byte(category))
-	hasher.Write([]byte(title))
-	hasher.Write([]byte(endpoint))
-	hasher.Write([]byte(observation))
-	hashHex := hex.EncodeToString(hasher.Sum(nil))[:12]
-
-	id := fmt.Sprintf("apk-art-%s-%s", strings.ToLower(ruleID), hashHex)
-
-	// Ensure all observation text and detail values are strictly redacted before serialization
+	// Ensure all fields and detail values are strictly redacted before serialization
 	cleanObs := secrets.RedactText(observation)
+	cleanTitle := secrets.RedactText(title)
+	cleanDesc := secrets.RedactText(description)
+	cleanRemediation := secrets.RedactText(remediation)
+	cleanEndpoint := secrets.SanitizeURL(endpoint)
+	cleanTarget := secrets.RedactText(target)
+
 	cleanDetails := make(map[string]string, len(details))
 	for k, v := range details {
 		cleanDetails[k] = secrets.RedactText(v)
 	}
+
+	hasher := sha256.New()
+	hasher.Write([]byte(ruleID))
+	hasher.Write([]byte(category))
+	hasher.Write([]byte(cleanTitle))
+	hasher.Write([]byte(cleanEndpoint))
+	hasher.Write([]byte(cleanObs))
+	hashHex := hex.EncodeToString(hasher.Sum(nil))[:12]
+
+	id := fmt.Sprintf("apk-art-%s-%s", strings.ToLower(ruleID), hashHex)
 
 	return report.Finding{
 		ID:                    id,
@@ -921,23 +929,23 @@ func buildArtifactFinding(
 		ClassificationOutcome: report.OutcomeConfirmed,
 		AnalysisMethod:        report.AnalysisMethodStatic,
 		Category:              category,
-		Title:                 title,
+		Title:                 cleanTitle,
 		Severity:              severity,
 		Confidence:            confidence,
-		Target:                target,
-		Endpoint:              endpoint,
+		Target:                cleanTarget,
+		Endpoint:              cleanEndpoint,
 		Method:                "STATIC_ANALYSIS",
-		Description:           description,
+		Description:           cleanDesc,
 		Evidence:              cleanObs,
 		EvidenceDetails: report.EvidenceDetails{
 			Observation:     cleanObs,
-			Location:        endpoint,
+			Location:        cleanEndpoint,
 			DetectionMethod: "static_artifact_intelligence",
 			Details:         cleanDetails,
 		},
-		Remediation: remediation,
+		Remediation: cleanRemediation,
 		RemediationAdvice: &report.RemediationAdvice{
-			Summary: remediation,
+			Summary: cleanRemediation,
 		},
 		Source:      "apk",
 		Fingerprint: hashHex,

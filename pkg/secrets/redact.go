@@ -29,6 +29,7 @@ var (
 	openaiKeyPattern      = regexp.MustCompile(`(?:\b|_)(?:sk-(?:proj-)?[0-9a-zA-Z_-]{20,})\b`)
 	awsAccessKeyPattern   = regexp.MustCompile(`(?:\b|_)(AKIA|ABIA|ACCA|ASIA)[0-9A-Z]{16,28}\b`)
 	supabaseSecretPattern = regexp.MustCompile(`(?:\b|_)(?:sb_secret_[0-9a-zA-Z_-]{20,})\b`)
+	googleKeyPattern      = regexp.MustCompile(`(?:\b|_)(AIza[0-9A-Za-z-_]{35,40})\b`)
 
 	// Payment card numbers (Visa, Mastercard, Amex, Discover, formatted or unformatted).
 	creditCardPattern = regexp.MustCompile(`\b(?:\d{4}[-\s]?){3}\d{4}\b|\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|6(?:011|5[0-9]{2})[0-9]{12})\b`)
@@ -127,6 +128,17 @@ func RedactText(input string) string {
 			return "_[REDACTED]"
 		}
 		return "[REDACTED]"
+	})
+	s = googleKeyPattern.ReplaceAllStringFunc(s, func(m string) string {
+		prefix := ""
+		if strings.HasPrefix(m, "_") {
+			prefix = "_"
+			m = m[1:]
+		}
+		if len(m) >= 4 {
+			return prefix + m[:4] + "[REDACTED]"
+		}
+		return prefix + "[REDACTED]"
 	})
 
 	// 5. Redact credit card numbers and personal identity numbers (SSN)
