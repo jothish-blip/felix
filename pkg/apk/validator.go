@@ -102,9 +102,21 @@ func ValidateZIPMagic(r io.ReaderAt, size int64) error {
 	return fmt.Errorf("%w: invalid archive magic signature 0x%X (expected ZIP 'PK\\x03\\x04')", ErrNotAnAPK, header)
 }
 
+var (
+	// windowsReservedNames lists legacy MS-DOS device names that are reserved on Windows.
+	windowsReservedNames = map[string]bool{
+		"CON": true, "PRN": true, "AUX": true, "NUL": true,
+		"COM1": true, "COM2": true, "COM3": true, "COM4": true,
+		"COM5": true, "COM6": true, "COM7": true, "COM8": true, "COM9": true,
+		"LPT1": true, "LPT2": true, "LPT3": true, "LPT4": true,
+		"LPT5": true, "LPT6": true, "LPT7": true, "LPT8": true, "LPT9": true,
+	}
+)
+
 // SanitizeArchiveEntry validates and canonicalizes an archive entry name.
 // It strictly prevents path traversal, absolute paths, backslashes, drive letters, UNC shares,
-// null bytes, and excessive path lengths or depths.
+// colons (alternate data streams), null bytes, control characters, Windows reserved device names,
+// trailing dots/spaces, and excessive path lengths or depths.
 func SanitizeArchiveEntry(name string, limits Limits) (string, error) {
 	if len(name) > limits.MaxPathLength {
 		return "", fmt.Errorf("%w: entry path length (%d) exceeds limit (%d)",
@@ -115,14 +127,29 @@ func SanitizeArchiveEntry(name string, limits Limits) (string, error) {
 		return "", fmt.Errorf("%w: archive contains empty entry name", ErrSecurityViolation)
 	}
 
-	// Reject null bytes
-	if strings.ContainsRune(name, 0) {
-		return "", fmt.Errorf("%w: entry name contains prohibited null byte: %q", ErrSecurityViolation, name)
+	// Reject null bytes and control characters (0x00 to 0x1F)
+	for i := 0; i < len(name); i++ {
+		if name[i] < 32 {
+			return "", fmt.Errorf("%w: entry name contains prohibited control character (0x%02X): %q",
+				ErrSecurityViolation, name[i], name)
+		}
 	}
 
 	// Reject backslashes outright to prevent cross-platform directory separator confusion and path bypasses
 	if strings.Contains(name, "\\") {
 		return "", fmt.Errorf("%w: entry name contains backslash separator %q (ZIP standard requires '/')",
+			ErrSecurityViolation, name)
+	}
+
+	// Reject colons anywhere in path (blocks Windows drive letters, relative volume paths, and Alternate Data Streams)
+	if strings.Contains(name, ":") {
+		return "", fmt.Errorf("%w: entry name contains prohibited colon character (drive letter or ADS): %q",
+			ErrSecurityViolation, name)
+	}
+
+	// Reject characters prohibited on Windows NTFS/FAT (< > " | ? *)
+	if strings.ContainsAny(name, "<>\"|?*") {
+		return "", fmt.Errorf("%w: entry name contains prohibited filesystem character: %q",
 			ErrSecurityViolation, name)
 	}
 
@@ -134,11 +161,6 @@ func SanitizeArchiveEntry(name string, limits Limits) (string, error) {
 	// Reject UNC network shares
 	if strings.HasPrefix(name, "//") {
 		return "", fmt.Errorf("%w: UNC network path in archive entry: %q", ErrSecurityViolation, name)
-	}
-
-	// Reject Windows volume/drive specifications (e.g. C:, D:)
-	if filepath.VolumeName(name) != "" || (len(name) >= 2 && name[1] == ':') {
-		return "", fmt.Errorf("%w: drive letter specification in archive entry: %q", ErrSecurityViolation, name)
 	}
 
 	// Canonicalize using POSIX path Clean (ZIP paths are forward-slash delimited)
@@ -153,12 +175,29 @@ func SanitizeArchiveEntry(name string, limits Limits) (string, error) {
 		return "", fmt.Errorf("%w: entry name resolves to root or empty: %q", ErrSecurityViolation, name)
 	}
 
-	// Enforce directory nesting depth limit
+	// Enforce directory nesting depth limit and validate segments
 	segments := strings.Split(clean, "/")
 	depth := 0
-	for _, s := range segments {
-		if s != "" && s != "." {
-			depth++
+	for _, seg := range segments {
+		if seg == "" || seg == "." {
+			continue
+		}
+		depth++
+
+		// Reject Windows reserved device names (e.g. AUX, CON, NUL, COM1-9, LPT1-9, aux.xml, con.json)
+		base := seg
+		if dotIdx := strings.IndexByte(base, '.'); dotIdx != -1 {
+			base = base[:dotIdx]
+		}
+		if windowsReservedNames[strings.ToUpper(base)] {
+			return "", fmt.Errorf("%w: entry path contains Windows reserved device name %q: %q",
+				ErrSecurityViolation, base, clean)
+		}
+
+		// Reject trailing dots or trailing spaces in segments or base names (Windows strips them, collapsing distinct paths)
+		if strings.HasSuffix(seg, ".") || strings.HasSuffix(seg, " ") || strings.HasSuffix(base, " ") || strings.HasSuffix(base, ".") {
+			return "", fmt.Errorf("%w: entry path segment has illegal trailing dot or space: %q",
+				ErrSecurityViolation, seg)
 		}
 	}
 	if depth > limits.MaxPathDepth {
@@ -176,11 +215,47 @@ func VerifyExtractionTarget(workspaceDir, relPath string) (string, error) {
 	target := filepath.Join(cleanWorkspace, filepath.FromSlash(relPath))
 	cleanTarget := filepath.Clean(target)
 
+	// Defense 1: Verify relative path does not escape using filepath.Rel
+	rel, err := filepath.Rel(cleanWorkspace, cleanTarget)
+	if err != nil {
+		return "", fmt.Errorf("%w: cannot resolve relative path for %q from %q: %v",
+			ErrSecurityViolation, relPath, workspaceDir, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == "." {
+		return "", fmt.Errorf("%w: entry path %q resolves outside workspace directory",
+			ErrSecurityViolation, relPath)
+	}
+
+	// Defense 2: Strict prefix containment check (case-insensitive for Windows safety)
 	expectedPrefix := cleanWorkspace + string(filepath.Separator)
-	if cleanTarget != cleanWorkspace && !strings.HasPrefix(cleanTarget, expectedPrefix) {
+	if !strings.HasPrefix(strings.ToLower(cleanTarget), strings.ToLower(expectedPrefix)) {
 		return "", fmt.Errorf("%w: entry path %q escapes workspace directory %q",
 			ErrSecurityViolation, relPath, workspaceDir)
 	}
 
 	return cleanTarget, nil
+}
+
+// ValidateManifestContent inspects the initial bytes of AndroidManifest.xml.
+// It verifies that the manifest is either compiled Android Binary XML (AXML)
+// starting with the 4-byte chunk header 0x00080003 (little-endian: 0x03, 0x00, 0x08, 0x00)
+// or a valid XML document containing a <manifest> element.
+func ValidateManifestContent(data []byte) error {
+	if len(data) < 4 {
+		return fmt.Errorf("%w: AndroidManifest.xml is too small (%d bytes)", ErrNotAnAPK, len(data))
+	}
+	// Android Binary XML magic: chunk type 0x0003, header size 0x0008 (little-endian: 0x03, 0x00, 0x08, 0x00)
+	if bytes.Equal(data[:4], []byte{0x03, 0x00, 0x08, 0x00}) {
+		return nil
+	}
+	// Plain text XML with <manifest> tag
+	content := data
+	if bytes.HasPrefix(content, []byte{0xEF, 0xBB, 0xBF}) { // UTF-8 BOM
+		content = content[3:]
+	}
+	trimmed := bytes.TrimSpace(content)
+	if bytes.HasPrefix(trimmed, []byte("<?xml")) || bytes.Contains(content, []byte("<manifest")) {
+		return nil
+	}
+	return fmt.Errorf("%w: AndroidManifest.xml has unrecognized format (neither Android Binary XML nor XML <manifest>)", ErrNotAnAPK)
 }

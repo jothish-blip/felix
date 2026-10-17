@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -642,5 +643,354 @@ func TestIntake_StaticOnly_NoSubprocessesOrNetwork(t *testing.T) {
 	}
 	if fi.Size() == 0 {
 		t.Errorf("input file was modified or truncated")
+	}
+}
+
+// ============================================================================
+// 7. SECURITY AUDIT REGRESSION TESTS
+// ============================================================================
+
+func TestIntake_GenericZIPWithFakeManifest(t *testing.T) {
+	// A generic ZIP with an AndroidManifest.xml that does not contain AXML or XML <manifest>
+	apkPath := createTestZip(t, map[string][]byte{
+		"AndroidManifest.xml": []byte("This is not a real Android manifest file"),
+		"classes.dex":         []byte("dex"),
+	})
+
+	_, err := Intake(context.Background(), apkPath, IntakeOptions{})
+	if err == nil {
+		t.Fatalf("expected ErrNotAnAPK for fake manifest content, got nil")
+	}
+	if !errors.Is(err, ErrNotAnAPK) {
+		t.Errorf("expected ErrNotAnAPK, got %v", err)
+	}
+}
+
+func TestIntake_GenericZIPMissingAndroidComponents(t *testing.T) {
+	// A generic ZIP with a valid XML manifest but zero Android components (photos, docs only)
+	apkPath := createTestZip(t, map[string][]byte{
+		"AndroidManifest.xml": []byte("<manifest package=\"com.generic.zip\"/>"),
+		"photo.jpg":           []byte("image-data"),
+		"report.pdf":          []byte("pdf-data"),
+	})
+
+	_, err := Intake(context.Background(), apkPath, IntakeOptions{})
+	if err == nil {
+		t.Fatalf("expected ErrNotAnAPK for generic zip lacking Android package components, got nil")
+	}
+	if !errors.Is(err, ErrNotAnAPK) {
+		t.Errorf("expected ErrNotAnAPK, got %v", err)
+	}
+}
+
+func TestIntake_BinaryAXMLManifest(t *testing.T) {
+	// Compiled Android Binary XML header: 0x00080003 (little-endian: 0x03, 0x00, 0x08, 0x00)
+	axmlHeader := []byte{0x03, 0x00, 0x08, 0x00, 0x20, 0x00, 0x00, 0x00}
+	axmlData := append(axmlHeader, bytes.Repeat([]byte{0x00}, 24)...)
+
+	apkPath := createTestZip(t, map[string][]byte{
+		"AndroidManifest.xml": axmlData,
+		"classes.dex":         []byte("dex-bytes"),
+	})
+
+	res, err := Intake(context.Background(), apkPath, IntakeOptions{Extract: true})
+	if err != nil {
+		t.Fatalf("expected successful intake for binary AXML APK, got: %v", err)
+	}
+	defer res.Workspace.Close()
+
+	if !res.ManifestPresent {
+		t.Errorf("expected ManifestPresent true")
+	}
+}
+
+func TestIntake_WindowsReservedDeviceNames(t *testing.T) {
+	reserved := []string{
+		"aux.json",
+		"con.xml",
+		"NUL",
+		"COM1.txt",
+		"prn.dat",
+		"assets/aux.png",
+		"res/raw/lpt2.bin",
+	}
+
+	for _, name := range reserved {
+		apkPath := createTestZip(t, map[string][]byte{
+			"AndroidManifest.xml": []byte("<manifest/>"),
+			"classes.dex":         []byte("dex"),
+			name:                  []byte("data"),
+		})
+
+		_, err := Intake(context.Background(), apkPath, IntakeOptions{})
+		if err == nil {
+			t.Errorf("expected ErrSecurityViolation for Windows reserved name %q, got nil", name)
+		}
+		if !errors.Is(err, ErrSecurityViolation) {
+			t.Errorf("expected ErrSecurityViolation for %q, got %v", name, err)
+		}
+	}
+}
+
+func TestIntake_TrailingDotOrSpacePath(t *testing.T) {
+	badPaths := []string{
+		"assets./config.json",
+		"foo .txt",
+		"res/raw/file.",
+		"assets/dir /item.txt",
+	}
+
+	for _, p := range badPaths {
+		apkPath := createTestZip(t, map[string][]byte{
+			"AndroidManifest.xml": []byte("<manifest/>"),
+			"classes.dex":         []byte("dex"),
+			p:                     []byte("bad-path-data"),
+		})
+
+		_, err := Intake(context.Background(), apkPath, IntakeOptions{})
+		if err == nil {
+			t.Errorf("expected ErrSecurityViolation for trailing dot/space path %q, got nil", p)
+		}
+		if !errors.Is(err, ErrSecurityViolation) {
+			t.Errorf("expected ErrSecurityViolation for %q, got %v", p, err)
+		}
+	}
+}
+
+func TestIntake_AlternateDataStreamColon(t *testing.T) {
+	apkPath := createTestZip(t, map[string][]byte{
+		"AndroidManifest.xml": []byte("<manifest/>"),
+		"classes.dex:stream":  []byte("ads-data"),
+	})
+
+	_, err := Intake(context.Background(), apkPath, IntakeOptions{})
+	if err == nil {
+		t.Fatalf("expected ErrSecurityViolation for ADS colon, got nil")
+	}
+	if !errors.Is(err, ErrSecurityViolation) {
+		t.Errorf("expected ErrSecurityViolation, got %v", err)
+	}
+}
+
+func TestIntake_RawUnixSymlinkInExternalAttrs(t *testing.T) {
+	// Create zip with raw external attributes declaring symlink (0120000 << 16) even if creator is FAT/DOS
+	tmpDir := t.TempDir()
+	apkPath := filepath.Join(tmpDir, "symlink_raw.apk")
+	f, _ := os.Create(apkPath)
+	zw := zip.NewWriter(f)
+
+	w1, _ := zw.Create("AndroidManifest.xml")
+	w1.Write([]byte("<manifest/>"))
+
+	w2, _ := zw.Create("classes.dex")
+	w2.Write([]byte("dex"))
+
+	fh := &zip.FileHeader{
+		Name:           "assets/symlink_target",
+		CreatorVersion: 0,            // FAT / MS-DOS creator version
+		ExternalAttrs:  0120000 << 16, // Unix S_IFLNK in high 16 bits!
+		Method:         zip.Store,
+	}
+	w3, _ := zw.CreateHeader(fh)
+	w3.Write([]byte("../outside.txt"))
+
+	zw.Close()
+	f.Close()
+
+	_, err := Intake(context.Background(), apkPath, IntakeOptions{})
+	if err == nil {
+		t.Fatalf("expected ErrSecurityViolation for raw external attribute symlink, got nil")
+	}
+	if !errors.Is(err, ErrSecurityViolation) {
+		t.Errorf("expected ErrSecurityViolation, got %v", err)
+	}
+}
+
+func TestIntake_CaseInsensitiveCollision(t *testing.T) {
+	tmpDir := t.TempDir()
+	apkPath := filepath.Join(tmpDir, "case_collision.apk")
+	f, _ := os.Create(apkPath)
+	zw := zip.NewWriter(f)
+
+	w1, _ := zw.Create("AndroidManifest.xml")
+	w1.Write([]byte("<manifest/>"))
+
+	w2, _ := zw.Create("classes.dex")
+	w2.Write([]byte("dex1"))
+
+	w3, _ := zw.Create("CLASSES.DEX") // case-insensitive collision
+	w3.Write([]byte("dex2"))
+
+	zw.Close()
+	f.Close()
+
+	_, err := Intake(context.Background(), apkPath, IntakeOptions{})
+	if err == nil {
+		t.Fatalf("expected ErrSecurityViolation for case collision, got nil")
+	}
+	if !errors.Is(err, ErrSecurityViolation) {
+		t.Errorf("expected ErrSecurityViolation, got %v", err)
+	}
+}
+
+func TestIntake_FileDirectoryConflict_DirectoryFirst(t *testing.T) {
+	tmpDir := t.TempDir()
+	apkPath := filepath.Join(tmpDir, "dir_first_conflict.apk")
+	f, _ := os.Create(apkPath)
+	zw := zip.NewWriter(f)
+
+	w1, _ := zw.Create("AndroidManifest.xml")
+	w1.Write([]byte("<manifest/>"))
+
+	// Create directory entry first
+	w2, _ := zw.Create("shared_path/")
+	_ = w2
+
+	// Create file entry at the exact same path
+	w3, _ := zw.Create("shared_path")
+	w3.Write([]byte("file-content"))
+
+	zw.Close()
+	f.Close()
+
+	_, err := Intake(context.Background(), apkPath, IntakeOptions{})
+	if err == nil {
+		t.Fatalf("expected ErrSecurityViolation for directory-then-file conflict, got nil")
+	}
+	if !errors.Is(err, ErrSecurityViolation) {
+		t.Errorf("expected ErrSecurityViolation, got %v", err)
+	}
+}
+
+type nopWriteCloser struct{ io.Writer }
+
+func (n nopWriteCloser) Close() error { return nil }
+
+func TestIntake_UnsupportedCompressionMethod(t *testing.T) {
+	// Register temporary compressor for method 99 so zip.Writer can build the archive
+	zip.RegisterCompressor(99, func(w io.Writer) (io.WriteCloser, error) {
+		return nopWriteCloser{w}, nil
+	})
+
+	tmpDir := t.TempDir()
+	apkPath := filepath.Join(tmpDir, "custom_method.apk")
+	f, err := os.Create(apkPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	zw := zip.NewWriter(f)
+
+	w1, _ := zw.Create("AndroidManifest.xml")
+	w1.Write([]byte("<manifest/>"))
+
+	fh := &zip.FileHeader{
+		Name:   "classes.dex",
+		Method: 99, // unsupported compression method
+	}
+	w2, err := zw.CreateHeader(fh)
+	if err != nil {
+		t.Fatalf("failed to create header: %v", err)
+	}
+	w2.Write([]byte("dummy"))
+
+	zw.Close()
+	f.Close()
+
+	_, err = Intake(context.Background(), apkPath, IntakeOptions{})
+	if err == nil {
+		t.Fatalf("expected ErrMalformedArchive for unsupported compression method, got nil")
+	}
+	if !errors.Is(err, ErrMalformedArchive) {
+		t.Errorf("expected ErrMalformedArchive, got %v", err)
+	}
+}
+
+func TestIntake_DeclaredSizeMismatch(t *testing.T) {
+	apkPath := createMinimalValidAPK(t)
+	data, err := os.ReadFile(apkPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Locate central directory header (PK\x01\x02) for classes.dex and tamper declared uncompressed size
+	cdSig := []byte{0x50, 0x4B, 0x01, 0x02}
+	idx := bytes.Index(data, cdSig)
+	if idx == -1 {
+		t.Fatalf("could not find central directory header")
+	}
+
+	found := false
+	for idx != -1 {
+		filenameLen := int(data[idx+28]) | int(data[idx+29])<<8
+		filename := string(data[idx+46 : idx+46+filenameLen])
+		if filename == "classes.dex" {
+			// Offset 24 is uint32 UncompressedSize: tamper it to 250 bytes
+			data[idx+24] = 0xFA
+			data[idx+25] = 0x00
+			data[idx+26] = 0x00
+			data[idx+27] = 0x00
+			found = true
+			break
+		}
+		next := bytes.Index(data[idx+4:], cdSig)
+		if next == -1 {
+			break
+		}
+		idx += 4 + next
+	}
+	if !found {
+		t.Fatalf("could not find classes.dex in central directory")
+	}
+
+	tamperedPath := filepath.Join(t.TempDir(), "mismatch.apk")
+	if err := os.WriteFile(tamperedPath, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = Intake(context.Background(), tamperedPath, IntakeOptions{})
+	if err == nil {
+		t.Fatalf("expected ErrMalformedArchive for declared size mismatch, got nil")
+	}
+	if !errors.Is(err, ErrMalformedArchive) {
+		t.Errorf("expected ErrMalformedArchive, got %v", err)
+	}
+}
+
+func TestIntake_EncryptedEntry(t *testing.T) {
+	tmpDir := t.TempDir()
+	apkPath := filepath.Join(tmpDir, "encrypted.apk")
+	f, err := os.Create(apkPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	zw := zip.NewWriter(f)
+
+	w1, _ := zw.Create("AndroidManifest.xml")
+	w1.Write([]byte("<manifest/>"))
+
+	fh := &zip.FileHeader{
+		Name:   "classes.dex",
+		Flags:  0x1, // General Purpose Bit Flag 0: encrypted
+		Method: zip.Store,
+	}
+	w2, err := zw.CreateHeader(fh)
+	if err != nil {
+		t.Fatalf("failed to create header: %v", err)
+	}
+	w2.Write([]byte("secret"))
+
+	zw.Close()
+	f.Close()
+
+	_, err = Intake(context.Background(), apkPath, IntakeOptions{})
+	if err == nil {
+		t.Fatalf("expected ErrSecurityViolation for encrypted entry, got nil")
+	}
+	if !errors.Is(err, ErrSecurityViolation) {
+		t.Errorf("expected ErrSecurityViolation, got %v", err)
 	}
 }

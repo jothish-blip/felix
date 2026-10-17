@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -133,9 +134,16 @@ func Intake(ctx context.Context, apkPath string, opts IntakeOptions) (*IntakeRes
 	// 8. Process and validate all archive entries
 	var (
 		seenPaths                   = make(map[string]bool, entryCount)
+		seenPathsLower              = make(map[string]bool, entryCount)
 		seenDirs                    = make(map[string]bool)
 		hasManifest                 bool
 		dexFiles                    []string
+		hasDex                      bool
+		hasResources                bool
+		hasResDir                   bool
+		hasAssetsDir                bool
+		hasLibDir                   bool
+		hasMetaInf                  bool
 		cumulativeDecompressedBytes int64
 	)
 
@@ -147,7 +155,7 @@ func Intake(ctx context.Context, apkPath string, opts IntakeOptions) (*IntakeRes
 			return nil, WrapError("entry_loop", "operation cancelled during entry processing", err)
 		}
 
-		// Reject symlinks, FIFOs, sockets, device files
+		// Reject symlinks, FIFOs, sockets, device files from parsed mode
 		mode := entry.Mode()
 		if mode&os.ModeSymlink != 0 || mode&os.ModeNamedPipe != 0 || mode&os.ModeSocket != 0 || mode&os.ModeDevice != 0 {
 			return nil, WrapError("entry_mode",
@@ -155,22 +163,71 @@ func Intake(ctx context.Context, apkPath string, opts IntakeOptions) (*IntakeRes
 				ErrSecurityViolation)
 		}
 
-		// Sanitize path and prevent path traversal / ZipSlip
+		// Also inspect raw external attributes (high 16 bits) to catch forged CreatorVersion
+		unixMode := entry.ExternalAttrs >> 16
+		if unixMode != 0 {
+			fileType := unixMode & 0170000
+			if fileType == 0120000 /* S_IFLNK */ ||
+				fileType == 0020000 /* S_IFCHR */ ||
+				fileType == 0060000 /* S_IFBLK */ ||
+				fileType == 0010000 /* S_IFIFO */ ||
+				fileType == 0140000 /* S_IFSOCK */ {
+				return nil, WrapError("entry_mode",
+					fmt.Sprintf("entry %q declares unsupported special file in raw attributes (0x%X)", entry.Name, unixMode),
+					ErrSecurityViolation)
+			}
+		}
+
+		// Sanitize path and prevent path traversal / ZipSlip / Windows device names
 		cleanPath, err := SanitizeArchiveEntry(entry.Name, limits)
 		if err != nil {
 			return nil, WrapError("sanitize_path", "", err)
 		}
 
-		// Detect duplicate archive entries
+		// Detect duplicate or case-colliding archive entries
 		if seenPaths[cleanPath] {
 			return nil, WrapError("duplicate_entry",
 				fmt.Sprintf("duplicate archive entry path detected: %q", cleanPath),
 				ErrSecurityViolation)
 		}
+		cleanPathLower := strings.ToLower(cleanPath)
+		if seenPathsLower[cleanPathLower] {
+			return nil, WrapError("duplicate_entry",
+				fmt.Sprintf("case-colliding archive entry path detected: %q", cleanPath),
+				ErrSecurityViolation)
+		}
 		seenPaths[cleanPath] = true
+		seenPathsLower[cleanPathLower] = true
+
+		// Reject encrypted or password-protected entries
+		if entry.Flags&0x1 != 0 {
+			return nil, WrapError("entry_flags",
+				fmt.Sprintf("entry %q is encrypted or password-protected", cleanPath),
+				ErrSecurityViolation)
+		}
+
+		// APK archives strictly permit Store (0) and Deflate (8) methods
+		if entry.Method != zip.Store && entry.Method != zip.Deflate {
+			return nil, WrapError("entry_method",
+				fmt.Sprintf("entry %q uses unsupported compression method %d (only Store and Deflate supported)", cleanPath, entry.Method),
+				ErrMalformedArchive)
+		}
+
+		// Compressed size cannot exceed the entire archive file size
+		if int64(entry.CompressedSize64) > fi.Size() {
+			return nil, WrapError("entry_header",
+				fmt.Sprintf("entry %q declared compressed size (%d) exceeds archive file size (%d)",
+					cleanPath, entry.CompressedSize64, fi.Size()),
+				ErrMalformedArchive)
+		}
 
 		// Directory entry handling
 		if entry.FileInfo().IsDir() {
+			if seenPaths[cleanPath] && !seenDirs[cleanPath] {
+				return nil, WrapError("path_conflict",
+					fmt.Sprintf("directory entry %q conflicts with existing file at same path", cleanPath),
+					ErrSecurityViolation)
+			}
 			seenDirs[cleanPath] = true
 			if opts.Extract {
 				targetDir, err := VerifyExtractionTarget(ws.Dir, cleanPath)
@@ -184,13 +241,27 @@ func Intake(ctx context.Context, apkPath string, opts IntakeOptions) (*IntakeRes
 			continue
 		}
 
-		// Check parent directory conflict: a file path cannot be an ancestor of another file
-		parentDir := filepath.ToSlash(filepath.Dir(cleanPath))
-		if seenPaths[parentDir] && !seenDirs[parentDir] {
+		// File entry handling: a file cannot conflict with an existing directory
+		if seenDirs[cleanPath] {
 			return nil, WrapError("path_conflict",
-				fmt.Sprintf("entry %q conflicts with existing file at %q", cleanPath, parentDir),
+				fmt.Sprintf("file entry %q conflicts with existing directory at same path", cleanPath),
 				ErrSecurityViolation)
 		}
+
+		// Check multi-level ancestor conflicts: no file can be an ancestor of another file
+		for p := cleanPath; p != "." && p != "/"; {
+			ancestor := path.Dir(p)
+			if ancestor == "." || ancestor == "/" {
+				break
+			}
+			if seenPaths[ancestor] && !seenDirs[ancestor] {
+				return nil, WrapError("path_conflict",
+					fmt.Sprintf("entry %q conflicts with existing file at %q", cleanPath, ancestor),
+					ErrSecurityViolation)
+			}
+			p = ancestor
+		}
+		parentDir := path.Dir(cleanPath)
 		if parentDir != "." && parentDir != "" {
 			seenDirs[parentDir] = true
 		}
@@ -201,6 +272,22 @@ func Intake(ctx context.Context, apkPath string, opts IntakeOptions) (*IntakeRes
 		}
 		if strings.HasSuffix(cleanPath, ".dex") {
 			dexFiles = append(dexFiles, cleanPath)
+			hasDex = true
+		}
+		if cleanPath == "resources.arsc" {
+			hasResources = true
+		}
+		if strings.HasPrefix(cleanPath, "res/") {
+			hasResDir = true
+		}
+		if strings.HasPrefix(cleanPath, "assets/") {
+			hasAssetsDir = true
+		}
+		if strings.HasPrefix(cleanPath, "lib/") {
+			hasLibDir = true
+		}
+		if strings.HasPrefix(cleanPath, "META-INF/") {
+			hasMetaInf = true
 		}
 
 		// Bound declared uncompressed size
@@ -257,7 +344,24 @@ func Intake(ctx context.Context, apkPath string, opts IntakeOptions) (*IntakeRes
 			outFile.Close()
 			if err != nil {
 				entryReader.Close()
-				return nil, WrapError("write_file", fmt.Sprintf("failed writing entry %q: %v", cleanPath, err), err)
+				return nil, WrapError("write_file", fmt.Sprintf("decompression error in entry %q: %v", cleanPath, err), ErrMalformedArchive)
+			}
+
+			// If this entry was AndroidManifest.xml, inspect content for valid AXML or XML structure
+			if cleanPath == "AndroidManifest.xml" {
+				headerBuf := make([]byte, 512)
+				mf, openErr := os.Open(targetPath)
+				if openErr != nil {
+					entryReader.Close()
+					return nil, WrapError("read_manifest", "failed to open extracted manifest for validation", openErr)
+				}
+				n, _ := io.ReadFull(mf, headerBuf)
+				mf.Close()
+
+				if err := ValidateManifestContent(headerBuf[:n]); err != nil {
+					entryReader.Close()
+					return nil, WrapError("verify_manifest", "", err)
+				}
 			}
 		} else {
 			// Discard read to verify decompression integrity, count actual bytes, and detect bombs
@@ -282,6 +386,14 @@ func Intake(ctx context.Context, apkPath string, opts IntakeOptions) (*IntakeRes
 				ErrLimitExceeded)
 		}
 
+		// Detect declared-size mismatches, premature EOF, or expansion beyond declared size
+		if uint64(bytesRead) != entry.UncompressedSize64 {
+			return nil, WrapError("size_mismatch",
+				fmt.Sprintf("entry %q actual decompressed size (%d bytes) does not match declared size (%d bytes)",
+					cleanPath, bytesRead, entry.UncompressedSize64),
+				ErrMalformedArchive)
+		}
+
 		// Update actual cumulative decompressed bytes
 		if err := CheckCumulativeGrowth(cumulativeDecompressedBytes, bytesRead, limits.MaxCumulativeDecompressedSize); err != nil {
 			return nil, WrapError("cumulative_expansion", "", err)
@@ -298,6 +410,13 @@ func Intake(ctx context.Context, apkPath string, opts IntakeOptions) (*IntakeRes
 	if !hasManifest {
 		return nil, WrapError("verify_apk",
 			"archive does not contain root AndroidManifest.xml (input is a generic ZIP, not an Android application package)",
+			ErrNotAnAPK)
+	}
+
+	// Verify that the archive contains at least one recognized Android application component or asset
+	if !hasDex && !hasResources && !hasResDir && !hasAssetsDir && !hasLibDir && !hasMetaInf {
+		return nil, WrapError("verify_apk",
+			"archive missing required Android package components (input is a generic ZIP without dex, resources, res, assets, lib, or META-INF)",
 			ErrNotAnAPK)
 	}
 
