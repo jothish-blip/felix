@@ -20,6 +20,15 @@ var (
 
 	// ErrSecurityViolation indicates an unsafe archive construct such as path traversal, symlink, or conflict.
 	ErrSecurityViolation = errors.New("security violation: archive contains unsafe paths, symlinks, or conflicting entries")
+
+	// ErrMalformedDEX indicates that the DEX file header, offsets, or tables are corrupt or truncated.
+	ErrMalformedDEX = errors.New("malformed DEX: corrupted header, invalid offsets, or truncated file")
+
+	// ErrUnsupportedDEX indicates an unsupported DEX version or format.
+	ErrUnsupportedDEX = errors.New("unsupported DEX version or format")
+
+	// ErrMalformedArtifact indicates a failure to parse an embedded configuration or resource file.
+	ErrMalformedArtifact = errors.New("malformed artifact: failed parsing configuration or resource file")
 )
 
 // IntakeError provides detailed, non-sensitive context for intake failures.

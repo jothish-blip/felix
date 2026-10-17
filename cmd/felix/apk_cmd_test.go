@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"io"
 	"os"
@@ -271,5 +272,229 @@ func TestCLI_APK_Analyze_DebuggableDetected(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected APK-MAN-DEBUGGABLE HIGH finding in JSON output")
+	}
+}
+
+func buildCLIDEX(stringsList []string) []byte {
+	header := make([]byte, 112)
+	copy(header[0:4], []byte("dex\n"))
+	copy(header[4:7], []byte("035"))
+	header[7] = 0
+	binary.LittleEndian.PutUint32(header[0x28:0x2C], 0x12345678)
+	binary.LittleEndian.PutUint32(header[0x24:0x28], 112)
+
+	stringCount := uint32(len(stringsList))
+	stringIDsOff := uint32(112)
+	binary.LittleEndian.PutUint32(header[0x38:0x3C], stringCount)
+	binary.LittleEndian.PutUint32(header[0x3C:0x40], stringIDsOff)
+
+	stringTableSize := stringCount * 4
+	dataOffset := stringIDsOff + stringTableSize
+
+	var stringTable bytes.Buffer
+	var stringData bytes.Buffer
+
+	for _, s := range stringsList {
+		currentDataOff := dataOffset + uint32(stringData.Len())
+		var offBytes [4]byte
+		binary.LittleEndian.PutUint32(offBytes[:], currentDataOff)
+		stringTable.Write(offBytes[:])
+
+		l := len(s)
+		for {
+			b := byte(l & 0x7f)
+			l >>= 7
+			if l != 0 {
+				b |= 0x80
+			}
+			stringData.WriteByte(b)
+			if l == 0 {
+				break
+			}
+		}
+		stringData.WriteString(s)
+		stringData.WriteByte(0x00)
+	}
+
+	totalSize := uint32(112) + stringTableSize + uint32(stringData.Len())
+	binary.LittleEndian.PutUint32(header[0x20:0x24], totalSize)
+
+	var dex bytes.Buffer
+	dex.Write(header)
+	dex.Write(stringTable.Bytes())
+	dex.Write(stringData.Bytes())
+	return dex.Bytes()
+}
+
+func createCLIArtifactAPK(t *testing.T, dexStrings []string) string {
+	t.Helper()
+	tmpDir := t.TempDir()
+	apkPath := filepath.Join(tmpDir, "artifact-app.apk")
+
+	f, err := os.Create(apkPath)
+	if err != nil {
+		t.Fatalf("failed to create apk file: %v", err)
+	}
+	defer f.Close()
+
+	zw := zip.NewWriter(f)
+	w1, _ := zw.Create("AndroidManifest.xml")
+	w1.Write([]byte(`<manifest package="com.felix.artifact.app"><application/></manifest>`))
+
+	w2, _ := zw.Create("classes.dex")
+	w2.Write(buildCLIDEX(dexStrings))
+
+	w3, _ := zw.Create("google-services.json")
+	w3.Write([]byte(`{
+		"project_info": {
+			"project_id": "cli-test-firebase",
+			"storage_bucket": "cli-test-firebase.appspot.com"
+		},
+		"client": [
+			{
+				"client_info": {
+					"mobilesdk_app_id": "1:123456789:android:abcdef"
+				},
+				"api_key": [
+					{"current_key": "AIzaSyC1234567890abcdef1234567890abcdef"}
+				]
+			}
+		]
+	}`))
+
+	_ = zw.Close()
+	return apkPath
+}
+
+func TestCLI_APK_AnalyzeArtifacts_TextOutput(t *testing.T) {
+	apkPath := createCLIArtifactAPK(t, []string{
+		"AKIAIOSFODNN7EXAMPLE",
+		"https://api.mycorp.com/v1/users",
+		"query GetCatalog { items { id } }",
+	})
+
+	code, out := captureAPKOutput(func() int {
+		return runAPK([]string{"--analyze-artifacts", apkPath})
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0 for --analyze-artifacts, got %d, out:\n%s", code, out)
+	}
+
+	if !strings.Contains(out, "APPLICATION ARTIFACT INTELLIGENCE") {
+		t.Errorf("expected artifact intelligence section, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Discovered Secrets:") {
+		t.Errorf("expected Discovered Secrets in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Service Indicators:") {
+		t.Errorf("expected Service Indicators in output, got:\n%s", out)
+	}
+	// Verify raw secret is NOT printed
+	if strings.Contains(out, "AKIAIOSFODNN7EXAMPLE") {
+		t.Errorf("Raw AWS secret leaked in CLI text output!")
+	}
+}
+
+func TestCLI_APK_Analyze_BothManifestAndArtifacts(t *testing.T) {
+	apkPath := createCLIArtifactAPK(t, []string{
+		"AKIAIOSFODNN7EXAMPLE",
+		"https://api.mycorp.com/v1/users",
+	})
+
+	code, out := captureAPKOutput(func() int {
+		return runAPK([]string{"--analyze", apkPath})
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0 for --analyze, got %d, out:\n%s", code, out)
+	}
+
+	if !strings.Contains(out, "ANDROID MANIFEST SECURITY ANALYSIS") {
+		t.Errorf("expected manifest analysis section in --analyze run")
+	}
+	if !strings.Contains(out, "APPLICATION ARTIFACT INTELLIGENCE") {
+		t.Errorf("expected artifact intelligence section in --analyze run")
+	}
+}
+
+func TestCLI_APK_AnalyzeArtifacts_JSONOutput(t *testing.T) {
+	apkPath := createCLIArtifactAPK(t, []string{
+		"AKIAIOSFODNN7EXAMPLE",
+		"https://api.mycorp.com/v1/users",
+	})
+
+	code, output := captureAPKOutput(func() int {
+		return runAPK([]string{"--json", "--analyze-artifacts", apkPath})
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d, out:\n%s", code, output)
+	}
+
+	var res map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &res); err != nil {
+		t.Fatalf("failed to parse JSON output: %v, raw:\n%s", err, output)
+	}
+
+	if res["security_assessment"] != "EVALUATED" {
+		t.Errorf("expected security_assessment=EVALUATED, got %v", res["security_assessment"])
+	}
+
+	artAnalysis, ok := res["artifact_analysis"].(map[string]interface{})
+	if !ok || artAnalysis == nil {
+		t.Fatalf("expected artifact_analysis object in JSON output")
+	}
+
+	dexFiles := artAnalysis["dex_files_analyzed"].([]interface{})
+	if len(dexFiles) != 1 {
+		t.Errorf("expected 1 dex file analyzed, got %d", len(dexFiles))
+	}
+
+	summary := artAnalysis["summary"].(map[string]interface{})
+	if summary["secrets_count"].(float64) < 1 {
+		t.Errorf("expected at least 1 secret, got %v", summary["secrets_count"])
+	}
+
+	// Verify no raw secret in JSON output
+	if strings.Contains(output, "AKIAIOSFODNN7EXAMPLE") {
+		t.Errorf("Raw AWS secret leaked in JSON output!")
+	}
+}
+
+func TestCLI_APK_AnalyzeArtifacts_MalformedDEX(t *testing.T) {
+	// APK with malformed DEX (corrupted header)
+	tmpDir := t.TempDir()
+	apkPath := filepath.Join(tmpDir, "malformed-dex.apk")
+	f, _ := os.Create(apkPath)
+	zw := zip.NewWriter(f)
+
+	w1, _ := zw.Create("AndroidManifest.xml")
+	w1.Write([]byte(`<manifest package="com.bad.dex"><application/></manifest>`))
+
+	w2, _ := zw.Create("classes.dex")
+	w2.Write([]byte("dex\n035\x00truncated"))
+
+	_ = zw.Close()
+	_ = f.Close()
+
+	code, output := captureAPKOutput(func() int {
+		return runAPK([]string{"--json", "--analyze-artifacts", apkPath})
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0 with partial analysis, got %d", code)
+	}
+
+	var res map[string]interface{}
+	_ = json.Unmarshal([]byte(output), &res)
+	artAnalysis := res["artifact_analysis"].(map[string]interface{})
+
+	if artAnalysis["partial_analysis"] != true {
+		t.Errorf("expected partial_analysis=true for malformed DEX")
+	}
+	limitations := artAnalysis["limitations"].([]interface{})
+	if len(limitations) == 0 {
+		t.Errorf("expected limitations recorded for malformed DEX")
 	}
 }

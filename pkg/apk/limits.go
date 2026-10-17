@@ -30,6 +30,18 @@ const (
 	// RatioCheckThresholdBytes is the minimum decompressed bytes before evaluating compression ratios,
 	// preventing false positives on tiny files (e.g., empty or small text files with high metadata overhead).
 	RatioCheckThresholdBytes int64 = 256 * 1024
+
+	// DefaultMaxDEXStrings is 200,000 strings bounding individual DEX string table size.
+	DefaultMaxDEXStrings int = 200000
+
+	// DefaultMaxArtifactFiles is 500 files bounding the number of configuration and resource files parsed.
+	DefaultMaxArtifactFiles int = 500
+
+	// DefaultMaxArtifactFileSize is 10 MiB bounding individual configuration or resource files.
+	DefaultMaxArtifactFileSize int64 = 10 * 1024 * 1024
+
+	// DefaultMaxArtifactTotalBytes is 50 MiB bounding cumulative bytes of analyzed artifacts.
+	DefaultMaxArtifactTotalBytes int64 = 50 * 1024 * 1024
 )
 
 // Limits encapsulates the configurable resource bounds for APK archive ingestion.
@@ -54,6 +66,18 @@ type Limits struct {
 
 	// MaxPathDepth is the maximum directory nesting depth permitted for an entry path.
 	MaxPathDepth int
+
+	// MaxDEXStrings bounds the maximum number of strings parsed from a single DEX file.
+	MaxDEXStrings int
+
+	// MaxArtifactFiles bounds the maximum number of configuration and resource files analyzed.
+	MaxArtifactFiles int
+
+	// MaxArtifactFileSize bounds the maximum size in bytes of any individual configuration or resource file analyzed.
+	MaxArtifactFileSize int64
+
+	// MaxArtifactTotalBytes bounds the cumulative size in bytes of all analyzed configuration and resource files.
+	MaxArtifactTotalBytes int64
 }
 
 // DefaultLimits returns conservative, production-minded default bounds.
@@ -66,6 +90,10 @@ func DefaultLimits() Limits {
 		MaxCompressionRatio:           DefaultMaxCompressionRatio,
 		MaxPathLength:                 DefaultMaxPathLength,
 		MaxPathDepth:                  DefaultMaxPathDepth,
+		MaxDEXStrings:                 DefaultMaxDEXStrings,
+		MaxArtifactFiles:              DefaultMaxArtifactFiles,
+		MaxArtifactFileSize:           DefaultMaxArtifactFileSize,
+		MaxArtifactTotalBytes:         DefaultMaxArtifactTotalBytes,
 	}
 }
 
@@ -96,7 +124,51 @@ func (l Limits) Validate() error {
 	if l.MaxPathDepth <= 0 {
 		return fmt.Errorf("%w: MaxPathDepth must be positive, got %d", ErrLimitExceeded, l.MaxPathDepth)
 	}
+	if l.MaxDEXStrings < 0 {
+		return fmt.Errorf("%w: MaxDEXStrings cannot be negative, got %d", ErrLimitExceeded, l.MaxDEXStrings)
+	}
+	if l.MaxArtifactFiles < 0 {
+		return fmt.Errorf("%w: MaxArtifactFiles cannot be negative, got %d", ErrLimitExceeded, l.MaxArtifactFiles)
+	}
+	if l.MaxArtifactFileSize < 0 {
+		return fmt.Errorf("%w: MaxArtifactFileSize cannot be negative, got %d", ErrLimitExceeded, l.MaxArtifactFileSize)
+	}
+	if l.MaxArtifactTotalBytes < 0 {
+		return fmt.Errorf("%w: MaxArtifactTotalBytes cannot be negative, got %d", ErrLimitExceeded, l.MaxArtifactTotalBytes)
+	}
 	return nil
+}
+
+// EffectiveMaxDEXStrings returns the configured MaxDEXStrings or DefaultMaxDEXStrings if unconfigured.
+func (l Limits) EffectiveMaxDEXStrings() int {
+	if l.MaxDEXStrings <= 0 {
+		return DefaultMaxDEXStrings
+	}
+	return l.MaxDEXStrings
+}
+
+// EffectiveMaxArtifactFiles returns the configured MaxArtifactFiles or DefaultMaxArtifactFiles if unconfigured.
+func (l Limits) EffectiveMaxArtifactFiles() int {
+	if l.MaxArtifactFiles <= 0 {
+		return DefaultMaxArtifactFiles
+	}
+	return l.MaxArtifactFiles
+}
+
+// EffectiveMaxArtifactFileSize returns the configured MaxArtifactFileSize or DefaultMaxArtifactFileSize if unconfigured.
+func (l Limits) EffectiveMaxArtifactFileSize() int64 {
+	if l.MaxArtifactFileSize <= 0 {
+		return DefaultMaxArtifactFileSize
+	}
+	return l.MaxArtifactFileSize
+}
+
+// EffectiveMaxArtifactTotalBytes returns the configured MaxArtifactTotalBytes or DefaultMaxArtifactTotalBytes if unconfigured.
+func (l Limits) EffectiveMaxArtifactTotalBytes() int64 {
+	if l.MaxArtifactTotalBytes <= 0 {
+		return DefaultMaxArtifactTotalBytes
+	}
+	return l.MaxArtifactTotalBytes
 }
 
 // CheckCumulativeGrowth verifies that adding entryBytes to currentBytes does not overflow or exceed maxBytes.

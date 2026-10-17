@@ -15,13 +15,14 @@ import (
 // runAPK executes the "felix apk" subcommand for APK intake, structural validation, and isolation.
 func runAPK(args []string) int {
 	var (
-		extract         bool
-		keepWorkspace   bool
-		jsonOutput      bool
-		quiet           bool
-		analyzeManifest bool
-		apkPath         string
-		limits          = apk.DefaultLimits()
+		extract          bool
+		keepWorkspace    bool
+		jsonOutput       bool
+		quiet            bool
+		analyzeManifest  bool
+		analyzeArtifacts bool
+		apkPath          string
+		limits           = apk.DefaultLimits()
 	)
 
 	// Custom argument parser matching Felix CLI conventions
@@ -47,8 +48,17 @@ func runAPK(args []string) int {
 			quiet = true
 			continue
 		}
-		if arg == "--analyze" || arg == "--analyze-manifest" {
+		if arg == "--analyze" {
 			analyzeManifest = true
+			analyzeArtifacts = true
+			continue
+		}
+		if arg == "--analyze-manifest" {
+			analyzeManifest = true
+			continue
+		}
+		if arg == "--analyze-artifacts" {
+			analyzeArtifacts = true
 			continue
 		}
 
@@ -111,7 +121,7 @@ func runAPK(args []string) int {
 
 	opts := apk.IntakeOptions{
 		Limits:  limits,
-		Extract: extract || analyzeManifest, // extract safe entries to enable network_security_config inspection
+		Extract: extract || analyzeManifest || analyzeArtifacts, // extract safe entries to enable manifest and artifact inspection
 	}
 
 	res, err := apk.Intake(ctx, apkPath, opts)
@@ -126,11 +136,21 @@ func runAPK(args []string) int {
 	}
 
 	// Optional manifest static security analysis
-	var analysisRes *apk.ManifestAnalysisResult
+	var manifestRes *apk.ManifestAnalysisResult
 	if analyzeManifest {
-		analysisRes, err = apk.AnalyzeManifest(ctx, res.Workspace, limits)
+		manifestRes, err = apk.AnalyzeManifest(ctx, res.Workspace, limits)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[-] Manifest analysis failed: %v\n", err)
+			return 2
+		}
+	}
+
+	// Optional application artifact static intelligence analysis
+	var artifactRes *apk.ArtifactAnalysisResult
+	if analyzeArtifacts {
+		artifactRes, err = apk.AnalyzeArtifacts(ctx, res.Workspace, limits)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Artifact analysis failed: %v\n", err)
 			return 2
 		}
 	}
@@ -151,16 +171,30 @@ func runAPK(args []string) int {
 		if keepWorkspace {
 			outObj["workspace_dir"] = res.Workspace.Path()
 		}
-		if analysisRes != nil {
+		if manifestRes != nil || artifactRes != nil {
 			outObj["security_assessment"] = "EVALUATED"
+		}
+		if manifestRes != nil {
 			outObj["manifest_analysis"] = map[string]interface{}{
-				"format":         analysisRes.Document.Format,
-				"package_name":   analysisRes.Document.PackageName,
-				"min_sdk":        analysisRes.Document.MinSDK,
-				"target_sdk":     analysisRes.Document.TargetSDK,
-				"findings_count": len(analysisRes.Findings),
-				"findings":       analysisRes.Findings,
-				"limitations":    analysisRes.Limitations,
+				"format":         manifestRes.Document.Format,
+				"package_name":   manifestRes.Document.PackageName,
+				"min_sdk":        manifestRes.Document.MinSDK,
+				"target_sdk":     manifestRes.Document.TargetSDK,
+				"findings_count": len(manifestRes.Findings),
+				"findings":       manifestRes.Findings,
+				"limitations":    manifestRes.Limitations,
+			}
+		}
+		if artifactRes != nil {
+			outObj["artifact_analysis"] = map[string]interface{}{
+				"dex_files_analyzed":    artifactRes.DexFilesAnalyzed,
+				"configs_analyzed":      artifactRes.ConfigsAnalyzed,
+				"findings_count":        artifactRes.FindingsCount,
+				"findings":              artifactRes.Findings,
+				"limitations":           artifactRes.Limitations,
+				"unsupported_artifacts": artifactRes.UnsupportedArtifacts,
+				"partial_analysis":      artifactRes.PartialAnalysis,
+				"summary":               artifactRes.Summary,
 			}
 		}
 		enc := json.NewEncoder(os.Stdout)
@@ -188,20 +222,20 @@ func runAPK(args []string) int {
 		}
 		fmt.Println("-----------------------------------------------------------")
 
-		if analysisRes != nil {
+		if manifestRes != nil {
 			fmt.Println("===========================================================")
 			fmt.Println("  FELIX :: ANDROID MANIFEST SECURITY ANALYSIS")
 			fmt.Println("===========================================================")
-			fmt.Printf("  Package Name:            %s\n", analysisRes.Document.PackageName)
-			fmt.Printf("  Manifest Format:         %s\n", analysisRes.Document.Format)
-			fmt.Printf("  Min SDK / Target SDK:    %d / %d\n", analysisRes.Document.MinSDK, analysisRes.Document.TargetSDK)
-			fmt.Printf("  Findings Identified:     %d\n", len(analysisRes.Findings))
+			fmt.Printf("  Package Name:            %s\n", manifestRes.Document.PackageName)
+			fmt.Printf("  Manifest Format:         %s\n", manifestRes.Document.Format)
+			fmt.Printf("  Min SDK / Target SDK:    %d / %d\n", manifestRes.Document.MinSDK, manifestRes.Document.TargetSDK)
+			fmt.Printf("  Findings Identified:     %d\n", len(manifestRes.Findings))
 			fmt.Println("-----------------------------------------------------------")
 
-			if len(analysisRes.Findings) == 0 {
+			if len(manifestRes.Findings) == 0 {
 				fmt.Println("  No security exposures or non-standard configurations identified.")
 			} else {
-				for _, f := range analysisRes.Findings {
+				for _, f := range manifestRes.Findings {
 					fmt.Printf("  [%s] %s\n", f.Severity, f.Title)
 					fmt.Printf("    Target/Component: %s\n", f.Endpoint)
 					fmt.Printf("    Observation:      %s\n", f.Evidence)
@@ -212,9 +246,48 @@ func runAPK(args []string) int {
 			fmt.Println("===========================================================")
 			fmt.Println("  Status:                  PASS (Manifest static assessment complete; offline)")
 			fmt.Println("===========================================================")
-		} else {
+		}
+
+		if artifactRes != nil {
+			fmt.Println("===========================================================")
+			fmt.Println("  FELIX :: APPLICATION ARTIFACT INTELLIGENCE")
+			fmt.Println("===========================================================")
+			fmt.Printf("  DEX Files Analyzed:      %d (%s)\n", len(artifactRes.DexFilesAnalyzed), strings.Join(artifactRes.DexFilesAnalyzed, ", "))
+			fmt.Printf("  Configurations Analyzed: %d\n", len(artifactRes.ConfigsAnalyzed))
+			fmt.Printf("  Discovered Secrets:      %d\n", artifactRes.Summary.SecretsCount)
+			fmt.Printf("  Service Indicators:      %d\n", artifactRes.Summary.ServicesCount)
+			fmt.Printf("  API Endpoints / Routes:  %d\n", artifactRes.Summary.EndpointsCount)
+			fmt.Printf("  GraphQL References:      %d\n", artifactRes.Summary.GraphQLCount)
+			fmt.Printf("  Total Findings:          %d\n", artifactRes.FindingsCount)
+			fmt.Println("-----------------------------------------------------------")
+
+			if len(artifactRes.Findings) == 0 {
+				fmt.Println("  No exposed secrets, services, or endpoints discovered in artifacts.")
+			} else {
+				for _, f := range artifactRes.Findings {
+					fmt.Printf("  [%s] %s\n", f.Severity, f.Title)
+					fmt.Printf("    Location:    %s\n", f.Endpoint)
+					fmt.Printf("    Observation: %s\n", f.Evidence)
+					fmt.Printf("    Remediation: %s\n", f.Remediation)
+					fmt.Println()
+				}
+			}
+
+			if len(artifactRes.Limitations) > 0 {
+				fmt.Println("  Limitations:")
+				for _, l := range artifactRes.Limitations {
+					fmt.Printf("    * %s\n", l)
+				}
+				fmt.Println()
+			}
+			fmt.Println("===========================================================")
+			fmt.Println("  Status:                  PASS (Artifact intelligence complete; offline)")
+			fmt.Println("===========================================================")
+		}
+
+		if manifestRes == nil && artifactRes == nil {
 			fmt.Println("  Status:                  PASS (Intake boundary verified; offline static-only)")
-			fmt.Println("  Security Posture:        Unevaluated (Pass --analyze to run manifest security analysis)")
+			fmt.Println("  Security Posture:        Unevaluated (Pass --analyze to run static security analysis)")
 			fmt.Println("===========================================================")
 		}
 	}
@@ -227,7 +300,9 @@ func printAPKHelp() {
 	fmt.Println("  felix apk [options] <path-to-apk>")
 	fmt.Println("\nSafely validate and isolate Android APK packages for offline static analysis.")
 	fmt.Println("\nOptions:")
-	fmt.Println("  --analyze, --analyze-manifest Run static security analysis on AndroidManifest.xml")
+	fmt.Println("  --analyze                     Run complete static security analysis (manifest and artifacts)")
+	fmt.Println("  --analyze-manifest            Run static security analysis on AndroidManifest.xml")
+	fmt.Println("  --analyze-artifacts           Run static intelligence analysis on DEX and embedded artifacts")
 	fmt.Println("  --extract                     Extract all safe entries to the isolated workspace")
 	fmt.Println("  --keep-workspace, --keep      Retain the isolated temporary workspace directory on disk")
 	fmt.Println("  --json                        Output machine-readable validation results as JSON")
