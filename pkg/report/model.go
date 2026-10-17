@@ -841,10 +841,17 @@ func FromAPIFinding(target string, f api.APIFinding) Finding {
 
 	case cat == "go-vars-exposure":
 		detMethod = "active_probe"
-		detStatus = "DETECTED"
-		verStatus = VerificationVerified
-		verResult = "Go expvar runtime variables endpoint (/debug/vars) is exposed without authentication."
-		negEvidence = "Runtime variables observed; all sensitive environment and configuration values were bounded and redacted."
+		if f.ClassificationOutcome == api.OutcomeInformational || f.Severity == api.SeverityInfo {
+			detStatus = "OBSERVED"
+			verStatus = VerificationObserved
+			verResult = "Go expvar runtime operational metrics observed (/debug/vars); no sensitive environment credentials exposed."
+			negEvidence = "Operational metrics observed; all command-line arguments and exported variable values were bounded and redacted."
+		} else {
+			detStatus = "DETECTED"
+			verStatus = VerificationVerified
+			verResult = "Go expvar runtime variables endpoint (/debug/vars) exposes candidate secret material."
+			negEvidence = "Candidate secret material observed; values were redacted. Active credential validity was not tested or verified against backend services."
+		}
 
 	case cat == "sensitive-endpoint-protected":
 		detMethod = "active_probe"

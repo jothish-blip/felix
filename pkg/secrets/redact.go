@@ -564,7 +564,7 @@ func IsSensitiveKey(k string) bool {
 	if strings.Contains(clean, "public") {
 		return false
 	}
-	if clean == "category" || clean == "keyboard" || clean == "monkey" || clean == "status" || clean == "type" {
+	if clean == "category" || clean == "keyboard" || clean == "monkey" || clean == "status" || clean == "type" || clean == "credentialvalidity" {
 		return false
 	}
 

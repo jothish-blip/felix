@@ -349,8 +349,8 @@ func TestGo_ExpvarBenignDisclosure(t *testing.T) {
 	if f.Category != CategoryGoVarsExposure {
 		t.Errorf("expected CategoryGoVarsExposure, got %s", f.Category)
 	}
-	if f.Severity != SeverityMedium {
-		t.Errorf("expected SeverityMedium for benign expvar exposure, got %s", f.Severity)
+	if f.Severity != SeverityInfo {
+		t.Errorf("expected SeverityInfo for benign expvar exposure, got %s", f.Severity)
 	}
 	if f.Classification != ClassAdmin {
 		t.Errorf("expected ClassAdmin, got %s", f.Classification)
@@ -953,10 +953,10 @@ func TestGo_ExpvarSecretLikeFalsePositives(t *testing.T) {
 	if f.Category != CategoryGoVarsExposure {
 		t.Errorf("expected CategoryGoVarsExposure, got %s", f.Category)
 	}
-	// Crucial: Ordinary metrics and false positives MUST NOT be classified as Critical
-	if f.Severity != SeverityMedium {
+	// Crucial: Ordinary metrics and false positives MUST NOT be classified as Critical or Medium; they are informational
+	if f.Severity != SeverityInfo {
 		t.Logf("f.Evidence: %s", f.Evidence)
-		t.Errorf("expected SeverityMedium for benign expvar metrics without secrets, got %s", f.Severity)
+		t.Errorf("expected SeverityInfo for benign expvar metrics without secrets, got %s", f.Severity)
 	}
 	if f.Details["candidate_material_status"] != "" {
 		t.Errorf("expected candidate_material_status to be empty for non-secret metrics, got %s", f.Details["candidate_material_status"])

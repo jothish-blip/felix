@@ -396,7 +396,7 @@ func InspectGoExpvar(resp *ProbeResponse, endpointURL string) *APIFinding {
 		walkExpvar(k, v, 0)
 	}
 
-	severity := SeverityMedium
+	severity := SeverityInfo
 	desc := "Go expvar runtime metrics and variables (/debug/vars) publicly accessible"
 	if hasUnmaskedSecret {
 		severity = SeverityCritical

@@ -368,16 +368,16 @@ func ClassifyFrameworkEvidence(f *APIFinding) {
 	// 2. Harmless Diagnostic Index (Invariant 7: Diagnostic endpoint existence does not establish high severity)
 	case cat == CategoryGoPprofExposure && (f.Details["interface"] == "profiling_index" || f.Severity == SeverityLow || f.Severity == SeverityInfo):
 		f.ClassificationOutcome = OutcomeInformational
-		if f.Severity == SeverityCritical || f.Severity == SeverityHigh {
-			f.Severity = SeverityLow
+		if f.Severity == SeverityCritical || f.Severity == SeverityHigh || f.Severity == SeverityMedium {
+			f.Severity = SeverityInfo
 		}
 		f.Confidence = ConfidenceHigh
 		f.Limitations = appendIfNotExists(f.Limitations, "Diagnostic index observed; live execution traces and memory dumps were not exposed.")
 
 	// 3. Public Interactive Documentation & Route Visibility (Invariant 1 & 3: Reachability / route names alone do not prove unauthorized access)
-	case cat == CategoryFastAPIDocs || cat == CategoryDjangoBrowsableAPI:
+	case cat == CategoryAPIDocsExposure || cat == CategoryFastAPIDocs || cat == CategoryDjangoBrowsableAPI:
 		f.ClassificationOutcome = OutcomeInformational
-		if f.Severity == SeverityCritical || f.Severity == SeverityHigh {
+		if f.Severity == SeverityCritical || f.Severity == SeverityHigh || f.Severity == SeverityMedium || f.Severity == "" {
 			f.Severity = SeverityInfo
 		}
 		f.Confidence = ConfidenceHigh
@@ -394,12 +394,15 @@ func ClassifyFrameworkEvidence(f *APIFinding) {
 	// 4. Routine Operational Telemetry without Sensitive Disclosure
 	case cat == CategoryHealthExposure || cat == CategoryMetricsExposure:
 		f.ClassificationOutcome = OutcomeInformational
-		f.Severity = SeverityInfo
+		if f.Severity == SeverityCritical || f.Severity == SeverityHigh || f.Severity == SeverityMedium || f.Severity == "" {
+			f.Severity = SeverityInfo
+		}
 		f.Confidence = ConfidenceHigh
 		f.Limitations = appendIfNotExists(f.Limitations, "Standard operational health/metrics telemetry; administrative credential access not demonstrated.")
 
-	case cat == CategoryGoVarsExposure && f.Severity != SeverityCritical && f.Severity != SeverityHigh:
+	case cat == CategoryGoVarsExposure && f.Details["candidate_material_status"] == "" && !strings.Contains(f.Evidence, "Candidate secret material observed"):
 		f.ClassificationOutcome = OutcomeInformational
+		f.Severity = SeverityInfo
 		f.Confidence = ConfidenceHigh
 		f.Limitations = appendIfNotExists(f.Limitations, "Operational metrics cataloged; sensitive environment credentials were not observed.")
 
@@ -415,15 +418,14 @@ func ClassifyFrameworkEvidence(f *APIFinding) {
 	// 6. Laravel Telescope Dashboard Shell without Data
 	case cat == CategoryLaravelTelescopeExposed:
 		f.ClassificationOutcome = OutcomeInformational
-		if f.Severity == SeverityCritical || f.Severity == SeverityHigh {
-			f.Severity = SeverityLow
-		}
+		f.Severity = SeverityInfo
 		f.Confidence = ConfidenceHigh
 		f.Limitations = appendIfNotExists(f.Limitations, "Monitoring dashboard shell observed; unauthenticated access to sensitive operational telemetry was not verified.")
 
 	// 7. Laravel Ignition Health Check only
 	case cat == CategoryLaravelIgnitionDebug && f.Severity == SeverityInfo:
 		f.ClassificationOutcome = OutcomeInformational
+		f.Severity = SeverityInfo
 		f.Confidence = ConfidenceHigh
 		f.Limitations = appendIfNotExists(f.Limitations, "Diagnostic health-check interface observed; command execution was not tested and exploitability remains unconfirmed.")
 
@@ -529,6 +531,15 @@ func ClassifyFrameworkEvidence(f *APIFinding) {
 		f.Confidence = ConfidenceHigh
 		f.Limitations = appendIfNotExists(f.Limitations, "Diagnostic error output exposed internal frames or paths.")
 
+	// 11. Go Expvar Exposure with Candidate Secrets (Invariant 5: Candidate credential validity remains unverified)
+	case cat == CategoryGoVarsExposure:
+		f.ClassificationOutcome = OutcomeConfirmed
+		if f.Severity == "" || f.Severity == SeverityInfo || f.Severity == SeverityLow {
+			f.Severity = SeverityCritical
+		}
+		f.Confidence = ConfidenceHigh
+		f.Limitations = appendIfNotExists(f.Limitations, "Go expvar runtime variables exposed candidate secret material. Active credential validity and access remain unverified.")
+
 	// --- C. SUSPECTED OUTCOMES ---
 	// Suspected Debug Mode without developer template confirmation
 	case (cat == CategoryDjangoDebugMode || cat == CategoryLaravelIgnitionDebug) && f.Confidence == ConfidenceMedium:
@@ -549,6 +560,9 @@ func ClassifyFrameworkEvidence(f *APIFinding) {
 			}
 		} else {
 			f.ClassificationOutcome = OutcomeInformational
+			if f.Severity == "" {
+				f.Severity = SeverityInfo
+			}
 		}
 	}
 
@@ -559,10 +573,11 @@ func ClassifyFrameworkEvidence(f *APIFinding) {
 		f.Limitations = appendIfNotExists(f.Limitations, "Candidate credential validity and active authorization status remain unverified.")
 	}
 
-	// Invariant 1: Reachability alone never proves a vulnerability. Informational observations cannot have High/Critical severity.
+	// Invariant 1: An informational finding must not retain a vulnerability severity such as Medium, High, or Critical.
+	// Use the project's existing informational severity convention (SeverityInfo).
 	if f.ClassificationOutcome == OutcomeInformational {
-		if f.Severity == SeverityCritical || f.Severity == SeverityHigh {
-			f.Severity = SeverityLow
+		if f.Severity == SeverityCritical || f.Severity == SeverityHigh || f.Severity == SeverityMedium || f.Severity == "" {
+			f.Severity = SeverityInfo
 		}
 	}
 }

@@ -258,8 +258,8 @@ func TestFramework_Scenario08_RoutineMetricsWithBenignSecretLikeWords(t *testing
 	if norm.ClassificationOutcome != OutcomeInformational {
 		t.Errorf("expected OutcomeInformational for routine metrics, got %s", norm.ClassificationOutcome)
 	}
-	if norm.Severity == SeverityCritical || norm.Severity == SeverityHigh {
-		t.Errorf("routine metrics must not have High/Critical severity, got %s", norm.Severity)
+	if norm.Severity != SeverityInfo {
+		t.Errorf("routine metrics must have SeverityInfo, got %s", norm.Severity)
 	}
 }
 
@@ -637,5 +637,281 @@ func TestFramework_Scenario24_StatusAndBodyDifferentEvidenceLevels(t *testing.T)
 	}
 	if norm.ClassificationOutcome != OutcomeInconclusive {
 		t.Errorf("expected OutcomeInconclusive for 500 error with no diagnostic markers, got %s", norm.ClassificationOutcome)
+	}
+}
+
+// ============================================================================
+// PHASE 3.5 FINAL CONSISTENCY REGRESSION TESTS
+// ============================================================================
+
+// Regression Test 1: Harmless expvar metrics must be OutcomeInformational and SeverityInfo (never Medium/High/Critical)
+func TestFramework_Regression_HarmlessExpvarMetrics(t *testing.T) {
+	testCases := []struct {
+		name        string
+		rawSeverity string
+		body        string
+	}{
+		{
+			name:        "Benign metrics with default SeverityInfo",
+			rawSeverity: SeverityInfo,
+			body:        `{"cmdline":["/usr/bin/app"],"memstats":{"Alloc":4096,"TotalAlloc":8192}}`,
+		},
+		{
+			name:        "Benign metrics where detector initially passed SeverityMedium",
+			rawSeverity: SeverityMedium,
+			body:        `{"cmdline":["/usr/bin/service","-port=8080"],"goroutines":45,"memstats":{"Alloc":1024}}`,
+		},
+		{
+			name:        "Benign metrics containing false-positive keywords",
+			rawSeverity: SeverityMedium,
+			body:        `{"token_bucket_rate":500,"csrf_token_header":"X-CSRF-Token","auth_mode":"bearer"}`,
+		},
+		{
+			name:        "Benign metrics with improperly inflated SeverityHigh",
+			rawSeverity: SeverityHigh,
+			body:        `{"cmdline":["app"],"uptime_seconds":86400}`,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := APIFinding{
+				Category:   CategoryGoVarsExposure,
+				Endpoint:   "https://example.com/debug/vars",
+				Method:     "GET",
+				HTTPStatus: 200,
+				Severity:   tc.rawSeverity,
+				Confidence: ConfidenceHigh,
+				Evidence:   tc.body,
+			}
+			norm := NormalizeFrameworkFinding(raw)
+
+			if norm.ClassificationOutcome != OutcomeInformational {
+				t.Errorf("expected OutcomeInformational, got %s", norm.ClassificationOutcome)
+			}
+			// Invariant: Informational findings must NOT retain vulnerability severity (Medium, High, Critical)
+			if norm.Severity != SeverityInfo {
+				t.Errorf("expected SeverityInfo for harmless expvar metrics, got %s (must not retain Medium/High/Critical)", norm.Severity)
+			}
+			if norm.Reachability != ReachabilityConfirmedReachable {
+				t.Errorf("expected ReachabilityConfirmedReachable, got %s", norm.Reachability)
+			}
+			if norm.AuthContext != AuthContextNoChallenge {
+				t.Errorf("expected AuthContextNoChallenge, got %s", norm.AuthContext)
+			}
+		})
+	}
+}
+
+// Regression Test 2: Framework identification only must be OutcomeInformational and SeverityInfo
+func TestFramework_Regression_FrameworkIdentificationOnly(t *testing.T) {
+	cases := []struct {
+		name     string
+		category string
+		evidence string
+		details  map[string]string
+	}{
+		{
+			name:     "Node runtime Express header",
+			category: CategoryNodeRuntimeExposure,
+			evidence: "X-Powered-By: Express",
+			details:  map[string]string{"framework": "Express"},
+		},
+		{
+			name:     "Go runtime server header",
+			category: CategoryGoRuntimeExposure,
+			evidence: "Server: Go-http-server/1.22",
+			details:  map[string]string{"framework": "Go"},
+		},
+		{
+			name:     "FastAPI docs exposure without sensitive routes",
+			category: CategoryFastAPIDocs,
+			evidence: "OpenAPI 3.0.0 documentation interface discovered at /docs",
+			details:  map[string]string{"interface": "interactive_api_docs"},
+		},
+		{
+			name:     "Django browsable API shell",
+			category: CategoryDjangoBrowsableAPI,
+			evidence: "Django REST Framework browsable API rendered at /api/",
+			details:  map[string]string{"interface": "browsable_api"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Even if raw finding was inadvertently marked Medium or High
+			for _, testSev := range []string{SeverityInfo, SeverityMedium, SeverityHigh} {
+				raw := APIFinding{
+					Category:   tc.category,
+					Endpoint:   "https://example.com/api",
+					Method:     "GET",
+					HTTPStatus: 200,
+					Severity:   testSev,
+					Confidence: ConfidenceHigh,
+					Evidence:   tc.evidence,
+					Details:    tc.details,
+				}
+				norm := NormalizeFrameworkFinding(raw)
+
+				if norm.ClassificationOutcome != OutcomeInformational {
+					t.Errorf("expected OutcomeInformational for %s (sev=%s), got %s", tc.name, testSev, norm.ClassificationOutcome)
+				}
+				if norm.Severity != SeverityInfo {
+					t.Errorf("expected SeverityInfo for %s (sev=%s), got %s", tc.name, testSev, norm.Severity)
+				}
+			}
+		})
+	}
+}
+
+// Regression Test 3: Genuine sensitive-data disclosures must preserve Medium/High severity and be OutcomeConfirmed
+func TestFramework_Regression_GenuineSensitiveDataDisclosures(t *testing.T) {
+	cases := []struct {
+		name             string
+		category         string
+		expectedSeverity string
+		evidence         string
+		details          map[string]string
+	}{
+		{
+			name:             "Spring Boot Actuator /env sensitive properties",
+			category:         CategoryActuatorEnv,
+			expectedSeverity: SeverityHigh,
+			evidence:         "Spring Boot Actuator /env exposed sensitive properties: spring.datasource.password=[REDACTED]",
+			details:          map[string]string{"unmasked_count": "3"},
+		},
+		{
+			name:             "Laravel Telescope sensitive telemetry entries",
+			category:         CategoryLaravelTelescopeData,
+			expectedSeverity: SeverityHigh,
+			evidence:         "Laravel Telescope telemetry exposed 15 SQL query entries and request payload: password=[REDACTED]",
+			details:          map[string]string{"entries_count": "15"},
+		},
+		{
+			name:             "Django technical 500 debug mode confirmed",
+			category:         CategoryDjangoDebugMode,
+			expectedSeverity: SeverityHigh,
+			evidence:         "Django technical 500 debug page confirmed (DEBUG=True). Developer traceback and settings exposed.",
+			details:          map[string]string{"template": "technical_500"},
+		},
+		{
+			name:             "Node.js runtime stack trace with internal frames",
+			category:         CategoryNodeStackTrace,
+			expectedSeverity: SeverityMedium,
+			evidence:         "TypeError: Cannot read properties of undefined at authenticate (/app/src/auth.js:42:15)",
+			details:          map[string]string{"has_stack_trace": "true"},
+		},
+		{
+			name:             "Go panic dump disclosing goroutine trace",
+			category:         CategoryGoDebugPanic,
+			expectedSeverity: SeverityMedium,
+			evidence:         "panic: runtime error: invalid memory address or nil pointer dereference\ngoroutine 1 [running]:\nmain.handleRequest(0x0, 0x0)",
+			details:          map[string]string{"has_panic_dump": "true"},
+		},
+		{
+			name:             "Spring Boot Actuator route mappings exposure",
+			category:         CategoryActuatorMappings,
+			expectedSeverity: SeverityMedium,
+			evidence:         "Spring Boot Actuator /mappings exposed 42 application endpoint mappings",
+			details:          map[string]string{"mappings_count": "42"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := APIFinding{
+				Category:   tc.category,
+				Endpoint:   "https://example.com/sensitive",
+				Method:     "GET",
+				HTTPStatus: 200,
+				Severity:   tc.expectedSeverity,
+				Confidence: ConfidenceHigh,
+				Evidence:   tc.evidence,
+				Details:    tc.details,
+			}
+			norm := NormalizeFrameworkFinding(raw)
+
+			if norm.ClassificationOutcome != OutcomeConfirmed {
+				t.Errorf("expected OutcomeConfirmed for genuine disclosure %s, got %s", tc.name, norm.ClassificationOutcome)
+			}
+			if norm.Severity != tc.expectedSeverity {
+				t.Errorf("CRITICAL DEFECT: genuine disclosure %s downgraded from %s to %s", tc.name, tc.expectedSeverity, norm.Severity)
+			}
+			if norm.Severity == SeverityInfo {
+				t.Errorf("CRITICAL DEFECT: genuine security disclosure must never be downgraded to SeverityInfo")
+			}
+		})
+	}
+}
+
+// Regression Test 4: Candidate secrets with unverified validity and redacted values
+func TestFramework_Regression_CandidateSecretsWithUnverifiedValidity(t *testing.T) {
+	cases := []struct {
+		name             string
+		category         string
+		initialSeverity  string
+		evidence         string
+		details          map[string]string
+		expectedSeverity string
+	}{
+		{
+			name:             "FastAPI OpenAPI schema with embedded candidate secret",
+			category:         CategoryFastAPISensitiveSchema,
+			initialSeverity:  SeverityHigh,
+			evidence:         "FastAPI schema exposed candidate secret: AKIAIOSFODNN7EXAMPLE",
+			details:          map[string]string{"key_name": "aws_access_key_id"},
+			expectedSeverity: SeverityHigh,
+		},
+		{
+			name:             "Go expvar with candidate secret",
+			category:         CategoryGoVarsExposure,
+			initialSeverity:  SeverityCritical,
+			evidence:         `HTTP 200 OK. Candidate secret material observed: [database_password] (active validity was not verified; values redacted).`,
+			details: map[string]string{
+				"candidate_material_status": "unverified_candidate_material",
+				"unmasked_secrets_count":    "1",
+			},
+			expectedSeverity: SeverityCritical,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := APIFinding{
+				Category:   tc.category,
+				Endpoint:   "https://example.com/target",
+				Method:     "GET",
+				HTTPStatus: 200,
+				Severity:   tc.initialSeverity,
+				Confidence: ConfidenceHigh,
+				Evidence:   tc.evidence,
+				Details:    tc.details,
+			}
+			norm := NormalizeFrameworkFinding(raw)
+
+			// Classification must reflect genuine security risk (Confirmed outcome)
+			if norm.ClassificationOutcome != OutcomeConfirmed {
+				t.Errorf("expected OutcomeConfirmed for candidate secrets, got %s", norm.ClassificationOutcome)
+			}
+			// Severity must be preserved (High or Critical)
+			if norm.Severity != tc.expectedSeverity {
+				t.Errorf("expected severity %s, got %s", tc.expectedSeverity, norm.Severity)
+			}
+			// Invariant 5: Candidate credential validity must explicitly be "unverified"
+			if norm.Details["credential_validity"] != "unverified" {
+				t.Errorf("expected Details[credential_validity] == 'unverified', got %q", norm.Details["credential_validity"])
+			}
+			// Limitations must document unverified credential validity
+			var hasValidityLimitation bool
+			for _, lim := range norm.Limitations {
+				if strings.Contains(strings.ToLower(lim), "unverified") || strings.Contains(strings.ToLower(lim), "validity") {
+					hasValidityLimitation = true
+					break
+				}
+			}
+			if !hasValidityLimitation {
+				t.Errorf("expected limitation stating candidate credential validity is unverified, got: %v", norm.Limitations)
+			}
+		})
 	}
 }

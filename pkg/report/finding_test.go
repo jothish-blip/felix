@@ -825,14 +825,33 @@ func TestFromAPIFinding_NodeAndGo(t *testing.T) {
 				Endpoint:    "https://app.example.com/debug/vars",
 				Method:      "GET",
 				Description: "Go expvar runtime metrics and variables (/debug/vars) publicly accessible",
-				Severity:    api.SeverityMedium,
+				Severity:    api.SeverityInfo,
 				Confidence:  api.ConfidenceHigh,
 				Fingerprint: api.GenerateFingerprint(api.CategoryGoVarsExposure, "https://app.example.com/debug/vars", "GET"),
 			},
 			expectedRule:   "API-GO-VARS-EXPOSURE",
 			expectedStatus: FindingStatusConfirmed,
+			expectedVer:    VerificationObserved,
+			expectedSev:    SeverityInfo,
+			expectedRemSub: "expvar",
+		},
+		{
+			apiFinding: api.APIFinding{
+				Category:    api.CategoryGoVarsExposure,
+				Endpoint:    "https://app.example.com/debug/vars",
+				Method:      "GET",
+				Description: "Go expvar runtime variables expose candidate secret material (validity unverified; active authentication not confirmed)",
+				Severity:    api.SeverityCritical,
+				Confidence:  api.ConfidenceHigh,
+				Fingerprint: api.GenerateFingerprint(api.CategoryGoVarsExposure, "https://app.example.com/debug/vars", "GET"),
+				Details: map[string]string{
+					"candidate_material_status": "unverified_candidate_material",
+				},
+			},
+			expectedRule:   "API-GO-VARS-EXPOSURE",
+			expectedStatus: FindingStatusConfirmed,
 			expectedVer:    VerificationVerified,
-			expectedSev:    SeverityMedium,
+			expectedSev:    SeverityCritical,
 			expectedRemSub: "expvar",
 		},
 		{
@@ -1076,4 +1095,143 @@ func TestFromAPIFinding_SharedFrameworkContract(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestReport_ClassificationSeverityConsistency_RegressionSuite tests consistency between classification and severity after report normalization.
+func TestReport_ClassificationSeverityConsistency_RegressionSuite(t *testing.T) {
+	target := "https://example.com"
+
+	t.Run("Harmless_Expvar_Metrics_Report_Normalization", func(t *testing.T) {
+		apiF := api.APIFinding{
+			Category:   api.CategoryGoVarsExposure,
+			Endpoint:   "https://example.com/debug/vars",
+			Method:     "GET",
+			HTTPStatus: 200,
+			Severity:   api.SeverityInfo,
+			Confidence: api.ConfidenceHigh,
+			Evidence:   `{"cmdline":["/usr/bin/service"],"memstats":{"Alloc":2048}}`,
+		}
+
+		rf := FromAPIFinding(target, apiF)
+
+		if rf.ClassificationOutcome != OutcomeInformational {
+			t.Errorf("expected OutcomeInformational, got %s", rf.ClassificationOutcome)
+		}
+		if rf.Severity != SeverityInfo {
+			t.Errorf("expected SeverityInfo, got %s (must not retain Medium/High/Critical)", rf.Severity)
+		}
+		if rf.Verification.Status != VerificationObserved {
+			t.Errorf("expected VerificationObserved for harmless metrics, got %s", rf.Verification.Status)
+		}
+	})
+
+	t.Run("Framework_Identification_Report_Normalization", func(t *testing.T) {
+		apiF := api.APIFinding{
+			Category:   api.CategoryNodeRuntimeExposure,
+			Endpoint:   "https://example.com",
+			Method:     "GET",
+			HTTPStatus: 200,
+			Severity:   api.SeverityInfo,
+			Confidence: api.ConfidenceHigh,
+			Evidence:   "X-Powered-By: Express",
+		}
+
+		rf := FromAPIFinding(target, apiF)
+
+		if rf.ClassificationOutcome != OutcomeInformational {
+			t.Errorf("expected OutcomeInformational, got %s", rf.ClassificationOutcome)
+		}
+		if rf.Severity != SeverityInfo {
+			t.Errorf("expected SeverityInfo, got %s", rf.Severity)
+		}
+	})
+
+	t.Run("Genuine_Sensitive_Data_Report_Normalization", func(t *testing.T) {
+		apiF := api.APIFinding{
+			Category:   api.CategoryActuatorEnv,
+			Endpoint:   "https://example.com/actuator/env",
+			Method:     "GET",
+			HTTPStatus: 200,
+			Severity:   api.SeverityHigh,
+			Confidence: api.ConfidenceHigh,
+			Evidence:   "spring.datasource.password=[REDACTED]",
+		}
+
+		rf := FromAPIFinding(target, apiF)
+
+		if rf.ClassificationOutcome != OutcomeConfirmed {
+			t.Errorf("expected OutcomeConfirmed, got %s", rf.ClassificationOutcome)
+		}
+		if rf.Severity != SeverityHigh {
+			t.Errorf("expected SeverityHigh, got %s (genuine disclosure must not be downgraded)", rf.Severity)
+		}
+		if rf.Verification.Status != VerificationVerified {
+			t.Errorf("expected VerificationVerified, got %s", rf.Verification.Status)
+		}
+	})
+
+	t.Run("Candidate_Secret_Report_Normalization", func(t *testing.T) {
+		apiF := api.APIFinding{
+			Category:   api.CategoryFastAPISensitiveSchema,
+			Endpoint:   "https://example.com/openapi.json",
+			Method:     "GET",
+			HTTPStatus: 200,
+			Severity:   api.SeverityHigh,
+			Confidence: api.ConfidenceMedium,
+			Evidence:   "OpenAPI schema exposed candidate secret: AKIAIOSFODNN7EXAMPLE",
+		}
+
+		rf := FromAPIFinding(target, apiF)
+
+		if rf.ClassificationOutcome != OutcomeConfirmed {
+			t.Errorf("expected OutcomeConfirmed, got %s", rf.ClassificationOutcome)
+		}
+		if rf.Severity != SeverityHigh {
+			t.Errorf("expected SeverityHigh, got %s", rf.Severity)
+		}
+		if rf.EvidenceDetails.Details["credential_validity"] != "unverified" {
+			t.Errorf("expected credential_validity == 'unverified', got %q", rf.EvidenceDetails.Details["credential_validity"])
+		}
+		var hasValidityLimitation bool
+		for _, lim := range rf.Verification.Limitations {
+			if strings.Contains(strings.ToLower(lim), "unverified") || strings.Contains(strings.ToLower(lim), "validity") {
+				hasValidityLimitation = true
+				break
+			}
+		}
+		if !hasValidityLimitation {
+			t.Errorf("expected limitation stating candidate credential validity is unverified, got: %v", rf.Verification.Limitations)
+		}
+	})
+
+	t.Run("NormalizeFinding_Enforces_Invariant_On_Arbitrary_Inputs", func(t *testing.T) {
+		// Test raw finding with OutcomeInformational but inflated severity
+		severities := []string{SeverityCritical, SeverityHigh, SeverityMedium}
+		for _, sev := range severities {
+			raw := Finding{
+				Target:                target,
+				Endpoint:              "https://example.com/info",
+				Method:                "GET",
+				Category:              "custom-telemetry",
+				Severity:              sev,
+				ClassificationOutcome: OutcomeInformational,
+			}
+
+			norm := NormalizeFinding(raw)
+
+			if norm.Severity != SeverityInfo {
+				t.Errorf("NormalizeFinding failed to clamp %s to SeverityInfo for OutcomeInformational: got %s", sev, norm.Severity)
+			}
+			if norm.ClassificationOutcome != OutcomeInformational {
+				t.Errorf("expected OutcomeInformational, got %s", norm.ClassificationOutcome)
+			}
+
+			// Idempotence test
+			norm2 := NormalizeFinding(norm)
+			if norm2.Severity != norm.Severity || norm2.ClassificationOutcome != norm.ClassificationOutcome {
+				t.Errorf("NormalizeFinding is not idempotent: norm1=(%s, %s), norm2=(%s, %s)",
+					norm.Severity, norm.ClassificationOutcome, norm2.Severity, norm2.ClassificationOutcome)
+			}
+		}
+	})
 }

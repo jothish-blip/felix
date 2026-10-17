@@ -296,6 +296,14 @@ func NormalizeFinding(f Finding) Finding {
 		f.ClassificationOutcome = api.NormalizeClassificationOutcome(string(f.ClassificationOutcome))
 	}
 
+	// Invariant 1: An informational finding must not retain a vulnerability severity such as Medium, High, or Critical.
+	// Use the project's existing informational severity convention (SeverityInfo).
+	if f.ClassificationOutcome == OutcomeInformational {
+		if f.Severity == SeverityCritical || f.Severity == SeverityHigh || f.Severity == SeverityMedium || f.Severity == "" {
+			f.Severity = SeverityInfo
+		}
+	}
+
 	if f.Reachability == "" {
 		f.Reachability = api.NormalizeReachability("", f.EvidenceDetails.HTTPStatus, nil)
 	} else {
