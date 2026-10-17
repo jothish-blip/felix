@@ -578,3 +578,118 @@ func TestCLI_APK_Inventory_JSONOutput(t *testing.T) {
 		t.Errorf("sensitive query token leaked in CLI JSON output!")
 	}
 }
+
+func captureAPKStderr(f func() int) (int, string) {
+	oldStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		panic(err)
+	}
+	os.Stderr = w
+
+	outChan := make(chan string)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, r)
+		outChan <- buf.String()
+	}()
+
+	code := f()
+
+	_ = w.Close()
+	os.Stderr = oldStderr
+	output := <-outChan
+	_ = r.Close()
+
+	return code, output
+}
+
+func TestCLI_APK_Assess_SecurityRefusal_MissingScopeTarget(t *testing.T) {
+	apkPath := createCLIArtifactAPK(t, []string{"https://api.mycorp.com/v1"})
+
+	code, errOut := captureAPKStderr(func() int {
+		return runAPK([]string{"--assess", apkPath})
+	})
+
+	if code != 2 {
+		t.Errorf("expected exit code 2 for missing scope target, got %d", code)
+	}
+	if !strings.Contains(errOut, "Active backend assessment requires explicit authorized scope targets") {
+		t.Errorf("expected security refusal message in stderr, got:\n%s", errOut)
+	}
+}
+
+func TestCLI_APK_Assess_SecurityRefusal_MissingAuthorization(t *testing.T) {
+	apkPath := createCLIArtifactAPK(t, []string{"https://api.mycorp.com/v1"})
+
+	code, errOut := captureAPKStderr(func() int {
+		return runAPK([]string{"--assess", "--target", "https://api.mycorp.com", apkPath})
+	})
+
+	if code != 2 {
+		t.Errorf("expected exit code 2 for missing authorization, got %d", code)
+	}
+	if !strings.Contains(errOut, "Missing authorization certification") {
+		t.Errorf("expected missing authorization certification message in stderr, got:\n%s", errOut)
+	}
+}
+
+func TestCLI_APK_Assess_DryRunPlanning_JSON(t *testing.T) {
+	apkPath := createCLIArtifactAPK(t, []string{
+		"https://api.mycorp.com/v1/users",
+		"https://unauthorized.thirdparty.com/v1",
+	})
+
+	code, output := captureAPKOutput(func() int {
+		return runAPK([]string{
+			"--json",
+			"--assess",
+			"--target", "https://api.mycorp.com",
+			"--auth-confirm",
+			"--dry-run",
+			apkPath,
+		})
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0 for dry-run plan, got %d, out:\n%s", code, output)
+	}
+
+	var res map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &res); err != nil {
+		t.Fatalf("failed to parse JSON: %v, raw:\n%s", err, output)
+	}
+
+	handoff, ok := res["backend_handoff"].(map[string]interface{})
+	if !ok || handoff == nil {
+		t.Fatalf("expected backend_handoff object in JSON output")
+	}
+
+	if handoff["dry_run"] != true {
+		t.Errorf("expected dry_run=true, got %v", handoff["dry_run"])
+	}
+	if handoff["total_requests_sent"].(float64) != 0 {
+		t.Errorf("expected 0 requests sent during dry-run, got %v", handoff["total_requests_sent"])
+	}
+	if handoff["total_tested"].(float64) != 0 {
+		t.Errorf("expected 0 tested during dry-run, got %v", handoff["total_tested"])
+	}
+	if handoff["total_eligible"].(float64) < 1 {
+		t.Errorf("expected at least 1 eligible candidate, got %v", handoff["total_eligible"])
+	}
+}
+
+func TestCLI_APK_StaticOnly_ActiveAssessmentDisabled(t *testing.T) {
+	apkPath := createCLIArtifactAPK(t, []string{"https://api.mycorp.com/v1"})
+
+	code, output := captureAPKOutput(func() int {
+		return runAPK([]string{"--analyze", apkPath})
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d", code)
+	}
+	if !strings.Contains(output, "Active Assessment:       Disabled (offline static analysis only") {
+		t.Errorf("expected active assessment disabled notice in static analysis output, got:\n%s", output)
+	}
+}

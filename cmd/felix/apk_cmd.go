@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"felix/pkg/apk"
+	"felix/pkg/assessment"
 )
 
 // runAPK executes the "felix apk" subcommand for APK intake, structural validation, and isolation.
@@ -23,6 +24,21 @@ func runAPK(args []string) int {
 		analyzeManifest  bool
 		analyzeArtifacts bool
 		buildInventory   bool
+		assessBackend    bool
+		dryRun           bool
+		scopeTargets     []string
+		scopeMode        string
+		exclusions       []string
+		authorizingParty string
+		authConfirm      bool
+		allowInferred    bool
+		allowThirdParty  bool
+		maxRequests      int
+		maxPerHost       int
+		rateLimit        float64
+		concurrency      int
+		perReqTimeout    time.Duration
+		overallDeadline  time.Duration
 		apkPath          string
 		limits           = apk.DefaultLimits()
 	)
@@ -66,6 +82,165 @@ func runAPK(args []string) int {
 		}
 		if arg == "--analyze-artifacts" {
 			analyzeArtifacts = true
+			continue
+		}
+		if arg == "--assess" || arg == "--handoff" {
+			assessBackend = true
+			analyzeManifest = true
+			analyzeArtifacts = true
+			buildInventory = true
+			continue
+		}
+		if arg == "--target" {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				fmt.Fprintf(os.Stderr, "[-] error: --target requires a URL argument\n")
+				return 2
+			}
+			i++
+			scopeTargets = append(scopeTargets, args[i])
+			continue
+		}
+		if strings.HasPrefix(arg, "--target=") {
+			scopeTargets = append(scopeTargets, strings.TrimPrefix(arg, "--target="))
+			continue
+		}
+		if arg == "--scope-mode" {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				fmt.Fprintf(os.Stderr, "[-] error: --scope-mode requires a mode argument (same-origin, subdomains, explicit)\n")
+				return 2
+			}
+			i++
+			scopeMode = args[i]
+			continue
+		}
+		if strings.HasPrefix(arg, "--scope-mode=") {
+			scopeMode = strings.TrimPrefix(arg, "--scope-mode=")
+			continue
+		}
+		if arg == "--exclude" {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				fmt.Fprintf(os.Stderr, "[-] error: --exclude requires a pattern argument\n")
+				return 2
+			}
+			i++
+			exclusions = append(exclusions, args[i])
+			continue
+		}
+		if strings.HasPrefix(arg, "--exclude=") {
+			exclusions = append(exclusions, strings.TrimPrefix(arg, "--exclude="))
+			continue
+		}
+		if arg == "--authorizing-party" || arg == "--auth-party" {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				fmt.Fprintf(os.Stderr, "[-] error: %s requires a party name argument\n", arg)
+				return 2
+			}
+			i++
+			authorizingParty = args[i]
+			continue
+		}
+		if strings.HasPrefix(arg, "--authorizing-party=") {
+			authorizingParty = strings.TrimPrefix(arg, "--authorizing-party=")
+			continue
+		}
+		if arg == "--auth-confirm" {
+			authConfirm = true
+			continue
+		}
+		if arg == "--allow-inferred" {
+			allowInferred = true
+			continue
+		}
+		if arg == "--allow-third-party" {
+			allowThirdParty = true
+			continue
+		}
+		if arg == "--dry-run" {
+			dryRun = true
+			continue
+		}
+		if arg == "--max-requests" {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				fmt.Fprintf(os.Stderr, "[-] error: --max-requests requires an integer argument\n")
+				return 2
+			}
+			i++
+			n, err := strconv.Atoi(args[i])
+			if err != nil || n <= 0 {
+				fmt.Fprintf(os.Stderr, "[-] error: invalid --max-requests %q: must be a positive integer\n", args[i])
+				return 2
+			}
+			maxRequests = n
+			continue
+		}
+		if arg == "--max-per-host" {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				fmt.Fprintf(os.Stderr, "[-] error: --max-per-host requires an integer argument\n")
+				return 2
+			}
+			i++
+			n, err := strconv.Atoi(args[i])
+			if err != nil || n <= 0 {
+				fmt.Fprintf(os.Stderr, "[-] error: invalid --max-per-host %q: must be a positive integer\n", args[i])
+				return 2
+			}
+			maxPerHost = n
+			continue
+		}
+		if arg == "--rate-limit" {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				fmt.Fprintf(os.Stderr, "[-] error: --rate-limit requires a number argument\n")
+				return 2
+			}
+			i++
+			f, err := strconv.ParseFloat(args[i], 64)
+			if err != nil || f <= 0 {
+				fmt.Fprintf(os.Stderr, "[-] error: invalid --rate-limit %q: must be positive\n", args[i])
+				return 2
+			}
+			rateLimit = f
+			continue
+		}
+		if arg == "--concurrency" {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				fmt.Fprintf(os.Stderr, "[-] error: --concurrency requires an integer argument\n")
+				return 2
+			}
+			i++
+			n, err := strconv.Atoi(args[i])
+			if err != nil || n <= 0 {
+				fmt.Fprintf(os.Stderr, "[-] error: invalid --concurrency %q: must be a positive integer\n", args[i])
+				return 2
+			}
+			concurrency = n
+			continue
+		}
+		if arg == "--timeout" {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				fmt.Fprintf(os.Stderr, "[-] error: --timeout requires a duration argument (e.g. 5s, 10s)\n")
+				return 2
+			}
+			i++
+			d, err := time.ParseDuration(args[i])
+			if err != nil || d <= 0 {
+				fmt.Fprintf(os.Stderr, "[-] error: invalid --timeout %q: must be a positive duration\n", args[i])
+				return 2
+			}
+			perReqTimeout = d
+			continue
+		}
+		if arg == "--overall-timeout" {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				fmt.Fprintf(os.Stderr, "[-] error: --overall-timeout requires a duration argument (e.g. 30s, 1m)\n")
+				return 2
+			}
+			i++
+			d, err := time.ParseDuration(args[i])
+			if err != nil || d <= 0 {
+				fmt.Fprintf(os.Stderr, "[-] error: invalid --overall-timeout %q: must be a positive duration\n", args[i])
+				return 2
+			}
+			overallDeadline = d
 			continue
 		}
 
@@ -172,6 +347,82 @@ func runAPK(args []string) int {
 		}
 	}
 
+	// Pre-flight validation for active backend assessment
+	if assessBackend {
+		if len(scopeTargets) == 0 {
+			fmt.Fprintf(os.Stderr, "[-] Security refusal: Active backend assessment requires explicit authorized scope targets.\n")
+			fmt.Fprintf(os.Stderr, "    Specify approved target URL(s) with --target <url>.\n")
+			fmt.Fprintf(os.Stderr, "    (Endpoints discovered during APK intake never confer automatic testing authorization.)\n")
+			return 2
+		}
+		if authorizingParty == "" && !authConfirm {
+			fmt.Fprintf(os.Stderr, "[-] Security refusal: Missing authorization certification.\n")
+			fmt.Fprintf(os.Stderr, "    Specify --authorizing-party <name> or --auth-confirm to certify explicit authorization to test the backend.\n")
+			return 2
+		}
+	}
+
+	// Optional authorized backend assessment handoff
+	var handoffReport *apk.HandoffReport
+	if assessBackend && inventoryRes != nil {
+		validFrom := time.Now().Add(-1 * time.Hour)
+		validUntil := time.Now().Add(24 * time.Hour)
+		partyName := authorizingParty
+		if partyName == "" {
+			partyName = "CLI Operator (Explicit --auth-confirm)"
+		}
+		authRecord := &assessment.AuthorizationRecord{
+			ID:                  "auth-cli-" + strconv.FormatInt(time.Now().Unix(), 10),
+			AuthorizingParty:    partyName,
+			AuthorizationMethod: "WRITTEN_CONTRACT",
+			Status:              assessment.AuthApproved,
+			ValidFrom:           &validFrom,
+			ValidUntil:          &validUntil,
+		}
+
+		handoffCfg := apk.DefaultHandoffConfig()
+		handoffCfg.AuthorizedTargets = scopeTargets
+		if scopeMode != "" {
+			handoffCfg.ScopeMode = scopeMode
+		}
+		handoffCfg.Authorization = authRecord
+		handoffCfg.AllowInferredRoutes = allowInferred
+		handoffCfg.AllowThirdParties = allowThirdParty
+		handoffCfg.DryRun = dryRun
+		if maxRequests > 0 {
+			handoffCfg.MaxRequestsTotal = maxRequests
+		}
+		if maxPerHost > 0 {
+			handoffCfg.MaxRequestsPerHost = maxPerHost
+		}
+		if rateLimit > 0 {
+			handoffCfg.RateLimit = rateLimit
+		}
+		if concurrency > 0 {
+			handoffCfg.MaxConcurrency = concurrency
+		}
+		if perReqTimeout > 0 {
+			handoffCfg.PerRequestTimeout = perReqTimeout
+		}
+		if overallDeadline > 0 {
+			handoffCfg.OverallDeadline = overallDeadline
+		}
+		for _, exc := range exclusions {
+			handoffCfg.Exclusions = append(handoffCfg.Exclusions, assessment.Exclusion{
+				ExclusionType: assessment.ExclusionHostname,
+				Pattern:       exc,
+				Reason:        "CLI exclusion rule",
+			})
+		}
+
+		hRep, err := apk.ExecuteHandoff(ctx, inventoryRes, handoffCfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Backend assessment failed: %v\n", err)
+			return 2
+		}
+		handoffReport = hRep
+	}
+
 	if jsonOutput {
 		outObj := map[string]interface{}{
 			"status":                   "PASS",
@@ -216,6 +467,9 @@ func runAPK(args []string) int {
 		}
 		if inventoryRes != nil {
 			outObj["backend_inventory"] = inventoryRes
+		}
+		if handoffReport != nil {
+			outObj["backend_handoff"] = handoffReport
 		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -354,6 +608,53 @@ func runAPK(args []string) int {
 			fmt.Println("===========================================================")
 		}
 
+		if handoffReport != nil {
+			fmt.Println("===========================================================")
+			fmt.Println("  FELIX :: AUTHORIZED BACKEND HANDOFF & ASSESSMENT")
+			fmt.Println("===========================================================")
+			fmt.Printf("  Scope Mode:              %s\n", handoffReport.ScopeMode)
+			fmt.Printf("  Authorized Targets:      %s\n", strings.Join(handoffReport.AuthorizedTargets, ", "))
+			fmt.Printf("  Dry Run (Planning):      %t\n", handoffReport.DryRun)
+			fmt.Printf("  Execution Duration:      %dms\n", handoffReport.DurationMs)
+			fmt.Println("-----------------------------------------------------------")
+			fmt.Printf("  Total Discovered:        %d\n", handoffReport.TotalDiscovered)
+			fmt.Printf("  Eligible Candidates:     %d\n", handoffReport.TotalEligible)
+			fmt.Printf("  Authorized in Scope:     %d\n", handoffReport.TotalAuthorized)
+			fmt.Printf("  Tested (Dispatched):     %d\n", handoffReport.TotalTested)
+			fmt.Printf("  Skipped:                 %d\n", handoffReport.TotalSkipped)
+			fmt.Printf("  Failed:                  %d\n", handoffReport.TotalFailed)
+			fmt.Printf("  Inconclusive:            %d\n", handoffReport.TotalInconclusive)
+			fmt.Printf("  Requests Dispatched:     %d\n", handoffReport.TotalRequestsSent)
+			fmt.Printf("  Budget Exhausted:        %t\n", handoffReport.BudgetExhausted)
+			fmt.Println("-----------------------------------------------------------")
+			fmt.Println("  Endpoint Dispositions:")
+			for _, r := range handoffReport.Results {
+				dispInfo := r.ReasonCode
+				if r.Disposition == apk.DispositionTested {
+					dispInfo = fmt.Sprintf("HTTP %d, %dms", r.HTTPStatus, r.DurationMs)
+				}
+				fmt.Printf("    * [%s] %s (%s)\n", strings.ToUpper(string(r.Disposition)), r.NormalizedURL, dispInfo)
+			}
+			if len(handoffReport.Limitations) > 0 {
+				fmt.Println()
+				fmt.Println("  Limitations & Safeguards:")
+				for _, l := range handoffReport.Limitations {
+					fmt.Printf("    * %s\n", l)
+				}
+			}
+			fmt.Println("===========================================================")
+			statusMsg := "PASS (Authorized backend assessment complete)"
+			if handoffReport.DryRun {
+				statusMsg = "PASS (Dry-run planning complete; zero network requests dispatched)"
+			}
+			fmt.Printf("  Status:                  %s\n", statusMsg)
+			fmt.Println("===========================================================")
+		}
+
+		if !assessBackend && (manifestRes != nil || artifactRes != nil || inventoryRes != nil) {
+			fmt.Println("  Active Assessment:       Disabled (offline static analysis only; pass --assess --target <url> --auth-confirm)")
+		}
+
 		if manifestRes == nil && artifactRes == nil && inventoryRes == nil {
 			fmt.Println("  Status:                  PASS (Intake boundary verified; offline static-only)")
 			fmt.Println("  Security Posture:        Unevaluated (Pass --analyze to run static security analysis)")
@@ -373,6 +674,21 @@ func printAPKHelp() {
 	fmt.Println("  --analyze-manifest            Run static security analysis on AndroidManifest.xml")
 	fmt.Println("  --analyze-artifacts           Run static intelligence analysis on DEX and embedded artifacts")
 	fmt.Println("  --inventory                   Build backend endpoint and host inventory from APK artifacts")
+	fmt.Println("  --assess, --handoff           Execute authorized active backend assessment on discovered inventory")
+	fmt.Println("  --target <url>                Authorized target URL (mandatory with --assess)")
+	fmt.Println("  --scope-mode <mode>           Scope mode: same-origin (default), subdomains, or explicit")
+	fmt.Println("  --exclude <pattern>           URL or hostname pattern to explicitly exclude from active testing")
+	fmt.Println("  --authorizing-party <name>    Entity or contract certifying authorization to test the backend")
+	fmt.Println("  --auth-confirm                Certify explicit authorization to conduct active backend assessment")
+	fmt.Println("  --allow-inferred              Permit testing of resolved inferred routes (default: false)")
+	fmt.Println("  --allow-third-party           Permit testing of third-party domains (default: false)")
+	fmt.Println("  --dry-run                     Plan candidates and dispositions without sending active network traffic")
+	fmt.Println("  --max-requests <n>            Maximum total network requests allowed for the assessment (default: 50)")
+	fmt.Println("  --max-per-host <n>            Maximum network requests allowed per backend host (default: 20)")
+	fmt.Println("  --rate-limit <rps>            Maximum request rate in requests per second (default: 10)")
+	fmt.Println("  --concurrency <n>             Maximum concurrent active probes (default: 2)")
+	fmt.Println("  --timeout <duration>          Per-request timeout (default: 5s)")
+	fmt.Println("  --overall-timeout <duration>  Overall assessment deadline (default: 30s)")
 	fmt.Println("  --extract                     Extract all safe entries to the isolated workspace")
 	fmt.Println("  --keep-workspace, --keep      Retain the isolated temporary workspace directory on disk")
 	fmt.Println("  --json                        Output machine-readable validation results as JSON")

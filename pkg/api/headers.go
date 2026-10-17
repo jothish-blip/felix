@@ -65,21 +65,24 @@ func getHeaderValues(h http.Header, name string) []string {
 
 // AuditSecurityHeaders inspects HTTP response headers on a target URL for recommended defense-in-depth protections.
 func AuditSecurityHeaders(ctx context.Context, client *Client, targetURL string) []APIFinding {
-	var findings []APIFinding
-
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
 	if err != nil {
-		return findings
+		return nil
 	}
 
 	resp, err := client.Do(ctx, req)
 	if err != nil {
-		return findings
+		return nil
 	}
 
+	return AuditResponseHeaders(targetURL, resp.StatusCode, resp.Header)
+}
+
+// AuditResponseHeaders inspects HTTP response headers for recommended defense-in-depth protections.
+func AuditResponseHeaders(targetURL string, statusCode int, headers http.Header) []APIFinding {
+	var findings []APIFinding
+
 	isHTTPS := strings.HasPrefix(strings.ToLower(targetURL), "https://")
-	headers := resp.Header
-	statusCode := resp.StatusCode
 
 	// 1. Content-Security-Policy Analysis
 	cspValues := getHeaderValues(headers, "Content-Security-Policy")
