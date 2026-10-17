@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -173,4 +174,123 @@ func TestCLI_APK_DiscloseNoSensitivePaths(t *testing.T) {
 		t.Errorf("expected exit code 0, got %d", code)
 	}
 	// Normal run without --keep-workspace must not print local workspace path
+}
+
+func TestCLI_APK_Analyze_TextOutput(t *testing.T) {
+	apkPath := createCLIValidAPK(t)
+
+	// Capture stdout
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	code := runAPK([]string{"--analyze", apkPath})
+
+	w.Close()
+	os.Stdout = oldStdout
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0 for --analyze, got %d", code)
+	}
+
+	var buf [8192]byte
+	n, _ := r.Read(buf[:])
+	out := string(buf[:n])
+
+	if !strings.Contains(out, "ANDROID MANIFEST SECURITY ANALYSIS") {
+		t.Errorf("expected manifest security analysis header in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Package Name:") {
+		t.Errorf("expected package name in output")
+	}
+}
+
+func TestCLI_APK_Analyze_JSONOutput(t *testing.T) {
+	apkPath := createCLIValidAPK(t)
+
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	code := runAPK([]string{"--json", "--analyze", apkPath})
+
+	w.Close()
+	os.Stdout = oldStdout
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d", code)
+	}
+
+	var buf [8192]byte
+	n, _ := r.Read(buf[:])
+	output := string(buf[:n])
+
+	var res map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &res); err != nil {
+		t.Fatalf("failed to parse JSON: %v, raw: %s", err, output)
+	}
+
+	if res["security_assessment"] != "EVALUATED" {
+		t.Errorf("expected security_assessment=EVALUATED, got %v", res["security_assessment"])
+	}
+
+	analysis, ok := res["manifest_analysis"].(map[string]interface{})
+	if !ok || analysis == nil {
+		t.Fatalf("expected manifest_analysis object in JSON output")
+	}
+
+	if analysis["package_name"] != "com.felix.cli.test" {
+		t.Errorf("expected package com.felix.cli.test, got %v", analysis["package_name"])
+	}
+}
+
+func TestCLI_APK_Analyze_DebuggableDetected(t *testing.T) {
+	// Create APK with debuggable="true"
+	tmpDir := t.TempDir()
+	apkPath := filepath.Join(tmpDir, "debuggable.apk")
+	f, _ := os.Create(apkPath)
+	zw := zip.NewWriter(f)
+
+	w1, _ := zw.Create("AndroidManifest.xml")
+	w1.Write([]byte(`<manifest package="com.debug.app"><application android:debuggable="true"/></manifest>`))
+
+	w2, _ := zw.Create("classes.dex")
+	w2.Write([]byte("dex"))
+
+	zw.Close()
+	f.Close()
+
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	code := runAPK([]string{"--json", "--analyze", apkPath})
+
+	w.Close()
+	os.Stdout = oldStdout
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d", code)
+	}
+
+	var buf [8192]byte
+	n, _ := r.Read(buf[:])
+	output := string(buf[:n])
+
+	var res map[string]interface{}
+	_ = json.Unmarshal([]byte(output), &res)
+	analysis := res["manifest_analysis"].(map[string]interface{})
+	findings := analysis["findings"].([]interface{})
+
+	found := false
+	for _, rawF := range findings {
+		f := rawF.(map[string]interface{})
+		if f["rule_id"] == "APK-MAN-DEBUGGABLE" && f["severity"] == "HIGH" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected APK-MAN-DEBUGGABLE HIGH finding in JSON output")
+	}
 }

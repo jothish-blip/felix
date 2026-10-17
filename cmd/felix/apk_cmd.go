@@ -15,12 +15,13 @@ import (
 // runAPK executes the "felix apk" subcommand for APK intake, structural validation, and isolation.
 func runAPK(args []string) int {
 	var (
-		extract       bool
-		keepWorkspace bool
-		jsonOutput    bool
-		quiet         bool
-		apkPath       string
-		limits        = apk.DefaultLimits()
+		extract         bool
+		keepWorkspace   bool
+		jsonOutput      bool
+		quiet           bool
+		analyzeManifest bool
+		apkPath         string
+		limits          = apk.DefaultLimits()
 	)
 
 	// Custom argument parser matching Felix CLI conventions
@@ -44,6 +45,10 @@ func runAPK(args []string) int {
 		}
 		if arg == "--quiet" || arg == "-q" || arg == "--silent" || arg == "-s" {
 			quiet = true
+			continue
+		}
+		if arg == "--analyze" || arg == "--analyze-manifest" {
+			analyzeManifest = true
 			continue
 		}
 
@@ -106,7 +111,7 @@ func runAPK(args []string) int {
 
 	opts := apk.IntakeOptions{
 		Limits:  limits,
-		Extract: extract,
+		Extract: extract || analyzeManifest, // extract safe entries to enable network_security_config inspection
 	}
 
 	res, err := apk.Intake(ctx, apkPath, opts)
@@ -118,6 +123,16 @@ func runAPK(args []string) int {
 	// Always ensure cleanup unless user explicitly requested --keep-workspace
 	if !keepWorkspace {
 		defer res.Workspace.Close()
+	}
+
+	// Optional manifest static security analysis
+	var analysisRes *apk.ManifestAnalysisResult
+	if analyzeManifest {
+		analysisRes, err = apk.AnalyzeManifest(ctx, res.Workspace, limits)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Manifest analysis failed: %v\n", err)
+			return 2
+		}
 	}
 
 	if jsonOutput {
@@ -135,6 +150,18 @@ func runAPK(args []string) int {
 		}
 		if keepWorkspace {
 			outObj["workspace_dir"] = res.Workspace.Path()
+		}
+		if analysisRes != nil {
+			outObj["security_assessment"] = "EVALUATED"
+			outObj["manifest_analysis"] = map[string]interface{}{
+				"format":         analysisRes.Document.Format,
+				"package_name":   analysisRes.Document.PackageName,
+				"min_sdk":        analysisRes.Document.MinSDK,
+				"target_sdk":     analysisRes.Document.TargetSDK,
+				"findings_count": len(analysisRes.Findings),
+				"findings":       analysisRes.Findings,
+				"limitations":    analysisRes.Limitations,
+			}
 		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -160,9 +187,36 @@ func runAPK(args []string) int {
 			fmt.Printf("  Isolated Workspace:      Ephemeral (cleaned up automatically)\n")
 		}
 		fmt.Println("-----------------------------------------------------------")
-		fmt.Println("  Status:                  PASS (Intake boundary verified; offline static-only)")
-		fmt.Println("  Security Posture:        Unevaluated (APK security analysis pending)")
-		fmt.Println("===========================================================")
+
+		if analysisRes != nil {
+			fmt.Println("===========================================================")
+			fmt.Println("  FELIX :: ANDROID MANIFEST SECURITY ANALYSIS")
+			fmt.Println("===========================================================")
+			fmt.Printf("  Package Name:            %s\n", analysisRes.Document.PackageName)
+			fmt.Printf("  Manifest Format:         %s\n", analysisRes.Document.Format)
+			fmt.Printf("  Min SDK / Target SDK:    %d / %d\n", analysisRes.Document.MinSDK, analysisRes.Document.TargetSDK)
+			fmt.Printf("  Findings Identified:     %d\n", len(analysisRes.Findings))
+			fmt.Println("-----------------------------------------------------------")
+
+			if len(analysisRes.Findings) == 0 {
+				fmt.Println("  No security exposures or non-standard configurations identified.")
+			} else {
+				for _, f := range analysisRes.Findings {
+					fmt.Printf("  [%s] %s\n", f.Severity, f.Title)
+					fmt.Printf("    Target/Component: %s\n", f.Endpoint)
+					fmt.Printf("    Observation:      %s\n", f.Evidence)
+					fmt.Printf("    Remediation:      %s\n", f.Remediation)
+					fmt.Println()
+				}
+			}
+			fmt.Println("===========================================================")
+			fmt.Println("  Status:                  PASS (Manifest static assessment complete; offline)")
+			fmt.Println("===========================================================")
+		} else {
+			fmt.Println("  Status:                  PASS (Intake boundary verified; offline static-only)")
+			fmt.Println("  Security Posture:        Unevaluated (Pass --analyze to run manifest security analysis)")
+			fmt.Println("===========================================================")
+		}
 	}
 
 	return 0
@@ -173,11 +227,12 @@ func printAPKHelp() {
 	fmt.Println("  felix apk [options] <path-to-apk>")
 	fmt.Println("\nSafely validate and isolate Android APK packages for offline static analysis.")
 	fmt.Println("\nOptions:")
-	fmt.Println("  --extract                 Extract all safe entries to the isolated workspace")
-	fmt.Println("  --keep-workspace, --keep  Retain the isolated temporary workspace directory on disk")
-	fmt.Println("  --json                    Output machine-readable validation results as JSON")
-	fmt.Println("  --quiet, -q               Suppress banner and verbose operational output")
-	fmt.Println("  --max-compressed-size <n> Maximum allowed input APK file size in bytes (default: 200MB)")
-	fmt.Println("  --max-entries <n>         Maximum allowed archive entries (default: 20000)")
-	fmt.Println("  --help, -h                Show this help message")
+	fmt.Println("  --analyze, --analyze-manifest Run static security analysis on AndroidManifest.xml")
+	fmt.Println("  --extract                     Extract all safe entries to the isolated workspace")
+	fmt.Println("  --keep-workspace, --keep      Retain the isolated temporary workspace directory on disk")
+	fmt.Println("  --json                        Output machine-readable validation results as JSON")
+	fmt.Println("  --quiet, -q                   Suppress banner and verbose operational output")
+	fmt.Println("  --max-compressed-size <n>     Maximum allowed input APK file size in bytes (default: 200MB)")
+	fmt.Println("  --max-entries <n>             Maximum allowed archive entries (default: 20000)")
+	fmt.Println("  --help, -h                    Show this help message")
 }
