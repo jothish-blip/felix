@@ -753,6 +753,48 @@ func FromAPIFinding(target string, f api.APIFinding) Finding {
 		verResult = "Laravel Telescope monitoring interface exposed unauthenticated application telemetry and diagnostic entries."
 		negEvidence = "All recorded telemetry, request payloads, and query parameters were bounded and redacted."
 
+	case cat == "node-runtime-exposure":
+		detMethod = "header_inspection"
+		detStatus = "OBSERVED"
+		verStatus = VerificationObserved
+		verResult = f.Description
+		negEvidence = "Node.js framework or runtime header observed; no unauthenticated debug interface or stack trace was disclosed."
+
+	case cat == "node-debug-error", cat == "node-stack-trace":
+		detMethod = "active_probe"
+		detStatus = "DETECTED"
+		verStatus = VerificationVerified
+		verResult = f.Description
+		negEvidence = "All internal filesystem paths, filenames, and environment values were bounded and redacted."
+
+	case cat == "go-runtime-exposure":
+		detMethod = "header_inspection"
+		detStatus = "OBSERVED"
+		verStatus = VerificationObserved
+		verResult = f.Description
+		negEvidence = "Go runtime or framework header observed; no unauthenticated diagnostic interface or panic was disclosed."
+
+	case cat == "go-debug-panic", cat == "go-stack-trace":
+		detMethod = "active_probe"
+		detStatus = "DETECTED"
+		verStatus = VerificationVerified
+		verResult = f.Description
+		negEvidence = "All goroutine frames, internal source locations, and error values were bounded and redacted."
+
+	case cat == "go-pprof-exposure":
+		detMethod = "active_probe"
+		detStatus = "DETECTED"
+		verStatus = VerificationVerified
+		verResult = "Go runtime pprof diagnostic interface is exposed without authentication."
+		negEvidence = "Diagnostic interface observed; heap dumps and profiling traces were bounded and not stored."
+
+	case cat == "go-vars-exposure":
+		detMethod = "active_probe"
+		detStatus = "DETECTED"
+		verStatus = VerificationVerified
+		verResult = "Go expvar runtime variables endpoint (/debug/vars) is exposed without authentication."
+		negEvidence = "Runtime variables observed; all sensitive environment and configuration values were bounded and redacted."
+
 	case cat == "sensitive-endpoint-protected":
 		detMethod = "active_probe"
 		detStatus = "OBSERVED"

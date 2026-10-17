@@ -57,6 +57,14 @@ const (
 	CategoryLaravelTelescopeExposed   = "laravel-telescope-exposure"
 	CategoryLaravelTelescopeProtected = "laravel-telescope-restricted"
 	CategoryLaravelTelescopeData      = "laravel-telescope-sensitive-data"
+	CategoryNodeRuntimeExposure       = "node-runtime-exposure"
+	CategoryNodeDebugError            = "node-debug-error"
+	CategoryNodeStackTrace            = "node-stack-trace"
+	CategoryGoRuntimeExposure         = "go-runtime-exposure"
+	CategoryGoDebugPanic              = "go-debug-panic"
+	CategoryGoStackTrace              = "go-stack-trace"
+	CategoryGoPprofExposure           = "go-pprof-exposure"
+	CategoryGoVarsExposure            = "go-vars-exposure"
 )
 
 // APIFinding represents a verified API security exposure, configuration issue, or hardening observation.

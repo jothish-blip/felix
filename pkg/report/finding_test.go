@@ -760,3 +760,118 @@ func TestFromAPIFinding_Laravel(t *testing.T) {
 		}
 	}
 }
+
+func TestFromAPIFinding_NodeAndGo(t *testing.T) {
+	target := "https://app.example.com"
+	cases := []struct {
+		apiFinding     api.APIFinding
+		expectedRule   string
+		expectedStatus FindingStatus
+		expectedVer    VerificationStatus
+		expectedSev    string
+		expectedRemSub string
+	}{
+		{
+			apiFinding: api.APIFinding{
+				Category:    api.CategoryNodeRuntimeExposure,
+				Endpoint:    "https://app.example.com/",
+				Method:      "GET",
+				Description: "Node.js Express framework identified via HTTP response header",
+				Severity:    api.SeverityInfo,
+				Confidence:  api.ConfidenceHigh,
+				Fingerprint: api.GenerateFingerprint(api.CategoryNodeRuntimeExposure, "https://app.example.com/", "GET"),
+			},
+			expectedRule:   "API-NODE-RUNTIME-EXPOSURE",
+			expectedStatus: FindingStatusConfirmed,
+			expectedVer:    VerificationObserved,
+			expectedSev:    SeverityInfo,
+			expectedRemSub: "x-powered-by",
+		},
+		{
+			apiFinding: api.APIFinding{
+				Category:    api.CategoryNodeStackTrace,
+				Endpoint:    "https://app.example.com/api/test",
+				Method:      "GET",
+				Description: "Node.js verbose stack trace exposes internal filesystem paths and application structure",
+				Severity:    api.SeverityMedium,
+				Confidence:  api.ConfidenceHigh,
+				Fingerprint: api.GenerateFingerprint(api.CategoryNodeStackTrace, "https://app.example.com/api/test", "GET"),
+			},
+			expectedRule:   "API-NODE-STACK-TRACE",
+			expectedStatus: FindingStatusConfirmed,
+			expectedVer:    VerificationVerified,
+			expectedSev:    SeverityMedium,
+			expectedRemSub: "NODE_ENV",
+		},
+		{
+			apiFinding: api.APIFinding{
+				Category:    api.CategoryGoPprofExposure,
+				Endpoint:    "https://app.example.com/debug/pprof/",
+				Method:      "GET",
+				Description: "Go net/http/pprof runtime diagnostic profiling interface publicly accessible",
+				Severity:    api.SeverityHigh,
+				Confidence:  api.ConfidenceHigh,
+				Fingerprint: api.GenerateFingerprint(api.CategoryGoPprofExposure, "https://app.example.com/debug/pprof/", "GET"),
+			},
+			expectedRule:   "API-GO-PPROF-EXPOSURE",
+			expectedStatus: FindingStatusConfirmed,
+			expectedVer:    VerificationVerified,
+			expectedSev:    SeverityHigh,
+			expectedRemSub: "pprof",
+		},
+		{
+			apiFinding: api.APIFinding{
+				Category:    api.CategoryGoVarsExposure,
+				Endpoint:    "https://app.example.com/debug/vars",
+				Method:      "GET",
+				Description: "Go expvar runtime metrics and variables (/debug/vars) publicly accessible",
+				Severity:    api.SeverityMedium,
+				Confidence:  api.ConfidenceHigh,
+				Fingerprint: api.GenerateFingerprint(api.CategoryGoVarsExposure, "https://app.example.com/debug/vars", "GET"),
+			},
+			expectedRule:   "API-GO-VARS-EXPOSURE",
+			expectedStatus: FindingStatusConfirmed,
+			expectedVer:    VerificationVerified,
+			expectedSev:    SeverityMedium,
+			expectedRemSub: "expvar",
+		},
+		{
+			apiFinding: api.APIFinding{
+				Category:    api.CategoryGoDebugPanic,
+				Endpoint:    "https://app.example.com/api/panic",
+				Method:      "GET",
+				Description: "Go runtime panic stack trace disclosed via HTTP response",
+				Severity:    api.SeverityMedium,
+				Confidence:  api.ConfidenceHigh,
+				Fingerprint: api.GenerateFingerprint(api.CategoryGoDebugPanic, "https://app.example.com/api/panic", "GET"),
+			},
+			expectedRule:   "API-GO-DEBUG-PANIC",
+			expectedStatus: FindingStatusConfirmed,
+			expectedVer:    VerificationVerified,
+			expectedSev:    SeverityMedium,
+			expectedRemSub: "Recovery",
+		},
+	}
+
+	for _, tc := range cases {
+		f := FromAPIFinding(target, tc.apiFinding)
+
+		if f.RuleID != tc.expectedRule {
+			t.Errorf("category %s: expected RuleID %s, got %s", tc.apiFinding.Category, tc.expectedRule, f.RuleID)
+		}
+		if f.Status != tc.expectedStatus {
+			t.Errorf("category %s: expected Status %s, got %s", tc.apiFinding.Category, tc.expectedStatus, f.Status)
+		}
+		if f.Verification.Status != tc.expectedVer {
+			t.Errorf("category %s: expected Verification.Status %s, got %s", tc.apiFinding.Category, tc.expectedVer, f.Verification.Status)
+		}
+		if f.Severity != tc.expectedSev {
+			t.Errorf("category %s: expected Severity %s, got %s", tc.apiFinding.Category, tc.expectedSev, f.Severity)
+		}
+
+		rem := RemediationFor(tc.apiFinding.Category, f.Title)
+		if !strings.Contains(rem, tc.expectedRemSub) {
+			t.Errorf("category %s: expected remediation to contain %q, got: %s", tc.apiFinding.Category, tc.expectedRemSub, rem)
+		}
+	}
+}

@@ -561,6 +561,26 @@ func RemediationFor(category, title string) string {
 	case cat == "laravel-telescope-restricted":
 		return "Ensure Laravel Telescope access rules continue to be enforced strictly via Telescope::auth with multi-factor administrative authentication."
 
+	// Node.js & Framework Diagnostic Interfaces
+	case cat == "node-debug-error", cat == "node-stack-trace":
+		return "Ensure NODE_ENV is set to 'production' in your deployment environment. Implement a custom error handler in Express (or your chosen framework) that logs full stack traces internally to secure logging infrastructure and returns generic, sanitized error responses to clients."
+
+	case cat == "node-runtime-exposure":
+		return "Disable framework signature headers (e.g., call `app.disable('x-powered-by')` in Express) to prevent exposing runtime framework technology to unauthenticated clients."
+
+	// Go Runtime & Framework Diagnostic Interfaces
+	case cat == "go-debug-panic", cat == "go-stack-trace":
+		return "Configure custom recovery middleware (such as gin.Recovery() or custom panic handlers) in Go HTTP servers to log panic details internally and return a generic HTTP 500 error without exposing goroutine stack traces or internal source paths."
+
+	case cat == "go-pprof-exposure":
+		return "Do not expose net/http/pprof endpoints on public HTTP listeners. Bind diagnostic profiling endpoints to a dedicated internal management port or loopback interface (127.0.0.1), or place them behind strict administrative authentication."
+
+	case cat == "go-vars-exposure":
+		return "Restrict access to the Go expvar endpoint (/debug/vars). Place it behind administrative authentication or bind it exclusively to internal management network interfaces."
+
+	case cat == "go-runtime-exposure":
+		return "Suppress unnecessary server identifying headers in Go framework configurations to minimize technological reconnaissance."
+
 	// Defensive Security Headers
 	case cat == "missing-csp":
 		return "Deploy a robust Content-Security-Policy (CSP) header restricting script execution, styles, and object embeds to trusted sources. Begin with `Content-Security-Policy-Report-Only` during staging."

@@ -20,6 +20,8 @@ type AuditResult struct {
 	DjangoCount         int                  `json:"django_count,omitempty"`
 	FastAPICount        int                  `json:"fastapi_count,omitempty"`
 	LaravelCount        int                  `json:"laravel_count,omitempty"`
+	NodeCount           int                  `json:"node_count,omitempty"`
+	GoCount             int                  `json:"go_count,omitempty"`
 	SensitiveCount      int                  `json:"sensitive_count"`
 	CORSCount           int                  `json:"cors_count"`
 	HeaderCount         int                  `json:"header_count"`
@@ -248,6 +250,14 @@ func (d *Detector) Audit(ctx context.Context, targetURL string, assets []crawler
 	laravelFindings := AuditLaravelDiagnostics(ctx, client, baseURL, candidatePaths)
 	addFindings(laravelFindings)
 
+	// 7. Audit Node.js Runtime & Framework Diagnostic Interfaces
+	nodeFindings := AuditNodeDiagnostics(ctx, client, baseURL, candidatePaths)
+	addFindings(nodeFindings)
+
+	// 8. Audit Go Runtime & Framework Diagnostic Interfaces (pprof, expvar, panics)
+	goFindings := AuditGoDiagnostics(ctx, client, baseURL, candidatePaths)
+	addFindings(goFindings)
+
 	// Track endpoints that already have documentation findings to prevent duplicate reporting
 	docEndpoints := make(map[string]struct{})
 	for _, f := range fastapiFindings {
@@ -373,7 +383,7 @@ func (d *Detector) Audit(ctx context.Context, targetURL string, assets []crawler
 		addFindings([]APIFinding{invFinding})
 	}
 
-	totalAudited := 1 + len(candidatePaths) + len(DefaultSensitivePaths) + len(DefaultActuatorCandidatePaths) + len(DefaultDjangoCandidatePaths) + len(DefaultFastAPICandidatePaths) + len(DefaultLaravelCandidatePaths)
+	totalAudited := 1 + len(candidatePaths) + len(DefaultSensitivePaths) + len(DefaultActuatorCandidatePaths) + len(DefaultDjangoCandidatePaths) + len(DefaultFastAPICandidatePaths) + len(DefaultLaravelCandidatePaths) + len(DefaultNodeCandidatePaths) + len(DefaultGoCandidatePaths)
 
 	return AuditResult{
 		EndpointsScanned:    totalAudited,
@@ -383,6 +393,8 @@ func (d *Detector) Audit(ctx context.Context, targetURL string, assets []crawler
 		DjangoCount:         len(djangoFindings),
 		FastAPICount:        len(fastapiFindings),
 		LaravelCount:        len(laravelFindings),
+		NodeCount:           len(nodeFindings),
+		GoCount:             len(goFindings),
 		SensitiveCount:      len(filteredSensitive),
 		CORSCount:           len(corsFindings),
 		HeaderCount:         len(headerFindings),
