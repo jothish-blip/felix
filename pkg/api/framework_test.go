@@ -915,3 +915,66 @@ func TestFramework_Regression_CandidateSecretsWithUnverifiedValidity(t *testing.
 		})
 	}
 }
+
+// Scenario 27: Diagnostic response that exposes sensitive data despite an unusual status code (e.g. HTTP 503 or 500)
+func TestFramework_Scenario27_SensitiveDiagnosticExposureWithUnusualStatus(t *testing.T) {
+	// Spring Boot Actuator /health returning HTTP 503 because a subsystem is DOWN,
+	// but exposing detailed component infrastructure telemetry
+	raw := APIFinding{
+		Category:   CategoryActuatorHealthDetailed,
+		Endpoint:   "https://example.com/actuator/health",
+		Method:     "GET",
+		HTTPStatus: 503,
+		AuthState:  AuthStatePublic,
+		Severity:   SeverityLow,
+		Confidence: ConfidenceHigh,
+		Evidence:   "HTTP 503. Spring Boot Actuator /health exposes detailed internal component telemetry. Status: DOWN. Components: [db, redis, diskSpace].",
+		Details: map[string]string{
+			"framework":       "Spring Boot",
+			"health_status":   "DOWN",
+			"component_count": "3",
+			"components":      "db, redis, diskSpace",
+		},
+	}
+	norm := NormalizeFrameworkFinding(raw)
+
+	if norm.ClassificationOutcome != OutcomeConfirmed {
+		t.Errorf("expected OutcomeConfirmed for genuine telemetry despite HTTP 503, got %s", norm.ClassificationOutcome)
+	}
+	if norm.Reachability != ReachabilityConfirmedReachable {
+		t.Errorf("expected ReachabilityConfirmedReachable (endpoint actively responded), got %s", norm.Reachability)
+	}
+	if norm.Framework != "Spring Boot" {
+		t.Errorf("expected framework Spring Boot, got %s", norm.Framework)
+	}
+}
+
+// Scenario 28: Framework identification that is ambiguous or conflicts with a gateway header
+func TestFramework_Scenario28_AmbiguousOrConflictingGatewayHeaders(t *testing.T) {
+	// Gateway header (e.g. Cloudflare / Envoy) present along with backend Express header
+	raw := APIFinding{
+		Category:   CategoryNodeRuntimeExposure,
+		Endpoint:   "https://example.com/api",
+		Method:     "GET",
+		HTTPStatus: 200,
+		Severity:   SeverityInfo,
+		Confidence: ConfidenceHigh,
+		Evidence:   "Server: cloudflare\nX-Powered-By: Express",
+		Details: map[string]string{
+			"framework":      "Express",
+			"gateway_header": "cloudflare",
+		},
+	}
+	norm := NormalizeFrameworkFinding(raw)
+
+	// Framework identification must remain informational
+	if norm.ClassificationOutcome != OutcomeInformational {
+		t.Errorf("expected OutcomeInformational for framework header behind gateway, got %s", norm.ClassificationOutcome)
+	}
+	if norm.Severity != SeverityInfo {
+		t.Errorf("expected SeverityInfo, got %s", norm.Severity)
+	}
+	if norm.Framework != "Express" {
+		t.Errorf("expected backend framework Express to be identified, got %s", norm.Framework)
+	}
+}

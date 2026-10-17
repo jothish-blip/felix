@@ -495,6 +495,15 @@ func ClassifyFrameworkEvidence(f *APIFinding) {
 		f.Confidence = ConfidenceHigh
 		f.Limitations = appendIfNotExists(f.Limitations, "Spring Boot Actuator route mappings exposed. Target endpoints were not recursively probed.")
 
+	// 7b. Spring Boot Actuator Detailed Component Telemetry
+	case cat == CategoryActuatorHealthDetailed:
+		f.ClassificationOutcome = OutcomeConfirmed
+		if f.Severity == "" {
+			f.Severity = SeverityLow
+		}
+		f.Confidence = ConfidenceHigh
+		f.Limitations = appendIfNotExists(f.Limitations, "Spring Boot Actuator detailed component telemetry exposed. Administrative credentials were not observed.")
+
 	// 8. Go Active Profiling Data (goroutine / heap dump)
 	case cat == CategoryGoPprofExposure && (f.Details["interface"] == "profiling_data" || f.Severity == SeverityHigh):
 		f.ClassificationOutcome = OutcomeConfirmed
@@ -605,7 +614,11 @@ func NormalizeFrameworkFinding(f APIFinding) APIFinding {
 
 	// 5. Normalize reachability
 	if norm.Reachability == "" {
-		norm.Reachability = NormalizeReachability(norm.Details["reachability"], norm.HTTPStatus, nil)
+		reachRaw := norm.Details["reachability"]
+		if reachRaw == "" && (norm.AuthState == AuthStatePublic || norm.AuthState == AuthStateAuthRequired || norm.AuthState == AuthStateForbidden) {
+			reachRaw = string(ReachabilityConfirmedReachable)
+		}
+		norm.Reachability = NormalizeReachability(reachRaw, norm.HTTPStatus, nil)
 	} else {
 		norm.Reachability = NormalizeReachability(string(norm.Reachability), norm.HTTPStatus, nil)
 	}
