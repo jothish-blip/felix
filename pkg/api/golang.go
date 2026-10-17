@@ -35,7 +35,7 @@ var (
 	// goSourceLocationRegex matches Go source file paths and line numbers, e.g. "	/go/src/app/main.go:42 +0x12b"
 	goSourceLocationRegex = regexp.MustCompile(`(?m)^\s*([a-zA-Z0-9_\-\./\\]+\.go):(\d+)(?:\s+\+0x[0-9a-fA-F]+)?`)
 	// goFilePathRegex matches internal absolute filesystem paths for Go applications
-	goFilePathRegex = regexp.MustCompile(`(?:^|[\s\("'])(/(?:go/src|home|app|workspace|usr/local/go|var/www)/[a-zA-Z0-9_\-\./\\]+\.go|[A-Za-z]:\\[a-zA-Z0-9_\-\.\\]+\.go)`)
+	goFilePathRegex = regexp.MustCompile(`(?:^|[\s\("'])(/(?:go/src|home|app|workspace|usr/local/go|var/www)/[a-zA-Z0-9_\-\./\\]+\.(?:go|mod|sum|yaml|json)|[A-Za-z]:\\[a-zA-Z0-9_\-\.\\]+\.(?:go|mod|sum|yaml|json))`)
 	// goPprofIndexMarkerRegex verifies official Go net/http/pprof HTML or text index page
 	goPprofIndexMarkerRegex = regexp.MustCompile(`(?i)(?:Types of profiles available:|/debug/pprof/heap|/debug/pprof/goroutine|/debug/pprof/block)`)
 )
@@ -195,59 +195,150 @@ func InspectGoPprof(resp *ProbeResponse, endpointURL string) *APIFinding {
 		return nil
 	}
 
-	// Check for pprof index or specific profile endpoints
+	goroutines := goGoroutineHeaderRegex.FindAllString(bodyStr, -1)
+	hasGoroutineDump := len(goroutines) > 0 || strings.Contains(bodyStr, "goroutine profile:")
+	hasHeapDump := strings.Contains(lowerURL, "heap") && (strings.Contains(bodyStr, "heap profile:") || strings.Contains(bodyStr, "runtime.MemProfile"))
 	hasIndexMarkers := goPprofIndexMarkerRegex.MatchString(bodyStr)
-	hasGoroutineDump := strings.Contains(lowerURL, "goroutine") && len(goGoroutineHeaderRegex.FindAllString(bodyStr, -1)) > 0
 
-	if !hasIndexMarkers && !hasGoroutineDump {
-		return nil
-	}
+	// Case 1: Active operational profiling data exposed (goroutines or heap execution traces) -> SeverityHigh
+	if hasGoroutineDump || hasHeapDump {
+		desc := "Go runtime goroutine diagnostic execution dump exposed"
+		ev := fmt.Sprintf("HTTP 200 OK on %s. Active Go goroutine execution dump disclosed (%d active goroutines observed).",
+			endpointURL, len(goroutines))
+		if hasHeapDump {
+			desc = "Go runtime heap memory profile dump exposed"
+			ev = fmt.Sprintf("HTTP 200 OK on %s. Active Go heap memory profile data disclosed without authentication.", endpointURL)
+		}
 
-	desc := "Go net/http/pprof runtime diagnostic profiling interface publicly accessible"
-	ev := fmt.Sprintf("HTTP 200 OK on %s. Go net/http/pprof runtime profiling interface exposed without authentication.", endpointURL)
-	if hasGoroutineDump {
-		desc = "Go runtime goroutine diagnostic dump publicly accessible"
-		ev = fmt.Sprintf("HTTP 200 OK on %s. Active Go goroutine execution dump disclosed without authentication.", endpointURL)
-	}
+		negEv := "Execution profiling data observed. Binary collection and heap memory downloads were bounded and not stored."
 
-	negEv := "Profiling endpoint observed; heap memory dumps, CPU execution traces, and binary execution commands were bounded and not executed."
+		details := map[string]string{
+			"framework":                "Go",
+			"component":                "net/http/pprof",
+			"endpoint":                 endpointURL,
+			"http_status":              "200",
+			"interface":                "profiling_data",
+			"data_exposure":            "active_execution_traces",
+			"auth_context":             "unauthenticated_or_unknown",
+			"validity_status":          "unverified_active_probe_omitted",
+			"active_auth_tested":       "false",
+			"verification_limitations": "Passive read-only query; execution profiling was observed without backend state alteration",
+		}
+		if hasGoroutineDump {
+			details["goroutine_count"] = fmt.Sprintf("%d", len(goroutines))
+		}
+		if resp.Truncated {
+			details["limitations"] = "Response exceeded 512 KiB and was bounded to preserve system resources"
+		}
 
-	details := map[string]string{
-		"framework":                "Go",
-		"component":                "net/http/pprof",
-		"endpoint":                 endpointURL,
-		"http_status":              "200",
-		"validity_status":          "unverified_active_probe_omitted",
-		"active_auth_tested":       "false",
-		"verification_limitations": "Passive read-only query; heap dumps and profiling collection were omitted to preserve target performance",
-	}
-	if resp.Truncated {
-		details["limitations"] = "Response exceeded 512 KiB and was bounded to preserve system resources"
-	}
+		for k, v := range details {
+			if secrets.IsSensitiveKey(k) || secrets.IsSensitiveHeader(k) {
+				details[k] = "[REDACTED]"
+			} else {
+				details[k] = secrets.RedactText(v)
+			}
+		}
 
-	for k, v := range details {
-		if secrets.IsSensitiveKey(k) || secrets.IsSensitiveHeader(k) {
-			details[k] = "[REDACTED]"
-		} else {
-			details[k] = secrets.RedactText(v)
+		return &APIFinding{
+			Category:         CategoryGoPprofExposure,
+			Endpoint:         endpointURL,
+			Method:           http.MethodGet,
+			Description:      secrets.RedactText(desc),
+			Evidence:         secrets.RedactText(ev),
+			NegativeEvidence: secrets.RedactText(negEv),
+			Severity:         SeverityHigh,
+			Confidence:       ConfidenceHigh,
+			Fingerprint:      GenerateFingerprint(CategoryGoPprofExposure, endpointURL, http.MethodGet),
+			Classification:   ClassAdmin,
+			Details:          details,
+			HTTPStatus:       resp.StatusCode,
 		}
 	}
 
-	_ = lowerBody
-	return &APIFinding{
-		Category:         CategoryGoPprofExposure,
-		Endpoint:         endpointURL,
-		Method:           http.MethodGet,
-		Description:      secrets.RedactText(desc),
-		Evidence:         secrets.RedactText(ev),
-		NegativeEvidence: secrets.RedactText(negEv),
-		Severity:         SeverityHigh,
-		Confidence:       ConfidenceHigh,
-		Fingerprint:      GenerateFingerprint(CategoryGoPprofExposure, endpointURL, http.MethodGet),
-		Classification:   ClassAdmin,
-		Details:          details,
-		HTTPStatus:       resp.StatusCode,
+	// Case 2: Profiling index / listing page reachable (non-sensitive endpoint inventory listing) -> SeverityLow
+	if hasIndexMarkers {
+		desc := "Go net/http/pprof diagnostic profiling index reachable (endpoint inventory observation)"
+		ev := fmt.Sprintf("HTTP 200 OK on %s. Go net/http/pprof diagnostic profiling index reachable; endpoint lists available profile types (heap, goroutine, block, etc.). Active execution dumps were not returned by this listing.", endpointURL)
+		negEv := "Profiling index observed; live memory dumps, CPU execution traces, and binary profiling data were bounded and not executed."
+
+		details := map[string]string{
+			"framework":                "Go",
+			"component":                "net/http/pprof",
+			"endpoint":                 endpointURL,
+			"http_status":              "200",
+			"interface":                "profiling_index",
+			"data_exposure":            "endpoint_inventory_only",
+			"auth_context":             "unauthenticated_or_unknown",
+			"validity_status":          "unverified_active_probe_omitted",
+			"active_auth_tested":       "false",
+			"verification_limitations": "Passive read-only query; execution profiling and heap collection were omitted to preserve target performance",
+		}
+		if resp.Truncated {
+			details["limitations"] = "Response exceeded 512 KiB and was bounded to preserve system resources"
+		}
+
+		for k, v := range details {
+			if secrets.IsSensitiveKey(k) || secrets.IsSensitiveHeader(k) {
+				details[k] = "[REDACTED]"
+			} else {
+				details[k] = secrets.RedactText(v)
+			}
+		}
+
+		return &APIFinding{
+			Category:         CategoryGoPprofExposure,
+			Endpoint:         endpointURL,
+			Method:           http.MethodGet,
+			Description:      secrets.RedactText(desc),
+			Evidence:         secrets.RedactText(ev),
+			NegativeEvidence: secrets.RedactText(negEv),
+			Severity:         SeverityLow,
+			Confidence:       ConfidenceHigh,
+			Fingerprint:      GenerateFingerprint(CategoryGoPprofExposure, endpointURL, http.MethodGet),
+			Classification:   ClassAdmin,
+			Details:          details,
+			HTTPStatus:       resp.StatusCode,
+		}
 	}
+
+	// Case 3: Ambiguous or minimal response on /debug/pprof route (exposure/impact unverified) -> SeverityInfo, ConfidenceLow
+	if isPprofRoute && strings.Contains(lowerBody, "pprof") {
+		desc := "Go diagnostic profiling endpoint response ambiguous (exposure and impact unverified)"
+		ev := fmt.Sprintf("HTTP 200 OK on %s, but response lacked standard Go net/http/pprof index markers or active profiling data.", endpointURL)
+		negEv := "Endpoint is reachable but did not disclose profiling data, index listings, or sensitive diagnostics; impact could not be confirmed."
+
+		details := map[string]string{
+			"framework":                "Go",
+			"component":                "net/http/pprof",
+			"endpoint":                 endpointURL,
+			"http_status":              "200",
+			"interface":                "ambiguous",
+			"data_exposure":            "unverified",
+			"classification":           "inconclusive",
+			"auth_context":             "unknown",
+			"verification_limitations": "Endpoint reachable but response lacked standard index markers or profiling data; impact unverified",
+		}
+		if resp.Truncated {
+			details["limitations"] = "Response exceeded 512 KiB and was bounded to preserve system resources"
+		}
+
+		return &APIFinding{
+			Category:         CategoryGoPprofExposure,
+			Endpoint:         endpointURL,
+			Method:           http.MethodGet,
+			Description:      secrets.RedactText(desc),
+			Evidence:         secrets.RedactText(ev),
+			NegativeEvidence: secrets.RedactText(negEv),
+			Severity:         SeverityInfo,
+			Confidence:       ConfidenceLow,
+			Fingerprint:      GenerateFingerprint(CategoryGoPprofExposure, endpointURL, http.MethodGet),
+			Classification:   ClassAdmin,
+			Details:          details,
+			HTTPStatus:       resp.StatusCode,
+		}
+	}
+
+	return nil
 }
 
 // InspectGoExpvar checks if an endpoint exposes the Go standard library expvar metrics and variables (/debug/vars).
@@ -275,10 +366,16 @@ func InspectGoExpvar(resp *ProbeResponse, endpointURL string) *APIFinding {
 
 	hasUnmaskedSecret := false
 	var observedSecretKeys []string
+	nodeCount := 0
 
-	// Recursively inspect expvar data for secrets or canary values
-	var walkExpvar func(k string, v interface{})
-	walkExpvar = func(k string, v interface{}) {
+	// Recursively inspect expvar data for secrets or canary values with bounded depth and node count
+	var walkExpvar func(k string, v interface{}, depth int)
+	walkExpvar = func(k string, v interface{}, depth int) {
+		if depth > 10 || nodeCount > 5000 {
+			return
+		}
+		nodeCount++
+
 		switch val := v.(type) {
 		case string:
 			if isGenuineUnmaskedSecret(k, val) {
@@ -291,23 +388,23 @@ func InspectGoExpvar(resp *ProbeResponse, endpointURL string) *APIFinding {
 			}
 		case map[string]interface{}:
 			for subK, subV := range val {
-				walkExpvar(subK, subV)
+				walkExpvar(subK, subV, depth+1)
 			}
 		case []interface{}:
 			for _, item := range val {
-				walkExpvar(k, item)
+				walkExpvar(k, item, depth+1)
 			}
 		}
 	}
 	for k, v := range data {
-		walkExpvar(k, v)
+		walkExpvar(k, v, 0)
 	}
 
 	severity := SeverityMedium
 	desc := "Go expvar runtime metrics and variables (/debug/vars) publicly accessible"
 	if hasUnmaskedSecret {
 		severity = SeverityCritical
-		desc = "Go expvar runtime variables expose candidate secret material (validity unverified)"
+		desc = "Go expvar runtime variables expose candidate secret material (validity unverified; active authentication not confirmed)"
 	}
 
 	ev := fmt.Sprintf("HTTP 200 OK on %s. Go expvar runtime variables (cmdline, memstats) disclosed without authentication.", endpointURL)
@@ -316,7 +413,7 @@ func InspectGoExpvar(resp *ProbeResponse, endpointURL string) *APIFinding {
 			strings.Join(observedSecretKeys, ", "))
 	}
 
-	negEv := "Operational metrics observed; all command-line arguments and exported variable values were bounded and redacted."
+	negEv := "Operational metrics observed; all command-line arguments and exported variable values were bounded and redacted. Active credential validity was not tested or verified against backend services."
 
 	details := map[string]string{
 		"framework":                "Go",
@@ -330,6 +427,7 @@ func InspectGoExpvar(resp *ProbeResponse, endpointURL string) *APIFinding {
 	if hasUnmaskedSecret {
 		details["unmasked_secrets_count"] = fmt.Sprintf("%d", len(observedSecretKeys))
 		details["candidate_material_status"] = "unverified_candidate_material"
+		details["credential_validity"] = "unverified"
 	}
 	if resp.Truncated {
 		details["limitations"] = "Response exceeded 512 KiB and was bounded to preserve system resources"
@@ -363,15 +461,6 @@ func InspectGoExpvar(resp *ProbeResponse, endpointURL string) *APIFinding {
 func InspectGoPanic(resp *ProbeResponse, endpointURL string) *APIFinding {
 	bodyStr := string(resp.Body)
 
-	// Go panic stack traces must have goroutine or panic headers, PLUS at least 2 .go source location lines
-	hasPanicHeader := goPanicHeaderRegex.MatchString(bodyStr)
-	hasGoroutineHeader := len(goGoroutineHeaderRegex.FindAllString(bodyStr, -1)) > 0
-	sourceLocations := goSourceLocationRegex.FindAllString(bodyStr, -1)
-
-	if (!hasPanicHeader && !hasGoroutineHeader) || len(sourceLocations) < 2 {
-		return nil
-	}
-
 	filePaths := goFilePathRegex.FindAllStringSubmatch(bodyStr, -1)
 	seenPaths := make(map[string]struct{})
 	var uniquePaths []string
@@ -385,6 +474,18 @@ func InspectGoPanic(resp *ProbeResponse, endpointURL string) *APIFinding {
 		}
 	}
 	sort.Strings(uniquePaths)
+
+	// Go panic stack traces must have goroutine or panic headers, PLUS at least 2 .go source location lines
+	hasPanicHeader := goPanicHeaderRegex.MatchString(bodyStr)
+	hasGoroutineHeader := len(goGoroutineHeaderRegex.FindAllString(bodyStr, -1)) > 0
+	sourceLocations := goSourceLocationRegex.FindAllString(bodyStr, -1)
+
+	hasPanicDump := (hasPanicHeader || hasGoroutineHeader) && len(sourceLocations) >= 2
+	hasSourcePathDisclosure := len(uniquePaths) > 0 && (resp.StatusCode >= 400 || strings.Contains(strings.ToLower(bodyStr), "error"))
+
+	if !hasPanicDump && !hasSourcePathDisclosure {
+		return nil
+	}
 
 	// Check for candidate unmasked secrets in panic output
 	hasUnmaskedSecret := false
@@ -411,6 +512,64 @@ func InspectGoPanic(resp *ProbeResponse, endpointURL string) *APIFinding {
 		if strings.Contains(trimmed, "felix_test_canary_secret") {
 			hasUnmaskedSecret = true
 			observedSecretKeys = append(observedSecretKeys, "canary_secret")
+		}
+	}
+
+	// Case 1: Isolated source path disclosure without complete panic dump
+	if !hasPanicDump && hasSourcePathDisclosure {
+		category := CategoryGoStackTrace
+		severity := SeverityLow
+		desc := "Go error response exposes internal source filesystem path"
+		if hasUnmaskedSecret {
+			severity = SeverityCritical
+			desc = "Go error response exposes candidate secret material (validity unverified)"
+		}
+
+		ev := fmt.Sprintf("HTTP %d on %s disclosed internal Go source path(s): [%s] without a full panic dump.",
+			resp.StatusCode, endpointURL, strings.Join(uniquePaths, ", "))
+		negEv := "Internal source path observed in error response without complete call stack or panic dump; active credential validity was not tested."
+
+		details := map[string]string{
+			"framework":                "Go",
+			"component":                "ErrorHandler",
+			"endpoint":                 endpointURL,
+			"http_status":              fmt.Sprintf("%d", resp.StatusCode),
+			"disclosed_paths_count":    fmt.Sprintf("%d", len(uniquePaths)),
+			"sample_path":              uniquePaths[0],
+			"has_panic_dump":           "false",
+			"validity_status":          "unverified_active_probe_omitted",
+			"active_auth_tested":       "false",
+			"verification_limitations": "Passive read-only inspection; backend state was not altered",
+		}
+		if hasUnmaskedSecret {
+			details["unmasked_secrets_count"] = fmt.Sprintf("%d", len(observedSecretKeys))
+			details["candidate_material_status"] = "unverified_candidate_material"
+		}
+		if resp.Truncated {
+			details["limitations"] = "Response exceeded 512 KiB and was bounded to preserve system resources"
+		}
+
+		for k, v := range details {
+			if secrets.IsSensitiveKey(k) || secrets.IsSensitiveHeader(k) {
+				details[k] = "[REDACTED]"
+			} else {
+				details[k] = secrets.RedactText(v)
+			}
+		}
+
+		return &APIFinding{
+			Category:         category,
+			Endpoint:         endpointURL,
+			Method:           http.MethodGet,
+			Description:      secrets.RedactText(desc),
+			Evidence:         secrets.RedactText(ev),
+			NegativeEvidence: secrets.RedactText(negEv),
+			Severity:         severity,
+			Confidence:       ConfidenceHigh,
+			Fingerprint:      GenerateFingerprint(category, endpointURL, http.MethodGet),
+			Classification:   ClassHealth,
+			Details:          details,
+			HTTPStatus:       resp.StatusCode,
 		}
 	}
 

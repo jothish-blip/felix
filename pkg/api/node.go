@@ -288,7 +288,67 @@ func InspectNodeResponse(resp *ProbeResponse, endpointURL string) []APIFinding {
 		return findings
 	}
 
-	// 4. Evaluate Express / Next.js Runtime Header Identification (Informational only)
+	// 4. Evaluate Filesystem Path Disclosed Without Full Stack Trace
+	if len(uniquePaths) > 0 && (resp.StatusCode >= 400 || len(errorMatches) > 0) {
+		desc := "Node.js diagnostic error response exposes internal filesystem path"
+		evPrefix := fmt.Sprintf("HTTP %d on %s disclosed internal filesystem path(s): [%s] without a full call stack.",
+			resp.StatusCode, endpointURL, strings.Join(uniquePaths, ", "))
+		negEv := "Internal application path observed in error response without complete stack trace; active credential validity was not tested."
+
+		severity := SeverityLow
+		if hasUnmaskedSecret {
+			severity = SeverityCritical
+			desc = "Node.js error response exposes candidate secret material (validity unverified)"
+		} else if isNodeSensitiveError(bodyStr) {
+			severity = SeverityMedium
+		}
+
+		details := map[string]string{
+			"framework":                "Node.js",
+			"component":                "ErrorHandler",
+			"endpoint":                 endpointURL,
+			"http_status":              fmt.Sprintf("%d", resp.StatusCode),
+			"disclosed_paths_count":    fmt.Sprintf("%d", len(uniquePaths)),
+			"sample_path":              uniquePaths[0],
+			"has_stack_trace":          "false",
+			"validity_status":          "unverified_active_probe_omitted",
+			"active_auth_tested":       "false",
+			"verification_limitations": "Passive read-only inspection; backend state was not altered",
+		}
+		if hasUnmaskedSecret {
+			details["unmasked_secrets_count"] = fmt.Sprintf("%d", len(observedSecretKeys))
+			details["candidate_material_status"] = "unverified_candidate_material"
+		}
+		if resp.Truncated {
+			details["limitations"] = "Response exceeded 512 KiB and was bounded to preserve system resources"
+		}
+
+		for k, v := range details {
+			if secrets.IsSensitiveKey(k) || secrets.IsSensitiveHeader(k) {
+				details[k] = "[REDACTED]"
+			} else {
+				details[k] = secrets.RedactText(v)
+			}
+		}
+
+		findings = append(findings, APIFinding{
+			Category:         CategoryNodeDebugError,
+			Endpoint:         endpointURL,
+			Method:           http.MethodGet,
+			Description:      secrets.RedactText(desc),
+			Evidence:         secrets.RedactText(evPrefix),
+			NegativeEvidence: secrets.RedactText(negEv),
+			Severity:         severity,
+			Confidence:       ConfidenceHigh,
+			Fingerprint:      GenerateFingerprint(CategoryNodeDebugError, endpointURL, http.MethodGet),
+			Classification:   ClassHealth,
+			Details:          details,
+			HTTPStatus:       resp.StatusCode,
+		})
+		return findings
+	}
+
+	// 5. Evaluate Express / Next.js Runtime Header Identification (Informational only)
 	if hasExpressHeader || hasNextHeader {
 		techName := "Express"
 		if hasNextHeader {

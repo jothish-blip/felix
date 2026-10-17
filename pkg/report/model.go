@@ -783,10 +783,22 @@ func FromAPIFinding(target string, f api.APIFinding) Finding {
 
 	case cat == "go-pprof-exposure":
 		detMethod = "active_probe"
-		detStatus = "DETECTED"
-		verStatus = VerificationVerified
-		verResult = "Go runtime pprof diagnostic interface is exposed without authentication."
-		negEvidence = "Diagnostic interface observed; heap dumps and profiling traces were bounded and not stored."
+		if f.Confidence == api.ConfidenceLow || f.Details["classification"] == "inconclusive" {
+			detStatus = "OBSERVED"
+			verStatus = VerificationNotExposed
+			verResult = "Go profiling route responded but returned ambiguous or inconclusive data; exposure and impact unverified."
+			negEvidence = "Response lacked standard profiling index markers or live execution data; operational exposure was not established."
+		} else if f.Severity == api.SeverityLow || f.Severity == api.SeverityInfo {
+			detStatus = "OBSERVED"
+			verStatus = VerificationObserved
+			verResult = "Go net/http/pprof diagnostic profiling index observed (endpoint inventory listing without live execution traces)."
+			negEvidence = "Diagnostic index observed; live execution traces and heap memory dumps were bounded and not stored."
+		} else {
+			detStatus = "DETECTED"
+			verStatus = VerificationVerified
+			verResult = "Go runtime profiling data (active execution or goroutine traces) exposed."
+			negEvidence = "Profiling data observed; binary download and heap storage were bounded and not executed."
+		}
 
 	case cat == "go-vars-exposure":
 		detMethod = "active_probe"

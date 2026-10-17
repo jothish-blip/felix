@@ -955,21 +955,32 @@ func InspectTelescopeAPI(resp *ProbeResponse, endpointURL string) *APIFinding {
 
 func isLaravelSecretKey(key string) bool {
 	lower := strings.ToLower(strings.TrimSpace(key))
-	return strings.Contains(lower, "password") ||
-		strings.Contains(lower, "secret") ||
-		strings.Contains(lower, "token") ||
-		strings.Contains(lower, "apikey") ||
-		strings.Contains(lower, "api_key") ||
-		strings.Contains(lower, "authorization") ||
-		strings.Contains(lower, "bearer") ||
-		strings.Contains(lower, "app_key") ||
-		strings.Contains(lower, "app-key") ||
-		strings.Contains(lower, "db_password") ||
-		strings.Contains(lower, "db_pass") ||
-		strings.Contains(lower, "mail_password") ||
-		strings.Contains(lower, "redis_password") ||
-		strings.Contains(lower, "aws_secret") ||
-		strings.Contains(lower, "private_key")
+	clean := strings.ReplaceAll(strings.ReplaceAll(lower, "_", ""), "-", "")
+
+	if clean == "csrftoken" || clean == "xsrftoken" || strings.HasSuffix(clean, "header") ||
+		strings.HasSuffix(clean, "rate") || strings.HasSuffix(clean, "bucket") ||
+		strings.HasSuffix(clean, "type") || strings.HasSuffix(clean, "count") ||
+		strings.HasSuffix(clean, "size") || strings.HasSuffix(clean, "mode") ||
+		strings.HasSuffix(clean, "alg") || strings.HasSuffix(clean, "algorithm") {
+		return false
+	}
+
+	return strings.Contains(clean, "password") ||
+		strings.Contains(clean, "passwd") ||
+		strings.Contains(clean, "secret") ||
+		strings.Contains(clean, "apikey") ||
+		strings.Contains(clean, "privatekey") ||
+		strings.Contains(clean, "privkey") ||
+		strings.Contains(clean, "appkey") ||
+		strings.Contains(clean, "dbpass") ||
+		strings.Contains(clean, "authtoken") ||
+		strings.Contains(clean, "remembertoken") ||
+		strings.Contains(clean, "accesstoken") ||
+		strings.Contains(clean, "refreshtoken") ||
+		clean == "token" ||
+		clean == "apitoken" ||
+		strings.Contains(clean, "authorization") ||
+		strings.Contains(clean, "bearer")
 }
 
 // isMaskedCredentialOrPlaceholder checks if a candidate string is masked or a placeholder.
@@ -980,7 +991,10 @@ func isMaskedCredentialOrPlaceholder(val string) bool {
 	}
 	lower := strings.ToLower(clean)
 	if lower == "null" || lower == "nil" || lower == "none" || lower == "undefined" ||
-		lower == "true" || lower == "false" || lower == "0" || lower == "1" {
+		lower == "true" || lower == "false" || lower == "0" || lower == "1" ||
+		lower == "bearer" || lower == "oauth2" || lower == "bcrypt" || lower == "jwt" ||
+		lower == "basic" || lower == "digest" || lower == "hs256" || lower == "rs256" ||
+		lower == "sha256" || lower == "session" {
 		return true
 	}
 	if secrets.IsPlaceholder(clean) {
@@ -1160,6 +1174,21 @@ func isRoutineException(excClass string) bool {
 func isCredentialSecretKey(key string) bool {
 	lower := strings.ToLower(strings.TrimSpace(key))
 	clean := strings.ReplaceAll(strings.ReplaceAll(lower, "_", ""), "-", "")
+
+	// Exclude non-secret metadata key names
+	if clean == "author" || clean == "authority" || clean == "csrftoken" || clean == "xsrftoken" {
+		return false
+	}
+	if strings.HasSuffix(clean, "url") || strings.HasSuffix(clean, "uri") || strings.HasSuffix(clean, "path") ||
+		strings.HasSuffix(clean, "type") || strings.HasSuffix(clean, "mode") || strings.HasSuffix(clean, "provider") ||
+		strings.HasSuffix(clean, "method") || strings.HasSuffix(clean, "endpoint") || strings.HasSuffix(clean, "alg") ||
+		strings.HasSuffix(clean, "algorithm") || strings.HasSuffix(clean, "size") || strings.HasSuffix(clean, "count") ||
+		strings.HasSuffix(clean, "rate") || strings.HasSuffix(clean, "name") || strings.HasSuffix(clean, "version") ||
+		strings.HasSuffix(clean, "header") || strings.HasSuffix(clean, "expiry") || strings.HasSuffix(clean, "expiration") ||
+		strings.HasSuffix(clean, "format") || strings.HasSuffix(clean, "bucket") {
+		return false
+	}
+
 	return strings.Contains(clean, "password") ||
 		strings.Contains(clean, "passwd") ||
 		strings.Contains(clean, "secret") ||
@@ -1169,7 +1198,10 @@ func isCredentialSecretKey(key string) bool {
 		strings.Contains(clean, "appkey") ||
 		strings.Contains(clean, "dbpass") ||
 		strings.Contains(clean, "token") ||
-		strings.Contains(clean, "auth") ||
+		strings.Contains(clean, "authtoken") ||
+		strings.Contains(clean, "authsecret") ||
+		strings.Contains(clean, "authkey") ||
+		strings.Contains(clean, "authorization") ||
 		strings.Contains(clean, "bearer")
 }
 

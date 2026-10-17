@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -764,8 +765,8 @@ func TestGo_PprofInterfaceExposure(t *testing.T) {
 	if f.Category != CategoryGoPprofExposure {
 		t.Errorf("expected CategoryGoPprofExposure, got %s", f.Category)
 	}
-	if f.Severity != SeverityHigh {
-		t.Errorf("expected SeverityHigh for unauthenticated pprof, got %s", f.Severity)
+	if f.Severity != SeverityLow {
+		t.Errorf("expected SeverityLow for profiling index listing, got %s", f.Severity)
 	}
 	if f.Classification != ClassAdmin {
 		t.Errorf("expected ClassAdmin, got %s", f.Classification)
@@ -773,11 +774,43 @@ func TestGo_PprofInterfaceExposure(t *testing.T) {
 	if f.Confidence != ConfidenceHigh {
 		t.Errorf("expected ConfidenceHigh, got %s", f.Confidence)
 	}
-	if !strings.Contains(f.Description, "pprof") {
-		t.Errorf("expected description to mention pprof, got %s", f.Description)
+	if f.Details["interface"] != "profiling_index" {
+		t.Errorf("expected interface profiling_index, got %s", f.Details["interface"])
+	}
+	if !strings.Contains(f.Description, "index") {
+		t.Errorf("expected description to mention index, got %s", f.Description)
 	}
 	if f.NegativeEvidence == "" {
 		t.Errorf("expected non-empty negative evidence")
+	}
+
+	// Also verify active goroutine dump generates SeverityHigh
+	goroutineServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "goroutine") {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `goroutine profile: total 2
+goroutine 1 [running]:
+main.main()
+	/go/src/app/main.go:10 +0x20
+goroutine 2 [IO wait]:
+net/http.(*conn).serve(0xc00008e000)
+	/usr/local/go/src/net/http/server.go:1925 +0x8a0`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer goroutineServer.Close()
+
+	goroutineFindings := AuditGoDiagnostics(context.Background(), client, goroutineServer.URL, []string{"/debug/pprof/goroutine"})
+	if len(goroutineFindings) == 0 {
+		t.Fatalf("expected finding for goroutine dump")
+	}
+	gf := goroutineFindings[0]
+	if gf.Severity != SeverityHigh {
+		t.Errorf("expected SeverityHigh for active goroutine dump, got %s", gf.Severity)
+	}
+	if gf.Details["data_exposure"] != "active_execution_traces" {
+		t.Errorf("expected active_execution_traces, got %s", gf.Details["data_exposure"])
 	}
 }
 
@@ -834,5 +867,235 @@ func TestNodeAndGo_RegressionProtection(t *testing.T) {
 		if apiFinding.Fingerprint == "" {
 			t.Errorf("expected non-empty fingerprint for category %s", apiFinding.Category)
 		}
+	}
+}
+
+// Test 21: Ambiguous or inconclusive Go pprof response
+func TestGo_PprofAmbiguousResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "pprof") {
+			w.WriteHeader(http.StatusOK)
+			// Returns text containing pprof but lacking index markers and profiling dumps
+			fmt.Fprint(w, `{"service":"pprof-proxy-gateway","status":"active"}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOptions{HTTPClient: server.Client(), AllowLoopback: true})
+	findings := AuditGoDiagnostics(context.Background(), client, server.URL, nil)
+
+	if len(findings) == 0 {
+		t.Fatalf("expected finding for ambiguous pprof endpoint")
+	}
+
+	foundInconclusive := false
+	for _, f := range findings {
+		if f.Category == CategoryGoPprofExposure && f.Confidence == ConfidenceLow {
+			foundInconclusive = true
+			if f.Severity != SeverityInfo {
+				t.Errorf("expected SeverityInfo for ambiguous pprof, got %s", f.Severity)
+			}
+			if f.Details["classification"] != "inconclusive" {
+				t.Errorf("expected classification inconclusive, got %s", f.Details["classification"])
+			}
+			if f.Details["data_exposure"] != "unverified" {
+				t.Errorf("expected data_exposure unverified, got %s", f.Details["data_exposure"])
+			}
+			break
+		}
+	}
+	if !foundInconclusive {
+		t.Errorf("expected inconclusive pprof finding, got: %+v", findings)
+	}
+}
+
+// Test 22: Go expvar ordinary metrics and secret-like false positives
+func TestGo_ExpvarSecretLikeFalsePositives(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/debug/vars") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			// Rich set of non-secret routine metrics and potential false-positive keys
+			fmt.Fprint(w, `{
+				"cmdline": ["/usr/bin/service", "-config=/etc/app/config.json", "-env=prod"],
+				"author": "Security Engineering Team",
+				"authority": "internal-ca.corp.local",
+				"auth_mode": "oauth2",
+				"auth_provider": "google_workspace",
+				"token_type": "bearer",
+				"token_bucket_rate": "500req/sec",
+				"password_hash_algorithm": "bcrypt",
+				"csrf_token_header": "X-CSRF-Token",
+				"database": {
+					"open_connections": 12,
+					"max_lifetime": "3600s",
+					"queries_total": 450000,
+					"driver_name": "postgres"
+				},
+				"memstats": {"Alloc": 4194304, "TotalAlloc": 8388608}
+			}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOptions{HTTPClient: server.Client(), AllowLoopback: true})
+	findings := AuditGoDiagnostics(context.Background(), client, server.URL, nil)
+
+	if len(findings) == 0 {
+		t.Fatalf("expected Go expvar finding")
+	}
+
+	f := findings[0]
+	if f.Category != CategoryGoVarsExposure {
+		t.Errorf("expected CategoryGoVarsExposure, got %s", f.Category)
+	}
+	// Crucial: Ordinary metrics and false positives MUST NOT be classified as Critical
+	if f.Severity != SeverityMedium {
+		t.Logf("f.Evidence: %s", f.Evidence)
+		t.Errorf("expected SeverityMedium for benign expvar metrics without secrets, got %s", f.Severity)
+	}
+	if f.Details["candidate_material_status"] != "" {
+		t.Errorf("expected candidate_material_status to be empty for non-secret metrics, got %s", f.Details["candidate_material_status"])
+	}
+}
+
+// Test 23: Go expvar deeply nested JSON and malformed responses
+func TestGo_ExpvarDeeplyNestedAndMalformedJSON(t *testing.T) {
+	// 1. Deeply nested JSON (depth > 20)
+	type nest map[string]interface{}
+	curr := nest{"leaf": "operational_value"}
+	for i := 0; i < 20; i++ {
+		curr = nest{fmt.Sprintf("level_%d", i): curr}
+	}
+	payload := map[string]interface{}{
+		"cmdline":  []string{"/usr/bin/app"},
+		"memstats": map[string]int{"Alloc": 1024},
+		"deep":     curr,
+	}
+	deepBytes, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("failed to marshal deep json: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write(deepBytes)
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOptions{HTTPClient: server.Client(), AllowLoopback: true})
+	// Must not stack overflow, hang, or panic
+	findings := AuditGoDiagnostics(context.Background(), client, server.URL, []string{"/debug/vars"})
+	if len(findings) == 0 {
+		t.Fatalf("expected finding on valid deep JSON")
+	}
+
+	// 2. Malformed JSON returns 0 findings cleanly
+	malformedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"cmdline": [`) // truncated / malformed
+	}))
+	defer malformedServer.Close()
+
+	malformedFindings := AuditGoDiagnostics(context.Background(), client, malformedServer.URL, []string{"/debug/vars"})
+	if len(malformedFindings) != 0 {
+		t.Errorf("expected 0 findings on malformed expvar JSON, got %d", len(malformedFindings))
+	}
+}
+
+// Test 24: Node.js filesystem path disclosed without a stack trace
+func TestNode_FilesystemPathDisclosedWithoutStackTrace(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusInternalServerError)
+		// Discloses an internal filesystem path in error message without a full V8 call stack
+		fmt.Fprint(w, `Error: Cannot find module '/app/config/database.js'
+    code: 'MODULE_NOT_FOUND'`)
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOptions{HTTPClient: server.Client(), AllowLoopback: true})
+	findings := AuditNodeDiagnostics(context.Background(), client, server.URL, nil)
+
+	if len(findings) == 0 {
+		t.Fatalf("expected finding for Node.js path disclosure")
+	}
+
+	f := findings[0]
+	if f.Category != CategoryNodeDebugError {
+		t.Errorf("expected CategoryNodeDebugError, got %s", f.Category)
+	}
+	if f.Severity != SeverityLow {
+		t.Errorf("expected SeverityLow for isolated path disclosure, got %s", f.Severity)
+	}
+	if f.Details["has_stack_trace"] != "false" {
+		t.Errorf("expected has_stack_trace false, got %s", f.Details["has_stack_trace"])
+	}
+	if !strings.Contains(f.Evidence, "/app/config/database.js") {
+		t.Errorf("expected evidence to mention /app/config/database.js, got %s", f.Evidence)
+	}
+}
+
+// Test 25: Go source path disclosed without a full panic dump
+func TestGo_SourcePathDisclosedWithoutPanicDump(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusInternalServerError)
+		// Discloses an internal Go source path in error message without a full runtime panic dump
+		fmt.Fprint(w, `failed to initialize application: open /go/src/app/configs/app.yaml: no such file or directory`)
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOptions{HTTPClient: server.Client(), AllowLoopback: true})
+	findings := AuditGoDiagnostics(context.Background(), client, server.URL, nil)
+
+	if len(findings) == 0 {
+		t.Fatalf("expected finding for Go source path disclosure")
+	}
+
+	f := findings[0]
+	if f.Category != CategoryGoStackTrace {
+		t.Errorf("expected CategoryGoStackTrace, got %s", f.Category)
+	}
+	if f.Severity != SeverityLow {
+		t.Errorf("expected SeverityLow for isolated source path disclosure, got %s", f.Severity)
+	}
+	if f.Details["has_panic_dump"] != "false" {
+		t.Errorf("expected has_panic_dump false, got %s", f.Details["has_panic_dump"])
+	}
+	if !strings.Contains(f.Evidence, "/go/src/app/configs/app.yaml") {
+		t.Errorf("expected evidence to mention source path, got %s", f.Evidence)
+	}
+}
+
+// Test 26: Harmless response containing misleading keywords
+func TestNodeAndGo_HarmlessResponseWithMisleadingKeywords(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		// Body with misleading keywords in innocent prose
+		fmt.Fprint(w, `<html><body>
+			<h1>System Status</h1>
+			<p>Don't panic! Our service is operating normally.</p>
+			<p>Yesterday's database error has been resolved. The authentication token system is verified.</p>
+			<p>Node and Go microservices are running with zero failures.</p>
+		</body></html>`)
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientOptions{HTTPClient: server.Client(), AllowLoopback: true})
+
+	nodeFindings := AuditNodeDiagnostics(context.Background(), client, server.URL, nil)
+	if len(nodeFindings) != 0 {
+		t.Errorf("expected 0 Node findings on harmless text with keywords, got %d: %+v", len(nodeFindings), nodeFindings)
+	}
+
+	goFindings := AuditGoDiagnostics(context.Background(), client, server.URL, nil)
+	if len(goFindings) != 0 {
+		t.Errorf("expected 0 Go findings on harmless text with keywords, got %d: %+v", len(goFindings), goFindings)
 	}
 }
