@@ -19,6 +19,7 @@ import (
 	"felix/pkg/assessment"
 	"felix/pkg/auth"
 	"felix/pkg/authz"
+	"felix/pkg/bola"
 	"felix/pkg/businesslogic"
 	"felix/pkg/cloudsec"
 	"felix/pkg/correlation"
@@ -73,6 +74,8 @@ func runAssessment(args []string) int {
 		return runAssessmentAuth(subArgs)
 	case "authz":
 		return runAssessmentAuthz(subArgs)
+	case "bola", "idor":
+		return runAssessmentBOLA(subArgs)
 	case "apisec", "api":
 		return runAssessmentAPISec(subArgs)
 	case "webvuln", "vuln":
@@ -113,6 +116,7 @@ func printAssessmentHelp() {
 	fmt.Println("  inventory    Inspect discovered attack-surface assets and relationships")
 	fmt.Println("  auth         Inspect authentication surfaces, or verify active authentication security (--run/--verify)")
 	fmt.Println("  authz        Test and inspect API authorization, BOLA/IDOR, BFLA, BOPLA, and privilege escalation")
+	fmt.Println("  bola         Assess Broken Object Level Authorization (BOLA/IDOR) across multi-user boundaries")
 	fmt.Println("  apisec       Assess OWASP API Security Top 10 (2023) categories and API inventory")
 	fmt.Println("  webvuln      Assess and verify web application vulnerabilities (XSS, SQLi, SSTI, SSRF, etc.)")
 	fmt.Println("  sessionsec   Assess session lifecycle, token handling, and identity boundaries (WSTG-SESS/ATHN)")
@@ -132,6 +136,8 @@ func printAssessmentHelp() {
 	fmt.Println("  felix assessment auth <asm-ref> --dry-run")
 	fmt.Println("  felix assessment auth <asm-ref> --run --bearer <token> --protected /api/v1/profile")
 	fmt.Println("  felix assessment authz <asm-ref> --policy policy.json --run")
+	fmt.Println("  felix assessment bola <asm-ref> --dry-run")
+	fmt.Println("  felix assessment bola <asm-ref> --run")
 	fmt.Println("  felix assessment apisec <asm-ref> --run --spec openapi.json")
 	fmt.Println("  felix assessment webvuln <asm-ref> --run")
 	fmt.Println("  felix assessment sessionsec <asm-ref> --run")
@@ -4008,6 +4014,645 @@ func runAssessmentSessionSec(args []string) int {
 	} else if summary == nil || summary.TotalTests == 0 {
 		fmt.Println("\nNo session security test results recorded.")
 		fmt.Printf("To run a session & identity security assessment:\n  felix assessment sessionsec %s --run\n", asm.Ref)
+	}
+
+	fmt.Println()
+	return 0
+}
+
+func printBOLAHelp() {
+	fmt.Println("Usage: felix assessment bola <asm-ref> [flags]")
+	fmt.Println("\nBroken Object Level Authorization (BOLA/IDOR) Verification Engine (OWASP API1:2023 / CWE-639)")
+	fmt.Println("\nFlags:")
+	fmt.Println("  --run                      Execute authorized active BOLA assessment")
+	fmt.Println("  --dry-run                  Output pre-assessment plan without network traffic")
+	fmt.Println("  -t, --target <url>         Override assessment target base URL")
+	fmt.Println("  --endpoint <path>          Target endpoint pattern (e.g. /api/users/{id})")
+	fmt.Println("  --object-id <id>           Target object identifier to evaluate")
+	fmt.Println("  --param <name>             Query or path parameter name for object identifier")
+	fmt.Println("  --user-a-token <token>     Authorization header value for User A (accessor)")
+	fmt.Println("  --user-b-token <token>     Authorization header value for User B (owner)")
+	fmt.Println("  --user-a-cookie <cookie>   Session cookie value for User A")
+	fmt.Println("  --user-b-cookie <cookie>   Session cookie value for User B")
+	fmt.Println("  --user-a-role <role>       Role for User A")
+	fmt.Println("  --user-b-role <role>       Role for User B")
+	fmt.Println("  --tenant-a <id>            Tenant identifier for User A")
+	fmt.Println("  --tenant-b <id>            Tenant identifier for User B")
+	fmt.Println("  --allow-state-changing     Explicitly permit write-operation BOLA tests (PUT/POST/PATCH/DELETE)")
+	fmt.Println("  --allow-loopback           Allow testing on loopback addresses")
+	fmt.Println("  --allow-private            Allow testing on private network addresses")
+	fmt.Println("  --max-requests <n>         Maximum requests allowed during run (default: 30)")
+	fmt.Println("  --policy <path>            Path to JSON policy/fixture file")
+	fmt.Println("  -c, --category <name>      Filter results by BOLA category (e.g. BOLA-USER-READ)")
+	fmt.Println("  -s, --status <name>        Filter results by verification state (VERIFIED, CANDIDATE, etc.)")
+	fmt.Println("  --json                     Output results in JSON format")
+	fmt.Println("  -v, --verbose              Enable verbose output")
+	fmt.Println("  -h, --help                 Display this help message")
+}
+
+func runAssessmentBOLA(args []string) int {
+	var (
+		assessmentRef      string
+		runExecution       bool
+		dryRun             bool
+		targetOverride     string
+		endpointFlag       string
+		objectIDFlag       string
+		paramFlag          string
+		userAToken         string
+		userBToken         string
+		userACookie        string
+		userBCookie        string
+		userARole          string
+		userBRole          string
+		tenantAFlag        string
+		tenantBFlag        string
+		policyPath         string
+		categoryFilter     string
+		statusFilter       string
+		jsonOutput         bool
+		verbose            bool
+		allowStateChanging bool
+		allowLoopback      bool
+		allowPrivate       bool
+		maxRequests        int = 30
+	)
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--run":
+			runExecution = true
+		case arg == "--dry-run":
+			dryRun = true
+		case arg == "--target" || arg == "-t":
+			if i+1 < len(args) {
+				targetOverride = args[i+1]
+				i++
+			}
+		case arg == "--endpoint":
+			if i+1 < len(args) {
+				endpointFlag = args[i+1]
+				i++
+			}
+		case arg == "--object-id":
+			if i+1 < len(args) {
+				objectIDFlag = args[i+1]
+				i++
+			}
+		case arg == "--param":
+			if i+1 < len(args) {
+				paramFlag = args[i+1]
+				i++
+			}
+		case arg == "--user-a-token":
+			if i+1 < len(args) {
+				userAToken = args[i+1]
+				i++
+			}
+		case arg == "--user-b-token":
+			if i+1 < len(args) {
+				userBToken = args[i+1]
+				i++
+			}
+		case arg == "--user-a-cookie":
+			if i+1 < len(args) {
+				userACookie = args[i+1]
+				i++
+			}
+		case arg == "--user-b-cookie":
+			if i+1 < len(args) {
+				userBCookie = args[i+1]
+				i++
+			}
+		case arg == "--user-a-role":
+			if i+1 < len(args) {
+				userARole = args[i+1]
+				i++
+			}
+		case arg == "--user-b-role":
+			if i+1 < len(args) {
+				userBRole = args[i+1]
+				i++
+			}
+		case arg == "--tenant-a":
+			if i+1 < len(args) {
+				tenantAFlag = args[i+1]
+				i++
+			}
+		case arg == "--tenant-b":
+			if i+1 < len(args) {
+				tenantBFlag = args[i+1]
+				i++
+			}
+		case arg == "--allow-state-changing":
+			allowStateChanging = true
+		case arg == "--allow-loopback":
+			allowLoopback = true
+		case arg == "--allow-private":
+			allowPrivate = true
+		case arg == "--max-requests":
+			if i+1 < len(args) {
+				if n, err := strconv.Atoi(args[i+1]); err == nil && n > 0 {
+					maxRequests = n
+				}
+				i++
+			}
+		case arg == "--policy":
+			if i+1 < len(args) {
+				policyPath = args[i+1]
+				i++
+			}
+		case arg == "--category" || arg == "-c":
+			if i+1 < len(args) {
+				categoryFilter = strings.ToUpper(args[i+1])
+				i++
+			}
+		case arg == "--status" || arg == "-s":
+			if i+1 < len(args) {
+				statusFilter = strings.ToUpper(args[i+1])
+				i++
+			}
+		case arg == "--json":
+			jsonOutput = true
+		case arg == "--verbose" || arg == "-v":
+			verbose = true
+		case arg == "--help" || arg == "-h":
+			printBOLAHelp()
+			return 0
+		default:
+			if !strings.HasPrefix(arg, "-") && assessmentRef == "" {
+				assessmentRef = arg
+			}
+		}
+	}
+
+	if assessmentRef == "" {
+		fmt.Fprintf(os.Stderr, "[-] Error: assessment ID or Ref is required\n\n")
+		printBOLAHelp()
+		return 2
+	}
+
+	store, err := getAssessmentStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Database error: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+
+	asm, err := store.GetAssessment(assessmentRef)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Error finding assessment '%s': %v\n", assessmentRef, err)
+		return 1
+	}
+	asm.Targets, _ = store.GetTargets(asm.ID)
+	asm.Authorization, _ = store.GetAuthorization(asm.ID)
+	asm.Exclusions, _ = store.GetExclusions(asm.ID)
+	asm.ScopeRules, _ = store.GetScopeRules(asm.ID)
+
+	targetBase := "http://localhost"
+	if len(asm.Targets) > 0 {
+		targetBase = strings.TrimRight(asm.Targets[0].TargetURL, "/")
+	}
+	if targetOverride != "" {
+		targetBase = strings.TrimRight(targetOverride, "/")
+	}
+
+	// 1. Build Target Endpoints
+	var targetEndpoints []bola.EndpointTemplate
+	if endpointFlag != "" {
+		targetEndpoints = append(targetEndpoints, bola.EndpointTemplate{
+			Method:          "GET",
+			PathPattern:     endpointFlag,
+			IsStateChanging: false,
+		})
+	}
+
+	assets, _, _ := store.GetInventory(asm.ID, "", "", true)
+	for _, a := range assets {
+		if a.Type == "ENDPOINT" || a.Type == "endpoint" {
+			path := a.DisplayName
+			if p, ok := a.Metadata["path"].(string); ok && p != "" {
+				path = p
+			}
+			if strings.Contains(path, "{") || strings.Contains(path, "id") || strings.Contains(path, "user") || strings.Contains(path, "order") || strings.Contains(path, "record") {
+				targetEndpoints = append(targetEndpoints, bola.EndpointTemplate{
+					Method:      "GET",
+					PathPattern: path,
+				})
+			}
+		}
+	}
+
+	if len(targetEndpoints) == 0 {
+		targetEndpoints = append(targetEndpoints,
+			bola.EndpointTemplate{Method: "GET", PathPattern: "/api/users/{id}"},
+			bola.EndpointTemplate{Method: "GET", PathPattern: "/api/orders/{id}"},
+			bola.EndpointTemplate{Method: "GET", PathPattern: "/api/records/{id}"},
+		)
+	}
+
+	// 2. Build Target Objects
+	var targetObjects []bola.ObjectIdentifier
+	if objectIDFlag != "" {
+		loc := "path"
+		if paramFlag != "" {
+			loc = "query"
+		}
+		targetObjects = append(targetObjects, bola.ObjectIdentifier{
+			ID:            objectIDFlag,
+			Location:      loc,
+			ParamName:     paramFlag,
+			OwnerIdentity: "user_b",
+			TenantID:      tenantBFlag,
+		})
+	} else {
+		targetObjects = append(targetObjects,
+			bola.ObjectIdentifier{ID: "usr-1002", Type: "user", Location: "path", ParamName: "id", OwnerIdentity: "user_b"},
+			bola.ObjectIdentifier{ID: "ord-5002", Type: "order", Location: "path", ParamName: "id", OwnerIdentity: "user_b"},
+		)
+	}
+
+	// 3. Build Identities
+	var identities []bola.TestIdentity
+	headersA := make(map[string]string)
+	cookiesA := make(map[string]string)
+	if userAToken != "" {
+		headersA["Authorization"] = "Bearer " + userAToken
+	}
+	if userACookie != "" {
+		cParts := strings.SplitN(userACookie, "=", 2)
+		if len(cParts) == 2 {
+			cookiesA[cParts[0]] = cParts[1]
+		} else {
+			cookiesA["session"] = userACookie
+		}
+	}
+
+	headersB := make(map[string]string)
+	cookiesB := make(map[string]string)
+	if userBToken != "" {
+		headersB["Authorization"] = "Bearer " + userBToken
+	}
+	if userBCookie != "" {
+		cParts := strings.SplitN(userBCookie, "=", 2)
+		if len(cParts) == 2 {
+			cookiesB[cParts[0]] = cParts[1]
+		} else {
+			cookiesB["session"] = userBCookie
+		}
+	}
+
+	if len(headersA) > 0 || len(cookiesA) > 0 {
+		identities = append(identities, bola.TestIdentity{
+			Alias:    "user_a",
+			Role:     userARole,
+			TenantID: tenantAFlag,
+			Headers:  headersA,
+			Cookies:  cookiesA,
+		})
+	}
+	if len(headersB) > 0 || len(cookiesB) > 0 {
+		identities = append(identities, bola.TestIdentity{
+			Alias:    "user_b",
+			Role:     userBRole,
+			TenantID: tenantBFlag,
+			Headers:  headersB,
+			Cookies:  cookiesB,
+		})
+	}
+
+	// Policy file loading if provided
+	if policyPath != "" {
+		p, err := authz.LoadPolicyFromFile(policyPath)
+		if err == nil && p != nil {
+			for _, id := range p.Identities {
+				identities = append(identities, bola.TestIdentity{
+					Alias:    id.Alias,
+					Role:     id.Role,
+					TenantID: id.TenantID,
+					Headers:  id.Headers,
+					Cookies:  id.Cookies,
+				})
+			}
+		}
+	}
+
+	// Default fallback identities for testing if none configured
+	if len(identities) == 0 {
+		identities = append(identities,
+			bola.TestIdentity{
+				Alias:   "user_a",
+				Role:    "user",
+				Headers: map[string]string{"Authorization": "Bearer synthetic_token_user_a"},
+				Cookies: map[string]string{"session_id": "synthetic_session_user_a"},
+			},
+			bola.TestIdentity{
+				Alias:   "user_b",
+				Role:    "user",
+				Headers: map[string]string{"Authorization": "Bearer synthetic_token_user_b"},
+				Cookies: map[string]string{"session_id": "synthetic_session_user_b"},
+			},
+		)
+	}
+
+	existingResults, _ := store.GetBOLAResults(asm.ID, "", "", "")
+	if !runExecution && !dryRun && len(existingResults) == 0 {
+		dryRun = true
+	}
+
+	// 1. Dry Run Mode
+	if dryRun {
+		engine := bola.NewEngine(nil, bola.DefaultConfig())
+		actx := &bola.AssessmentContext{
+			AssessmentID:            asm.ID,
+			BaseURL:                 targetBase,
+			Endpoints:               targetEndpoints,
+			Objects:                 targetObjects,
+			Identities:              identities,
+			AllowStateChangingTests: allowStateChanging,
+			MaxRequests:             maxRequests,
+			DryRun:                  true,
+		}
+		plan, _ := engine.Plan(context.Background(), actx)
+
+		if jsonOutput {
+			b, _ := json.MarshalIndent(plan, "", "  ")
+			fmt.Println(string(b))
+			return 0
+		}
+
+		fmt.Println("================================================================================")
+		fmt.Printf("  FELIX :: BOLA / BROKEN OBJECT LEVEL AUTHORIZATION PLAN (DRY-RUN): %s\n", asm.Ref)
+		fmt.Printf("  Assessment: %s | Target Base: %s\n", asm.Name, targetBase)
+		fmt.Printf("  Endpoints: %d | Test Objects: %d | Test Identities: %d | Planned Tests: %d\n",
+			len(targetEndpoints), len(targetObjects), len(identities), len(plan.Tests))
+		fmt.Println("================================================================================")
+
+		fmt.Println("\n[+] SAFETY & AUTHORIZATION GUARANTEES:")
+		fmt.Println("  - Differential Authorization: Tests cross-principal access using isolated sessions.")
+		fmt.Println("  - Zero Secret Leakage:       Bearer tokens, cookies, and private fields are strictly redacted.")
+		fmt.Println("  - False Positive Resistance:  200 OK alone, generic login pages, and empty responses never verify BOLA.")
+		fmt.Println("  - Read-Only Default:          Write mutations require explicit opt-in (--allow-state-changing).")
+		fmt.Println("  - Request Budget Limiting:    Enforces atomic CAS request ceiling.")
+
+		fmt.Println("\n[+] PLANNED BOLA TESTS:")
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "TEST ID\tCATEGORY\tOWASP\tMETHOD\tENDPOINT\tOBJECT\tSTATUS\tREASON")
+		for _, t := range plan.Tests {
+			reason := t.BlockedReason
+			if reason == "" {
+				reason = "-"
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				t.ID, t.Category, t.OWASPRef, t.Method, t.Endpoint, t.ObjectID, t.Status, reason)
+		}
+		_ = w.Flush()
+
+		fmt.Printf("\nTo execute active testing:\n  felix assessment bola %s --run\n\n", asm.Ref)
+		return 0
+	}
+
+	// 2. Active Run Execution Mode
+	if runExecution {
+		if asm.Authorization == nil {
+			fmt.Fprintf(os.Stderr, "[-] Security refusal: no authorization record found for assessment %s\n", asm.Ref)
+			return 1
+		}
+		valid, reason := asm.Authorization.IsCurrentlyValid(time.Now().UTC())
+		if !valid {
+			fmt.Fprintf(os.Stderr, "[-] Security refusal: authorization invalid: %s\n", reason)
+			return 1
+		}
+
+		if len(asm.Targets) == 0 {
+			fmt.Fprintf(os.Stderr, "[-] Error: assessment %s has no targets configured\n", asm.Ref)
+			return 1
+		}
+
+		targetID := asm.Targets[0].ID
+		execID := "exec-" + uuid.New().String()
+		now := time.Now().UTC()
+		execRecord := &assessment.AssessmentExecution{
+			ID:           execID,
+			AssessmentID: asm.ID,
+			Status:       assessment.StatusRunning,
+			StartedAt:    now,
+			ConfigSnapshot: assessment.ScanConfigSnapshot{
+				TimeoutSeconds: 15,
+				Concurrency:    5,
+				ScopeMode:      asm.ScopeMode,
+				FelixVersion:   "2.0",
+			},
+		}
+		if err := store.CreateExecution(execRecord); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Failed to create execution record: %v\n", err)
+			return 1
+		}
+
+		var targetURLs []string
+		for _, t := range asm.Targets {
+			targetURLs = append(targetURLs, t.TargetURL)
+		}
+		scopeVal := assessment.NewScopeValidator(asm.ScopeMode, targetURLs, asm.ScopeRules, asm.Exclusions)
+
+		uTarget, _ := url.Parse(targetBase)
+		isTargetLoopback := uTarget != nil && bola.IsLoopbackHost(uTarget.Hostname())
+
+		cfg := bola.DefaultConfig()
+		cfg.AllowStateChangingTests = allowStateChanging
+		httpClient := &http.Client{
+			Transport: crawler.NewRateLimitedTransport(crawler.NewSafeTransport(crawler.SafeTransportOptions{
+				Timeout:         cfg.Timeout,
+				AllowLoopback:   allowLoopback || isTargetLoopback,
+				AllowPrivateIPs: allowPrivate,
+			}), crawler.RateLimitOptions{}),
+			Timeout: cfg.Timeout,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 10 {
+					return fmt.Errorf("stopped after 10 redirects")
+				}
+				lastURL := ""
+				if len(via) > 0 {
+					lastURL = via[len(via)-1].URL.String()
+				}
+				return scopeVal.ValidateRedirect(lastURL, req.URL.String())
+			},
+		}
+
+		engine := bola.NewEngine(httpClient, cfg)
+		var authRec *auth.AuthorizationRecord
+		if asm.Authorization != nil {
+			authRec = &auth.AuthorizationRecord{
+				ID:                  asm.Authorization.ID,
+				AuthorizingParty:    asm.Authorization.AuthorizingParty,
+				AuthorizationMethod: asm.Authorization.AuthorizationMethod,
+				Status:              string(asm.Authorization.Status),
+				ValidFrom:           asm.Authorization.ValidFrom,
+				ValidUntil:          asm.Authorization.ValidUntil,
+			}
+		}
+
+		var dispatchedRequests int32
+		actx := &bola.AssessmentContext{
+			AssessmentID:            asm.ID,
+			ExecutionID:             execID,
+			BaseURL:                 targetBase,
+			Endpoints:               targetEndpoints,
+			Objects:                 targetObjects,
+			Identities:              identities,
+			IsAllowed:               scopeVal.IsAllowed,
+			IsExcluded:              func(u string) bool { excluded, _ := scopeVal.IsExcluded(u); return excluded },
+			Authorization:           authRec,
+			AllowStateChangingTests: allowStateChanging,
+			MaxRequests:             maxRequests,
+			DispatchedRequests:      &dispatchedRequests,
+		}
+
+		fmt.Println("================================================================================")
+		fmt.Printf("  EXECUTING BOLA / IDOR VERIFICATION: %s (%s)\n", asm.Ref, asm.Name)
+		fmt.Printf("  Target: %s | Endpoints: %d | Objects: %d | Identities: %d\n",
+			targetBase, len(targetEndpoints), len(targetObjects), len(identities))
+		fmt.Println("================================================================================")
+
+		startTime := time.Now()
+		results, summary, err := engine.Assess(context.Background(), actx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Execution error: %v\n", err)
+			execRecord.Status = assessment.StatusFailed
+			execRecord.ErrorMessage = err.Error()
+			_ = store.UpdateExecution(execRecord)
+			return 1
+		}
+
+		duration := time.Since(startTime)
+		completedAt := time.Now().UTC()
+		execRecord.Status = assessment.StatusCompleted
+		execRecord.CompletedAt = &completedAt
+		execRecord.DurationMs = duration.Milliseconds()
+		execRecord.RequestCount = int(dispatchedRequests)
+
+		// Save results
+		if err := store.SaveBOLAResults(results); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Warning: failed to save BOLA results: %v\n", err)
+		}
+
+		// Save RunRecord
+		covJSON, _ := json.Marshal(summary.CoverageMap)
+		runRec := &bola.RunRecord{
+			ID:                 uuid.New().String(),
+			AssessmentID:       asm.ID,
+			ExecutionID:        execID,
+			TotalTests:         summary.TotalTests,
+			CategoriesAssessed: summary.CategoriesCovered,
+			VerifiedCount:      summary.VerifiedCount,
+			CandidateCount:     summary.CandidateCount,
+			NotVulnerableCount: summary.NotVulnerableCount,
+			InconclusiveCount:  summary.InconclusiveCount,
+			BlockedCount:       summary.BlockedCount,
+			CoverageJSON:       string(covJSON),
+			CreatedAt:          completedAt,
+		}
+		if err := store.SaveBOLARun(runRec); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Warning: failed to save BOLA run record: %v\n", err)
+		}
+
+		// Save findings
+		var asmFindings []assessment.AssessmentFinding
+		for _, r := range results {
+			if r.Finding != nil {
+				asmFindings = append(asmFindings, assessment.ToAssessmentFinding(asm.ID, execID, targetID, *r.Finding))
+			}
+		}
+		execRecord.FindingCount = len(asmFindings)
+		if len(asmFindings) > 0 {
+			if err := store.SaveFindings(asmFindings); err != nil {
+				fmt.Fprintf(os.Stderr, "[-] Warning: failed to save findings: %v\n", err)
+			}
+		}
+
+		_ = store.UpdateExecution(execRecord)
+
+		fmt.Printf("\n[+] Assessment Complete in %v\n", duration.Round(time.Millisecond))
+		fmt.Printf("    Total Tests: %d | Categories Assessed: %d\n", summary.TotalTests, summary.CategoriesCovered)
+		fmt.Printf("    Verified Issues: %d | Candidates: %d | Not Vulnerable: %d | Inconclusive: %d\n",
+			summary.VerifiedCount, summary.CandidateCount, summary.NotVulnerableCount, summary.InconclusiveCount)
+	}
+
+	// 3. Reporting / Inspection Mode
+	results, err := store.GetBOLAResults(asm.ID, "", categoryFilter, statusFilter)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Failed to fetch BOLA results: %v\n", err)
+		return 1
+	}
+
+	summary, _ := store.GetBOLASummary(asm.ID, "")
+
+	if jsonOutput {
+		out := map[string]interface{}{
+			"assessment_ref": asm.Ref,
+			"target_base":    targetBase,
+			"summary":        summary,
+			"results":        results,
+		}
+		b, _ := json.MarshalIndent(out, "", "  ")
+		fmt.Println(string(b))
+		return 0
+	}
+
+	fmt.Println("================================================================================")
+	fmt.Printf("  FELIX :: BOLA / BROKEN OBJECT LEVEL AUTHORIZATION RESULTS: %s\n", asm.Ref)
+	fmt.Printf("  Assessment: %s | Target: %s\n", asm.Name, targetBase)
+	fmt.Println("================================================================================")
+
+	allCats := []bola.Category{
+		bola.CategoryBOLAUserRead,
+		bola.CategoryBOLATenantRead,
+		bola.CategoryBOLACollection,
+		bola.CategoryBOLAWriteMutation,
+	}
+
+	if summary != nil && len(summary.CoverageMap) > 0 {
+		fmt.Println("\n[+] CATEGORY COVERAGE SUMMARY:")
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "CODE\tCATEGORY\tOWASP REF\tSTATUS\tTESTS\tVERIFIED\tCANDIDATES")
+		for _, cat := range allCats {
+			cov, ok := summary.CoverageMap[string(cat)]
+			if !ok {
+				meta := bola.CategoryMetadata[cat]
+				cov = bola.CategoryCoverage{
+					Code:     meta.Code,
+					Name:     meta.Name,
+					OWASPRef: meta.OWASP,
+					Status:   bola.CoverageUntested,
+				}
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%d\t%d\n",
+				cov.Code, cov.Name, cov.OWASPRef, cov.Status, cov.TestsRun, cov.Verified, cov.Candidates)
+		}
+		_ = w.Flush()
+	}
+
+	if len(results) > 0 {
+		fmt.Println("\n[+] DETAILED TEST RESULTS:")
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		if verbose {
+			fmt.Fprintln(w, "CODE\tSTATE\tSEVERITY\tMETHOD\tENDPOINT\tOBJECT\tEVIDENCE & DETAILS")
+			for _, r := range results {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					r.VulnCode, r.VerificationState, r.Severity, r.Method, r.Endpoint, r.ObjectID, r.EvidenceSummary)
+			}
+		} else {
+			fmt.Fprintln(w, "CODE\tSTATE\tSEVERITY\tMETHOD\tENDPOINT\tOBJECT\tEVIDENCE SUMMARY")
+			for _, r := range results {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					r.VulnCode, r.VerificationState, r.Severity, r.Method, r.Endpoint, r.ObjectID, r.EvidenceSummary)
+			}
+		}
+		_ = w.Flush()
+	} else if summary == nil || summary.TotalTests == 0 {
+		fmt.Println("\nNo BOLA test results recorded.")
+		fmt.Printf("To run an authorized BOLA assessment:\n  felix assessment bola %s --run\n", asm.Ref)
 	}
 
 	fmt.Println()

@@ -10,6 +10,7 @@ import (
 	"felix/pkg/apisec"
 	"felix/pkg/auth"
 	"felix/pkg/authz"
+	"felix/pkg/bola"
 	"felix/pkg/businesslogic"
 	"felix/pkg/cloudsec"
 	"felix/pkg/correlation"
@@ -2463,5 +2464,147 @@ func TestStore_CommonAssetModelRoundTrip(t *testing.T) {
 				t.Fatalf("expected APK details hydrated with PackageName=corp.test.mobile, got: %+v", a.APK)
 			}
 		}
+	}
+}
+
+func TestStore_BOLAPersistenceAndMigration(t *testing.T) {
+	store, cleanup := newTestStore(t)
+	defer cleanup()
+
+	// 1. Create client and assessment
+	client := &Client{Name: "BOLA Security Client"}
+	if err := store.CreateClient(client); err != nil {
+		t.Fatalf("CreateClient failed: %v", err)
+	}
+	asm := &Assessment{
+		ClientID: client.ID,
+		Name:     "BOLA Verification Assessment",
+		Status:   StatusReady,
+	}
+	if err := store.CreateAssessment(asm); err != nil {
+		t.Fatalf("CreateAssessment failed: %v", err)
+	}
+
+	execID := uuid.New().String()
+
+	// 2. Test SaveBOLARun and GetBOLARun
+	runRec := &bola.RunRecord{
+		ID:                 uuid.New().String(),
+		AssessmentID:       asm.ID,
+		ExecutionID:        execID,
+		TotalTests:         4,
+		CategoriesAssessed: 2,
+		VerifiedCount:      1,
+		CandidateCount:     1,
+		NotVulnerableCount: 1,
+		InconclusiveCount:  1,
+		BlockedCount:       0,
+		CoverageJSON:       `{"BOLA-USER-READ":{"category":"BOLA-USER-READ","code":"BOLA-USER-READ","name":"Unauthorized Cross-User Object Read","owasp_ref":"API1:2023","status":"VERIFIED_ISSUE_FOUND","tests_run":2,"verified":1,"candidates":0,"inconclusive":0,"blocked":0,"explanation":"BOLA verified"}}`,
+		CreatedAt:          time.Now().UTC(),
+	}
+	if err := store.SaveBOLARun(runRec); err != nil {
+		t.Fatalf("SaveBOLARun failed: %v", err)
+	}
+
+	fetchedRun, err := store.GetBOLARun(asm.ID, execID)
+	if err != nil {
+		t.Fatalf("GetBOLARun failed: %v", err)
+	}
+	if fetchedRun.ID != runRec.ID {
+		t.Errorf("expected run ID %s, got %s", runRec.ID, fetchedRun.ID)
+	}
+	if fetchedRun.VerifiedCount != 1 {
+		t.Errorf("expected VerifiedCount 1, got %d", fetchedRun.VerifiedCount)
+	}
+
+	// 3. Test SaveBOLAResults and GetBOLAResults
+	res1 := bola.Result{
+		ID:                uuid.New().String(),
+		AssessmentID:      asm.ID,
+		ExecutionID:       execID,
+		Category:          bola.CategoryBOLAUserRead,
+		VulnCode:          "BOLA-USER-READ",
+		TestID:            "BOLA-TEST-001",
+		TestName:          "Unauthorized Cross-User Object Read on /api/users/{id}",
+		OWASPRef:          "API1:2023",
+		CWERef:            "CWE-639",
+		Endpoint:          "/api/users/{id}",
+		Method:            "GET",
+		ObjectID:          "usr-9988",
+		OwnerAlias:        "user_b",
+		AccessorAlias:     "user_a",
+		VerificationState: bola.StateVerified,
+		Severity:          "HIGH",
+		Confidence:        "CONFIRMED",
+		ObservedStatus:    200,
+		EvidenceSummary:   "BOLA verified: non-owner user_a accessed owner user_b's object usr-9988",
+		EvidenceDetails: map[string]string{
+			"match_type": "exact_normalized_json_match",
+		},
+		CreatedAt: time.Now().UTC(),
+	}
+	res2 := bola.Result{
+		ID:                uuid.New().String(),
+		AssessmentID:      asm.ID,
+		ExecutionID:       execID,
+		Category:          bola.CategoryBOLATenantRead,
+		VulnCode:          "BOLA-TENANT-READ",
+		TestID:            "BOLA-TEST-002",
+		TestName:          "Cross-Tenant Isolation on /api/tenants/{tenantId}/records/{recordId}",
+		OWASPRef:          "API1:2023",
+		CWERef:            "CWE-639",
+		Endpoint:          "/api/tenants/{tenantId}/records/{recordId}",
+		Method:            "GET",
+		ObjectID:          "rec-100",
+		OwnerAlias:        "tenant_b",
+		AccessorAlias:     "tenant_a",
+		VerificationState: bola.StateNotVulnerable,
+		Severity:          "INFO",
+		Confidence:        "CONFIRMED",
+		ObservedStatus:    403,
+		EvidenceSummary:   "Access correctly denied with status 403",
+		CreatedAt:         time.Now().UTC(),
+	}
+
+	if err := store.SaveBOLAResults([]bola.Result{res1, res2}); err != nil {
+		t.Fatalf("SaveBOLAResults failed: %v", err)
+	}
+
+	allResults, err := store.GetBOLAResults(asm.ID, execID, "", "")
+	if err != nil {
+		t.Fatalf("GetBOLAResults failed: %v", err)
+	}
+	if len(allResults) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(allResults))
+	}
+
+	// Filter by category
+	catFiltered, err := store.GetBOLAResults(asm.ID, execID, string(bola.CategoryBOLAUserRead), "")
+	if err != nil {
+		t.Fatalf("GetBOLAResults by category failed: %v", err)
+	}
+	if len(catFiltered) != 1 || catFiltered[0].VulnCode != "BOLA-USER-READ" {
+		t.Errorf("expected 1 result for BOLA-USER-READ, got %d", len(catFiltered))
+	}
+
+	// Filter by state
+	stateFiltered, err := store.GetBOLAResults(asm.ID, execID, "", string(bola.StateVerified))
+	if err != nil {
+		t.Fatalf("GetBOLAResults by state failed: %v", err)
+	}
+	if len(stateFiltered) != 1 {
+		t.Errorf("expected 1 verified result, got %d", len(stateFiltered))
+	}
+
+	// 4. Test GetBOLASummary
+	summary, err := store.GetBOLASummary(asm.ID, execID)
+	if err != nil {
+		t.Fatalf("GetBOLASummary failed: %v", err)
+	}
+	if summary.TotalTests != 4 {
+		t.Errorf("expected TotalTests = 4 from RunRecord, got %d", summary.TotalTests)
+	}
+	if summary.VerifiedCount != 1 {
+		t.Errorf("expected VerifiedCount = 1, got %d", summary.VerifiedCount)
 	}
 }

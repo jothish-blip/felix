@@ -13,6 +13,7 @@ import (
 	"felix/pkg/apisec"
 	"felix/pkg/auth"
 	"felix/pkg/authz"
+	"felix/pkg/bola"
 	"felix/pkg/businesslogic"
 	"felix/pkg/cloudsec"
 	"felix/pkg/config"
@@ -163,6 +164,13 @@ type Store interface {
 
 	// Interrupted run recovery
 	DetectAndRecoverInterruptedRuns() (int, error)
+
+	// Broken Object Level Authorization Engine (Phase 5.3)
+	SaveBOLARun(record *bola.RunRecord) error
+	GetBOLARun(assessmentID string, executionID string) (*bola.RunRecord, error)
+	SaveBOLAResults(results []bola.Result) error
+	GetBOLAResults(assessmentID string, executionID string, category string, state string) ([]bola.Result, error)
+	GetBOLASummary(assessmentID string, executionID string) (*bola.Summary, error)
 
 	// Close database
 	Close() error
@@ -1163,6 +1171,75 @@ func (s *SQLiteStore) migrate() error {
 
 		if _, err := tx.Exec(schemaV12); err != nil {
 			return fmt.Errorf("migration v12 failed: %w", err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+
+	// Migration 13: BOLA / IDOR Verification Engine (Phase 5.3)
+	if currentVersion < 13 {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		schemaV13 := `
+		CREATE TABLE IF NOT EXISTS assessment_bola_runs (
+			id TEXT PRIMARY KEY,
+			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+			execution_id TEXT NOT NULL,
+			total_tests INTEGER NOT NULL DEFAULT 0,
+			categories_assessed INTEGER NOT NULL DEFAULT 0,
+			verified_count INTEGER NOT NULL DEFAULT 0,
+			candidate_count INTEGER NOT NULL DEFAULT 0,
+			not_vulnerable_count INTEGER NOT NULL DEFAULT 0,
+			inconclusive_count INTEGER NOT NULL DEFAULT 0,
+			blocked_count INTEGER NOT NULL DEFAULT 0,
+			coverage_json TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_bola_runs_asm_id ON assessment_bola_runs(assessment_id);
+		CREATE INDEX IF NOT EXISTS idx_bola_runs_exec_id ON assessment_bola_runs(execution_id);
+
+		CREATE TABLE IF NOT EXISTS assessment_bola_results (
+			id TEXT PRIMARY KEY,
+			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+			execution_id TEXT NOT NULL,
+			category TEXT NOT NULL,
+			vuln_code TEXT NOT NULL,
+			test_id TEXT NOT NULL,
+			test_name TEXT NOT NULL,
+			owasp_ref TEXT NOT NULL,
+			cwe_ref TEXT NOT NULL,
+			endpoint TEXT NOT NULL,
+			method TEXT NOT NULL,
+			object_id TEXT NOT NULL,
+			owner_alias TEXT NOT NULL,
+			accessor_alias TEXT NOT NULL,
+			verification_state TEXT NOT NULL,
+			severity TEXT NOT NULL,
+			confidence TEXT NOT NULL,
+			observed_status INTEGER,
+			evidence_summary TEXT NOT NULL,
+			evidence_details_json TEXT,
+			finding_id TEXT,
+			created_at TIMESTAMP NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_bola_res_asm_id ON assessment_bola_results(assessment_id);
+		CREATE INDEX IF NOT EXISTS idx_bola_res_exec_id ON assessment_bola_results(execution_id);
+		CREATE INDEX IF NOT EXISTS idx_bola_res_cat ON assessment_bola_results(category);
+		CREATE INDEX IF NOT EXISTS idx_bola_res_state ON assessment_bola_results(verification_state);
+
+		INSERT INTO schema_migrations (version, applied_at) VALUES (13, CURRENT_TIMESTAMP);
+		`
+
+		if _, err := tx.Exec(schemaV13); err != nil {
+			return fmt.Errorf("migration v13 failed: %w", err)
 		}
 
 		if err := tx.Commit(); err != nil {
@@ -4582,4 +4659,246 @@ func (s *SQLiteStore) GetVerificationSummary(assessmentID string, executionID st
 	}
 
 	return sum, nil
+}
+
+// ============================================================================
+// BOLA / Broken Object Level Authorization Engine (Phase 5.3)
+// ============================================================================
+
+func (s *SQLiteStore) SaveBOLARun(record *bola.RunRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	query := `
+		INSERT INTO assessment_bola_runs (
+			id, assessment_id, execution_id, total_tests, categories_assessed,
+			verified_count, candidate_count, not_vulnerable_count, inconclusive_count, blocked_count,
+			coverage_json, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			total_tests = excluded.total_tests,
+			categories_assessed = excluded.categories_assessed,
+			verified_count = excluded.verified_count,
+			candidate_count = excluded.candidate_count,
+			not_vulnerable_count = excluded.not_vulnerable_count,
+			inconclusive_count = excluded.inconclusive_count,
+			blocked_count = excluded.blocked_count,
+			coverage_json = excluded.coverage_json;
+	`
+	now := record.CreatedAt
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+
+	_, err := s.db.Exec(
+		query,
+		record.ID, record.AssessmentID, record.ExecutionID,
+		record.TotalTests, record.CategoriesAssessed,
+		record.VerifiedCount, record.CandidateCount, record.NotVulnerableCount,
+		record.InconclusiveCount, record.BlockedCount,
+		record.CoverageJSON, now,
+	)
+	return err
+}
+
+func (s *SQLiteStore) GetBOLARun(assessmentID string, executionID string) (*bola.RunRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := `
+		SELECT id, assessment_id, execution_id, total_tests, categories_assessed,
+		       verified_count, candidate_count, not_vulnerable_count, inconclusive_count, blocked_count,
+		       coverage_json, created_at
+		FROM assessment_bola_runs
+		WHERE assessment_id = ?
+	`
+	args := []interface{}{assessmentID}
+	if executionID != "" {
+		query += " AND execution_id = ?"
+		args = append(args, executionID)
+	}
+	query += " ORDER BY created_at DESC LIMIT 1"
+
+	var rec bola.RunRecord
+	err := s.db.QueryRow(query, args...).Scan(
+		&rec.ID, &rec.AssessmentID, &rec.ExecutionID,
+		&rec.TotalTests, &rec.CategoriesAssessed,
+		&rec.VerifiedCount, &rec.CandidateCount, &rec.NotVulnerableCount,
+		&rec.InconclusiveCount, &rec.BlockedCount,
+		&rec.CoverageJSON, &rec.CreatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &rec, nil
+}
+
+func (s *SQLiteStore) SaveBOLAResults(results []bola.Result) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO assessment_bola_results (
+			id, assessment_id, execution_id, category, vuln_code, test_id, test_name,
+			owasp_ref, cwe_ref, endpoint, method, object_id, owner_alias, accessor_alias,
+			verification_state, severity, confidence, observed_status,
+			evidence_summary, evidence_details_json, finding_id, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, r := range results {
+		var detailsJSON string
+		if len(r.EvidenceDetails) > 0 {
+			b, _ := json.Marshal(r.EvidenceDetails)
+			detailsJSON = string(b)
+		}
+
+		findingID := ""
+		if r.Finding != nil {
+			findingID = r.Finding.ID
+		}
+
+		now := r.CreatedAt
+		if now.IsZero() {
+			now = time.Now().UTC()
+		}
+
+		_, err := stmt.Exec(
+			r.ID, r.AssessmentID, r.ExecutionID, string(r.Category), r.VulnCode, r.TestID, r.TestName,
+			r.OWASPRef, r.CWERef, r.Endpoint, r.Method, r.ObjectID, r.OwnerAlias, r.AccessorAlias,
+			string(r.VerificationState), r.Severity, r.Confidence, r.ObservedStatus,
+			r.EvidenceSummary, detailsJSON, findingID, now,
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+func (s *SQLiteStore) GetBOLAResults(assessmentID string, executionID string, category string, state string) ([]bola.Result, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := `
+		SELECT id, assessment_id, execution_id, category, vuln_code, test_id, test_name,
+		       owasp_ref, cwe_ref, endpoint, method, object_id, owner_alias, accessor_alias,
+		       verification_state, severity, confidence, observed_status,
+		       evidence_summary, evidence_details_json, finding_id, created_at
+		FROM assessment_bola_results
+		WHERE assessment_id = ?
+	`
+	args := []interface{}{assessmentID}
+
+	if executionID != "" {
+		query += " AND execution_id = ?"
+		args = append(args, executionID)
+	}
+	if category != "" {
+		query += " AND category = ?"
+		args = append(args, category)
+	}
+	if state != "" {
+		query += " AND verification_state = ?"
+		args = append(args, state)
+	}
+
+	query += " ORDER BY created_at ASC"
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []bola.Result
+	for rows.Next() {
+		var r bola.Result
+		var catStr, stateStr, detailsJSON, findingID sql.NullString
+		var obsStatus sql.NullInt64
+
+		err := rows.Scan(
+			&r.ID, &r.AssessmentID, &r.ExecutionID, &catStr, &r.VulnCode, &r.TestID, &r.TestName,
+			&r.OWASPRef, &r.CWERef, &r.Endpoint, &r.Method, &r.ObjectID, &r.OwnerAlias, &r.AccessorAlias,
+			&stateStr, &r.Severity, &r.Confidence, &obsStatus,
+			&r.EvidenceSummary, &detailsJSON, &findingID, &r.CreatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		if catStr.Valid {
+			r.Category = bola.Category(catStr.String)
+		}
+		if stateStr.Valid {
+			r.VerificationState = bola.VerificationState(stateStr.String)
+		}
+		if obsStatus.Valid {
+			r.ObservedStatus = int(obsStatus.Int64)
+		}
+		if detailsJSON.Valid && detailsJSON.String != "" {
+			_ = json.Unmarshal([]byte(detailsJSON.String), &r.EvidenceDetails)
+		}
+
+		results = append(results, r)
+	}
+	return results, nil
+}
+
+func (s *SQLiteStore) GetBOLASummary(assessmentID string, executionID string) (*bola.Summary, error) {
+	// 1. Try to load saved RunRecord
+	run, err := s.GetBOLARun(assessmentID, executionID)
+	if err == nil && run != nil && run.CoverageJSON != "" {
+		var covMap map[string]bola.CategoryCoverage
+		if err := json.Unmarshal([]byte(run.CoverageJSON), &covMap); err == nil {
+			summary := &bola.Summary{
+				TotalTests:         run.TotalTests,
+				CategoriesCovered:  run.CategoriesAssessed,
+				VerifiedCount:      run.VerifiedCount,
+				CandidateCount:     run.CandidateCount,
+				NotVulnerableCount: run.NotVulnerableCount,
+				InconclusiveCount:  run.InconclusiveCount,
+				BlockedCount:       run.BlockedCount,
+				CoverageMap:        covMap,
+			}
+			return summary, nil
+		}
+	}
+
+	// 2. Fallback to computing from raw results
+	results, err := s.GetBOLAResults(assessmentID, executionID, "", "")
+	if err != nil {
+		return nil, err
+	}
+
+	summary := &bola.Summary{
+		TotalTests:  len(results),
+		CoverageMap: make(map[string]bola.CategoryCoverage),
+	}
+	for _, r := range results {
+		switch r.VerificationState {
+		case bola.StateVerified:
+			summary.VerifiedCount++
+		case bola.StateCandidate:
+			summary.CandidateCount++
+		case bola.StateNotVulnerable:
+			summary.NotVulnerableCount++
+		case bola.StateInconclusive:
+			summary.InconclusiveCount++
+		case bola.StateSkipped:
+			summary.BlockedCount++
+		}
+	}
+	return summary, nil
 }
