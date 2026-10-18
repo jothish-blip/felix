@@ -2,8 +2,10 @@ package apk
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -759,4 +761,762 @@ func TestHandoff_DryRunMode(t *testing.T) {
 	if rep.Results[0].ReasonCode != "DRY_RUN_PLAN" {
 		t.Errorf("expected DRY_RUN_PLAN for eligible endpoint, got: %s", rep.Results[0].ReasonCode)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4.5 Boundary Audit Tests: Authorization, DNS, Redirects, Budgets
+// ---------------------------------------------------------------------------
+
+type mockAuditResolver struct {
+	hosts map[string][]net.IPAddr
+}
+
+func newMockAuditResolver(entries map[string][]string) *mockAuditResolver {
+	hosts := make(map[string][]net.IPAddr)
+	for h, ipStrs := range entries {
+		var addrs []net.IPAddr
+		for _, ipStr := range ipStrs {
+			ip := net.ParseIP(ipStr)
+			if ip != nil {
+				addrs = append(addrs, net.IPAddr{IP: ip})
+			}
+		}
+		hosts[strings.ToLower(h)] = addrs
+	}
+	return &mockAuditResolver{hosts: hosts}
+}
+
+func (m *mockAuditResolver) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {
+	if addrs, ok := m.hosts[strings.ToLower(host)]; ok {
+		return addrs, nil
+	}
+	return nil, &net.DNSError{
+		Err:        "no such host",
+		Name:       host,
+		IsNotFound: true,
+	}
+}
+
+// TestHandoff_Audit_AuthorizationAndThirdPartyControls verifies that:
+// - Missing, invalid, or expired authorization prevents every active request.
+// - --target defines a target or scope but cannot independently establish authorization.
+// - --allow-third-party cannot bypass authorization, scope, exclusions, or destination-IP restrictions.
+// - A third-party endpoint outside explicit scope receives zero requests.
+// - Inferred and unresolved endpoints follow the configured policy.
+func TestHandoff_Audit_AuthorizationAndThirdPartyControls(t *testing.T) {
+	var serverRequests int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&serverRequests, 1)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer ts.Close()
+
+	authApproved := newTestAuth("Audit Authority")
+
+	t.Run("Missing_Authorization_Fails_Closed", func(t *testing.T) {
+		atomic.StoreInt32(&serverRequests, 0)
+		inv := &BackendInventory{
+			Endpoints: []EndpointEntry{
+				{NormalizedURL: ts.URL + "/api/v1/health", Host: ts.Listener.Addr().String(), HostIdentity: ts.Listener.Addr().String(), Classification: ClassificationConfirmedReference},
+			},
+		}
+		cfg := DefaultHandoffConfig()
+		cfg.AuthorizedTargets = []string{ts.URL}
+		cfg.Authorization = nil // Missing
+
+		_, err := ExecuteHandoff(context.Background(), inv, cfg)
+		if err == nil || !strings.Contains(err.Error(), "authorization record is required") {
+			t.Fatalf("expected authorization record required error, got: %v", err)
+		}
+		if atomic.LoadInt32(&serverRequests) != 0 {
+			t.Errorf("expected 0 network requests, got %d", atomic.LoadInt32(&serverRequests))
+		}
+	})
+
+	t.Run("Expired_Authorization_Fails_Closed", func(t *testing.T) {
+		atomic.StoreInt32(&serverRequests, 0)
+		inv := &BackendInventory{
+			Endpoints: []EndpointEntry{
+				{NormalizedURL: ts.URL + "/api/v1/health", Host: ts.Listener.Addr().String(), HostIdentity: ts.Listener.Addr().String(), Classification: ClassificationConfirmedReference},
+			},
+		}
+		past := time.Now().Add(-1 * time.Hour)
+		expiredAuth := &assessment.AuthorizationRecord{
+			Status:     assessment.AuthApproved,
+			ValidUntil: &past,
+		}
+		cfg := DefaultHandoffConfig()
+		cfg.AuthorizedTargets = []string{ts.URL}
+		cfg.Authorization = expiredAuth
+
+		_, err := ExecuteHandoff(context.Background(), inv, cfg)
+		if err == nil || !strings.Contains(err.Error(), "invalid authorization") {
+			t.Fatalf("expected invalid authorization error, got: %v", err)
+		}
+		if atomic.LoadInt32(&serverRequests) != 0 {
+			t.Errorf("expected 0 network requests, got %d", atomic.LoadInt32(&serverRequests))
+		}
+	})
+
+	t.Run("Future_Authorization_Fails_Closed", func(t *testing.T) {
+		atomic.StoreInt32(&serverRequests, 0)
+		inv := &BackendInventory{
+			Endpoints: []EndpointEntry{
+				{NormalizedURL: ts.URL + "/api/v1/health", Host: ts.Listener.Addr().String(), HostIdentity: ts.Listener.Addr().String(), Classification: ClassificationConfirmedReference},
+			},
+		}
+		future := time.Now().Add(2 * time.Hour)
+		futureAuth := &assessment.AuthorizationRecord{
+			Status:    assessment.AuthApproved,
+			ValidFrom: &future,
+		}
+		cfg := DefaultHandoffConfig()
+		cfg.AuthorizedTargets = []string{ts.URL}
+		cfg.Authorization = futureAuth
+
+		_, err := ExecuteHandoff(context.Background(), inv, cfg)
+		if err == nil || !strings.Contains(err.Error(), "invalid authorization") {
+			t.Fatalf("expected invalid authorization error for future auth, got: %v", err)
+		}
+		if atomic.LoadInt32(&serverRequests) != 0 {
+			t.Errorf("expected 0 network requests, got %d", atomic.LoadInt32(&serverRequests))
+		}
+	})
+
+	t.Run("Pending_And_Revoked_Authorization_Fails_Closed", func(t *testing.T) {
+		atomic.StoreInt32(&serverRequests, 0)
+		inv := &BackendInventory{
+			Endpoints: []EndpointEntry{
+				{NormalizedURL: ts.URL + "/api/v1/health", Host: ts.Listener.Addr().String(), HostIdentity: ts.Listener.Addr().String(), Classification: ClassificationConfirmedReference},
+			},
+		}
+		pendingAuth := &assessment.AuthorizationRecord{
+			Status: assessment.AuthPending,
+		}
+		cfg := DefaultHandoffConfig()
+		cfg.AuthorizedTargets = []string{ts.URL}
+		cfg.Authorization = pendingAuth
+
+		_, err := ExecuteHandoff(context.Background(), inv, cfg)
+		if err == nil || !strings.Contains(err.Error(), "must be APPROVED") {
+			t.Fatalf("expected must be APPROVED error for pending auth, got: %v", err)
+		}
+
+		revokedAuth := &assessment.AuthorizationRecord{
+			Status: assessment.AuthRevoked,
+		}
+		cfg.Authorization = revokedAuth
+		_, err = ExecuteHandoff(context.Background(), inv, cfg)
+		if err == nil || !strings.Contains(err.Error(), "must be APPROVED") {
+			t.Fatalf("expected must be APPROVED error for revoked auth, got: %v", err)
+		}
+		if atomic.LoadInt32(&serverRequests) != 0 {
+			t.Errorf("expected 0 network requests, got %d", atomic.LoadInt32(&serverRequests))
+		}
+	})
+
+	t.Run("Target_Flag_Cannot_Independently_Establish_Authorization", func(t *testing.T) {
+		atomic.StoreInt32(&serverRequests, 0)
+		inv := &BackendInventory{
+			Endpoints: []EndpointEntry{
+				{NormalizedURL: ts.URL + "/api/v1/health", Host: ts.Listener.Addr().String(), HostIdentity: ts.Listener.Addr().String(), Classification: ClassificationConfirmedReference},
+			},
+		}
+		// Target configured, but authorization explicitly omitted
+		cfg := DefaultHandoffConfig()
+		cfg.AuthorizedTargets = []string{ts.URL}
+		cfg.Authorization = nil
+
+		_, err := ExecuteHandoff(context.Background(), inv, cfg)
+		if err == nil {
+			t.Fatalf("expected failure when target is specified without authorization")
+		}
+		if atomic.LoadInt32(&serverRequests) != 0 {
+			t.Errorf("expected 0 network requests dispatched, got %d", atomic.LoadInt32(&serverRequests))
+		}
+	})
+
+	t.Run("AllowThirdParty_Cannot_Bypass_Authorization", func(t *testing.T) {
+		atomic.StoreInt32(&serverRequests, 0)
+		inv := &BackendInventory{
+			Endpoints: []EndpointEntry{
+				{NormalizedURL: ts.URL + "/api/v1/health", Host: ts.Listener.Addr().String(), HostIdentity: ts.Listener.Addr().String(), Classification: ClassificationConfirmedReference},
+			},
+		}
+		cfg := DefaultHandoffConfig()
+		cfg.AuthorizedTargets = []string{ts.URL}
+		cfg.AllowThirdParties = true // Even with AllowThirdParties=true, authorization is mandatory
+		cfg.Authorization = nil
+
+		_, err := ExecuteHandoff(context.Background(), inv, cfg)
+		if err == nil || !strings.Contains(err.Error(), "authorization record is required") {
+			t.Fatalf("expected authorization record is required, got: %v", err)
+		}
+		if atomic.LoadInt32(&serverRequests) != 0 {
+			t.Errorf("expected 0 network requests, got %d", atomic.LoadInt32(&serverRequests))
+		}
+	})
+
+	t.Run("AllowThirdParty_Cannot_Bypass_Scope", func(t *testing.T) {
+		atomic.StoreInt32(&serverRequests, 0)
+		inv := &BackendInventory{
+			Endpoints: []EndpointEntry{
+				{
+					NormalizedURL:  "https://unauthorized-vendor.example.com/api/v1/data",
+					Host:           "unauthorized-vendor.example.com",
+					HostIdentity:   "unauthorized-vendor.example.com",
+					Category:       CategoryCloudService,
+					Classification: ClassificationConfirmedReference,
+				},
+			},
+		}
+		cfg := DefaultHandoffConfig()
+		cfg.AuthorizedTargets = []string{ts.URL} // ts.URL is the only authorized target
+		cfg.Authorization = authApproved
+		cfg.AllowThirdParties = true // third party allowed, but OUT OF SCOPE target must be blocked!
+
+		rep, err := ExecuteHandoff(context.Background(), inv, cfg)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if rep.TotalTested != 0 || rep.TotalSkipped != 1 {
+			t.Fatalf("expected 0 tested, 1 skipped; got tested=%d, skipped=%d", rep.TotalTested, rep.TotalSkipped)
+		}
+		if rep.Results[0].ReasonCode != "OUT_OF_SCOPE" {
+			t.Errorf("expected OUT_OF_SCOPE, got: %s", rep.Results[0].ReasonCode)
+		}
+		if rep.TotalRequestsSent != 0 {
+			t.Errorf("expected 0 requests sent, got %d", rep.TotalRequestsSent)
+		}
+		if rep.Results[0].RequestDispatched {
+			t.Errorf("expected RequestDispatched=false")
+		}
+	})
+
+	t.Run("AllowThirdParty_Cannot_Bypass_Exclusions", func(t *testing.T) {
+		atomic.StoreInt32(&serverRequests, 0)
+		inv := &BackendInventory{
+			Endpoints: []EndpointEntry{
+				{
+					NormalizedURL:  ts.URL + "/excluded/thirdparty",
+					Host:           ts.Listener.Addr().String(),
+					HostIdentity:   ts.Listener.Addr().String(),
+					Category:       CategoryStorage,
+					Classification: ClassificationConfirmedReference,
+				},
+			},
+		}
+		cfg := DefaultHandoffConfig()
+		cfg.AuthorizedTargets = []string{ts.URL}
+		cfg.Authorization = authApproved
+		cfg.AllowLoopback = true
+		cfg.AllowThirdParties = true
+		cfg.Exclusions = []assessment.Exclusion{
+			{
+				ExclusionType: assessment.ExclusionPathPrefix,
+				Pattern:       "/excluded",
+				Reason:        "Strict exclusion",
+			},
+		}
+
+		rep, err := ExecuteHandoff(context.Background(), inv, cfg)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if rep.TotalTested != 0 || rep.TotalSkipped != 1 {
+			t.Fatalf("expected 0 tested, 1 skipped; got tested=%d, skipped=%d", rep.TotalTested, rep.TotalSkipped)
+		}
+		if rep.Results[0].ReasonCode != "EXCLUDED" {
+			t.Errorf("expected EXCLUDED, got %s", rep.Results[0].ReasonCode)
+		}
+		if atomic.LoadInt32(&serverRequests) != 0 {
+			t.Errorf("expected 0 network requests, got %d", atomic.LoadInt32(&serverRequests))
+		}
+	})
+
+	t.Run("AllowThirdParty_Cannot_Bypass_Prohibited_IP", func(t *testing.T) {
+		inv := &BackendInventory{
+			Endpoints: []EndpointEntry{
+				{
+					NormalizedURL:  "http://169.254.169.254/latest/meta-data/",
+					Host:           "169.254.169.254",
+					HostIdentity:   "169.254.169.254",
+					Category:       CategoryCloudService,
+					Classification: ClassificationConfirmedReference,
+				},
+			},
+		}
+		cfg := DefaultHandoffConfig()
+		cfg.AuthorizedTargets = []string{"http://169.254.169.254"}
+		cfg.Authorization = authApproved
+		cfg.AllowThirdParties = true // even with allow third-party, cloud metadata IP is blocked!
+
+		rep, err := ExecuteHandoff(context.Background(), inv, cfg)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if rep.TotalTested != 0 || rep.TotalSkipped != 1 {
+			t.Fatalf("expected 0 tested, 1 skipped; got tested=%d, skipped=%d", rep.TotalTested, rep.TotalSkipped)
+		}
+		if rep.Results[0].ReasonCode != "PROHIBITED_IP" {
+			t.Errorf("expected PROHIBITED_IP, got: %s", rep.Results[0].ReasonCode)
+		}
+	})
+}
+
+// TestHandoff_Audit_DNSConnectionAndRedirects verifies that:
+// - Destination IP is subject to the same policy as validated target.
+// - Prohibited IPv4, IPv6, IPv4-mapped IPv6, and mixed DNS answers are rejected.
+// - Redirect chains accurately count against request budgets, per-host limits, and endpoint tracking.
+// - Redirects to out-of-scope hosts and prohibited IPs are blocked before connecting.
+func TestHandoff_Audit_DNSConnectionAndRedirects(t *testing.T) {
+	authApproved := newTestAuth("Audit Operations")
+
+	t.Run("Mixed_DNS_Answers_Rejected_By_SafeDialer", func(t *testing.T) {
+		// Mock resolver returning a dual-homed entry: one public IP, one loopback IP
+		resolver := newMockAuditResolver(map[string][]string{
+			"mixed.dns.local": {"93.184.216.34", "127.0.0.1"},
+		})
+
+		inv := &BackendInventory{
+			Endpoints: []EndpointEntry{
+				{
+					NormalizedURL:  "http://mixed.dns.local:8080/v1/resource",
+					Host:           "mixed.dns.local:8080",
+					HostIdentity:   "mixed.dns.local:8080",
+					Classification: ClassificationConfirmedReference,
+				},
+			},
+		}
+
+		cfg := DefaultHandoffConfig()
+		cfg.AuthorizedTargets = []string{"http://mixed.dns.local:8080"}
+		cfg.Authorization = authApproved
+		cfg.AllowLoopback = false // Prohibit loopback!
+		cfg.Resolver = resolver
+
+		rep, err := ExecuteHandoff(context.Background(), inv, cfg)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if rep.TotalFailed != 1 {
+			t.Fatalf("expected 1 failed due to SSRF refusal, got tested=%d, failed=%d, skipped=%d",
+				rep.TotalTested, rep.TotalFailed, rep.TotalSkipped)
+		}
+		if rep.Results[0].ReasonCode != "SSRF_BLOCKED" {
+			t.Errorf("expected SSRF_BLOCKED, got: %s", rep.Results[0].ReasonCode)
+		}
+		if !strings.Contains(rep.Results[0].ReasonMessage, "SSRF security refusal") &&
+			!strings.Contains(rep.Results[0].ReasonMessage, "loopback") {
+			t.Errorf("expected SSRF refusal message, got: %s", rep.Results[0].ReasonMessage)
+		}
+	})
+
+	t.Run("Prohibited_IPv6_And_Mapped_IPv6_Blocked", func(t *testing.T) {
+		inv := &BackendInventory{
+			Endpoints: []EndpointEntry{
+				{NormalizedURL: "http://[::1]:8080/v1", Host: "[::1]:8080", HostIdentity: "[::1]:8080", Classification: ClassificationConfirmedReference},
+				{NormalizedURL: "http://[::ffff:127.0.0.1]:8080/v1", Host: "[::ffff:127.0.0.1]:8080", HostIdentity: "[::ffff:127.0.0.1]:8080", Classification: ClassificationConfirmedReference},
+				{NormalizedURL: "http://[::ffff:169.254.169.254]/v1", Host: "[::ffff:169.254.169.254]", HostIdentity: "[::ffff:169.254.169.254]", Classification: ClassificationConfirmedReference},
+				{NormalizedURL: "http://[fd00:ec2::254]/v1", Host: "[fd00:ec2::254]", HostIdentity: "[fd00:ec2::254]", Classification: ClassificationConfirmedReference},
+				{NormalizedURL: "http://[fe80::1]:8080/v1", Host: "[fe80::1]:8080", HostIdentity: "[fe80::1]:8080", Classification: ClassificationConfirmedReference},
+			},
+		}
+
+		cfg := DefaultHandoffConfig()
+		cfg.AuthorizedTargets = []string{
+			"http://[::1]:8080",
+			"http://[::ffff:127.0.0.1]:8080",
+			"http://[::ffff:169.254.169.254]",
+			"http://[fd00:ec2::254]",
+			"http://[fe80::1]:8080",
+		}
+		cfg.Authorization = authApproved
+		cfg.AllowLoopback = false
+		cfg.AllowPrivateIPs = false
+
+		rep, err := ExecuteHandoff(context.Background(), inv, cfg)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if rep.TotalSkipped != 5 || rep.TotalTested != 0 {
+			t.Fatalf("expected 5 skipped for prohibited IPv6/IPv4-mapped addresses, got tested=%d, skipped=%d",
+				rep.TotalTested, rep.TotalSkipped)
+		}
+		for i, r := range rep.Results {
+			if r.ReasonCode != "PROHIBITED_IP" {
+				t.Errorf("endpoint %d (%s) expected PROHIBITED_IP, got: %s", i, r.NormalizedURL, r.ReasonCode)
+			}
+		}
+	})
+
+	t.Run("Redirect_Chain_Exact_Request_Accounting", func(t *testing.T) {
+		var hopRequests int32
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt32(&hopRequests, 1)
+			switch r.URL.Path {
+			case "/start":
+				http.Redirect(w, r, "/hop1", http.StatusFound)
+			case "/hop1":
+				http.Redirect(w, r, "/final", http.StatusFound)
+			case "/final":
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{"result":"completed"}`))
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer ts.Close()
+
+		inv := &BackendInventory{
+			Endpoints: []EndpointEntry{
+				{
+					NormalizedURL:  ts.URL + "/start",
+					Host:           ts.Listener.Addr().String(),
+					HostIdentity:   ts.Listener.Addr().String(),
+					Classification: ClassificationConfirmedReference,
+				},
+			},
+		}
+
+		cfg := DefaultHandoffConfig()
+		cfg.AuthorizedTargets = []string{ts.URL}
+		cfg.Authorization = authApproved
+		cfg.AllowLoopback = true
+		cfg.MaxRedirects = 5
+
+		rep, err := ExecuteHandoff(context.Background(), inv, cfg)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if rep.TotalTested != 1 {
+			t.Fatalf("expected 1 tested endpoint, got %d", rep.TotalTested)
+		}
+		// Initial request + 2 redirect hops = 3 total requests
+		if rep.Results[0].RequestCount != 3 {
+			t.Errorf("expected endpoint RequestCount=3, got %d", rep.Results[0].RequestCount)
+		}
+		if rep.TotalRequestsSent != 3 {
+			t.Errorf("expected report TotalRequestsSent=3, got %d", rep.TotalRequestsSent)
+		}
+		if atomic.LoadInt32(&hopRequests) != 3 {
+			t.Errorf("expected server to receive 3 requests, got %d", atomic.LoadInt32(&hopRequests))
+		}
+	})
+
+	t.Run("Redirect_Chain_Budget_Exhaustion_Terminates_Safely", func(t *testing.T) {
+		var hopRequests int32
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt32(&hopRequests, 1)
+			switch r.URL.Path {
+			case "/start":
+				http.Redirect(w, r, "/hop1", http.StatusFound)
+			case "/hop1":
+				http.Redirect(w, r, "/final", http.StatusFound)
+			case "/final":
+				w.WriteHeader(http.StatusOK)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer ts.Close()
+
+		inv := &BackendInventory{
+			Endpoints: []EndpointEntry{
+				{
+					NormalizedURL:  ts.URL + "/start",
+					Host:           ts.Listener.Addr().String(),
+					HostIdentity:   ts.Listener.Addr().String(),
+					Classification: ClassificationConfirmedReference,
+				},
+			},
+		}
+
+		cfg := DefaultHandoffConfig()
+		cfg.AuthorizedTargets = []string{ts.URL}
+		cfg.Authorization = authApproved
+		cfg.AllowLoopback = true
+		cfg.MaxRequestsTotal = 2 // budget allows at most 2 requests: initial + 1 hop, blocking hop 2!
+		cfg.MaxRedirects = 5
+
+		rep, err := ExecuteHandoff(context.Background(), inv, cfg)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if rep.TotalFailed != 1 {
+			t.Fatalf("expected 1 failed endpoint due to budget exhaustion on redirect, got tested=%d, failed=%d",
+				rep.TotalTested, rep.TotalFailed)
+		}
+		if rep.Results[0].ReasonCode != "REDIRECT_BLOCKED" {
+			t.Errorf("expected REDIRECT_BLOCKED, got %s", rep.Results[0].ReasonCode)
+		}
+		if !strings.Contains(rep.Results[0].ReasonMessage, "budget exhausted") {
+			t.Errorf("expected budget exhausted message, got: %s", rep.Results[0].ReasonMessage)
+		}
+		if rep.TotalRequestsSent != 2 {
+			t.Errorf("expected TotalRequestsSent=2, got %d", rep.TotalRequestsSent)
+		}
+		if atomic.LoadInt32(&hopRequests) != 2 {
+			t.Errorf("expected server to receive exactly 2 requests before cut-off, got %d", atomic.LoadInt32(&hopRequests))
+		}
+	})
+
+	t.Run("Redirect_To_Prohibited_IP_Blocked_In_CheckRedirect", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "http://169.254.169.254/latest/meta-data/", http.StatusFound)
+		}))
+		defer ts.Close()
+
+		inv := &BackendInventory{
+			Endpoints: []EndpointEntry{
+				{
+					NormalizedURL:  ts.URL + "/metadata-leak",
+					Host:           ts.Listener.Addr().String(),
+					HostIdentity:   ts.Listener.Addr().String(),
+					Classification: ClassificationConfirmedReference,
+				},
+			},
+		}
+
+		cfg := DefaultHandoffConfig()
+		cfg.AuthorizedTargets = []string{ts.URL}
+		cfg.Authorization = authApproved
+		cfg.AllowLoopback = true
+
+		rep, err := ExecuteHandoff(context.Background(), inv, cfg)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if rep.TotalFailed != 1 {
+			t.Fatalf("expected 1 failed, got tested=%d, failed=%d", rep.TotalTested, rep.TotalFailed)
+		}
+		if rep.Results[0].ReasonCode != "SSRF_BLOCKED" && rep.Results[0].ReasonCode != "REDIRECT_BLOCKED" {
+			t.Errorf("expected SSRF_BLOCKED or REDIRECT_BLOCKED, got: %s", rep.Results[0].ReasonCode)
+		}
+		if !strings.Contains(rep.Results[0].ReasonMessage, "cloud metadata") {
+			t.Errorf("expected cloud metadata reason, got: %s", rep.Results[0].ReasonMessage)
+		}
+	})
+}
+
+// TestHandoff_Audit_RequestBudgetsAndOutcomes verifies that:
+// - Payload size limits return INCONCLUSIVE_RESPONSE_TOO_LARGE.
+// - Context cancellations return INCONCLUSIVE_CANCELLED.
+// - HTTP 429 returns INCONCLUSIVE_RATE_LIMITED.
+// - Sum invariant strictly holds: TotalDiscovered == TotalTested + TotalSkipped + TotalFailed + TotalInconclusive.
+func TestHandoff_Audit_RequestBudgetsAndOutcomes(t *testing.T) {
+	authApproved := newTestAuth("Audit Director")
+
+	t.Run("Response_Too_Large_Outcome", func(t *testing.T) {
+		// Server sends body > DefaultMaxAPIResponse (1MB)
+		largeBody := make([]byte, 1500*1024)
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Length", strconv.Itoa(len(largeBody)))
+			w.WriteHeader(http.StatusOK)
+			w.Write(largeBody)
+		}))
+		defer ts.Close()
+
+		inv := &BackendInventory{
+			Endpoints: []EndpointEntry{
+				{
+					NormalizedURL:  ts.URL + "/large-response",
+					Host:           ts.Listener.Addr().String(),
+					HostIdentity:   ts.Listener.Addr().String(),
+					Classification: ClassificationConfirmedReference,
+				},
+			},
+		}
+
+		cfg := DefaultHandoffConfig()
+		cfg.AuthorizedTargets = []string{ts.URL}
+		cfg.Authorization = authApproved
+		cfg.AllowLoopback = true
+
+		rep, err := ExecuteHandoff(context.Background(), inv, cfg)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if rep.TotalInconclusive != 1 {
+			t.Fatalf("expected 1 inconclusive due to large response, got tested=%d, inconclusive=%d, failed=%d",
+				rep.TotalTested, rep.TotalInconclusive, rep.TotalFailed)
+		}
+		if rep.Results[0].ReasonCode != "INCONCLUSIVE_RESPONSE_TOO_LARGE" {
+			t.Errorf("expected INCONCLUSIVE_RESPONSE_TOO_LARGE, got: %s", rep.Results[0].ReasonCode)
+		}
+	})
+
+	t.Run("Context_Cancellation_Outcome", func(t *testing.T) {
+		blockCh := make(chan struct{})
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			<-blockCh
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer ts.Close()
+		defer close(blockCh)
+
+		inv := &BackendInventory{
+			Endpoints: []EndpointEntry{
+				{
+					NormalizedURL:  ts.URL + "/cancel-me",
+					Host:           ts.Listener.Addr().String(),
+					HostIdentity:   ts.Listener.Addr().String(),
+					Classification: ClassificationConfirmedReference,
+				},
+			},
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			cancel()
+		}()
+
+		cfg := DefaultHandoffConfig()
+		cfg.AuthorizedTargets = []string{ts.URL}
+		cfg.Authorization = authApproved
+		cfg.AllowLoopback = true
+		cfg.PerRequestTimeout = 2 * time.Second
+
+		rep, err := ExecuteHandoff(ctx, inv, cfg)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if rep.TotalInconclusive != 1 {
+			t.Fatalf("expected 1 inconclusive due to cancellation, got tested=%d, inconclusive=%d",
+				rep.TotalTested, rep.TotalInconclusive)
+		}
+		if rep.Results[0].ReasonCode != "INCONCLUSIVE_CANCELLED" {
+			t.Errorf("expected INCONCLUSIVE_CANCELLED, got: %s", rep.Results[0].ReasonCode)
+		}
+	})
+
+	t.Run("HTTP_429_Rate_Limited_Outcome", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(`{"error":"Too Many Requests"}`))
+		}))
+		defer ts.Close()
+
+		inv := &BackendInventory{
+			Endpoints: []EndpointEntry{
+				{
+					NormalizedURL:  ts.URL + "/rate-limited",
+					Host:           ts.Listener.Addr().String(),
+					HostIdentity:   ts.Listener.Addr().String(),
+					Classification: ClassificationConfirmedReference,
+				},
+			},
+		}
+
+		cfg := DefaultHandoffConfig()
+		cfg.AuthorizedTargets = []string{ts.URL}
+		cfg.Authorization = authApproved
+		cfg.AllowLoopback = true
+
+		rep, err := ExecuteHandoff(context.Background(), inv, cfg)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if rep.TotalInconclusive != 1 {
+			t.Fatalf("expected 1 inconclusive due to rate limiting, got: tested=%d, inconclusive=%d",
+				rep.TotalTested, rep.TotalInconclusive)
+		}
+		if rep.Results[0].ReasonCode != "INCONCLUSIVE_RATE_LIMITED" {
+			t.Errorf("expected INCONCLUSIVE_RATE_LIMITED, got: %s", rep.Results[0].ReasonCode)
+		}
+	})
+
+	t.Run("Accounting_Sums_And_Disposition_Invariants", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/ok":
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{"status":"success"}`))
+			case "/bad":
+				hj, ok := w.(http.Hijacker)
+				if ok {
+					conn, _, _ := hj.Hijack()
+					conn.Close()
+					return
+				}
+				http.Error(w, "server error", http.StatusInternalServerError)
+			case "/slow":
+				time.Sleep(600 * time.Millisecond)
+				w.WriteHeader(http.StatusOK)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer ts.Close()
+
+		// Warm up connection to eliminate TCP dial latency jitter
+		warmResp, _ := http.Get(ts.URL + "/ok")
+		if warmResp != nil {
+			warmResp.Body.Close()
+		}
+
+		inv := &BackendInventory{
+			Endpoints: []EndpointEntry{
+				// 1. Tested
+				{NormalizedURL: ts.URL + "/ok", Host: ts.Listener.Addr().String(), HostIdentity: ts.Listener.Addr().String(), Classification: ClassificationConfirmedReference},
+				// 2. Skipped (out-of-scope)
+				{NormalizedURL: "https://unauthorized.example.com/v1", Host: "unauthorized.example.com", HostIdentity: "unauthorized.example.com", Classification: ClassificationConfirmedReference},
+				// 3. Failed (connection reset/network error)
+				{NormalizedURL: ts.URL + "/bad", Host: ts.Listener.Addr().String(), HostIdentity: ts.Listener.Addr().String(), Classification: ClassificationConfirmedReference},
+				// 4. Inconclusive (timed out)
+				{NormalizedURL: ts.URL + "/slow", Host: ts.Listener.Addr().String(), HostIdentity: ts.Listener.Addr().String(), Classification: ClassificationConfirmedReference},
+			},
+		}
+
+		cfg := DefaultHandoffConfig()
+		cfg.AuthorizedTargets = []string{ts.URL}
+		cfg.Authorization = authApproved
+		cfg.AllowLoopback = true
+		cfg.MaxConcurrency = 1
+		cfg.PerRequestTimeout = 200 * time.Millisecond // /slow sleeps 600ms, reliably timing out
+
+		rep, err := ExecuteHandoff(context.Background(), inv, cfg)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if rep.TotalDiscovered != 4 {
+			t.Errorf("expected TotalDiscovered=4, got %d", rep.TotalDiscovered)
+		}
+		if rep.TotalTested != 1 {
+			t.Errorf("expected TotalTested=1, got %d", rep.TotalTested)
+		}
+		if rep.TotalSkipped != 1 {
+			t.Errorf("expected TotalSkipped=1, got %d", rep.TotalSkipped)
+		}
+		if rep.TotalFailed != 1 {
+			t.Errorf("expected TotalFailed=1, got %d", rep.TotalFailed)
+		}
+		if rep.TotalInconclusive != 1 {
+			t.Errorf("expected TotalInconclusive=1, got %d", rep.TotalInconclusive)
+		}
+
+		sum := rep.TotalTested + rep.TotalSkipped + rep.TotalFailed + rep.TotalInconclusive
+		if sum != rep.TotalDiscovered {
+			t.Fatalf("invariant broken: sum(%d) != TotalDiscovered(%d)", sum, rep.TotalDiscovered)
+		}
+
+		for _, r := range rep.Results {
+			if r.Disposition == DispositionSkipped {
+				if r.RequestDispatched || r.RequestCount != 0 {
+					t.Errorf("skipped endpoint had request dispatched: %+v", r)
+				}
+			}
+		}
+	})
 }

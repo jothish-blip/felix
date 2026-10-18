@@ -8,8 +8,10 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"felix/pkg/api"
@@ -17,6 +19,8 @@ import (
 	"felix/pkg/crawler"
 	"felix/pkg/secrets"
 )
+
+type reqCounterKey struct{}
 
 // EndpointDisposition represents the final assessment outcome for an inventory endpoint.
 type EndpointDisposition string
@@ -64,6 +68,7 @@ type HandoffConfig struct {
 	DryRun               bool
 	UserAgent            string
 	ProgressFunc         func(msg string)
+	Resolver             crawler.Resolver
 }
 
 // DefaultHandoffConfig provides conservative, safe default parameters for backend handoff.
@@ -420,6 +425,7 @@ func ExecuteHandoff(ctx context.Context, inventory *BackendInventory, cfg Handof
 			KeepAlive:       30 * time.Second,
 			AllowLoopback:   cfg.AllowLoopback,
 			AllowPrivateIPs: cfg.AllowPrivateIPs,
+			Resolver:        cfg.Resolver,
 			TLSConfig: &tls.Config{
 				MinVersion: tls.VersionTLS12,
 			},
@@ -470,6 +476,10 @@ func ExecuteHandoff(ctx context.Context, inventory *BackendInventory, cfg Handof
 				// Consume redirect request from budget
 				if allowed, rReason := budget.Acquire(destHost); !allowed {
 					return fmt.Errorf("redirect blocked: %s", rReason)
+				}
+
+				if counter, ok := req.Context().Value(reqCounterKey{}).(*int32); ok && counter != nil {
+					atomic.AddInt32(counter, 1)
 				}
 
 				return nil
@@ -533,20 +543,22 @@ func ExecuteHandoff(ctx context.Context, inventory *BackendInventory, cfg Handof
 
 				reqStart := time.Now().UTC()
 				results[i].StartedAt = &reqStart
-				results[i].RequestDispatched = true
-				results[i].RequestCount = 1
 
 				targetURL := targetEP.NormalizedURL
 
-				// Create safe per-request context
+				var epReqCount int32 = 1
+				// Create safe per-request context with counter attached
 				reqCtx, reqCancel := context.WithTimeout(overallCtx, perReqTimeout)
 				defer reqCancel()
+				reqCtx = context.WithValue(reqCtx, reqCounterKey{}, &epReqCount)
 
 				req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, targetURL, nil)
 				if err != nil {
 					reqEnd := time.Now().UTC()
 					results[i].CompletedAt = &reqEnd
 					results[i].DurationMs = reqEnd.Sub(reqStart).Milliseconds()
+					results[i].RequestDispatched = false
+					results[i].RequestCount = 0
 					results[i].Disposition = DispositionFailed
 					results[i].State = StateFailed
 					results[i].ReasonCode = "REQUEST_CREATION_FAILED"
@@ -554,19 +566,28 @@ func ExecuteHandoff(ctx context.Context, inventory *BackendInventory, cfg Handof
 					return
 				}
 				req.Header.Set("Accept", "*/*")
+				results[i].RequestDispatched = true
 
 				resp, err := apiClient.Do(reqCtx, req)
 				reqEnd := time.Now().UTC()
 				results[i].CompletedAt = &reqEnd
 				results[i].DurationMs = reqEnd.Sub(reqStart).Milliseconds()
+				results[i].RequestCount = int(atomic.LoadInt32(&epReqCount))
 
 				if err != nil {
 					// Handle specific technical error conditions
-					if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					if errors.Is(err, context.Canceled) {
+						results[i].Disposition = DispositionInconclusive
+						results[i].State = StateInconclusive
+						results[i].ReasonCode = "INCONCLUSIVE_CANCELLED"
+						results[i].ReasonMessage = "assessment was cancelled"
+						return
+					}
+					if errors.Is(err, context.DeadlineExceeded) || os.IsTimeout(err) {
 						results[i].Disposition = DispositionInconclusive
 						results[i].State = StateInconclusive
 						results[i].ReasonCode = "INCONCLUSIVE_TIMEOUT"
-						results[i].ReasonMessage = fmt.Sprintf("request timed out or was cancelled: %v", err)
+						results[i].ReasonMessage = fmt.Sprintf("request timed out: %v", err)
 						return
 					}
 					if err == api.ErrRateLimited {
@@ -576,11 +597,49 @@ func ExecuteHandoff(ctx context.Context, inventory *BackendInventory, cfg Handof
 						results[i].ReasonMessage = "target responded with HTTP 429 Too Many Requests"
 						return
 					}
+					if err == api.ErrResponseTooLarge {
+						results[i].Disposition = DispositionInconclusive
+						results[i].State = StateInconclusive
+						results[i].ReasonCode = "INCONCLUSIVE_RESPONSE_TOO_LARGE"
+						results[i].ReasonMessage = "target response exceeded maximum size limit"
+						return
+					}
+					if strings.Contains(err.Error(), "redirect to") || strings.Contains(err.Error(), "redirect blocked") || strings.Contains(err.Error(), "stopped after") {
+						results[i].Disposition = DispositionFailed
+						results[i].State = StateFailed
+						results[i].ReasonCode = "REDIRECT_BLOCKED"
+						results[i].ReasonMessage = secrets.RedactText(err.Error())
+						return
+					}
+					if strings.Contains(err.Error(), "SSRF security refusal") || strings.Contains(err.Error(), "prohibited") {
+						results[i].Disposition = DispositionFailed
+						results[i].State = StateFailed
+						results[i].ReasonCode = "SSRF_BLOCKED"
+						results[i].ReasonMessage = secrets.RedactText(err.Error())
+						return
+					}
+					if strings.Contains(err.Error(), "outside authorized scope") || strings.Contains(err.Error(), "matches exclusion rule") {
+						results[i].RequestDispatched = false
+						results[i].RequestCount = 0
+						results[i].Disposition = DispositionSkipped
+						results[i].State = StateSkipped
+						results[i].ReasonCode = "OUT_OF_SCOPE"
+						results[i].ReasonMessage = secrets.RedactText(err.Error())
+						return
+					}
 
 					results[i].Disposition = DispositionFailed
 					results[i].State = StateFailed
 					results[i].ReasonCode = "NETWORK_ERROR"
 					results[i].ReasonMessage = secrets.RedactText(err.Error())
+					return
+				}
+
+				if resp != nil && resp.Truncated {
+					results[i].Disposition = DispositionInconclusive
+					results[i].State = StateInconclusive
+					results[i].ReasonCode = "INCONCLUSIVE_RESPONSE_TOO_LARGE"
+					results[i].ReasonMessage = "target response exceeded maximum size limit"
 					return
 				}
 
