@@ -391,9 +391,6 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 		identMap[id.Alias] = id
 	}
 
-	identA := actx.Identities[0]
-	identB := actx.Identities[1]
-
 	testIdx := 1
 	for _, ep := range actx.Endpoints {
 		isMutation := ep.IsStateChanging || isStateChangingMethod(ep.Method)
@@ -413,18 +410,30 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 				}
 			}
 
+			cat := CategoryBOLAUserRead
+			if obj.TenantID != "" {
+				cat = CategoryBOLATenantRead
+			}
+			if ep.IsCollection {
+				cat = CategoryBOLACollection
+			}
+			if isMutation {
+				cat = CategoryBOLAWriteMutation
+			}
+			meta := CategoryMetadata[cat]
+
 			// Ownership mapping check
 			if obj.OwnerIdentity == "" {
 				r := Result{
 					ID:                uuid.New().String(),
 					AssessmentID:      actx.AssessmentID,
 					ExecutionID:       actx.ExecutionID,
-					Category:          CategoryBOLAUserRead,
+					Category:          cat,
 					VulnCode:          "BOLA-MISSING-OWNERSHIP",
 					TestID:            fmt.Sprintf("BOLA-TEST-%03d", testIdx),
 					TestName:          fmt.Sprintf("Ownership Mapping Validation for %s", obj.ID),
-					OWASPRef:          "API1:2023",
-					CWERef:            "CWE-639",
+					OWASPRef:          meta.OWASP,
+					CWERef:            meta.CWE,
 					Endpoint:          ep.PathPattern,
 					Method:            ep.Method,
 					ObjectID:          obj.ID,
@@ -441,27 +450,67 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 
 			owner, hasOwner := identMap[obj.OwnerIdentity]
 			if !hasOwner {
-				// Default to identB if owner alias is not explicitly keyed
-				owner = identB
-			}
-			// Non-owner is the other identity
-			nonOwner := identA
-			if strings.EqualFold(nonOwner.Alias, owner.Alias) {
-				nonOwner = identB
+				r := Result{
+					ID:                uuid.New().String(),
+					AssessmentID:      actx.AssessmentID,
+					ExecutionID:       actx.ExecutionID,
+					Category:          cat,
+					VulnCode:          "BOLA-UNRESOLVED-OWNER",
+					TestID:            fmt.Sprintf("BOLA-TEST-%03d", testIdx),
+					TestName:          fmt.Sprintf("Owner Identity Resolution for %s", obj.ID),
+					OWASPRef:          meta.OWASP,
+					CWERef:            meta.CWE,
+					Endpoint:          ep.PathPattern,
+					Method:            ep.Method,
+					ObjectID:          obj.ID,
+					OwnerAlias:        obj.OwnerIdentity,
+					VerificationState: StateInconclusive,
+					Severity:          "INFO",
+					Confidence:        "LOW",
+					EvidenceSummary:   fmt.Sprintf("Configured owner %q not found in assessment identities; ownership cannot be established for object %s", obj.OwnerIdentity, obj.ID),
+					CreatedAt:         time.Now().UTC(),
+				}
+				results = append(results, r)
+				testIdx++
+				continue
 			}
 
-			cat := CategoryBOLAUserRead
-			if obj.TenantID != "" {
-				cat = CategoryBOLATenantRead
+			// Find distinct non-owner identity
+			var nonOwner TestIdentity
+			var hasNonOwner bool
+			for _, id := range actx.Identities {
+				if !strings.EqualFold(id.Alias, owner.Alias) {
+					nonOwner = id
+					hasNonOwner = true
+					break
+				}
 			}
-			if ep.IsCollection {
-				cat = CategoryBOLACollection
-			}
-			if isMutation {
-				cat = CategoryBOLAWriteMutation
+			if !hasNonOwner || !AreIdentitiesDistinct(owner, nonOwner) {
+				r := Result{
+					ID:                uuid.New().String(),
+					AssessmentID:      actx.AssessmentID,
+					ExecutionID:       actx.ExecutionID,
+					Category:          cat,
+					VulnCode:          "BOLA-NO-NON-OWNER",
+					TestID:            fmt.Sprintf("BOLA-TEST-%03d", testIdx),
+					TestName:          fmt.Sprintf("Non-Owner Identity Resolution for %s", obj.ID),
+					OWASPRef:          meta.OWASP,
+					CWERef:            meta.CWE,
+					Endpoint:          ep.PathPattern,
+					Method:            ep.Method,
+					ObjectID:          obj.ID,
+					OwnerAlias:        owner.Alias,
+					VerificationState: StateInconclusive,
+					Severity:          "INFO",
+					Confidence:        "LOW",
+					EvidenceSummary:   fmt.Sprintf("No distinct non-owner identity available to test cross-principal access for object %s", obj.ID),
+					CreatedAt:         time.Now().UTC(),
+				}
+				results = append(results, r)
+				testIdx++
+				continue
 			}
 
-			meta := CategoryMetadata[cat]
 			targetURL := buildTargetURL(actx.BaseURL, ep, obj)
 
 			// Validate URL scope before dispatch

@@ -4278,7 +4278,11 @@ func runAssessmentBOLA(args []string) int {
 	headersA := make(map[string]string)
 	cookiesA := make(map[string]string)
 	if userAToken != "" {
-		headersA["Authorization"] = "Bearer " + userAToken
+		tokenVal := strings.TrimSpace(userAToken)
+		if !strings.HasPrefix(strings.ToLower(tokenVal), "bearer ") {
+			tokenVal = "Bearer " + tokenVal
+		}
+		headersA["Authorization"] = tokenVal
 	}
 	if userACookie != "" {
 		cParts := strings.SplitN(userACookie, "=", 2)
@@ -4292,7 +4296,11 @@ func runAssessmentBOLA(args []string) int {
 	headersB := make(map[string]string)
 	cookiesB := make(map[string]string)
 	if userBToken != "" {
-		headersB["Authorization"] = "Bearer " + userBToken
+		tokenVal := strings.TrimSpace(userBToken)
+		if !strings.HasPrefix(strings.ToLower(tokenVal), "bearer ") {
+			tokenVal = "Bearer " + tokenVal
+		}
+		headersB["Authorization"] = tokenVal
 	}
 	if userBCookie != "" {
 		cParts := strings.SplitN(userBCookie, "=", 2)
@@ -4303,7 +4311,7 @@ func runAssessmentBOLA(args []string) int {
 		}
 	}
 
-	if len(headersA) > 0 || len(cookiesA) > 0 {
+	if len(headersA) > 0 || len(cookiesA) > 0 || userARole != "" || tenantAFlag != "" {
 		identities = append(identities, bola.TestIdentity{
 			Alias:    "user_a",
 			Role:     userARole,
@@ -4312,7 +4320,7 @@ func runAssessmentBOLA(args []string) int {
 			Cookies:  cookiesA,
 		})
 	}
-	if len(headersB) > 0 || len(cookiesB) > 0 {
+	if len(headersB) > 0 || len(cookiesB) > 0 || userBRole != "" || tenantBFlag != "" {
 		identities = append(identities, bola.TestIdentity{
 			Alias:    "user_b",
 			Role:     userBRole,

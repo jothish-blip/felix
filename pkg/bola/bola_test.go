@@ -912,3 +912,151 @@ func TestBOLA_TenantIsolation_CrossTenantLeakageVerified(t *testing.T) {
 		t.Errorf("expected VERIFIED for cross-tenant leakage, got %s", results[0].VerificationState)
 	}
 }
+
+// 25. Unresolved owner identity produces an inconclusive result without assuming arbitrary owner
+func TestBOLA_UnresolvedOwner_Inconclusive(t *testing.T) {
+	engine := NewEngine(nil, DefaultConfig())
+	actx := &AssessmentContext{
+		AssessmentID:  "asm-01",
+		ExecutionID:   "exec-01",
+		BaseURL:       "http://127.0.0.1:8080",
+		Authorization: testApprovedAuth(),
+		Endpoints:     []EndpointTemplate{{Method: "GET", PathPattern: "/api/users/{id}"}},
+		// Owner is alice, but identities only define user_a and user_b
+		Objects: []ObjectIdentifier{{ID: "usr-9988", Location: "path", OwnerIdentity: "alice"}},
+		Identities: []TestIdentity{
+			{Alias: "user_a", Headers: map[string]string{"Authorization": "Bearer token_user_a"}},
+			{Alias: "user_b", Headers: map[string]string{"Authorization": "Bearer token_user_b"}},
+		},
+	}
+
+	results, _, err := engine.Assess(context.Background(), actx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].VerificationState != StateInconclusive {
+		t.Errorf("expected INCONCLUSIVE for unresolved owner, got %s", results[0].VerificationState)
+	}
+	if !strings.Contains(results[0].EvidenceSummary, "not found in assessment identities") {
+		t.Errorf("expected evidence to state owner was not found, got %s", results[0].EvidenceSummary)
+	}
+}
+
+// 26. Object ID reference without matching baseline payload produces CANDIDATE, not VERIFIED
+func TestBOLA_UnverifiedObjectIDReference_Candidate(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if strings.Contains(r.Header.Get("Authorization"), "token_user_a") {
+			// Non-owner receives 200 OK mentioning the ID, but payload is completely different from owner baseline
+			fmt.Fprint(w, `{"error_message":"item usr-9988 is restricted under current policy"}`)
+			return
+		}
+		// Owner baseline receives protected object
+		fmt.Fprint(w, `{"id":"usr-9988","owner":"user_b","records":["confidential_rec1"]}`)
+	}))
+	defer ts.Close()
+
+	engine := NewEngine(nil, DefaultConfig())
+	actx := &AssessmentContext{
+		AssessmentID:  "asm-01",
+		ExecutionID:   "exec-01",
+		BaseURL:       ts.URL,
+		Authorization: testApprovedAuth(),
+		Endpoints:     []EndpointTemplate{{Method: "GET", PathPattern: "/api/users/{id}"}},
+		Objects:       []ObjectIdentifier{{ID: "usr-9988", Location: "path", OwnerIdentity: "user_b"}},
+		Identities: []TestIdentity{
+			{Alias: "user_a", Headers: map[string]string{"Authorization": "Bearer token_user_a"}},
+			{Alias: "user_b", Headers: map[string]string{"Authorization": "Bearer token_user_b"}},
+		},
+	}
+
+	results, _, err := engine.Assess(context.Background(), actx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].VerificationState != StateCandidate {
+		t.Errorf("expected CANDIDATE when object ID is referenced without matching baseline payload, got %s", results[0].VerificationState)
+	}
+}
+
+// 27. Distinct tokens and cookies sent independently with no bleed across requests
+func TestBOLA_DistinctTokensAndCookies_NoBleed(t *testing.T) {
+	var ownerAuth, ownerCookie string
+	var crossAuth, crossCookie string
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		auth := r.Header.Get("Authorization")
+		c, _ := r.Cookie("session_token")
+
+		if strings.Contains(auth, "token_owner_b") {
+			ownerAuth = auth
+			if c != nil {
+				ownerCookie = c.Value
+			}
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"id":"usr-9988","owner":"user_b","data":"owner_profile"}`)
+			return
+		}
+		if strings.Contains(auth, "token_accessor_a") {
+			crossAuth = auth
+			if c != nil {
+				crossCookie = c.Value
+			}
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, `{"error":"forbidden"}`)
+			return
+		}
+
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer ts.Close()
+
+	engine := NewEngine(nil, DefaultConfig())
+	actx := &AssessmentContext{
+		AssessmentID:  "asm-01",
+		ExecutionID:   "exec-01",
+		BaseURL:       ts.URL,
+		Authorization: testApprovedAuth(),
+		Endpoints:     []EndpointTemplate{{Method: "GET", PathPattern: "/api/users/{id}"}},
+		Objects:       []ObjectIdentifier{{ID: "usr-9988", Location: "path", OwnerIdentity: "user_b"}},
+		Identities: []TestIdentity{
+			{
+				Alias:   "user_a",
+				Headers: map[string]string{"Authorization": "Bearer token_accessor_a"},
+				Cookies: map[string]string{"session_token": "cookie_accessor_a"},
+			},
+			{
+				Alias:   "user_b",
+				Headers: map[string]string{"Authorization": "Bearer token_owner_b"},
+				Cookies: map[string]string{"session_token": "cookie_owner_b"},
+			},
+		},
+	}
+
+	results, _, err := engine.Assess(context.Background(), actx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].VerificationState != StateNotVulnerable {
+		t.Errorf("expected NOT_VULNERABLE, got %s", results[0].VerificationState)
+	}
+
+	// Verify headers and cookies were strictly separated
+	if ownerAuth != "Bearer token_owner_b" || ownerCookie != "cookie_owner_b" {
+		t.Errorf("owner did not send expected credentials: auth=%q, cookie=%q", ownerAuth, ownerCookie)
+	}
+	if crossAuth != "Bearer token_accessor_a" || crossCookie != "cookie_accessor_a" {
+		t.Errorf("accessor did not send expected credentials: auth=%q, cookie=%q", crossAuth, crossCookie)
+	}
+}

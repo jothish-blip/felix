@@ -236,7 +236,7 @@ func CompareRead(baseline, cross ResponseData, obj ObjectIdentifier, ownerAlias,
 		baseBytes, _ := json.Marshal(cleanBase)
 		crossBytes, _ := json.Marshal(cleanCross)
 
-		// If normalized payloads match and contain the object ID -> VERIFIED BOLA!
+		// If normalized payloads match and contain the object ID or designated protected data -> VERIFIED BOLA!
 		if bytes.Equal(baseBytes, crossBytes) && (containsObjectID || containsProtectedData) {
 			details["match_type"] = "exact_normalized_json_match"
 			return ComparisonResult{
@@ -248,26 +248,60 @@ func CompareRead(baseline, cross ResponseData, obj ObjectIdentifier, ownerAlias,
 			}
 		}
 
-		// Check if cross response contains the core object data fields from baseline
-		if containsObjectID || containsProtectedData {
-			details["match_type"] = "partial_protected_object_match"
+		// If designated protected data marker is explicitly exposed in the non-owner response -> VERIFIED BOLA!
+		if containsProtectedData {
+			details["match_type"] = "designated_protected_data_exposure"
 			return ComparisonResult{
 				State:           StateVerified,
 				Severity:        "HIGH",
 				Confidence:      "CONFIRMED",
-				EvidenceSummary: fmt.Sprintf("BOLA verified: non-owner %s received object %s containing owner %s's protected data", accessorAlias, obj.ID, ownerAlias),
+				EvidenceSummary: fmt.Sprintf("BOLA verified: non-owner %s received object %s containing owner %s's designated protected marker data", accessorAlias, obj.ID, ownerAlias),
+				EvidenceDetails: details,
+			}
+		}
+
+		// If object identifier is mentioned but payload does not match owner baseline or lack protected data proof -> CANDIDATE
+		if containsObjectID {
+			details["match_type"] = "unverified_object_id_reference"
+			return ComparisonResult{
+				State:           StateCandidate,
+				Severity:        "LOW",
+				Confidence:      "LOW",
+				EvidenceSummary: fmt.Sprintf("Non-owner received status %d referencing object %s, but payload did not match owner's protected baseline; candidate for review", cross.StatusCode, obj.ID),
 				EvidenceDetails: details,
 			}
 		}
 	} else {
-		// Non-JSON responses
-		if containsObjectID || containsProtectedData {
-			details["match_type"] = "raw_object_marker_match"
+		// Non-JSON responses: require exact payload match with object ID/protected data or explicit protected data
+		if bytes.Equal(baseline.Body, cross.Body) && (containsObjectID || containsProtectedData) {
+			details["match_type"] = "exact_raw_payload_match"
 			return ComparisonResult{
 				State:           StateVerified,
 				Severity:        "HIGH",
 				Confidence:      "CONFIRMED",
-				EvidenceSummary: fmt.Sprintf("BOLA verified: non-owner %s received payload containing owner %s's object identifier %s", accessorAlias, ownerAlias, obj.ID),
+				EvidenceSummary: fmt.Sprintf("BOLA verified: non-owner %s received identical raw object representation for %s owned by %s", accessorAlias, obj.ID, ownerAlias),
+				EvidenceDetails: details,
+			}
+		}
+
+		if containsProtectedData {
+			details["match_type"] = "designated_protected_data_exposure"
+			return ComparisonResult{
+				State:           StateVerified,
+				Severity:        "HIGH",
+				Confidence:      "CONFIRMED",
+				EvidenceSummary: fmt.Sprintf("BOLA verified: non-owner %s received designated protected data for object %s", accessorAlias, obj.ID),
+				EvidenceDetails: details,
+			}
+		}
+
+		if containsObjectID {
+			details["match_type"] = "unverified_object_id_reference"
+			return ComparisonResult{
+				State:           StateCandidate,
+				Severity:        "LOW",
+				Confidence:      "LOW",
+				EvidenceSummary: fmt.Sprintf("Non-owner received non-JSON response referencing object %s, but data does not match baseline; candidate for review", obj.ID),
 				EvidenceDetails: details,
 			}
 		}
