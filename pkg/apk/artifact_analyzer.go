@@ -13,6 +13,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -53,7 +54,7 @@ var (
 	jwtTokenRegex       = regexp.MustCompile(`\b(ey[A-Za-z0-9_-]{10,}\.ey[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})\b`)
 	dbURIRegex          = regexp.MustCompile(`(?i)\b(mongodb(?:\+srv)?|redis|rediss|postgres(?:ql)?|mysql)://([^:/\s?#@]+):([^/\s?#@]+)@([a-zA-Z0-9_.-]+(?::[0-9]+)?)(?:/([^?\s#]*))?`)
 	redisTokenURIRegex  = regexp.MustCompile(`(?i)\b(rediss?://):?([^:/\s?#@]+)@([a-zA-Z0-9_.-]+(?::[0-9]+)?)(?:/([^?\s#]*))?`)
-	httpURLRegex        = regexp.MustCompile(`(?i)\bhttps?://[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?::[0-9]+)?(?:/[a-zA-Z0-9_.~!$&'()*+,;=:@%/-]*)?`)
+	httpURLRegex        = regexp.MustCompile(`(?i)\bhttps?://(?:[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?::[0-9]+)?(?:/[a-zA-Z0-9_.~!$&'()*+,;=:@%/-]*)?`)
 	versionedRouteRegex = regexp.MustCompile(`^/(?:api/)?v[0-9]+(?:/[a-zA-Z0-9_.~-]+)+$`)
 	graphqlQueryRegex   = regexp.MustCompile(`(?s)\b(?:query|mutation|subscription)\s*(?:[A-Za-z0-9_]+\s*)?\{.*?\}`)
 
@@ -277,7 +278,36 @@ func AnalyzeArtifacts(ctx context.Context, ws *Workspace, limits Limits) (*Artif
 	}
 	result.FindingsCount = len(result.Findings)
 
+	// Sort findings deterministically (by severity descending, then Title, then ID)
+	sort.Slice(result.Findings, func(i, j int) bool {
+		rI := severityRank(result.Findings[i].Severity)
+		rJ := severityRank(result.Findings[j].Severity)
+		if rI != rJ {
+			return rI < rJ
+		}
+		if result.Findings[i].Title != result.Findings[j].Title {
+			return result.Findings[i].Title < result.Findings[j].Title
+		}
+		return result.Findings[i].ID < result.Findings[j].ID
+	})
+	sort.Strings(result.ConfigsAnalyzed)
+
 	return result, nil
+}
+
+func severityRank(s string) int {
+	switch strings.ToUpper(s) {
+	case report.SeverityCritical:
+		return 1
+	case report.SeverityHigh:
+		return 2
+	case report.SeverityMedium:
+		return 3
+	case report.SeverityLow:
+		return 4
+	default:
+		return 5
+	}
 }
 
 // inspectStringForIntelligence scans a single string token for secrets, endpoints, services, or GraphQL patterns.
@@ -1011,6 +1041,7 @@ func discoverDEXFiles(ws *Workspace) []string {
 	})
 
 	if len(results) > 0 {
+		sort.Strings(results)
 		return results
 	}
 
@@ -1033,6 +1064,7 @@ func discoverDEXFiles(ws *Workspace) []string {
 		}
 	}
 
+	sort.Strings(results)
 	return results
 }
 

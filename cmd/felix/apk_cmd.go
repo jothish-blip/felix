@@ -33,6 +33,7 @@ func runAPK(args []string) int {
 		authConfirm      bool
 		allowInferred    bool
 		allowThirdParty  bool
+		allowLoopback    bool
 		maxRequests      int
 		maxPerHost       int
 		rateLimit        float64
@@ -188,6 +189,10 @@ func runAPK(args []string) int {
 		}
 		if arg == "--allow-third-party" {
 			allowThirdParty = true
+			continue
+		}
+		if arg == "--allow-loopback" {
+			allowLoopback = true
 			continue
 		}
 		if arg == "--dry-run" {
@@ -432,6 +437,7 @@ func runAPK(args []string) int {
 		handoffCfg.Authorization = authRecord
 		handoffCfg.AllowInferredRoutes = allowInferred
 		handoffCfg.AllowThirdParties = allowThirdParty
+		handoffCfg.AllowLoopback = allowLoopback
 		handoffCfg.DryRun = dryRun
 		if maxRequests > 0 {
 			handoffCfg.MaxRequestsTotal = maxRequests
@@ -747,6 +753,7 @@ func printAPKHelp() {
 	fmt.Println("  --auth-confirm                Certify explicit authorization to conduct active backend assessment")
 	fmt.Println("  --allow-inferred              Permit testing of resolved inferred routes (default: false)")
 	fmt.Println("  --allow-third-party           Permit testing of third-party domains (default: false)")
+	fmt.Println("  --allow-loopback              Permit testing against loopback/localhost (testing only; default: false)")
 	fmt.Println("  --dry-run                     Plan candidates and dispositions without sending active network traffic")
 	fmt.Println("  --report [file]               Generate standalone mobile audit HTML report (default: mobile_audit.html)")
 	fmt.Println("  --html [file]                 Alias for --report")

@@ -6,9 +6,12 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -836,5 +839,134 @@ func TestCLI_APK_Report_WithAssess_DryRun(t *testing.T) {
 	}
 	if !strings.Contains(s, "Dry-Run Plan") {
 		t.Errorf("expected dry-run badge in report")
+	}
+}
+
+func TestCLI_APK_EndToEnd_FullWorkflow(t *testing.T) {
+	// Setup local mock server for authorized target
+	var serverRequests int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&serverRequests, 1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"healthy","service":"api"}`))
+	}))
+	defer ts.Close()
+
+	// 1. Create a rich synthetic APK containing manifest, DEX with target URL + secret + service indicator, and google-services.json
+	dexStrings := []string{
+		ts.URL + "/api/v1/health",
+		"https://unauthorized.evilcorp.com/api/v1/leaks",
+		"AKIAIOSFODNN7EXAMPLE",
+	}
+	apkPath := createCLIArtifactAPK(t, dexStrings)
+
+	// Stage 1: Static analysis only (zero requests to mock server)
+	code1, out1 := captureAPKOutput(func() int {
+		return runAPK([]string{"--analyze", apkPath})
+	})
+	if code1 != 0 {
+		t.Fatalf("expected exit code 0 for --analyze, got %d, out:\n%s", code1, out1)
+	}
+	if atomic.LoadInt32(&serverRequests) != 0 {
+		t.Errorf("static analysis must never send network requests, got %d requests", atomic.LoadInt32(&serverRequests))
+	}
+	if !strings.Contains(out1, "Active Assessment:       Disabled (offline static analysis only") {
+		t.Errorf("expected static analysis offline notice in output")
+	}
+
+	// Stage 2: Repeat static analysis to verify idempotency/determinism of results
+	code2, out2 := captureAPKOutput(func() int {
+		return runAPK([]string{"--analyze", apkPath})
+	})
+	if code2 != 0 {
+		t.Fatalf("expected exit code 0 on repeat run, got %d", code2)
+	}
+	if out1 != out2 {
+		t.Errorf("static analysis output should be deterministic across repeat executions on same APK")
+	}
+
+	// Stage 3: Authorized active assessment and mobile_audit.html report generation
+	reportFile := filepath.Join(t.TempDir(), "e2e_mobile_audit.html")
+	code3, out3 := captureAPKOutput(func() int {
+		return runAPK([]string{
+			"--json",
+			"--assess",
+			"--target", ts.URL,
+			"--auth-confirm",
+			"--authorizing-party", "E2E Lead Auditor",
+			"--allow-loopback",
+			"--report", reportFile,
+			apkPath,
+		})
+	})
+	if code3 != 0 {
+		t.Fatalf("expected exit code 0 for authorized assessment, got %d, out:\n%s", code3, out3)
+	}
+
+	// Verify server received exactly 1 request for in-scope target, while evilcorp was skipped
+	if atomic.LoadInt32(&serverRequests) != 1 {
+		t.Errorf("expected exactly 1 request dispatched to authorized server, got %d", atomic.LoadInt32(&serverRequests))
+	}
+
+	// Parse JSON output
+	var jsonRes map[string]interface{}
+	if err := json.Unmarshal([]byte(out3), &jsonRes); err != nil {
+		t.Fatalf("failed to parse JSON response: %v, raw:\n%s", err, out3)
+	}
+
+	if jsonRes["status"] != "PASS" {
+		t.Errorf("expected status PASS, got %v", jsonRes["status"])
+	}
+	if jsonRes["report_file"] != reportFile {
+		t.Errorf("expected report_file %q, got %v", reportFile, jsonRes["report_file"])
+	}
+
+	handoff, ok := jsonRes["backend_handoff"].(map[string]interface{})
+	if !ok || handoff == nil {
+		t.Fatalf("expected backend_handoff object in json output")
+	}
+	if handoff["total_tested"].(float64) != 1 {
+		t.Errorf("expected 1 tested endpoint, got %v", handoff["total_tested"])
+	}
+	if handoff["total_skipped"].(float64) < 1 {
+		t.Errorf("expected at least 1 skipped endpoint (unauthorized evilcorp), got %v", handoff["total_skipped"])
+	}
+
+	// Verify generated HTML report exists and contains all required sections
+	htmlBytes, err := os.ReadFile(reportFile)
+	if err != nil {
+		t.Fatalf("failed to read generated HTML report: %v", err)
+	}
+	htmlStr := string(htmlBytes)
+
+	// Validate presence of 8 key report sections
+	sections := []string{
+		"FELIX Mobile Security Assessment Report",
+		"APK Package Metadata",
+		"Security Findings",
+		"Embedded Service & Infrastructure Indicators",
+		"Backend Endpoint & Host Inventory",
+		"Authorized Backend Assessment Results",
+		"Actionable Remediation Guidance",
+		"Analysis Scope, Methodology & Limitations",
+	}
+	for _, sec := range sections {
+		if !strings.Contains(htmlStr, sec) {
+			t.Errorf("missing section in generated HTML report: %q", sec)
+		}
+	}
+
+	// Verify active test status and HTTP 200 recorded in report
+	if !strings.Contains(htmlStr, "HTTP 200") {
+		t.Errorf("expected HTTP 200 outcome in report")
+	}
+	if !strings.Contains(htmlStr, "Authorized Assessment Completed") {
+		t.Errorf("expected Authorized Assessment Completed badge in report")
+	}
+
+	// Verify raw secrets are redacted in the generated HTML
+	if strings.Contains(htmlStr, "AKIAIOSFODNN7EXAMPLE") {
+		t.Errorf("CRITICAL: raw AWS secret leaked into generated HTML report!")
 	}
 }
