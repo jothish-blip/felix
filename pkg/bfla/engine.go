@@ -230,10 +230,14 @@ func (e *Engine) Plan(ctx context.Context, actx *AssessmentContext) (*TestPlan, 
 			pt.Status = PlanBlocked
 			pt.BlockedReason = "Target endpoint is excluded by assessment scope policy"
 			plan.BlockedTests++
-		} else if pol.IsStateChanging && !actx.AllowStateChangingTests {
+		} else if (pol.IsStateChanging || pol.Category == CategoryBFLAWriteMutation) && !actx.AllowStateChangingTests {
 			pt.Status = PlanSkipped
 			pt.BlockedReason = "State-changing function tests require explicit --allow-state-changing opt-in"
 			plan.StateChangingTests++
+		} else if (pol.IsStateChanging || pol.Category == CategoryBFLAWriteMutation) && !actx.SyntheticFixture {
+			pt.Status = PlanBlocked
+			pt.BlockedReason = "State-changing function tests are restricted to designated synthetic fixtures or isolated test environments"
+			plan.BlockedTests++
 		} else if testedIdent == nil {
 			pt.Status = PlanBlocked
 			pt.BlockedReason = "No distinct lower-privilege identity available to test function restriction"
@@ -334,11 +338,18 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 			continue
 		}
 
-		// State changing opt-in check
-		if pol.IsStateChanging && !actx.AllowStateChangingTests {
-			res := makeSkippedResult(actx, pol, "State-changing test skipped: requires explicit --allow-state-changing")
-			results = append(results, res)
-			continue
+		// State changing & write mutation check
+		if pol.IsStateChanging || pol.Category == CategoryBFLAWriteMutation {
+			if !actx.AllowStateChangingTests {
+				res := makeSkippedResult(actx, pol, "State-changing test blocked: requires explicit --allow-state-changing opt-in")
+				results = append(results, res)
+				continue
+			}
+			if !actx.SyntheticFixture {
+				res := makeSkippedResult(actx, pol, "State-changing test blocked: write mutations are restricted to designated synthetic fixtures or isolated test environments (SyntheticFixture required)")
+				results = append(results, res)
+				continue
+			}
 		}
 
 		// Check for distinct identities
@@ -422,6 +433,128 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 				continue
 			}
 			baselineResp = baseData
+		}
+
+		// Special Handling for CategoryBFLAMethodBypass
+		if pol.Category == CategoryBFLAMethodBypass {
+			// Step B1: Test Primary Method (Restricted Role)
+			primaryResp, err := e.executeRequest(ctx, client, pol.Method, fullURL, pol.Payload, testedIdent)
+			if err != nil {
+				res := Result{
+					ID:                uuid.New().String(),
+					AssessmentID:      actx.AssessmentID,
+					ExecutionID:       actx.ExecutionID,
+					Category:          pol.Category,
+					VulnCode:          string(pol.Category),
+					TestID:            fmt.Sprintf("bfla-%s", pol.FunctionID),
+					TestName:          pol.Name,
+					OWASPRef:          CategoryMetadata[pol.Category].OWASP,
+					CWERef:            CategoryMetadata[pol.Category].CWE,
+					Endpoint:          pol.Path,
+					Method:            pol.Method,
+					RequiredRole:      allowedIdent.Role,
+					AccessorRole:      testedIdent.Role,
+					AccessorAlias:     testedIdent.Alias,
+					VerificationState: StateInconclusive,
+					Severity:          "INFO",
+					Confidence:        "LOW",
+					EvidenceSummary:   fmt.Sprintf("Primary method %s test request for role %s failed: %v", pol.Method, testedIdent.Role, err),
+					CreatedAt:         time.Now().UTC(),
+				}
+				results = append(results, res)
+				continue
+			}
+
+			// Check if primary method was denied
+			isPrimaryDenied := primaryResp.StatusCode == http.StatusUnauthorized ||
+				primaryResp.StatusCode == http.StatusForbidden ||
+				primaryResp.StatusCode == http.StatusNotFound ||
+				primaryResp.StatusCode == http.StatusMethodNotAllowed ||
+				IsHTMLOrLoginPage(primaryResp) ||
+				IsGenericErrorJSON(primaryResp.Body)
+
+			if isPrimaryDenied {
+				altMethods := pol.AlternateMethods
+				if len(altMethods) == 0 {
+					altMethods = defaultAlternateMethods(pol.Method)
+				}
+
+				var bestComp *ComparisonResult
+				var bestAltMethod string
+				var bestAltStatus int
+				writeAttempted := false
+
+				for _, altM := range altMethods {
+					if ctx.Err() != nil {
+						return nil, nil, ctx.Err()
+					}
+					// If alternate method is a write method:
+					if isWriteMethod(altM) {
+						if writeAttempted {
+							// Inconclusive or failed attempt does not trigger automatic retry using another write method
+							continue
+						}
+						if !actx.AllowStateChangingTests || !actx.SyntheticFixture {
+							// Block state-changing write alternate method without explicit opt-in and synthetic fixture
+							continue
+						}
+						writeAttempted = true
+					}
+
+					altResp, err := e.executeRequest(ctx, client, altM, fullURL, pol.Payload, testedIdent)
+					if err != nil {
+						continue
+					}
+
+					comp := CompareMethodBypass(primaryResp, altResp, pol, allowedIdent.Role, testedIdent.Role, testedIdent.Alias, altM)
+					if comp.State == StateVerified {
+						bestComp = &comp
+						bestAltMethod = altM
+						bestAltStatus = altResp.StatusCode
+						break
+					}
+					if comp.State == StateCandidate && (bestComp == nil || bestComp.State != StateCandidate) {
+						bestComp = &comp
+						bestAltMethod = altM
+						bestAltStatus = altResp.StatusCode
+					} else if bestComp == nil {
+						bestComp = &comp
+						bestAltMethod = altM
+						bestAltStatus = altResp.StatusCode
+					}
+				}
+
+				if bestComp != nil {
+					res := Result{
+						ID:                uuid.New().String(),
+						AssessmentID:      actx.AssessmentID,
+						ExecutionID:       actx.ExecutionID,
+						Category:          pol.Category,
+						VulnCode:          string(pol.Category),
+						TestID:            fmt.Sprintf("bfla-%s", pol.FunctionID),
+						TestName:          pol.Name,
+						OWASPRef:          CategoryMetadata[pol.Category].OWASP,
+						CWERef:            CategoryMetadata[pol.Category].CWE,
+						Endpoint:          pol.Path,
+						Method:            bestAltMethod,
+						RequiredRole:      allowedIdent.Role,
+						AccessorRole:      testedIdent.Role,
+						AccessorAlias:     testedIdent.Alias,
+						VerificationState: bestComp.State,
+						Severity:          bestComp.Severity,
+						Confidence:        bestComp.Confidence,
+						ObservedStatus:    bestAltStatus,
+						EvidenceSummary:   bestComp.EvidenceSummary,
+						EvidenceDetails:   bestComp.EvidenceDetails,
+						CreatedAt:         time.Now().UTC(),
+					}
+					if bestComp.State == StateVerified || bestComp.State == StateCandidate {
+						res.Finding = buildFinding(res, pol, *bestComp, fullURL)
+					}
+					results = append(results, res)
+					continue
+				}
+			}
 		}
 
 		// Step B: Lower-Privilege Test Request (Restricted Role)
@@ -818,4 +951,25 @@ func DefaultIdentities() []TestIdentity {
 			Headers:        map[string]string{"Authorization": "Bearer token_user_synthetic"},
 		},
 	}
+}
+
+func defaultAlternateMethods(method string) []string {
+	m := strings.ToUpper(strings.TrimSpace(method))
+	switch m {
+	case "POST":
+		return []string{"GET", "PUT"}
+	case "GET":
+		return []string{"POST", "PUT"}
+	case "PUT":
+		return []string{"POST", "GET"}
+	case "DELETE":
+		return []string{"POST", "GET"}
+	default:
+		return []string{"GET", "POST"}
+	}
+}
+
+func isWriteMethod(method string) bool {
+	m := strings.ToUpper(strings.TrimSpace(method))
+	return m == "POST" || m == "PUT" || m == "PATCH" || m == "DELETE"
 }

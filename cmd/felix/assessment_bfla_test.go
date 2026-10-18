@@ -34,6 +34,7 @@ func TestCLI_AssessmentBFLA_Help(t *testing.T) {
 		"--admin-role",
 		"--user-role",
 		"--allow-state-changing",
+		"--synthetic-fixture",
 		"--max-requests",
 	}
 	for _, exp := range expectedStrings {

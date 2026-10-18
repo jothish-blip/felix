@@ -336,3 +336,127 @@ func CompareFunctionAccess(baseline, testResp ResponseData, policy FunctionPolic
 		EvidenceDetails: details,
 	}
 }
+
+// CompareMethodBypass evaluates whether an alternate HTTP method bypassed authorization after a primary method was denied.
+func CompareMethodBypass(primaryResp, altResp ResponseData, policy FunctionPolicy, allowedRole, testedRole, testedAlias, altMethod string) ComparisonResult {
+	details := make(map[string]string)
+	details["policy_id"] = policy.FunctionID
+	details["endpoint"] = policy.Path
+	details["primary_method"] = policy.Method
+	details["alternate_method"] = altMethod
+	details["allowed_role"] = allowedRole
+	details["tested_role"] = testedRole
+	details["tested_alias"] = testedAlias
+	details["primary_status"] = fmt.Sprintf("%d", primaryResp.StatusCode)
+	details["alternate_status"] = fmt.Sprintf("%d", altResp.StatusCode)
+
+	// If alternate method was denied with 401, 403, 404, or 405 -> authorization consistently enforced
+	if altResp.StatusCode == http.StatusUnauthorized || altResp.StatusCode == http.StatusForbidden ||
+		altResp.StatusCode == http.StatusNotFound || altResp.StatusCode == http.StatusMethodNotAllowed {
+		return ComparisonResult{
+			State:           StateNotVulnerable,
+			Severity:        "INFO",
+			Confidence:      "CONFIRMED",
+			EvidenceSummary: fmt.Sprintf("Authorization consistently enforced; primary method %s denied (HTTP %d) and alternate method %s denied (HTTP %d)", policy.Method, primaryResp.StatusCode, altMethod, altResp.StatusCode),
+			EvidenceDetails: details,
+		}
+	}
+
+	// Check if alternate response is redirect to login / challenge
+	if altResp.StatusCode >= 300 && altResp.StatusCode < 400 {
+		loc := altResp.Header.Get("Location")
+		lowLoc := strings.ToLower(loc)
+		if strings.Contains(lowLoc, "login") || strings.Contains(lowLoc, "auth") || strings.Contains(lowLoc, "signin") || strings.Contains(lowLoc, "challenge") {
+			return ComparisonResult{
+				State:           StateNotVulnerable,
+				Severity:        "INFO",
+				Confidence:      "CONFIRMED",
+				EvidenceSummary: fmt.Sprintf("Alternate method %s correctly redirected to auth challenge (%s) with status %d", altMethod, loc, altResp.StatusCode),
+				EvidenceDetails: details,
+			}
+		}
+	}
+
+	// Check HTML login page or generic error JSON
+	if IsHTMLOrLoginPage(altResp) {
+		return ComparisonResult{
+			State:           StateNotVulnerable,
+			Severity:        "INFO",
+			Confidence:      "CONFIRMED",
+			EvidenceSummary: fmt.Sprintf("Alternate method %s returned HTML challenge page (HTTP %d); function not executed", altMethod, altResp.StatusCode),
+			EvidenceDetails: details,
+		}
+	}
+	if IsGenericErrorJSON(altResp.Body) {
+		return ComparisonResult{
+			State:           StateNotVulnerable,
+			Severity:        "INFO",
+			Confidence:      "CONFIRMED",
+			EvidenceSummary: fmt.Sprintf("Alternate method %s returned application error payload (HTTP %d); function not executed", altMethod, altResp.StatusCode),
+			EvidenceDetails: details,
+		}
+	}
+
+	// Empty body -> inconclusive
+	if IsEmptyResponse(altResp.Body) {
+		return ComparisonResult{
+			State:           StateInconclusive,
+			Severity:        "INFO",
+			Confidence:      "LOW",
+			EvidenceSummary: fmt.Sprintf("Alternate method %s returned empty body (HTTP %d); insufficient evidence of function execution", altMethod, altResp.StatusCode),
+			EvidenceDetails: details,
+		}
+	}
+
+	// If alternate method returned 2xx:
+	// A 2xx response alone NEVER confirms BFLA without evidence of privileged execution!
+	if altResp.StatusCode >= 200 && altResp.StatusCode < 300 {
+		if policy.ProtectedResponseMarker != "" {
+			if strings.Contains(string(altResp.Body), policy.ProtectedResponseMarker) {
+				details["marker_matched"] = policy.ProtectedResponseMarker
+				return ComparisonResult{
+					State:           StateVerified,
+					Severity:        "HIGH",
+					Confidence:      "CONFIRMED",
+					EvidenceSummary: fmt.Sprintf("BFLA Method Bypass verified: primary method %s was denied (HTTP %d), but alternate method %s successfully executed privileged function confirmed by protected marker %q (HTTP %d)", policy.Method, primaryResp.StatusCode, altMethod, policy.ProtectedResponseMarker, altResp.StatusCode),
+					EvidenceDetails: details,
+				}
+			}
+			// 2xx without protected marker -> CANDIDATE
+			return ComparisonResult{
+				State:           StateCandidate,
+				Severity:        "MEDIUM",
+				Confidence:      "POSSIBLE",
+				EvidenceSummary: fmt.Sprintf("Primary method %s was denied (HTTP %d), and alternate method %s returned HTTP %d, but response did not contain designated protected marker %q; function execution unconfirmed", policy.Method, primaryResp.StatusCode, altMethod, altResp.StatusCode, policy.ProtectedResponseMarker),
+				EvidenceDetails: details,
+			}
+		}
+
+		// When no marker configured, require privileged indicators
+		if HasPrivilegedIndicators(altResp.Body) {
+			return ComparisonResult{
+				State:           StateVerified,
+				Severity:        "HIGH",
+				Confidence:      "CONFIRMED",
+				EvidenceSummary: fmt.Sprintf("BFLA Method Bypass verified: primary method %s was denied (HTTP %d), but alternate method %s returned HTTP %d with confirmed privileged administrative data", policy.Method, primaryResp.StatusCode, altMethod, altResp.StatusCode),
+				EvidenceDetails: details,
+			}
+		}
+
+		return ComparisonResult{
+			State:           StateCandidate,
+			Severity:        "MEDIUM",
+			Confidence:      "POSSIBLE",
+			EvidenceSummary: fmt.Sprintf("Primary method %s was denied (HTTP %d), and alternate method %s returned HTTP %d without confirmed privileged indicators; function execution unconfirmed", policy.Method, primaryResp.StatusCode, altMethod, altResp.StatusCode),
+			EvidenceDetails: details,
+		}
+	}
+
+	return ComparisonResult{
+		State:           StateInconclusive,
+		Severity:        "INFO",
+		Confidence:      "LOW",
+		EvidenceSummary: fmt.Sprintf("Alternate method %s returned unexpected status %d; inconclusive authorization outcome", altMethod, altResp.StatusCode),
+		EvidenceDetails: details,
+	}
+}

@@ -523,9 +523,24 @@ func TestBFLA_PrivilegeEscalation_CorrectlyEnforced(t *testing.T) {
 	}
 }
 
-// 11. Method Bypass -> VERIFIED
+// 11. Method Bypass -> VERIFIED (Primary POST denied with 403, alternate GET succeeds with protected marker)
 func TestBFLA_MethodBypass_Verified(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHdr := r.Header.Get("Authorization")
+		if strings.Contains(authHdr, "token_user") {
+			if r.Method == "POST" {
+				w.WriteHeader(http.StatusForbidden)
+				fmt.Fprint(w, `{"error":"forbidden"}`)
+				return
+			}
+			if r.Method == "GET" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				fmt.Fprint(w, `{"settings":{"maintenance_mode":true}}`)
+				return
+			}
+		}
+		// Admin gets 200 on primary POST
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, `{"settings":{"maintenance_mode":true}}`)
@@ -569,6 +584,74 @@ func TestBFLA_MethodBypass_Verified(t *testing.T) {
 	}
 	if results[0].Category != CategoryBFLAMethodBypass {
 		t.Errorf("expected CategoryBFLAMethodBypass, got %s", results[0].Category)
+	}
+	if results[0].Method != "GET" {
+		t.Errorf("expected bypass method to record alternate GET, got %s", results[0].Method)
+	}
+	if results[0].Finding == nil {
+		t.Errorf("expected finding to be attached to VERIFIED result")
+	}
+}
+
+// 11b. Method Bypass -> 2xx alone without protected marker produces CANDIDATE (never VERIFIED)
+func TestBFLA_MethodBypass_Alternate200WithoutMarker_Candidate(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHdr := r.Header.Get("Authorization")
+		if strings.Contains(authHdr, "token_user") {
+			if r.Method == "POST" {
+				w.WriteHeader(http.StatusForbidden)
+				fmt.Fprint(w, `{"error":"forbidden"}`)
+				return
+			}
+			if r.Method == "GET" {
+				// Alternate method returns 200 without protected marker
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				fmt.Fprint(w, `{"status":"ok","msg":"hello"}`)
+				return
+			}
+		}
+		// Admin
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"settings":{"maintenance_mode":true}}`)
+	}))
+	defer ts.Close()
+
+	engine := NewEngine(nil, DefaultConfig())
+	actx := &AssessmentContext{
+		AssessmentID:  "asm-01",
+		ExecutionID:   "exec-01",
+		BaseURL:       ts.URL,
+		Authorization: testApprovedAuth(),
+		Policies: []FunctionPolicy{
+			{
+				FunctionID:              "settings-method",
+				Name:                    "Settings Method Parity",
+				Path:                    "/api/admin/settings",
+				Method:                  "POST",
+				Category:                CategoryBFLAMethodBypass,
+				AllowedRoles:            []string{"admin"},
+				RestrictedRoles:         []string{"user"},
+				ProtectedResponseMarker: "maintenance_mode",
+				PositiveControlRequired: true,
+			},
+		},
+		Identities: []TestIdentity{
+			{Alias: "admin_user", Role: "admin", Headers: map[string]string{"Authorization": "Bearer token_admin"}},
+			{Alias: "user_alias", Role: "user", Headers: map[string]string{"Authorization": "Bearer token_user"}},
+		},
+	}
+
+	results, _, err := engine.Assess(context.Background(), actx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].VerificationState != StateCandidate {
+		t.Errorf("expected CANDIDATE when alternate 200 lacks protected marker, got %s", results[0].VerificationState)
 	}
 }
 
@@ -617,8 +700,8 @@ func TestBFLA_MethodBypass_ConsistentlyEnforced(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
-	if results[0].VerificationState != StateInconclusive && results[0].VerificationState != StateNotVulnerable {
-		t.Errorf("expected NOT_VULNERABLE or INCONCLUSIVE for 405 Method Not Allowed, got %s", results[0].VerificationState)
+	if results[0].VerificationState != StateNotVulnerable {
+		t.Errorf("expected NOT_VULNERABLE for consistently enforced methods, got %s", results[0].VerificationState)
 	}
 }
 
@@ -717,6 +800,146 @@ func TestBFLA_WriteMutation_OptIn_Verified(t *testing.T) {
 	}
 	if results[0].VerificationState != StateVerified {
 		t.Errorf("expected VERIFIED for opted-in write mutation, got %s", results[0].VerificationState)
+	}
+}
+
+// 14b. Write mutation blocked when SyntheticFixture is false even if AllowStateChangingTests is true
+func TestBFLA_WriteMutation_BlockedWhenNotSyntheticFixture(t *testing.T) {
+	var requestCount int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	engine := NewEngine(nil, DefaultConfig())
+	actx := &AssessmentContext{
+		AssessmentID:            "asm-01",
+		ExecutionID:             "exec-01",
+		BaseURL:                 ts.URL,
+		Authorization:           testApprovedAuth(),
+		AllowStateChangingTests: true,  // Opt-in given
+		SyntheticFixture:        false, // BUT not a designated synthetic fixture
+		Policies: []FunctionPolicy{
+			{
+				FunctionID:      "delete-account",
+				Name:            "Delete Account Function",
+				Path:            "/api/admin/users/123",
+				Method:          "DELETE",
+				Category:        CategoryBFLAWriteMutation,
+				AllowedRoles:    []string{"admin"},
+				RestrictedRoles: []string{"user"},
+				IsStateChanging: true,
+			},
+		},
+		Identities: []TestIdentity{
+			{Alias: "admin", Role: "admin", Headers: map[string]string{"Authorization": "Bearer token_admin"}},
+			{Alias: "user", Role: "user", Headers: map[string]string{"Authorization": "Bearer token_user"}},
+		},
+	}
+
+	results, _, err := engine.Assess(context.Background(), actx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].VerificationState != StateSkipped {
+		t.Errorf("expected SKIPPED when SyntheticFixture is false for write mutation, got %s", results[0].VerificationState)
+	}
+	if atomic.LoadInt32(&requestCount) != 0 {
+		t.Errorf("security invariant violated: dispatched %d network requests on non-synthetic fixture", atomic.LoadInt32(&requestCount))
+	}
+}
+
+// 14c. Write mutation failed attempt does not trigger automatic retry using another write method
+func TestBFLA_WriteMutation_FailedAttempt_NoRetryWithAnotherWriteMethod(t *testing.T) {
+	var userMethods []string
+	var mu sync.Mutex
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHdr := r.Header.Get("Authorization")
+		if strings.Contains(authHdr, "token_user") {
+			mu.Lock()
+			userMethods = append(userMethods, r.Method)
+			mu.Unlock()
+			if r.Method == "GET" {
+				w.WriteHeader(http.StatusForbidden)
+				fmt.Fprint(w, `{"error":"forbidden"}`)
+				return
+			}
+			if r.Method == "PUT" {
+				w.WriteHeader(http.StatusInternalServerError)
+				fmt.Fprint(w, `{"error":"server error"}`)
+				return
+			}
+			if r.Method == "DELETE" {
+				w.WriteHeader(http.StatusOK)
+				fmt.Fprint(w, `{"status":"deleted"}`)
+				return
+			}
+		}
+		// Admin
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"status":"ok","protected_key":"secret"}`)
+	}))
+	defer ts.Close()
+
+	engine := NewEngine(nil, DefaultConfig())
+	actx := &AssessmentContext{
+		AssessmentID:            "asm-01",
+		ExecutionID:             "exec-01",
+		BaseURL:                 ts.URL,
+		Authorization:           testApprovedAuth(),
+		AllowStateChangingTests: true,
+		SyntheticFixture:        true,
+		Policies: []FunctionPolicy{
+			{
+				FunctionID:              "admin-op",
+				Name:                    "Admin Operation",
+				Path:                    "/api/admin/op",
+				Method:                  "GET",
+				Category:                CategoryBFLAMethodBypass,
+				AlternateMethods:        []string{"PUT", "DELETE"},
+				AllowedRoles:            []string{"admin"},
+				RestrictedRoles:         []string{"user"},
+				ProtectedResponseMarker: "secret",
+				PositiveControlRequired: true,
+			},
+		},
+		Identities: []TestIdentity{
+			{Alias: "admin", Role: "admin", Headers: map[string]string{"Authorization": "Bearer token_admin"}},
+			{Alias: "user", Role: "user", Headers: map[string]string{"Authorization": "Bearer token_user"}},
+		},
+	}
+
+	results, _, err := engine.Assess(context.Background(), actx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	// userMethods should contain "GET" (primary) and "PUT" (first write attempt), but NEVER "DELETE" (no write retry)
+	hasDelete := false
+	putCount := 0
+	for _, m := range userMethods {
+		if m == "DELETE" {
+			hasDelete = true
+		}
+		if m == "PUT" {
+			putCount++
+		}
+	}
+	if hasDelete {
+		t.Errorf("security violation: engine executed DELETE after PUT failed; write retries must not occur across write methods")
+	}
+	if putCount != 1 {
+		t.Errorf("expected exactly 1 PUT write attempt, got %d", putCount)
 	}
 }
 

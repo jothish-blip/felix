@@ -4689,6 +4689,7 @@ func printBFLAHelp() {
 	fmt.Println("  --admin-role <role>        Role name for privileged user (default: admin)")
 	fmt.Println("  --user-role <role>         Role name for lower-privilege user (default: user)")
 	fmt.Println("  --allow-state-changing     Explicitly permit write-operation BFLA tests (POST/PUT/PATCH/DELETE)")
+	fmt.Println("  --synthetic-fixture        Designate target as a controlled synthetic fixture or isolated test environment")
 	fmt.Println("  --allow-loopback           Allow testing on loopback addresses")
 	fmt.Println("  --allow-private            Allow testing on private network addresses")
 	fmt.Println("  --max-requests <n>         Maximum requests allowed during run (default: 30)")
@@ -4702,27 +4703,28 @@ func printBFLAHelp() {
 
 func runAssessmentBFLA(args []string) int {
 	var (
-		assessmentRef      string
-		runExecution       bool
-		dryRun             bool
-		targetOverride     string
-		endpointFlag       string
-		methodFlag         string = "GET"
-		adminToken         string
-		userToken          string
-		adminCookie        string
-		userCookie         string
-		adminRole          string = "admin"
-		userRole           string = "user"
-		policyPath         string
-		categoryFilter     string
-		statusFilter       string
-		jsonOutput         bool
-		verbose            bool
-		allowStateChanging bool
-		allowLoopback      bool
-		allowPrivate       bool
-		maxRequests        int = 30
+		assessmentRef        string
+		runExecution         bool
+		dryRun               bool
+		targetOverride       string
+		endpointFlag         string
+		methodFlag           string = "GET"
+		adminToken           string
+		userToken            string
+		adminCookie          string
+		userCookie           string
+		adminRole            string = "admin"
+		userRole             string = "user"
+		policyPath           string
+		categoryFilter       string
+		statusFilter         string
+		jsonOutput           bool
+		verbose              bool
+		allowStateChanging   bool
+		syntheticFixtureFlag bool
+		allowLoopback        bool
+		allowPrivate         bool
+		maxRequests          int = 30
 	)
 
 	for i := 0; i < len(args); i++ {
@@ -4779,6 +4781,8 @@ func runAssessmentBFLA(args []string) int {
 			}
 		case arg == "--allow-state-changing":
 			allowStateChanging = true
+		case arg == "--synthetic-fixture":
+			syntheticFixtureFlag = true
 		case arg == "--allow-loopback":
 			allowLoopback = true
 		case arg == "--allow-private":
@@ -4849,6 +4853,10 @@ func runAssessmentBFLA(args []string) int {
 	if targetOverride != "" {
 		targetBase = strings.TrimRight(targetOverride, "/")
 	}
+
+	uTarget, _ := url.Parse(targetBase)
+	isTargetLoopback := uTarget != nil && bfla.IsLoopbackHost(uTarget.Hostname())
+	syntheticFixture := syntheticFixtureFlag || isTargetLoopback || policyPath != ""
 
 	// 1. Build Policies
 	var policies []bfla.FunctionPolicy
@@ -4964,6 +4972,7 @@ func runAssessmentBFLA(args []string) int {
 			Policies:                policies,
 			Identities:              identities,
 			AllowStateChangingTests: allowStateChanging,
+			SyntheticFixture:        syntheticFixture,
 			DryRun:                  true,
 			IsExcluded: func(target string) bool {
 				for _, exc := range asm.Exclusions {
@@ -5056,9 +5065,6 @@ func runAssessmentBFLA(args []string) int {
 		fmt.Printf("[*] Dispatched at %s | Max Requests: %d | Concurrency: 3\n",
 			now.Format(time.RFC3339), maxRequests)
 
-		uTarget, _ := url.Parse(targetBase)
-		isTargetLoopback := uTarget != nil && bfla.IsLoopbackHost(uTarget.Hostname())
-
 		cfg := bfla.DefaultConfig()
 		cfg.AllowActiveTesting = true
 		cfg.AllowStateChangingTests = allowStateChanging
@@ -5105,7 +5111,7 @@ func runAssessmentBFLA(args []string) int {
 			Policies:                policies,
 			Identities:              identities,
 			AllowStateChangingTests: allowStateChanging,
-			SyntheticFixture:        true,
+			SyntheticFixture:        syntheticFixture,
 			Authorization:           authRec,
 			MaxRequests:             maxRequests,
 			DispatchedRequests:      &dispatchedReqs,

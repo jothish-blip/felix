@@ -173,6 +173,7 @@ type FunctionPolicy struct {
 	Name                    string   `json:"name"`
 	Path                    string   `json:"path"`
 	Method                  string   `json:"method"` // e.g. "GET", "POST", "PUT", "DELETE", "PATCH", "*"
+	AlternateMethods        []string `json:"alternate_methods,omitempty"` // Alternate HTTP methods evaluated for method bypass (e.g. ["GET", "PUT"])
 	Category                Category `json:"category"`
 	AllowedRoles            []string `json:"allowed_roles"`             // Roles authorized to execute this function (e.g. ["admin", "superadmin"])
 	RestrictedRoles         []string `json:"restricted_roles"`          // Roles forbidden from executing this function (e.g. ["user", "viewer", "guest"])
