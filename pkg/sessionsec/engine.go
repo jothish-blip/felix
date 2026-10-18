@@ -5,15 +5,110 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"felix/pkg/crawler"
 	"felix/pkg/report"
 	"github.com/google/uuid"
 )
+
+// EffectivePort returns the explicit port or default scheme port for standard HTTP/HTTPS URLs.
+func EffectivePort(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	if p := u.Port(); p != "" {
+		return p
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return "443"
+	case "http":
+		return "80"
+	default:
+		return ""
+	}
+}
+
+// IsSameOrigin checks whether two URLs share the exact scheme, host, and effective port.
+func IsSameOrigin(u1, u2 *url.URL) bool {
+	if u1 == nil || u2 == nil {
+		return false
+	}
+	if !strings.EqualFold(u1.Scheme, u2.Scheme) {
+		return false
+	}
+	if !strings.EqualFold(u1.Hostname(), u2.Hostname()) {
+		return false
+	}
+	return EffectivePort(u1) == EffectivePort(u2)
+}
+
+// IsLoopbackHost checks whether a hostname or IP represents the local loopback machine.
+func IsLoopbackHost(host string) bool {
+	h := strings.ToLower(strings.TrimSpace(host))
+	if h == "localhost" || h == "127.0.0.1" || h == "::1" || h == "ip6-localhost" || h == "ip6-loopback" {
+		return true
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
+
+// SensitiveCredentialHeaders enumerates HTTP headers containing authentication credentials or session tokens.
+var SensitiveCredentialHeaders = []string{
+	"Authorization",
+	"Cookie",
+	"Cookie2",
+	"X-Auth-Token",
+	"X-API-Key",
+	"X-Session-ID",
+	"X-Session-Token",
+	"X-CSRF-Token",
+	"X-XSRF-Token",
+	"Proxy-Authorization",
+}
+
+// StripSensitiveCredentials strips all sensitive authentication, token, and session headers from an HTTP request.
+func StripSensitiveCredentials(req *http.Request) {
+	if req == nil || req.Header == nil {
+		return
+	}
+	for _, h := range SensitiveCredentialHeaders {
+		req.Header.Del(h)
+	}
+}
+
+// credentialGuardedTransport wraps an http.RoundTripper to withhold sensitive credentials
+// from remote unencrypted HTTP requests and enforce request budget.
+type credentialGuardedTransport struct {
+	base        http.RoundTripper
+	maxRequests int
+	reqCount    *int32
+}
+
+func (c *credentialGuardedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if c.maxRequests > 0 && c.reqCount != nil {
+		curr := atomic.AddInt32(c.reqCount, 1)
+		if int(curr) > c.maxRequests {
+			return nil, fmt.Errorf("request budget exceeded (limit: %d)", c.maxRequests)
+		}
+	}
+
+	// Withhold sensitive credentials when transmitting over remote unencrypted HTTP
+	if strings.EqualFold(req.URL.Scheme, "http") && !IsLoopbackHost(req.URL.Hostname()) {
+		reqClone := req.Clone(req.Context())
+		StripSensitiveCredentials(reqClone)
+		return c.base.RoundTrip(reqClone)
+	}
+	return c.base.RoundTrip(req)
+}
 
 // Engine evaluates session lifecycle, identity boundaries, and token handling.
 type Engine struct {
@@ -24,8 +119,13 @@ type Engine struct {
 // NewEngine creates a new Session & Identity Security Engine.
 func NewEngine(client *http.Client, config Config) *Engine {
 	if client == nil {
+		safeTransport := crawler.NewSafeTransport(crawler.SafeTransportOptions{
+			Timeout:       config.Timeout,
+			KeepAlive:     30 * time.Second,
+			AllowLoopback: true,
+		})
 		client = &http.Client{
-			Transport: crawler.NewRateLimitedTransport(http.DefaultTransport, crawler.RateLimitOptions{}),
+			Transport: crawler.NewRateLimitedTransport(safeTransport, crawler.RateLimitOptions{}),
 			Timeout:   config.Timeout,
 		}
 	}
@@ -36,17 +136,30 @@ func NewEngine(client *http.Client, config Config) *Engine {
 }
 
 // scopedClient creates an HTTP client that validates every redirect destination
-// against the assessment's approved scope and exclusions before the redirected request is sent.
+// against the assessment's approved scope and exclusions before the redirected request is sent,
+// and enforces cross-origin and cleartext credential withholding.
 func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
 	transport := e.client.Transport
 	if transport == nil {
-		transport = http.DefaultTransport
+		transport = crawler.NewSafeTransport(crawler.SafeTransportOptions{
+			Timeout:       e.config.Timeout,
+			KeepAlive:     30 * time.Second,
+			AllowLoopback: true,
+		})
 	}
 	if _, ok := transport.(*crawler.RateLimitedTransport); !ok {
 		transport = crawler.NewRateLimitedTransport(transport, crawler.RateLimitOptions{})
 	}
+
+	var reqCounter int32
+	guardedTransport := &credentialGuardedTransport{
+		base:        transport,
+		maxRequests: actx.MaxRequests,
+		reqCount:    &reqCounter,
+	}
+
 	return &http.Client{
-		Transport: transport,
+		Transport: guardedTransport,
 		Timeout:   e.config.Timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
@@ -59,12 +172,25 @@ func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
 			if actx.IsAllowed != nil && !actx.IsAllowed(destURL) {
 				return fmt.Errorf("redirect blocked: %s is out of authorized scope", destURL)
 			}
-			// Prevent credential forwarding across origin boundaries
+
+			// Origin boundary and chained redirect defense:
 			if len(via) > 0 {
+				initialURL := via[0].URL
 				prevURL := via[len(via)-1].URL
-				if !strings.EqualFold(prevURL.Host, req.URL.Host) {
-					req.Header.Del("Authorization")
-					req.Header.Del("Cookie")
+
+				crossPrev := !IsSameOrigin(prevURL, req.URL)
+				crossInitial := !IsSameOrigin(initialURL, req.URL)
+				chainedUntrusted := false
+				for _, v := range via {
+					if !IsSameOrigin(v.URL, initialURL) {
+						chainedUntrusted = true
+						break
+					}
+				}
+				isRemoteCleartext := strings.EqualFold(req.URL.Scheme, "http") && !IsLoopbackHost(req.URL.Hostname())
+
+				if crossPrev || crossInitial || chainedUntrusted || isRemoteCleartext {
+					StripSensitiveCredentials(req)
 				}
 			}
 			return nil
@@ -639,9 +765,9 @@ func (e *Engine) assessSessionFixation(ctx context.Context, actx *AssessmentCont
 		r.EvidenceSummary = "No pre-authentication session cookie issued prior to login"
 		cov.Observations++
 	} else {
-		// Live target without authorized credentials: report candidate
-		r.VerificationState = StateCandidate
-		r.Severity = report.SeverityMedium
+		// Live target without authorized credentials: report inconclusive
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
 		r.Confidence = report.ConfidenceLow
 		r.EvidenceSummary = fmt.Sprintf("Pre-authentication cookie '%s' observed; verifying session renewal requires authorized credentials", preAuthCookie.Name)
 		r.EvidenceDetails = map[string]string{
@@ -649,12 +775,14 @@ func (e *Engine) assessSessionFixation(ctx context.Context, actx *AssessmentCont
 			"hash":        HashSecret(preAuthCookie.Value),
 			"limitation":  "authorized_credentials_missing",
 		}
-		cov.Candidates++
+		cov.Inconclusive++
+		cov.Blocked++
+		cov.Status = CoverageBlockedMissingPrereq
 	}
 
 	results = append(results, r)
 	cov.TestsRun = len(results)
-	cov.Explanation = fmt.Sprintf("Evaluated session fixation protections (%d verified vulnerabilities, %d candidates)", cov.Verified, cov.Candidates)
+	cov.Explanation = fmt.Sprintf("Evaluated session fixation protections (%d verified vulnerabilities, %d inconclusive)", cov.Verified, cov.Inconclusive)
 	return results, findings, cov
 }
 
@@ -999,18 +1127,21 @@ func (e *Engine) assessSessionInvalidation(ctx context.Context, actx *Assessment
 			}
 		}
 	} else if len(actx.Identities) > 0 {
-		// Live target with test credentials
-		r.VerificationState = StateCandidate
-		r.Severity = report.SeverityMedium
-		r.Confidence = report.ConfidenceMedium
-		r.EvidenceSummary = "Protected resource identified; automated active session timeout verification requires scheduled revocation schedule"
-		cov.Candidates++
+		// Live target with test credentials: automated timeout verification requires explicit scheduled revocation
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.Confidence = report.ConfidenceLow
+		r.EvidenceSummary = "Session invalidation assessment inconclusive: automated active session timeout verification requires scheduled revocation schedule or explicit invalidation trigger"
+		cov.Inconclusive++
+		cov.Blocked++
+		cov.Status = CoverageBlockedMissingPrereq
 	} else {
 		// Missing credentials / protected resource
 		r.VerificationState = StateInconclusive
 		r.Severity = report.SeverityInfo
 		r.Confidence = report.ConfidenceLow
 		r.EvidenceSummary = "Session invalidation test blocked: Missing authorized test session and protected resource"
+		cov.Inconclusive++
 		cov.Blocked++
 		cov.Status = CoverageBlockedMissingPrereq
 	}
@@ -1345,6 +1476,7 @@ func (e *Engine) assessPrivilegeTransitions(ctx context.Context, actx *Assessmen
 		r.Severity = report.SeverityInfo
 		r.Confidence = report.ConfidenceLow
 		r.EvidenceSummary = "Privilege transition assessment blocked: Requires authorized dual-role test identities to execute role transition"
+		cov.Inconclusive++
 		cov.Blocked++
 		cov.Status = CoverageBlockedMissingPrereq
 	}
@@ -1454,11 +1586,13 @@ func (e *Engine) assessLogoutBehavior(ctx context.Context, actx *AssessmentConte
 		}
 	} else {
 		// Live target without state-changing permission
-		r.VerificationState = StateCandidate
-		r.Severity = report.SeverityMedium
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
 		r.Confidence = report.ConfidenceLow
-		r.EvidenceSummary = fmt.Sprintf("Logout endpoint '%s' discovered; active server invalidation test requires authorized session state", logoutURL)
-		cov.Candidates++
+		r.EvidenceSummary = fmt.Sprintf("Logout endpoint '%s' discovered; active server invalidation test requires authorized session state and state-changing permission", logoutURL)
+		cov.Inconclusive++
+		cov.Blocked++
+		cov.Status = CoverageBlockedMissingPrereq
 	}
 
 	results = append(results, r)
@@ -1552,11 +1686,13 @@ func (e *Engine) assessPasswordRecovery(ctx context.Context, actx *AssessmentCon
 		}
 	} else {
 		// Live target: Safety rule forbids sending unsolicited resets to live users
-		r.VerificationState = StateCandidate
-		r.Severity = report.SeverityMedium
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
 		r.Confidence = report.ConfidenceLow
-		r.EvidenceSummary = fmt.Sprintf("Recovery endpoint '%s' discovered; token lifecycle verification requires controlled test email/account", resetURL)
-		cov.Candidates++
+		r.EvidenceSummary = fmt.Sprintf("Recovery endpoint '%s' discovered; token lifecycle verification blocked without controlled test email/account and explicit authorization", resetURL)
+		cov.Inconclusive++
+		cov.Blocked++
+		cov.Status = CoverageBlockedMissingPrereq
 	}
 
 	results = append(results, r)
@@ -1753,6 +1889,7 @@ func (e *Engine) assessSessionPuzzling(ctx context.Context, actx *AssessmentCont
 		r.Severity = report.SeverityInfo
 		r.Confidence = report.ConfidenceLow
 		r.EvidenceSummary = "Session puzzling test blocked: No multi-step identity workflow discovered"
+		cov.Inconclusive++
 		cov.Blocked++
 		cov.Status = CoverageBlockedMissingPrereq
 	}
@@ -1839,14 +1976,17 @@ func (e *Engine) assessSessionIsolation(ctx context.Context, actx *AssessmentCon
 		r.Severity = report.SeverityInfo
 		r.Confidence = report.ConfidenceLow
 		r.EvidenceSummary = "Cross-session isolation assessment blocked: Requires at least 2 distinct authorized test identities"
+		cov.Inconclusive++
 		cov.Blocked++
 		cov.Status = CoverageBlockedMissingPrereq
 	} else {
-		r.VerificationState = StateCandidate
-		r.Severity = report.SeverityMedium
-		r.Confidence = report.ConfidenceMedium
-		r.EvidenceSummary = "Dual test identities available; automated isolation verification requires mapped private test resources"
-		cov.Candidates++
+		r.VerificationState = StateInconclusive
+		r.Severity = report.SeverityInfo
+		r.Confidence = report.ConfidenceLow
+		r.EvidenceSummary = "Cross-session isolation assessment blocked: Dual test identities available, but automated isolation verification requires mapped private test resources"
+		cov.Inconclusive++
+		cov.Blocked++
+		cov.Status = CoverageBlockedMissingPrereq
 	}
 
 	results = append(results, r)

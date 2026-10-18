@@ -3404,6 +3404,8 @@ func runAssessmentSessionSec(args []string) int {
 		protectedURLFlag   string
 		cookieFlag         string
 		allowStateChanging bool
+		allowLoopback      bool
+		allowPrivate       bool
 		maxRequests        int = 30
 	)
 
@@ -3441,6 +3443,10 @@ func runAssessmentSessionSec(args []string) int {
 			}
 		case arg == "--allow-state-changing":
 			allowStateChanging = true
+		case arg == "--allow-loopback":
+			allowLoopback = true
+		case arg == "--allow-private":
+			allowPrivate = true
 		case arg == "--max-requests":
 			if i+1 < len(args) {
 				if n, err := strconv.Atoi(args[i+1]); err == nil && n > 0 {
@@ -3803,10 +3809,15 @@ func runAssessmentSessionSec(args []string) int {
 		}
 		scopeVal := assessment.NewScopeValidator(asm.ScopeMode, targetURLs, asm.ScopeRules, asm.Exclusions)
 
+		uTarget, _ := url.Parse(targetBase)
+		isTargetLoopback := uTarget != nil && sessionsec.IsLoopbackHost(uTarget.Hostname())
+
 		cfg := sessionsec.DefaultConfig()
 		sessionHTTPClient := &http.Client{
 			Transport: crawler.NewRateLimitedTransport(crawler.NewSafeTransport(crawler.SafeTransportOptions{
-				Timeout: cfg.Timeout,
+				Timeout:         cfg.Timeout,
+				AllowLoopback:   allowLoopback || isTargetLoopback,
+				AllowPrivateIPs: allowPrivate,
 			}), crawler.RateLimitOptions{}),
 			Timeout: cfg.Timeout,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {

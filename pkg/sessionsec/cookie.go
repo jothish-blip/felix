@@ -97,8 +97,15 @@ func SplitSetCookieHeader(header string) []string {
 	for i := 0; i < len(header); i++ {
 		ch := header[i]
 
-		// Check if entering or inside an Expires attribute
-		if ch == ';' || ch == ',' {
+		// Check if entering or exiting an Expires attribute
+		if ch == ';' {
+			remaining := strings.ToLower(strings.TrimSpace(header[i+1:]))
+			if strings.HasPrefix(remaining, "expires=") {
+				inExpires = true
+			} else {
+				inExpires = false
+			}
+		} else if ch == ',' {
 			remaining := strings.ToLower(strings.TrimSpace(header[i+1:]))
 			if strings.HasPrefix(remaining, "expires=") {
 				inExpires = true

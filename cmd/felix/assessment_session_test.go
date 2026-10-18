@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -206,5 +207,35 @@ func TestCLI_AssessmentSession_Unauthorized_FailsClosed(t *testing.T) {
 	}
 	if !strings.Contains(errOut, "Security refusal: no authorization record found") {
 		t.Errorf("expected authorization refusal message, got %q", errOut)
+	}
+}
+
+func TestCLI_AssessmentSession_ActiveRun_Authorized(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/login" {
+			http.SetCookie(w, &http.Cookie{Name: "session", Value: "pre_auth_cli_test", Path: "/"})
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"status":"ok"}`)
+	}))
+	defer ts.Close()
+
+	// Authorized assessment (approveAuth = true)
+	asm, cleanup := setupTestAssessmentForSession(t, ts.URL, true)
+	defer cleanup()
+
+	code, out, _ := captureStdoutStderr(func() int {
+		return runAssessmentSessionSec([]string{asm.Ref, "--run", "--max-requests", "15"})
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0 for authorized active assessment, got %d", code)
+	}
+	if !strings.Contains(out, "EXECUTING SESSION & IDENTITY SECURITY AUDIT") {
+		t.Errorf("expected execution banner, got: %s", out)
+	}
+	if !strings.Contains(out, "CATEGORY COVERAGE SUMMARY") {
+		t.Errorf("expected category coverage summary table in output, got: %s", out)
 	}
 }

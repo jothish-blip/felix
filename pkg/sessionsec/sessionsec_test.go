@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -1039,5 +1040,306 @@ func TestSessionSec_InvalidationLoginRedirectNotVulnerable(t *testing.T) {
 	}
 	if results[0].VerificationState != StateNotVulnerable {
 		t.Errorf("expected StateNotVulnerable, got %v", results[0].VerificationState)
+	}
+}
+
+// 21. Test Origin Port Mismatch Credential Stripping
+func TestSessionSec_OriginPortMismatchCredentialStripping(t *testing.T) {
+	var targetHeaders http.Header
+	destServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHeaders = r.Header.Clone()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer destServer.Close()
+
+	originServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, destServer.URL, http.StatusFound)
+	}))
+	defer originServer.Close()
+
+	engine := NewEngine(nil, DefaultConfig())
+	actx := &AssessmentContext{
+		AssessmentID: "asm-port-mismatch",
+		BaseURL:      originServer.URL,
+		IsAllowed: func(u string) bool {
+			return true
+		},
+	}
+
+	client := engine.scopedClient(actx)
+	req, _ := http.NewRequest("GET", originServer.URL, nil)
+	for _, h := range SensitiveCredentialHeaders {
+		req.Header.Set(h, "sensitive_secret_val_123")
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("client Do failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	for _, h := range SensitiveCredentialHeaders {
+		if val := targetHeaders.Get(h); val != "" {
+			t.Errorf("expected sensitive header %q to be stripped across port-mismatched redirect, got: %s", h, val)
+		}
+	}
+}
+
+// 22. Test Origin Comparison and Scheme Downgrade Defense
+func TestSessionSec_OriginComparisonAndSchemeDowngradeDefense(t *testing.T) {
+	// 1. IsSameOrigin checks
+	u1, _ := url.Parse("https://example.com")
+	u2, _ := url.Parse("https://example.com:443")
+	u3, _ := url.Parse("http://example.com:80")
+	u4, _ := url.Parse("https://example.com:8443")
+	u5, _ := url.Parse("https://sub.example.com")
+
+	if !IsSameOrigin(u1, u2) {
+		t.Errorf("expected https://example.com and https://example.com:443 to be same origin")
+	}
+	if IsSameOrigin(u1, u3) {
+		t.Errorf("expected https vs http to NOT be same origin (scheme mismatch)")
+	}
+	if IsSameOrigin(u1, u4) {
+		t.Errorf("expected 443 vs 8443 to NOT be same origin (port mismatch)")
+	}
+	if IsSameOrigin(u1, u5) {
+		t.Errorf("expected example.com vs sub.example.com to NOT be same origin (host mismatch)")
+	}
+
+	// 2. Client CheckRedirect scheme downgrade credential stripping
+	engine := NewEngine(nil, DefaultConfig())
+	actx := &AssessmentContext{
+		AssessmentID: "asm-scheme-downgrade",
+		BaseURL:      "https://example.com",
+		IsAllowed:    func(string) bool { return true },
+	}
+	client := engine.scopedClient(actx)
+
+	reqRedirect, _ := http.NewRequest("GET", "http://example.com/api", nil)
+	reqRedirect.Header.Set("Authorization", "Bearer sensitive_token")
+	reqRedirect.Header.Set("Cookie", "session=secret")
+
+	viaReq, _ := http.NewRequest("GET", "https://example.com/login", nil)
+	viaReq.Header.Set("Authorization", "Bearer sensitive_token")
+	viaReq.Header.Set("Cookie", "session=secret")
+
+	err := client.CheckRedirect(reqRedirect, []*http.Request{viaReq})
+	if err != nil {
+		t.Fatalf("unexpected CheckRedirect error: %v", err)
+	}
+
+	if val := reqRedirect.Header.Get("Authorization"); val != "" {
+		t.Errorf("expected Authorization to be stripped on HTTPS->HTTP scheme downgrade, got %q", val)
+	}
+	if val := reqRedirect.Header.Get("Cookie"); val != "" {
+		t.Errorf("expected Cookie to be stripped on HTTPS->HTTP scheme downgrade, got %q", val)
+	}
+}
+
+// 23. Test Chained Redirect Credential Defense
+func TestSessionSec_ChainedRedirectUntrustedOrigin(t *testing.T) {
+	var targetHeaders http.Header
+	cServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHeaders = r.Header.Clone()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer cServer.Close()
+
+	bServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, cServer.URL, http.StatusFound)
+	}))
+	defer bServer.Close()
+
+	aServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, bServer.URL, http.StatusFound)
+	}))
+	defer aServer.Close()
+
+	engine := NewEngine(nil, DefaultConfig())
+	actx := &AssessmentContext{
+		AssessmentID: "asm-chained-redirect",
+		BaseURL:      aServer.URL,
+		IsAllowed:    func(string) bool { return true },
+	}
+
+	client := engine.scopedClient(actx)
+	req, _ := http.NewRequest("GET", aServer.URL, nil)
+	req.Header.Set("Authorization", "Bearer chained_secret_token")
+	req.Header.Set("Cookie", "session=chained_cookie")
+	req.Header.Set("X-API-Key", "chained_api_key")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("client Do failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if val := targetHeaders.Get("Authorization"); val != "" {
+		t.Errorf("expected Authorization to be stripped across chained redirect, got: %s", val)
+	}
+	if val := targetHeaders.Get("Cookie"); val != "" {
+		t.Errorf("expected Cookie to be stripped across chained redirect, got: %s", val)
+	}
+	if val := targetHeaders.Get("X-API-Key"); val != "" {
+		t.Errorf("expected X-API-Key to be stripped across chained redirect, got: %s", val)
+	}
+}
+
+// 24. Test Remote Cleartext Transport Credential Withholding
+type mockTransport struct {
+	lastReq *http.Request
+}
+
+func (m *mockTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	m.lastReq = req
+	return &http.Response{
+		StatusCode: 200,
+		Header:     make(http.Header),
+		Body:       http.NoBody,
+	}, nil
+}
+
+func TestSessionSec_RemoteCleartextTransportCredentialWithholding(t *testing.T) {
+	mock := &mockTransport{}
+	guarded := &credentialGuardedTransport{base: mock}
+
+	// 1. Remote unencrypted HTTP -> Credentials MUST be withheld
+	reqRemote, _ := http.NewRequest("GET", "http://api.remote-unencrypted-example.com/user", nil)
+	reqRemote.Header.Set("Authorization", "Bearer top_secret_token")
+	reqRemote.Header.Set("Cookie", "session=classified_session_id")
+	reqRemote.Header.Set("X-API-Key", "api_key_secret")
+
+	_, err := guarded.RoundTrip(reqRemote)
+	if err != nil {
+		t.Fatalf("guarded RoundTrip failed: %v", err)
+	}
+
+	if val := mock.lastReq.Header.Get("Authorization"); val != "" {
+		t.Errorf("expected Authorization stripped on remote unencrypted HTTP, got: %s", val)
+	}
+	if val := mock.lastReq.Header.Get("Cookie"); val != "" {
+		t.Errorf("expected Cookie stripped on remote unencrypted HTTP, got: %s", val)
+	}
+	if val := mock.lastReq.Header.Get("X-API-Key"); val != "" {
+		t.Errorf("expected X-API-Key stripped on remote unencrypted HTTP, got: %s", val)
+	}
+
+	// 2. Loopback HTTP -> Credentials permitted for local testing / mock fixtures
+	reqLoopback, _ := http.NewRequest("GET", "http://127.0.0.1:8080/user", nil)
+	reqLoopback.Header.Set("Authorization", "Bearer loopback_token")
+	reqLoopback.Header.Set("Cookie", "session=loopback_cookie")
+
+	_, err = guarded.RoundTrip(reqLoopback)
+	if err != nil {
+		t.Fatalf("loopback RoundTrip failed: %v", err)
+	}
+
+	if val := mock.lastReq.Header.Get("Authorization"); val != "Bearer loopback_token" {
+		t.Errorf("expected loopback to retain Authorization, got: %s", val)
+	}
+	if val := mock.lastReq.Header.Get("Cookie"); val != "session=loopback_cookie" {
+		t.Errorf("expected loopback to retain Cookie, got: %s", val)
+	}
+}
+
+// 25. Test Live Target Prerequisite Inconclusive Outcome
+func TestSessionSec_LivePrerequisiteInconclusiveOutcome(t *testing.T) {
+	// Server responds normally to pre-auth and logout endpoints
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/login" {
+			http.SetCookie(w, &http.Cookie{Name: "session", Value: "pre_auth_cookie_val", Path: "/"})
+		}
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"status":"ok"}`)
+	}))
+	defer server.Close()
+
+	engine := NewEngine(server.Client(), DefaultConfig())
+	past := time.Now().UTC().Add(-1 * time.Hour)
+	future := time.Now().UTC().Add(24 * time.Hour)
+
+	actx := &AssessmentContext{
+		AssessmentID:     "asm-live-prereq-inconclusive",
+		BaseURL:          server.URL,
+		SyntheticFixture: false, // Live target mode
+		Authorization: &auth.AuthorizationRecord{
+			ID:                  "auth-live-test",
+			AuthorizingParty:    "Security Team",
+			AuthorizationMethod: "WRITTEN_APPROVAL",
+			Status:              "APPROVED",
+			ValidFrom:           &past,
+			ValidUntil:          &future,
+		},
+		Endpoints: []TargetEndpoint{
+			{Method: "POST", Path: "/login", Type: "login"},
+			{Method: "POST", Path: "/logout", Type: "logout"},
+			{Method: "GET", Path: "/profile", Type: "protected"},
+			{Method: "POST", Path: "/reset-password", Type: "recovery"},
+		},
+		IsAllowed: func(string) bool { return true },
+	}
+
+	results, findings, summary, err := engine.Assess(context.Background(), actx)
+	if err != nil {
+		t.Fatalf("Assess failed: %v", err)
+	}
+
+	_ = findings
+	if summary.InconclusiveCount == 0 {
+		t.Fatalf("expected inconclusive tests when live prerequisites are absent, got %d", summary.InconclusiveCount)
+	}
+
+	// Verify that categories lacking live prerequisites are marked INCONCLUSIVE and BLOCKED_MISSING_PREREQUISITES
+	prereqCategories := []SessionCategory{
+		CategorySessionFixation,
+		CategorySessionInvalidation,
+		CategoryPrivilegeTransitions,
+		CategoryLogoutBehavior,
+		CategoryPasswordRecovery,
+		CategorySessionPuzzling,
+		CategorySessionIsolation,
+	}
+
+	for _, cat := range prereqCategories {
+		cov, ok := summary.CoverageMap[string(cat)]
+		if !ok {
+			t.Errorf("missing coverage for category %s", cat)
+			continue
+		}
+		if cov.Inconclusive == 0 {
+			t.Errorf("category %s expected Inconclusive > 0, got %d", cat, cov.Inconclusive)
+		}
+		if cov.Status != CoverageBlockedMissingPrereq {
+			t.Errorf("category %s expected status %s, got %s", cat, CoverageBlockedMissingPrereq, cov.Status)
+		}
+	}
+
+	// Ensure results for these categories are StateInconclusive, never StateCandidate
+	for _, res := range results {
+		for _, cat := range prereqCategories {
+			if res.Category == cat {
+				if res.VerificationState == StateCandidate {
+					t.Errorf("result %s for category %s was StateCandidate; expected StateInconclusive when prerequisites are absent",
+						res.TestID, cat)
+				}
+			}
+		}
+	}
+}
+
+// 26. Test SplitSetCookieHeader With Complex Expires Dates
+func TestSessionSec_SplitSetCookieHeaderExpiresHandling(t *testing.T) {
+	header := "session_id=abc123xyz; Expires=Wed, 21 Oct 2026 07:28:00 GMT; Path=/; Secure; HttpOnly, user_pref=dark; Path=/; SameSite=Lax"
+	cookies := SplitSetCookieHeader(header)
+
+	if len(cookies) != 2 {
+		t.Fatalf("expected 2 cookies split, got %d: %#v", len(cookies), cookies)
+	}
+	if !strings.HasPrefix(cookies[0], "session_id=abc123xyz") {
+		t.Errorf("first cookie corrupted: %s", cookies[0])
+	}
+	if !strings.HasPrefix(cookies[1], "user_pref=dark") {
+		t.Errorf("second cookie corrupted: %s", cookies[1])
 	}
 }
