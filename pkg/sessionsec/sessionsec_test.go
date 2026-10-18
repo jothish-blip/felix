@@ -2,12 +2,15 @@ package sessionsec
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"felix/pkg/auth"
 	"felix/pkg/report"
 )
 
@@ -706,5 +709,335 @@ func TestSessionSec_DryRun(t *testing.T) {
 	}
 	if summary == nil || summary.CategoriesCovered != 11 {
 		t.Errorf("expected 11 categories covered in dry run summary, got %+v", summary)
+	}
+}
+
+// 15. Test Cookie Parsing, Case-Insensitive Attributes, and Prefix Rules
+func TestSessionSec_CookieParsingAndPrefixRules(t *testing.T) {
+	// Raw Set-Cookie header with comma in Expires and case-insensitive attributes
+	rawHeader := "session_token=secret_val_123; EXPIRES=Wed, 21 Oct 2026 07:28:00 GMT; PATH=/; HTTPONLY; SECURE; SameSite=Strict"
+	cookies := ParseSetCookieHeaders([]string{rawHeader})
+	if len(cookies) != 1 {
+		t.Fatalf("expected 1 parsed cookie, got %d", len(cookies))
+	}
+	c := cookies[0]
+	if c.Name != "session_token" || c.Value != "secret_val_123" {
+		t.Errorf("unexpected name/val: %s=%s", c.Name, c.Value)
+	}
+	if !c.HttpOnly || !c.Secure {
+		t.Errorf("expected HttpOnly and Secure to be true, got HttpOnly=%t, Secure=%t", c.HttpOnly, c.Secure)
+	}
+	if c.Path != "/" {
+		t.Errorf("expected Path=/, got %s", c.Path)
+	}
+	if c.SameSite != http.SameSiteStrictMode {
+		t.Errorf("expected SameSiteStrictMode, got %v", c.SameSite)
+	}
+	if c.Expires.IsZero() {
+		t.Errorf("expected non-zero parsed Expires date")
+	}
+
+	// __Host- prefix tests
+	// Case 1: Bad __Host- cookie missing Secure and specifying Domain
+	badHostCookie := &ParsedCookie{
+		Name:      "__Host-sess",
+		Value:     "bad_host_val",
+		Path:      "/api", // should be /
+		Domain:    "example.com", // should be empty
+		Secure:    false, // must be true
+		HttpOnly:  true,
+		HasDomain: true,
+		HasPath:   true,
+	}
+	defects, _ := EvaluateCookieAttributes(badHostCookie, "https://example.com")
+	foundSecureDefect, foundPathDefect, foundDomainDefect := false, false, false
+	for _, d := range defects {
+		if strings.Contains(d.Code, "NO-SECURE") {
+			foundSecureDefect = true
+		}
+		if strings.Contains(d.Code, "PATH") {
+			foundPathDefect = true
+		}
+		if strings.Contains(d.Code, "DOMAIN") {
+			foundDomainDefect = true
+		}
+	}
+	if !foundSecureDefect || !foundPathDefect || !foundDomainDefect {
+		t.Errorf("expected __Host- violations for secure, path, and domain, got: %+v", defects)
+	}
+
+	// Case 2: Good __Host- cookie
+	goodHostCookie := &ParsedCookie{
+		Name:        "__Host-sess",
+		Value:       "good_host_val",
+		Path:        "/",
+		Secure:      true,
+		HttpOnly:    true,
+		SameSite:    http.SameSiteStrictMode,
+		HasPath:     true,
+		HasSecure:   true,
+		HasHttpOnly: true,
+		HasSameSite: true,
+	}
+	goodDefects, _ := EvaluateCookieAttributes(goodHostCookie, "https://example.com")
+	if len(goodDefects) != 0 {
+		t.Errorf("expected 0 defects for valid __Host- cookie, got: %+v", goodDefects)
+	}
+
+	// Non-session cookies: Anti-CSRF and Analytics
+	csrfCookie := &ParsedCookie{
+		Name:        "XSRF-TOKEN",
+		Value:       "csrf_val_abc",
+		Path:        "/",
+		Secure:      true,
+		HttpOnly:    false, // Legitimate double-submit pattern
+		SameSite:    http.SameSiteLaxMode,
+		HasSameSite: true,
+	}
+	csrfDefects, isSession := EvaluateCookieAttributes(csrfCookie, "https://example.com")
+	if isSession {
+		t.Errorf("expected XSRF-TOKEN not to be classified as session cookie")
+	}
+	if len(csrfDefects) != 0 {
+		t.Errorf("expected 0 defects for standard double-submit CSRF cookie, got: %+v", csrfDefects)
+	}
+
+	// SameSite=None without Secure
+	sameSiteNoneInsecure := &ParsedCookie{
+		Name:        "sess_cookie",
+		Value:       "val",
+		SameSite:    http.SameSiteNoneMode,
+		Secure:      false,
+		HttpOnly:    true,
+		HasSameSite: true,
+	}
+	ssDefects, _ := EvaluateCookieAttributes(sameSiteNoneInsecure, "https://example.com")
+	foundSSNone := false
+	for _, d := range ssDefects {
+		if strings.Contains(d.Code, "SAMESITE-NONE-INSECURE") {
+			foundSSNone = true
+		}
+	}
+	if !foundSSNone {
+		t.Errorf("expected SameSite=None without Secure defect, got: %+v", ssDefects)
+	}
+}
+
+// 16. Test Remote Cleartext HTTP Cookie Transport Guard
+func TestSessionSec_InsecureCleartextRemoteHTTP(t *testing.T) {
+	cookie := &ParsedCookie{
+		Name:        "session_id",
+		Value:       "secret_token_cleartext",
+		Path:        "/",
+		Secure:      false,
+		HttpOnly:    true,
+		SameSite:    http.SameSiteLaxMode,
+		HasSameSite: true,
+	}
+	// Remote HTTP target (not loopback)
+	defects, isSession := EvaluateCookieAttributes(cookie, "http://api.production-server.com")
+	if !isSession {
+		t.Fatalf("expected session_id to be classified as session cookie")
+	}
+	foundCleartext := false
+	for _, d := range defects {
+		if d.Code == "SS-COOKIE-CLEARTEXT" {
+			foundCleartext = true
+		}
+	}
+	if !foundCleartext {
+		t.Errorf("expected SS-COOKIE-CLEARTEXT defect for remote cleartext HTTP, got: %+v", defects)
+	}
+}
+
+// 17. Test Cross-Origin Redirect Credential Stripping
+func TestSessionSec_CrossOriginRedirectCredentialStripping(t *testing.T) {
+	var targetReceivedAuth, targetReceivedCookie string
+	destServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetReceivedAuth = r.Header.Get("Authorization")
+		targetReceivedCookie = r.Header.Get("Cookie")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer destServer.Close()
+
+	originServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, destServer.URL, http.StatusFound)
+	}))
+	defer originServer.Close()
+
+	engine := NewEngine(nil, DefaultConfig())
+	actx := &AssessmentContext{
+		AssessmentID: "asm-cross-origin",
+		BaseURL:      originServer.URL,
+		IsAllowed: func(u string) bool {
+			return true // Allow all for this test to observe credential behavior
+		},
+	}
+
+	client := engine.scopedClient(actx)
+	req, _ := http.NewRequest("GET", originServer.URL, nil)
+	req.Header.Set("Authorization", "Bearer sensitive_secret_token_xyz")
+	req.Header.Set("Cookie", "session=sensitive_cookie_val_abc")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("client Do failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if targetReceivedAuth != "" {
+		t.Errorf("expected Authorization header to be stripped across origin redirect, got: %s", targetReceivedAuth)
+	}
+	if targetReceivedCookie != "" {
+		t.Errorf("expected Cookie header to be stripped across origin redirect, got: %s", targetReceivedCookie)
+	}
+}
+
+// 18. Test Authorization Gate Fail-Closed in Engine
+func TestSessionSec_AuthorizationGateFailClosed(t *testing.T) {
+	engine := NewEngine(nil, DefaultConfig())
+
+	// 1. Missing Authorization record on non-fixture context -> must fail closed
+	actxMissing := &AssessmentContext{
+		AssessmentID:     "asm-auth-missing",
+		BaseURL:          "https://example.com",
+		SyntheticFixture: false,
+		DryRun:           false,
+	}
+	_, _, _, errMissing := engine.Assess(context.Background(), actxMissing)
+	if errMissing == nil || !strings.Contains(errMissing.Error(), "security refusal: authorization record required") {
+		t.Errorf("expected error for missing authorization, got %v", errMissing)
+	}
+
+	// 2. Expired Authorization record -> must fail closed
+	now := time.Now().UTC()
+	validFrom := now.Add(-48 * time.Hour)
+	validUntil := now.Add(-24 * time.Hour)
+	actxExpired := &AssessmentContext{
+		AssessmentID:     "asm-auth-expired",
+		BaseURL:          "https://example.com",
+		SyntheticFixture: false,
+		DryRun:           false,
+		Authorization: &auth.AuthorizationRecord{
+			ID:               "auth-expired",
+			Status:           "APPROVED",
+			ValidFrom:        &validFrom,
+			ValidUntil:       &validUntil,
+			AuthorizingParty: "Security Officer",
+		},
+	}
+	_, _, _, errExpired := engine.Assess(context.Background(), actxExpired)
+	if errExpired == nil || !strings.Contains(errExpired.Error(), "security refusal: authorization is invalid") {
+		t.Errorf("expected error for expired authorization, got %v", errExpired)
+	}
+}
+
+// 19. Test Zero-Knowledge Sensitive Token Redaction Sentinel
+func TestSessionSec_SentinelLeakPrevention(t *testing.T) {
+	canarySessionToken := "flx_sentinel_secret_cookie_token_9876543210"
+	canaryPassword := "flx_sentinel_pass_secret_abc1234567"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" && r.URL.Path == "/" {
+			http.SetCookie(w, &http.Cookie{
+				Name:  "session_token",
+				Value: canarySessionToken,
+				Path:  "/",
+			})
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	engine := NewEngine(server.Client(), DefaultConfig())
+	actx := &AssessmentContext{
+		AssessmentID:     "asm-sentinel-leak-test",
+		ExecutionID:      "exec-sentinel-1",
+		BaseURL:          server.URL,
+		SyntheticFixture: true,
+		Identities: []TestIdentity{
+			{
+				Alias:    "user_sentinel",
+				Role:     "user",
+				Username: "canary_user",
+				Password: canaryPassword,
+			},
+		},
+	}
+
+	results, findings, summary, err := engine.Assess(context.Background(), actx)
+	if err != nil {
+		t.Fatalf("Assess failed: %v", err)
+	}
+
+	// Serialize results to JSON
+	bytesResults, err := json.Marshal(results)
+	if err != nil {
+		t.Fatalf("json.Marshal results failed: %v", err)
+	}
+	jsonResults := string(bytesResults)
+
+	// Serialize findings to JSON
+	bytesFindings, err := json.Marshal(findings)
+	if err != nil {
+		t.Fatalf("json.Marshal findings failed: %v", err)
+	}
+	jsonFindings := string(bytesFindings)
+
+	// Serialize summary to JSON
+	bytesSummary, err := json.Marshal(summary)
+	if err != nil {
+		t.Fatalf("json.Marshal summary failed: %v", err)
+	}
+	jsonSummary := string(bytesSummary)
+
+	// Assert zero exposure of raw secret canary token
+	if strings.Contains(jsonResults, canarySessionToken) {
+		t.Fatalf("SECURITY VIOLATION: Canary session token leaked in results JSON: %s", jsonResults)
+	}
+	if strings.Contains(jsonFindings, canarySessionToken) {
+		t.Fatalf("SECURITY VIOLATION: Canary session token leaked in findings JSON: %s", jsonFindings)
+	}
+	if strings.Contains(jsonSummary, canarySessionToken) {
+		t.Fatalf("SECURITY VIOLATION: Canary session token leaked in summary JSON: %s", jsonSummary)
+	}
+
+	// Assert zero exposure of raw secret canary password
+	if strings.Contains(jsonResults, canaryPassword) {
+		t.Fatalf("SECURITY VIOLATION: Canary password leaked in results JSON")
+	}
+	if strings.Contains(jsonFindings, canaryPassword) {
+		t.Fatalf("SECURITY VIOLATION: Canary password leaked in findings JSON")
+	}
+	if strings.Contains(jsonSummary, canaryPassword) {
+		t.Fatalf("SECURITY VIOLATION: Canary password leaked in summary JSON")
+	}
+}
+
+// 20. Test Session Invalidation False Positive Protection (Login Redirects & Forms)
+func TestSessionSec_InvalidationLoginRedirectNotVulnerable(t *testing.T) {
+	// Server returns HTTP 200 with an HTML login form when session is revoked
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `<html><body><h2>Please Sign In</h2><form action="/login" method="POST"><input type="password" name="password"></form></body></html>`)
+	}))
+	defer server.Close()
+
+	engine := NewEngine(server.Client(), DefaultConfig())
+	actx := &AssessmentContext{
+		AssessmentID:     "asm-inval-redirect",
+		BaseURL:          server.URL,
+		SyntheticFixture: true,
+		Endpoints:        []TargetEndpoint{{Method: "GET", Path: "/profile", Type: "protected"}},
+	}
+
+	results, findings, cov := engine.assessSessionInvalidation(context.Background(), actx, server.Client())
+	if cov.Verified != 0 || len(findings) != 0 {
+		t.Fatalf("expected 0 verified findings when server renders login form on invalidation, got %d (findings: %d)", cov.Verified, len(findings))
+	}
+	if results[0].VerificationState != StateNotVulnerable {
+		t.Errorf("expected StateNotVulnerable, got %v", results[0].VerificationState)
 	}
 }

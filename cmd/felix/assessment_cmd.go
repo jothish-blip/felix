@@ -3365,7 +3365,14 @@ func printSessionSecHelp() {
 	fmt.Println("\nFlags:")
 	fmt.Println("  --run                    Execute active session & identity security assessment")
 	fmt.Println("  --dry-run                Plan tests, analyze state transitions, and verify preconditions")
+	fmt.Println("  --target <url>           Override or set the base target URL")
+	fmt.Println("  --login-url <url>        Specify explicit login endpoint path or URL")
+	fmt.Println("  --logout-url <url>       Specify explicit logout endpoint path or URL")
+	fmt.Println("  --protected-url <url>    Specify explicit protected resource endpoint path or URL")
+	fmt.Println("  --cookie <name=value>    Provide test session cookie for authenticated verification")
+	fmt.Println("  --allow-state-changing   Opt-in to state-changing lifecycle tests (logout, invalidation)")
 	fmt.Println("  --policy <path>          Path to authorization policy file (JSON) with test identities")
+	fmt.Println("  --max-requests <n>       Maximum request budget (default: 30)")
 	fmt.Println("  --category, -c <cat>     Filter by session category (FIXATION, COOKIE, INVALIDATION, etc.)")
 	fmt.Println("  --status, -s <state>     Filter by verification state (VERIFIED, CANDIDATE, OBSERVED, NOT_VULNERABLE)")
 	fmt.Println("  --json                   Output full JSON format")
@@ -3374,6 +3381,8 @@ func printSessionSecHelp() {
 	fmt.Println("\nExamples:")
 	fmt.Println("  felix assessment sessionsec <asm-ref> --dry-run")
 	fmt.Println("  felix assessment sessionsec <asm-ref> --run")
+	fmt.Println("  felix assessment sessionsec <asm-ref> --run --cookie \"session=canary_token\"")
+	fmt.Println("  felix assessment sessionsec <asm-ref> --run --login-url /auth/login --protected-url /api/me")
 	fmt.Println("  felix assessment sessionsec <asm-ref> --run --policy policy.json")
 	fmt.Println("  felix assessment sessionsec <asm-ref> --status VERIFIED")
 	fmt.Println("  felix assessment sessionsec <asm-ref> --category SESSION_FIXATION --json")
@@ -3381,14 +3390,21 @@ func printSessionSecHelp() {
 
 func runAssessmentSessionSec(args []string) int {
 	var (
-		assessmentRef  string
-		runExecution   bool
-		dryRun         bool
-		policyPath     string
-		categoryFilter string
-		statusFilter   string
-		jsonOutput     bool
-		verbose        bool
+		assessmentRef      string
+		runExecution       bool
+		dryRun             bool
+		policyPath         string
+		categoryFilter     string
+		statusFilter       string
+		jsonOutput         bool
+		verbose            bool
+		targetOverride     string
+		loginURLFlag       string
+		logoutURLFlag      string
+		protectedURLFlag   string
+		cookieFlag         string
+		allowStateChanging bool
+		maxRequests        int = 30
 	)
 
 	for i := 0; i < len(args); i++ {
@@ -3398,6 +3414,40 @@ func runAssessmentSessionSec(args []string) int {
 			runExecution = true
 		case arg == "--dry-run":
 			dryRun = true
+		case arg == "--target" || arg == "-t":
+			if i+1 < len(args) {
+				targetOverride = args[i+1]
+				i++
+			}
+		case arg == "--login-url":
+			if i+1 < len(args) {
+				loginURLFlag = args[i+1]
+				i++
+			}
+		case arg == "--logout-url":
+			if i+1 < len(args) {
+				logoutURLFlag = args[i+1]
+				i++
+			}
+		case arg == "--protected-url" || arg == "--protected":
+			if i+1 < len(args) {
+				protectedURLFlag = args[i+1]
+				i++
+			}
+		case arg == "--cookie":
+			if i+1 < len(args) {
+				cookieFlag = args[i+1]
+				i++
+			}
+		case arg == "--allow-state-changing":
+			allowStateChanging = true
+		case arg == "--max-requests":
+			if i+1 < len(args) {
+				if n, err := strconv.Atoi(args[i+1]); err == nil && n > 0 {
+					maxRequests = n
+				}
+				i++
+			}
 		case arg == "--policy":
 			if i+1 < len(args) {
 				policyPath = args[i+1]
@@ -3453,6 +3503,9 @@ func runAssessmentSessionSec(args []string) int {
 	targetBase := "http://localhost"
 	if len(asm.Targets) > 0 {
 		targetBase = strings.TrimRight(asm.Targets[0].TargetURL, "/")
+	}
+	if targetOverride != "" {
+		targetBase = strings.TrimRight(targetOverride, "/")
 	}
 
 	// Load inventory endpoints and auth surfaces
@@ -3574,6 +3627,17 @@ func runAssessmentSessionSec(args []string) int {
 		)
 	}
 
+	// Apply explicit CLI endpoint overrides if supplied
+	if loginURLFlag != "" {
+		targetEndpoints = append([]sessionsec.TargetEndpoint{{Method: "POST", Path: loginURLFlag, Type: "login", Source: "cli"}}, targetEndpoints...)
+	}
+	if logoutURLFlag != "" {
+		targetEndpoints = append([]sessionsec.TargetEndpoint{{Method: "POST", Path: logoutURLFlag, Type: "logout", Source: "cli"}}, targetEndpoints...)
+	}
+	if protectedURLFlag != "" {
+		targetEndpoints = append([]sessionsec.TargetEndpoint{{Method: "GET", Path: protectedURLFlag, Type: "protected", Source: "cli"}}, targetEndpoints...)
+	}
+
 	// Load identities from policy
 	var policy *authz.AuthzPolicy
 	if policyPath != "" {
@@ -3609,6 +3673,29 @@ func runAssessmentSessionSec(args []string) int {
 		}
 	}
 
+	// Apply explicit CLI cookie if supplied
+	if cookieFlag != "" {
+		cParts := strings.SplitN(cookieFlag, "=", 2)
+		cName := strings.TrimSpace(cParts[0])
+		cVal := ""
+		if len(cParts) > 1 {
+			cVal = strings.TrimSpace(cParts[1])
+		}
+		if len(identities) > 0 {
+			if identities[0].Cookies == nil {
+				identities[0].Cookies = make(map[string]string)
+			}
+			identities[0].Cookies[cName] = cVal
+		} else {
+			identities = append(identities, sessionsec.TestIdentity{
+				Alias:          "cli_session_identity",
+				Role:           "user",
+				PrivilegeLevel: 1,
+				Cookies:        map[string]string{cName: cVal},
+			})
+		}
+	}
+
 	// Check if existing results exist
 	existingResults, _ := store.GetSessionSecResults(asm.ID, "", "", "")
 	if !runExecution && !dryRun && len(existingResults) == 0 {
@@ -3619,10 +3706,13 @@ func runAssessmentSessionSec(args []string) int {
 	if dryRun {
 		engine := sessionsec.NewEngine(nil, sessionsec.DefaultConfig())
 		actx := &sessionsec.AssessmentContext{
-			AssessmentID: asm.ID,
-			BaseURL:      targetBase,
-			Endpoints:    targetEndpoints,
-			Identities:   identities,
+			AssessmentID:            asm.ID,
+			BaseURL:                 targetBase,
+			Endpoints:               targetEndpoints,
+			Identities:              identities,
+			AllowStateChangingTests: allowStateChanging,
+			MaxRequests:             maxRequests,
+			DryRun:                  true,
 		}
 		plan, _ := engine.Plan(context.Background(), actx)
 
@@ -3732,14 +3822,29 @@ func runAssessmentSessionSec(args []string) int {
 		}
 
 		engine := sessionsec.NewEngine(sessionHTTPClient, cfg)
+		var authRec *auth.AuthorizationRecord
+		if asm.Authorization != nil {
+			authRec = &auth.AuthorizationRecord{
+				ID:                  asm.Authorization.ID,
+				AuthorizingParty:    asm.Authorization.AuthorizingParty,
+				AuthorizationMethod: asm.Authorization.AuthorizationMethod,
+				Status:              string(asm.Authorization.Status),
+				ValidFrom:           asm.Authorization.ValidFrom,
+				ValidUntil:          asm.Authorization.ValidUntil,
+			}
+		}
+
 		actx := &sessionsec.AssessmentContext{
-			AssessmentID: asm.ID,
-			ExecutionID:  execID,
-			BaseURL:      targetBase,
-			Endpoints:    targetEndpoints,
-			Identities:   identities,
-			IsAllowed:    scopeVal.IsAllowed,
-			IsExcluded:   func(u string) bool { excluded, _ := scopeVal.IsExcluded(u); return excluded },
+			AssessmentID:            asm.ID,
+			ExecutionID:             execID,
+			BaseURL:                 targetBase,
+			Endpoints:               targetEndpoints,
+			Identities:              identities,
+			IsAllowed:               scopeVal.IsAllowed,
+			IsExcluded:              func(u string) bool { excluded, _ := scopeVal.IsExcluded(u); return excluded },
+			Authorization:           authRec,
+			AllowStateChangingTests: allowStateChanging,
+			MaxRequests:             maxRequests,
 		}
 
 		fmt.Println("================================================================================")

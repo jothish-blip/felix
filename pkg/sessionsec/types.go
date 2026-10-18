@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"felix/pkg/auth"
 	"felix/pkg/report"
 	"felix/pkg/secrets"
 )
@@ -322,6 +323,8 @@ type AssessmentContext struct {
 	SyntheticFixture        bool
 	AllowStateChangingTests bool
 	DryRun                  bool
+	Authorization           *auth.AuthorizationRecord
+	MaxRequests             int
 }
 
 // Config defines the runtime configuration for the Session Security Engine.

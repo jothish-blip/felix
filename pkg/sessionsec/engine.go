@@ -59,6 +59,14 @@ func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
 			if actx.IsAllowed != nil && !actx.IsAllowed(destURL) {
 				return fmt.Errorf("redirect blocked: %s is out of authorized scope", destURL)
 			}
+			// Prevent credential forwarding across origin boundaries
+			if len(via) > 0 {
+				prevURL := via[len(via)-1].URL
+				if !strings.EqualFold(prevURL.Host, req.URL.Host) {
+					req.Header.Del("Authorization")
+					req.Header.Del("Cookie")
+				}
+			}
 			return nil
 		},
 	}
@@ -375,6 +383,15 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 		return nil, nil, summary, nil
 	}
 
+	if !actx.SyntheticFixture {
+		if actx.Authorization == nil {
+			return nil, nil, nil, fmt.Errorf("security refusal: authorization record required for active session assessment")
+		}
+		if valid, reason := actx.Authorization.IsCurrentlyValid(time.Now().UTC()); !valid {
+			return nil, nil, nil, fmt.Errorf("security refusal: authorization is invalid: %s", reason)
+		}
+	}
+
 	client := e.scopedClient(actx)
 	var allResults []Result
 	var allFindings []report.Finding
@@ -670,14 +687,51 @@ func (e *Engine) assessCookieSecurity(ctx context.Context, actx *AssessmentConte
 	}
 	defer resp.Body.Close()
 
-	cookies := resp.Cookies()
-	isHTTPS := strings.HasPrefix(strings.ToLower(testURL), "https://")
+	// Read response body safely bounded
+	limit := e.config.MaxBodyReadBytes
+	if limit <= 0 {
+		limit = 1024 * 1024
+	}
+	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, limit))
+	bodyStr := string(bodyBytes)
 
-	for _, c := range cookies {
-		lowerName := strings.ToLower(c.Name)
-		isSession := strings.Contains(lowerName, "sess") || strings.Contains(lowerName, "token") ||
-			strings.Contains(lowerName, "auth") || strings.Contains(lowerName, "jwt") ||
-			strings.Contains(lowerName, "sid") || strings.Contains(lowerName, "connect.sid")
+	// Parse cookies using robust Set-Cookie header parser
+	rawHeaders := resp.Header["Set-Cookie"]
+	parsedCookies := ParseSetCookieHeaders(rawHeaders)
+
+	// Fallback to resp.Cookies() if rawHeaders produced nothing (e.g. synthetic client or mock)
+	if len(parsedCookies) == 0 {
+		for _, c := range resp.Cookies() {
+			parsedCookies = append(parsedCookies, &ParsedCookie{
+				Name:        c.Name,
+				Value:       c.Value,
+				Path:        c.Path,
+				Domain:      c.Domain,
+				Expires:     c.Expires,
+				MaxAge:      c.MaxAge,
+				Secure:      c.Secure,
+				HttpOnly:    c.HttpOnly,
+				SameSite:    c.SameSite,
+				HasDomain:   c.Domain != "",
+				HasPath:     c.Path != "",
+				HasSecure:   c.Secure,
+				HasHttpOnly: c.HttpOnly,
+				HasSameSite: c.SameSite != 0,
+				Raw:         c.String(),
+			})
+		}
+	}
+
+	seenCookieTests := make(map[string]bool)
+
+	for _, c := range parsedCookies {
+		if seenCookieTests[c.Name] {
+			continue
+		}
+		seenCookieTests[c.Name] = true
+
+		cType := ClassifyCookie(c.Name)
+		defects, isSession := EvaluateCookieAttributes(c, testURL)
 
 		r := Result{
 			ID:             uuid.New().String(),
@@ -696,34 +750,50 @@ func (e *Engine) assessCookieSecurity(ctx context.Context, actx *AssessmentConte
 			CreatedAt:      time.Now().UTC(),
 		}
 
-		var defects []string
 		if isSession {
-			if !c.HttpOnly {
-				defects = append(defects, "Missing HttpOnly flag (accessible to JavaScript DOM)")
-			}
-			if isHTTPS && !c.Secure {
-				defects = append(defects, "Missing Secure flag on HTTPS transport")
-			}
-			if c.SameSite == http.SameSiteDefaultMode {
-				defects = append(defects, "SameSite attribute unset (relies on browser default)")
-			} else if c.SameSite == http.SameSiteNoneMode && !c.Secure {
-				defects = append(defects, "SameSite=None without Secure flag")
-			}
-
 			if len(defects) > 0 {
-				r.VerificationState = StateCandidate
-				r.Severity = report.SeverityMedium
+				var defectMsgs []string
+				hasVerifiedDefect := false
+				topSeverity := report.SeverityMedium
+
+				for _, d := range defects {
+					defectMsgs = append(defectMsgs, d.Description)
+					if d.Severity == report.SeverityHigh || d.Severity == report.SeverityCritical {
+						hasVerifiedDefect = true
+						topSeverity = d.Severity
+					}
+				}
+
+				if hasVerifiedDefect {
+					r.VerificationState = StateVerified
+					r.Severity = topSeverity
+					cov.Verified++
+					cov.Status = CoverageVerifiedIssueFound
+				} else {
+					r.VerificationState = StateCandidate
+					r.Severity = report.SeverityMedium
+					cov.Candidates++
+				}
 				r.Confidence = report.ConfidenceHigh
-				r.EvidenceSummary = fmt.Sprintf("Session cookie '%s' lacks security attributes: %s", c.Name, strings.Join(defects, "; "))
+				r.EvidenceSummary = fmt.Sprintf("Session cookie '%s' exhibits security attribute defects: %s",
+					c.Name, strings.Join(defectMsgs, "; "))
 				r.EvidenceDetails = map[string]string{
 					"cookie_name": c.Name,
-					"defects":     strings.Join(defects, ", "),
+					"defects":     strings.Join(defectMsgs, ", "),
 					"http_only":   fmt.Sprintf("%t", c.HttpOnly),
 					"secure":      fmt.Sprintf("%t", c.Secure),
 					"same_site":   fmt.Sprintf("%d", c.SameSite),
-					"hash":        HashSecret(c.Value),
+					"path":        c.Path,
+					"domain":      c.Domain,
+					"token_hash":  HashSecret(c.Value),
 				}
-				cov.Candidates++
+
+				if hasVerifiedDefect {
+					fnd := e.createFinding(actx, r, fmt.Sprintf("Insecure Session Cookie Attributes: '%s'", c.Name),
+						r.EvidenceSummary, r.Severity, 65)
+					r.Finding = fnd
+					findings = append(findings, *fnd)
+				}
 			} else {
 				r.VerificationState = StateNotVulnerable
 				r.Severity = report.SeverityInfo
@@ -731,29 +801,87 @@ func (e *Engine) assessCookieSecurity(ctx context.Context, actx *AssessmentConte
 				r.EvidenceSummary = fmt.Sprintf("Session cookie '%s' properly protected with HttpOnly, Secure, and SameSite attributes", c.Name)
 			}
 		} else {
-			// Non-session cookie (analytics, preferences)
-			r.VerificationState = StateObserved
-			r.Severity = report.SeverityInfo
-			r.Confidence = report.ConfidenceHigh
-			r.EvidenceSummary = fmt.Sprintf("Non-session cookie '%s' observed (attributes: Secure=%t, HttpOnly=%t)", c.Name, c.Secure, c.HttpOnly)
-			cov.Observations++
+			switch cType {
+			case CookieTypeCSRF:
+				r.VerificationState = StateObserved
+				r.Severity = report.SeverityInfo
+				r.Confidence = report.ConfidenceHigh
+				r.EvidenceSummary = fmt.Sprintf("Anti-CSRF cookie '%s' observed (Secure=%t, SameSite=%d; client-side readability standard for double-submit)",
+					c.Name, c.Secure, c.SameSite)
+				cov.Observations++
+			case CookieTypeAnalytics, CookieTypePreference:
+				r.VerificationState = StateObserved
+				r.Severity = report.SeverityInfo
+				r.Confidence = report.ConfidenceHigh
+				r.EvidenceSummary = fmt.Sprintf("Non-session cookie '%s' observed (attributes: Secure=%t, HttpOnly=%t)",
+					c.Name, c.Secure, c.HttpOnly)
+				cov.Observations++
+			default:
+				r.VerificationState = StateObserved
+				r.Severity = report.SeverityInfo
+				r.Confidence = report.ConfidenceMedium
+				r.EvidenceSummary = fmt.Sprintf("Application cookie '%s' observed with attributes (Secure=%t, HttpOnly=%t)",
+					c.Name, c.Secure, c.HttpOnly)
+				cov.Observations++
+			}
 		}
 
 		results = append(results, r)
+
+		// Check if active session token is reflected in the response body
+		if isSession && len(c.Value) >= 8 && strings.Contains(bodyStr, c.Value) {
+			rReflect := Result{
+				ID:                uuid.New().String(),
+				AssessmentID:      actx.AssessmentID,
+				ExecutionID:       actx.ExecutionID,
+				Category:          CategoryCookieSecurity,
+				VulnCode:          meta.Code,
+				TestID:            fmt.Sprintf("SS-COOKIE-BODY-REFLECTION-%s", c.Name),
+				TestName:          fmt.Sprintf("Session Token Reflected in Response Body (%s)", c.Name),
+				WSTGRef:           meta.WSTG,
+				Endpoint:          testURL,
+				Method:            "GET",
+				ObservedStatus:    resp.StatusCode,
+				VerificationState: StateVerified,
+				Severity:          report.SeverityHigh,
+				Confidence:        report.ConfidenceHigh,
+				EvidenceSummary:   fmt.Sprintf("Session token for cookie '%s' (hash: %s) is reflected in the HTTP response body", c.Name, HashSecret(c.Value)),
+				EvidenceDetails: map[string]string{
+					"cookie_name": c.Name,
+					"token_hash":  HashSecret(c.Value),
+					"defect":      "SESSION_TOKEN_REFLECTED_IN_BODY",
+				},
+				CreatedAt: time.Now().UTC(),
+			}
+			fndReflect := e.createFinding(actx, rReflect, fmt.Sprintf("Session Token Reflected in Response Body (%s)", c.Name),
+				rReflect.EvidenceSummary, report.SeverityHigh, 75)
+			rReflect.Finding = fndReflect
+			findings = append(findings, *fndReflect)
+			cov.Verified++
+			cov.Status = CoverageVerifiedIssueFound
+			results = append(results, rReflect)
+		}
 	}
 
 	// Check for URL session token exposure across discovered endpoints
 	for _, ep := range actx.Endpoints {
 		for _, param := range ep.Parameters {
 			lowerParam := strings.ToLower(param)
-			if lowerParam == "session_id" || lowerParam == "sid" || lowerParam == "auth_token" || lowerParam == "phpsessid" {
+			if lowerParam == "session_id" || lowerParam == "sid" || lowerParam == "auth_token" ||
+				lowerParam == "phpsessid" || lowerParam == "access_token" || lowerParam == "jwt" {
+				testID := fmt.Sprintf("SS-COOKIE-URL-EXPOSURE-%s-%s", ep.Path, param)
+				if seenCookieTests[testID] {
+					continue
+				}
+				seenCookieTests[testID] = true
+
 				r := Result{
 					ID:                uuid.New().String(),
 					AssessmentID:      actx.AssessmentID,
 					ExecutionID:       actx.ExecutionID,
 					Category:          CategoryCookieSecurity,
 					VulnCode:          meta.Code,
-					TestID:            "SS-COOKIE-URL-EXPOSURE",
+					TestID:            testID,
 					TestName:          fmt.Sprintf("Session Identifier Exposed in URL Query (%s)", param),
 					WSTGRef:           meta.WSTG,
 					Endpoint:          buildEndpointURL(actx.BaseURL, ep.Path, map[string]string{param: "flx_token_canary"}),
@@ -841,9 +969,10 @@ func (e *Engine) assessSessionInvalidation(ctx context.Context, actx *Assessment
 		if err == nil {
 			r.ObservedStatus = resp.StatusCode
 			bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-			resp.Body.Close()
+			lowerBody := strings.ToLower(string(bodyBytes))
+			isLoginContent := strings.Contains(lowerBody, "login") || strings.Contains(lowerBody, "sign in") || (strings.Contains(lowerBody, "<form") && strings.Contains(lowerBody, "password"))
 
-			if resp.StatusCode == 200 && (strings.Contains(string(bodyBytes), "profile") || strings.Contains(string(bodyBytes), "user")) {
+			if resp.StatusCode == 200 && !isLoginContent && (strings.Contains(lowerBody, "profile") || strings.Contains(lowerBody, "user") || strings.Contains(lowerBody, "account") || strings.Contains(lowerBody, "dashboard")) {
 				// VULNERABLE: Server accepted invalidated session
 				r.VerificationState = StateVerified
 				r.Severity = report.SeverityHigh
@@ -1294,8 +1423,10 @@ func (e *Engine) assessLogoutBehavior(ctx context.Context, actx *AssessmentConte
 				r.ObservedStatus = respReplay.StatusCode
 				bodyBytes, _ := io.ReadAll(io.LimitReader(respReplay.Body, 512))
 				respReplay.Body.Close()
+				lowerBody := strings.ToLower(string(bodyBytes))
+				isLoginContent := strings.Contains(lowerBody, "login") || strings.Contains(lowerBody, "sign in") || (strings.Contains(lowerBody, "<form") && strings.Contains(lowerBody, "password"))
 
-				if respReplay.StatusCode == 200 && strings.Contains(string(bodyBytes), "profile") {
+				if respReplay.StatusCode == 200 && !isLoginContent && (strings.Contains(lowerBody, "profile") || strings.Contains(lowerBody, "dashboard") || strings.Contains(lowerBody, "account") || strings.Contains(lowerBody, "user")) {
 					// VULNERABLE: Client deleted cookie, but server still accepted session
 					r.VerificationState = StateVerified
 					r.Severity = report.SeverityHigh
