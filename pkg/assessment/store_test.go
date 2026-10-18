@@ -10,6 +10,7 @@ import (
 	"felix/pkg/apisec"
 	"felix/pkg/auth"
 	"felix/pkg/authz"
+	"felix/pkg/bfla"
 	"felix/pkg/bola"
 	"felix/pkg/businesslogic"
 	"felix/pkg/cloudsec"
@@ -2600,6 +2601,154 @@ func TestStore_BOLAPersistenceAndMigration(t *testing.T) {
 	summary, err := store.GetBOLASummary(asm.ID, execID)
 	if err != nil {
 		t.Fatalf("GetBOLASummary failed: %v", err)
+	}
+	if summary.TotalTests != 4 {
+		t.Errorf("expected TotalTests = 4 from RunRecord, got %d", summary.TotalTests)
+	}
+	if summary.VerifiedCount != 1 {
+		t.Errorf("expected VerifiedCount = 1, got %d", summary.VerifiedCount)
+	}
+}
+
+func TestStore_BFLAPersistenceAndMigration(t *testing.T) {
+	store, cleanup := newTestStore(t)
+	defer cleanup()
+
+	// 1. Setup client and assessment
+	client := &Client{
+		ID:   uuid.New().String(),
+		Name: "BFLA Test Client",
+	}
+	if err := store.CreateClient(client); err != nil {
+		t.Fatalf("CreateClient failed: %v", err)
+	}
+
+	asm := &Assessment{
+		ID:       uuid.New().String(),
+		Ref:      "ASM-BFLA-TEST-001",
+		ClientID: client.ID,
+		Name:     "BFLA Verification Assessment",
+		Status:   StatusReady,
+	}
+	if err := store.CreateAssessment(asm); err != nil {
+		t.Fatalf("CreateAssessment failed: %v", err)
+	}
+
+	execID := uuid.New().String()
+
+	// 2. Test SaveBFLARun and GetBFLARun
+	runRec := &bfla.RunRecord{
+		ID:                 uuid.New().String(),
+		AssessmentID:       asm.ID,
+		ExecutionID:        execID,
+		TotalTests:         4,
+		CategoriesAssessed: 2,
+		VerifiedCount:      1,
+		CandidateCount:     1,
+		NotVulnerableCount: 1,
+		InconclusiveCount:  1,
+		BlockedCount:       0,
+		CoverageJSON:       `{"BFLA-ADMIN-ENDPOINT":{"category":"BFLA-ADMIN-ENDPOINT","code":"BFLA-ADMIN-ENDPOINT","name":"Lower-Privilege Role Accesses Admin-Only Endpoint","owasp_ref":"API5:2023","status":"VERIFIED_ISSUE_FOUND","tests_run":2,"verified":1,"candidates":0,"inconclusive":0,"blocked":0,"explanation":"BFLA verified"}}`,
+		CreatedAt:          time.Now().UTC(),
+	}
+	if err := store.SaveBFLARun(runRec); err != nil {
+		t.Fatalf("SaveBFLARun failed: %v", err)
+	}
+
+	fetchedRun, err := store.GetBFLARun(asm.ID, execID)
+	if err != nil {
+		t.Fatalf("GetBFLARun failed: %v", err)
+	}
+	if fetchedRun.ID != runRec.ID {
+		t.Errorf("expected run ID %s, got %s", runRec.ID, fetchedRun.ID)
+	}
+	if fetchedRun.VerifiedCount != 1 {
+		t.Errorf("expected VerifiedCount 1, got %d", fetchedRun.VerifiedCount)
+	}
+
+	// 3. Test SaveBFLAResults and GetBFLAResults
+	res1 := bfla.Result{
+		ID:                uuid.New().String(),
+		AssessmentID:      asm.ID,
+		ExecutionID:       execID,
+		Category:          bfla.CategoryBFLAAdminEndpoint,
+		VulnCode:          "BFLA-ADMIN-ENDPOINT",
+		TestID:            "BFLA-TEST-001",
+		TestName:          "Lower-Privilege Role Accesses /api/admin/metrics",
+		OWASPRef:          "API5:2023",
+		CWERef:            "CWE-285",
+		Endpoint:          "/api/admin/metrics",
+		Method:            "GET",
+		RequiredRole:      "admin",
+		AccessorRole:      "user",
+		AccessorAlias:     "std_user",
+		VerificationState: bfla.StateVerified,
+		Severity:          "HIGH",
+		Confidence:        "CONFIRMED",
+		ObservedStatus:    200,
+		EvidenceSummary:   "BFLA verified: lower-privilege user accessed /api/admin/metrics",
+		EvidenceDetails: map[string]string{
+			"marker_matched": "metrics",
+		},
+		CreatedAt: time.Now().UTC(),
+	}
+	res2 := bfla.Result{
+		ID:                uuid.New().String(),
+		AssessmentID:      asm.ID,
+		ExecutionID:       execID,
+		Category:          bfla.CategoryBFLAPrivilegeEscalation,
+		VulnCode:          "BFLA-PRIVILEGE-ESCALATION",
+		TestID:            "BFLA-TEST-002",
+		TestName:          "Privilege Escalation on /api/admin/config",
+		OWASPRef:          "API5:2023",
+		CWERef:            "CWE-269",
+		Endpoint:          "/api/admin/config",
+		Method:            "GET",
+		RequiredRole:      "admin",
+		AccessorRole:      "user",
+		AccessorAlias:     "std_user",
+		VerificationState: bfla.StateNotVulnerable,
+		Severity:          "INFO",
+		Confidence:        "CONFIRMED",
+		ObservedStatus:    403,
+		EvidenceSummary:   "Access correctly denied with status 403",
+		CreatedAt:         time.Now().UTC(),
+	}
+
+	if err := store.SaveBFLAResults([]bfla.Result{res1, res2}); err != nil {
+		t.Fatalf("SaveBFLAResults failed: %v", err)
+	}
+
+	allResults, err := store.GetBFLAResults(asm.ID, execID, "", "")
+	if err != nil {
+		t.Fatalf("GetBFLAResults failed: %v", err)
+	}
+	if len(allResults) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(allResults))
+	}
+
+	// Filter by category
+	catFiltered, err := store.GetBFLAResults(asm.ID, execID, string(bfla.CategoryBFLAAdminEndpoint), "")
+	if err != nil {
+		t.Fatalf("GetBFLAResults by category failed: %v", err)
+	}
+	if len(catFiltered) != 1 || catFiltered[0].VulnCode != "BFLA-ADMIN-ENDPOINT" {
+		t.Errorf("expected 1 result for BFLA-ADMIN-ENDPOINT, got %d", len(catFiltered))
+	}
+
+	// Filter by state
+	stateFiltered, err := store.GetBFLAResults(asm.ID, execID, "", string(bfla.StateVerified))
+	if err != nil {
+		t.Fatalf("GetBFLAResults by state failed: %v", err)
+	}
+	if len(stateFiltered) != 1 {
+		t.Errorf("expected 1 verified result, got %d", len(stateFiltered))
+	}
+
+	// 4. Test GetBFLASummary
+	summary, err := store.GetBFLASummary(asm.ID, execID)
+	if err != nil {
+		t.Fatalf("GetBFLASummary failed: %v", err)
 	}
 	if summary.TotalTests != 4 {
 		t.Errorf("expected TotalTests = 4 from RunRecord, got %d", summary.TotalTests)

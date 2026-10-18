@@ -19,6 +19,7 @@ import (
 	"felix/pkg/assessment"
 	"felix/pkg/auth"
 	"felix/pkg/authz"
+	"felix/pkg/bfla"
 	"felix/pkg/bola"
 	"felix/pkg/businesslogic"
 	"felix/pkg/cloudsec"
@@ -76,6 +77,8 @@ func runAssessment(args []string) int {
 		return runAssessmentAuthz(subArgs)
 	case "bola", "idor":
 		return runAssessmentBOLA(subArgs)
+	case "bfla":
+		return runAssessmentBFLA(subArgs)
 	case "apisec", "api":
 		return runAssessmentAPISec(subArgs)
 	case "webvuln", "vuln":
@@ -117,6 +120,7 @@ func printAssessmentHelp() {
 	fmt.Println("  auth         Inspect authentication surfaces, or verify active authentication security (--run/--verify)")
 	fmt.Println("  authz        Test and inspect API authorization, BOLA/IDOR, BFLA, BOPLA, and privilege escalation")
 	fmt.Println("  bola         Assess Broken Object Level Authorization (BOLA/IDOR) across multi-user boundaries")
+	fmt.Println("  bfla         Assess Broken Function Level Authorization (BFLA) across privilege boundaries")
 	fmt.Println("  apisec       Assess OWASP API Security Top 10 (2023) categories and API inventory")
 	fmt.Println("  webvuln      Assess and verify web application vulnerabilities (XSS, SQLi, SSTI, SSRF, etc.)")
 	fmt.Println("  sessionsec   Assess session lifecycle, token handling, and identity boundaries (WSTG-SESS/ATHN)")
@@ -138,6 +142,8 @@ func printAssessmentHelp() {
 	fmt.Println("  felix assessment authz <asm-ref> --policy policy.json --run")
 	fmt.Println("  felix assessment bola <asm-ref> --dry-run")
 	fmt.Println("  felix assessment bola <asm-ref> --run")
+	fmt.Println("  felix assessment bfla <asm-ref> --dry-run")
+	fmt.Println("  felix assessment bfla <asm-ref> --run")
 	fmt.Println("  felix assessment apisec <asm-ref> --run --spec openapi.json")
 	fmt.Println("  felix assessment webvuln <asm-ref> --run")
 	fmt.Println("  felix assessment sessionsec <asm-ref> --run")
@@ -4661,6 +4667,588 @@ func runAssessmentBOLA(args []string) int {
 	} else if summary == nil || summary.TotalTests == 0 {
 		fmt.Println("\nNo BOLA test results recorded.")
 		fmt.Printf("To run an authorized BOLA assessment:\n  felix assessment bola %s --run\n", asm.Ref)
+	}
+
+	fmt.Println()
+	return 0
+}
+
+func printBFLAHelp() {
+	fmt.Println("Usage: felix assessment bfla <asm-ref> [flags]")
+	fmt.Println("\nBroken Function Level Authorization (BFLA) Verification Engine (OWASP API5:2023 / CWE-285, CWE-269, CWE-648)")
+	fmt.Println("\nFlags:")
+	fmt.Println("  --run                      Execute authorized active BFLA assessment")
+	fmt.Println("  --dry-run                  Output pre-assessment plan without network traffic")
+	fmt.Println("  -t, --target <url>         Override assessment target base URL")
+	fmt.Println("  --endpoint <path>          Target endpoint path (e.g. /api/admin/metrics)")
+	fmt.Println("  --method <method>          HTTP method to evaluate (default: GET)")
+	fmt.Println("  --admin-token <token>      Authorization header value for privileged role (admin)")
+	fmt.Println("  --user-token <token>       Authorization header value for lower-privilege role (user)")
+	fmt.Println("  --admin-cookie <cookie>    Session cookie value for privileged role (admin)")
+	fmt.Println("  --user-cookie <cookie>     Session cookie value for lower-privilege role (user)")
+	fmt.Println("  --admin-role <role>        Role name for privileged user (default: admin)")
+	fmt.Println("  --user-role <role>         Role name for lower-privilege user (default: user)")
+	fmt.Println("  --allow-state-changing     Explicitly permit write-operation BFLA tests (POST/PUT/PATCH/DELETE)")
+	fmt.Println("  --allow-loopback           Allow testing on loopback addresses")
+	fmt.Println("  --allow-private            Allow testing on private network addresses")
+	fmt.Println("  --max-requests <n>         Maximum requests allowed during run (default: 30)")
+	fmt.Println("  --policy <path>            Path to JSON policy file")
+	fmt.Println("  -c, --category <name>      Filter results by BFLA category (e.g. BFLA-ADMIN-ENDPOINT)")
+	fmt.Println("  -s, --status <name>        Filter results by verification state (VERIFIED, CANDIDATE, etc.)")
+	fmt.Println("  --json                     Output results in JSON format")
+	fmt.Println("  -v, --verbose              Enable verbose output")
+	fmt.Println("  -h, --help                 Display this help message")
+}
+
+func runAssessmentBFLA(args []string) int {
+	var (
+		assessmentRef      string
+		runExecution       bool
+		dryRun             bool
+		targetOverride     string
+		endpointFlag       string
+		methodFlag         string = "GET"
+		adminToken         string
+		userToken          string
+		adminCookie        string
+		userCookie         string
+		adminRole          string = "admin"
+		userRole           string = "user"
+		policyPath         string
+		categoryFilter     string
+		statusFilter       string
+		jsonOutput         bool
+		verbose            bool
+		allowStateChanging bool
+		allowLoopback      bool
+		allowPrivate       bool
+		maxRequests        int = 30
+	)
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--run":
+			runExecution = true
+		case arg == "--dry-run":
+			dryRun = true
+		case arg == "--target" || arg == "-t":
+			if i+1 < len(args) {
+				targetOverride = args[i+1]
+				i++
+			}
+		case arg == "--endpoint":
+			if i+1 < len(args) {
+				endpointFlag = args[i+1]
+				i++
+			}
+		case arg == "--method":
+			if i+1 < len(args) {
+				methodFlag = strings.ToUpper(args[i+1])
+				i++
+			}
+		case arg == "--admin-token":
+			if i+1 < len(args) {
+				adminToken = args[i+1]
+				i++
+			}
+		case arg == "--user-token":
+			if i+1 < len(args) {
+				userToken = args[i+1]
+				i++
+			}
+		case arg == "--admin-cookie":
+			if i+1 < len(args) {
+				adminCookie = args[i+1]
+				i++
+			}
+		case arg == "--user-cookie":
+			if i+1 < len(args) {
+				userCookie = args[i+1]
+				i++
+			}
+		case arg == "--admin-role":
+			if i+1 < len(args) {
+				adminRole = args[i+1]
+				i++
+			}
+		case arg == "--user-role":
+			if i+1 < len(args) {
+				userRole = args[i+1]
+				i++
+			}
+		case arg == "--allow-state-changing":
+			allowStateChanging = true
+		case arg == "--allow-loopback":
+			allowLoopback = true
+		case arg == "--allow-private":
+			allowPrivate = true
+		case arg == "--max-requests":
+			if i+1 < len(args) {
+				if n, err := strconv.Atoi(args[i+1]); err == nil && n > 0 {
+					maxRequests = n
+				}
+				i++
+			}
+		case arg == "--policy":
+			if i+1 < len(args) {
+				policyPath = args[i+1]
+				i++
+			}
+		case arg == "--category" || arg == "-c":
+			if i+1 < len(args) {
+				categoryFilter = strings.ToUpper(args[i+1])
+				i++
+			}
+		case arg == "--status" || arg == "-s":
+			if i+1 < len(args) {
+				statusFilter = strings.ToUpper(args[i+1])
+				i++
+			}
+		case arg == "--json":
+			jsonOutput = true
+		case arg == "--verbose" || arg == "-v":
+			verbose = true
+		case arg == "--help" || arg == "-h":
+			printBFLAHelp()
+			return 0
+		default:
+			if !strings.HasPrefix(arg, "-") && assessmentRef == "" {
+				assessmentRef = arg
+			}
+		}
+	}
+
+	if assessmentRef == "" {
+		fmt.Fprintf(os.Stderr, "[-] Error: assessment ID or Ref is required\n\n")
+		printBFLAHelp()
+		return 2
+	}
+
+	store, err := getAssessmentStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Database error: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+
+	asm, err := store.GetAssessment(assessmentRef)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Error finding assessment '%s': %v\n", assessmentRef, err)
+		return 1
+	}
+	asm.Targets, _ = store.GetTargets(asm.ID)
+	asm.Authorization, _ = store.GetAuthorization(asm.ID)
+	asm.Exclusions, _ = store.GetExclusions(asm.ID)
+	asm.ScopeRules, _ = store.GetScopeRules(asm.ID)
+
+	targetBase := "http://localhost"
+	if len(asm.Targets) > 0 {
+		targetBase = strings.TrimRight(asm.Targets[0].TargetURL, "/")
+	}
+	if targetOverride != "" {
+		targetBase = strings.TrimRight(targetOverride, "/")
+	}
+
+	// 1. Build Policies
+	var policies []bfla.FunctionPolicy
+	var loadedIdentities []bfla.TestIdentity
+
+	if policyPath != "" {
+		data, err := os.ReadFile(policyPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Error reading policy file: %v\n", err)
+			return 1
+		}
+		var pf bfla.PolicyFile
+		if err := json.Unmarshal(data, &pf); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Error parsing policy file: %v\n", err)
+			return 1
+		}
+		policies = pf.Policies
+		loadedIdentities = pf.Identities
+	} else if endpointFlag != "" {
+		isStateChanging := methodFlag == "POST" || methodFlag == "PUT" || methodFlag == "DELETE" || methodFlag == "PATCH"
+		cat := bfla.CategoryBFLAAdminEndpoint
+		if isStateChanging {
+			cat = bfla.CategoryBFLAWriteMutation
+		}
+		policies = append(policies, bfla.FunctionPolicy{
+			FunctionID:              "cli-endpoint-test",
+			Name:                    fmt.Sprintf("Function Authorization on %s %s", methodFlag, endpointFlag),
+			Path:                    endpointFlag,
+			Method:                  methodFlag,
+			Category:                cat,
+			AllowedRoles:            []string{adminRole},
+			RestrictedRoles:         []string{userRole},
+			RequiredPrivilegeLevel:  5,
+			PositiveControlRequired: true,
+			IsStateChanging:         isStateChanging,
+		})
+	} else {
+		policies = bfla.DefaultPolicies()
+	}
+
+	// 2. Build Identities
+	var identities []bfla.TestIdentity
+	if len(loadedIdentities) > 0 {
+		identities = loadedIdentities
+	} else {
+		headersAdmin := make(map[string]string)
+		cookiesAdmin := make(map[string]string)
+		if adminToken != "" {
+			tokenVal := strings.TrimSpace(adminToken)
+			if !strings.HasPrefix(strings.ToLower(tokenVal), "bearer ") {
+				tokenVal = "Bearer " + tokenVal
+			}
+			headersAdmin["Authorization"] = tokenVal
+		}
+		if adminCookie != "" {
+			cParts := strings.SplitN(adminCookie, "=", 2)
+			if len(cParts) == 2 {
+				cookiesAdmin[cParts[0]] = cParts[1]
+			} else {
+				cookiesAdmin["session"] = adminCookie
+			}
+		}
+
+		headersUser := make(map[string]string)
+		cookiesUser := make(map[string]string)
+		if userToken != "" {
+			tokenVal := strings.TrimSpace(userToken)
+			if !strings.HasPrefix(strings.ToLower(tokenVal), "bearer ") {
+				tokenVal = "Bearer " + tokenVal
+			}
+			headersUser["Authorization"] = tokenVal
+		}
+		if userCookie != "" {
+			cParts := strings.SplitN(userCookie, "=", 2)
+			if len(cParts) == 2 {
+				cookiesUser[cParts[0]] = cParts[1]
+			} else {
+				cookiesUser["session"] = userCookie
+			}
+		}
+
+		if len(headersAdmin) == 0 && len(cookiesAdmin) == 0 {
+			headersAdmin["Authorization"] = "Bearer token_admin_synthetic"
+		}
+		if len(headersUser) == 0 && len(cookiesUser) == 0 {
+			headersUser["Authorization"] = "Bearer token_user_synthetic"
+		}
+
+		identities = []bfla.TestIdentity{
+			{
+				Alias:          "admin_user",
+				Role:           adminRole,
+				PrivilegeLevel: 5,
+				Headers:        headersAdmin,
+				Cookies:        cookiesAdmin,
+			},
+			{
+				Alias:          "standard_user",
+				Role:           userRole,
+				PrivilegeLevel: 1,
+				Headers:        headersUser,
+				Cookies:        cookiesUser,
+			},
+		}
+	}
+
+	// Mode 1: Dry-Run
+	if dryRun {
+		engine := bfla.NewEngine(nil, bfla.DefaultConfig())
+		actx := &bfla.AssessmentContext{
+			AssessmentID:            asm.ID,
+			BaseURL:                 targetBase,
+			Policies:                policies,
+			Identities:              identities,
+			AllowStateChangingTests: allowStateChanging,
+			DryRun:                  true,
+			IsExcluded: func(target string) bool {
+				for _, exc := range asm.Exclusions {
+					if strings.Contains(target, exc.Pattern) {
+						return true
+					}
+				}
+				return false
+			},
+		}
+
+		plan, err := engine.Plan(context.Background(), actx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Planning error: %v\n", err)
+			return 1
+		}
+
+		if jsonOutput {
+			b, _ := json.MarshalIndent(plan, "", "  ")
+			fmt.Println(string(b))
+			return 0
+		}
+
+		fmt.Println("================================================================================")
+		fmt.Println("  FELIX :: BFLA / BROKEN FUNCTION LEVEL AUTHORIZATION PLAN (DRY-RUN)")
+		fmt.Printf("  Assessment: %s (%s) | Target: %s\n", asm.Name, asm.Ref, targetBase)
+		fmt.Println("================================================================================")
+		fmt.Printf("Total Planned Tests: %d | Ready: %d | Blocked: %d | State-Changing: %d\n\n",
+			plan.TotalTests, plan.ReadyTests, plan.BlockedTests, plan.StateChangingTests)
+
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "TEST ID\tCATEGORY\tMETHOD\tENDPOINT\tALLOWED ROLE\tTEST ROLE\tSTATUS")
+		for _, pt := range plan.Tests {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				pt.ID, pt.Category, pt.Method, pt.Endpoint, pt.AllowedRole, pt.TestedRole, pt.Status)
+		}
+		_ = w.Flush()
+
+		fmt.Printf("\nTo execute active testing:\n  felix assessment bfla %s --run\n\n", asm.Ref)
+		return 0
+	}
+
+	// Mode 2: Active Run
+	if runExecution {
+		if asm.Authorization == nil {
+			fmt.Fprintln(os.Stderr, "[-] Refused: Assessment lacks authorization record.")
+			fmt.Fprintf(os.Stderr, "    Run: felix assessment authorize %s --authorizer <name> --role <role>\n", asm.Ref)
+			return 1
+		}
+		valid, reason := asm.Authorization.IsCurrentlyValid(time.Now().UTC())
+		if !valid {
+			fmt.Fprintf(os.Stderr, "[-] Refused: Authorization is invalid (%s).\n", reason)
+			return 1
+		}
+
+		targetID := ""
+		if len(asm.Targets) > 0 {
+			targetID = asm.Targets[0].ID
+		}
+
+		execID := "exec-" + uuid.New().String()
+		now := time.Now().UTC()
+		execRecord := &assessment.AssessmentExecution{
+			ID:           execID,
+			AssessmentID: asm.ID,
+			Status:       assessment.StatusRunning,
+			StartedAt:    now,
+			ConfigSnapshot: assessment.ScanConfigSnapshot{
+				TimeoutSeconds: 15,
+				Concurrency:    5,
+				ScopeMode:      asm.ScopeMode,
+				FelixVersion:   "2.0",
+			},
+		}
+		if err := store.CreateExecution(execRecord); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Failed to create execution record: %v\n", err)
+			return 1
+		}
+
+		var targetURLs []string
+		for _, t := range asm.Targets {
+			targetURLs = append(targetURLs, t.TargetURL)
+		}
+		scopeVal := assessment.NewScopeValidator(asm.ScopeMode, targetURLs, asm.ScopeRules, asm.Exclusions)
+
+		fmt.Println("================================================================================")
+		fmt.Println("  FELIX :: BFLA / BROKEN FUNCTION LEVEL AUTHORIZATION VERIFICATION")
+		fmt.Printf("  Assessment: %s (%s) | Target: %s\n", asm.Name, asm.Ref, targetBase)
+		fmt.Println("================================================================================")
+		fmt.Printf("[*] Dispatched at %s | Max Requests: %d | Concurrency: 3\n",
+			now.Format(time.RFC3339), maxRequests)
+
+		uTarget, _ := url.Parse(targetBase)
+		isTargetLoopback := uTarget != nil && bfla.IsLoopbackHost(uTarget.Hostname())
+
+		cfg := bfla.DefaultConfig()
+		cfg.AllowActiveTesting = true
+		cfg.AllowStateChangingTests = allowStateChanging
+
+		safeTransport := crawler.NewSafeTransport(crawler.SafeTransportOptions{
+			Timeout:         cfg.Timeout,
+			AllowLoopback:   allowLoopback || isTargetLoopback,
+			AllowPrivateIPs: allowPrivate,
+		})
+		httpClient := &http.Client{
+			Transport: crawler.NewRateLimitedTransport(safeTransport, crawler.RateLimitOptions{}),
+			Timeout:   cfg.Timeout,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 10 {
+					return fmt.Errorf("stopped after 10 redirects")
+				}
+				lastURL := ""
+				if len(via) > 0 {
+					lastURL = via[len(via)-1].URL.String()
+				}
+				return scopeVal.ValidateRedirect(lastURL, req.URL.String())
+			},
+		}
+
+		engine := bfla.NewEngine(httpClient, cfg)
+
+		var authRec *auth.AuthorizationRecord
+		if asm.Authorization != nil {
+			authRec = &auth.AuthorizationRecord{
+				ID:                  asm.Authorization.ID,
+				AuthorizingParty:    asm.Authorization.AuthorizingParty,
+				AuthorizationMethod: asm.Authorization.AuthorizationMethod,
+				Status:              string(asm.Authorization.Status),
+				ValidFrom:           asm.Authorization.ValidFrom,
+				ValidUntil:          asm.Authorization.ValidUntil,
+			}
+		}
+
+		var dispatchedReqs int32
+		actx := &bfla.AssessmentContext{
+			AssessmentID:            asm.ID,
+			ExecutionID:             execID,
+			BaseURL:                 targetBase,
+			Policies:                policies,
+			Identities:              identities,
+			AllowStateChangingTests: allowStateChanging,
+			SyntheticFixture:        true,
+			Authorization:           authRec,
+			MaxRequests:             maxRequests,
+			DispatchedRequests:      &dispatchedReqs,
+			IsAllowed:               scopeVal.IsAllowed,
+			IsExcluded:              func(u string) bool { excluded, _ := scopeVal.IsExcluded(u); return excluded },
+		}
+
+		startTime := time.Now()
+		results, summary, err := engine.Assess(context.Background(), actx)
+		duration := time.Since(startTime)
+		completedAt := time.Now().UTC()
+
+		if err != nil {
+			execRecord.Status = assessment.StatusFailed
+			execRecord.ErrorMessage = err.Error()
+			_ = store.UpdateExecution(execRecord)
+			fmt.Fprintf(os.Stderr, "[-] Assessment failed: %v\n", err)
+			return 1
+		}
+
+		execRecord.Status = assessment.StatusCompleted
+
+		// Save results
+		if err := store.SaveBFLAResults(results); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Warning: failed to save BFLA results: %v\n", err)
+		}
+
+		// Save run record
+		covJSON, _ := json.Marshal(summary.CoverageMap)
+		runRec := &bfla.RunRecord{
+			ID:                 uuid.New().String(),
+			AssessmentID:       asm.ID,
+			ExecutionID:        execID,
+			TotalTests:         summary.TotalTests,
+			CategoriesAssessed: summary.CategoriesCovered,
+			VerifiedCount:      summary.VerifiedCount,
+			CandidateCount:     summary.CandidateCount,
+			NotVulnerableCount: summary.NotVulnerableCount,
+			InconclusiveCount:  summary.InconclusiveCount,
+			BlockedCount:       summary.BlockedCount,
+			CoverageJSON:       string(covJSON),
+			CreatedAt:          completedAt,
+		}
+		if err := store.SaveBFLARun(runRec); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Warning: failed to save BFLA run record: %v\n", err)
+		}
+
+		// Save findings
+		var asmFindings []assessment.AssessmentFinding
+		for _, r := range results {
+			if r.Finding != nil {
+				asmFindings = append(asmFindings, assessment.ToAssessmentFinding(asm.ID, execID, targetID, *r.Finding))
+			}
+		}
+		execRecord.FindingCount = len(asmFindings)
+		if len(asmFindings) > 0 {
+			if err := store.SaveFindings(asmFindings); err != nil {
+				fmt.Fprintf(os.Stderr, "[-] Warning: failed to save findings: %v\n", err)
+			}
+		}
+
+		_ = store.UpdateExecution(execRecord)
+
+		fmt.Printf("\n[+] Assessment Complete in %v\n", duration.Round(time.Millisecond))
+		fmt.Printf("    Total Tests: %d | Categories Assessed: %d\n", summary.TotalTests, summary.CategoriesCovered)
+		fmt.Printf("    Verified Issues: %d | Candidates: %d | Not Vulnerable: %d | Inconclusive: %d\n",
+			summary.VerifiedCount, summary.CandidateCount, summary.NotVulnerableCount, summary.InconclusiveCount)
+	}
+
+	// Mode 3: Inspection / Reporting
+	results, err := store.GetBFLAResults(asm.ID, "", categoryFilter, statusFilter)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Failed to fetch BFLA results: %v\n", err)
+		return 1
+	}
+
+	summary, _ := store.GetBFLASummary(asm.ID, "")
+
+	if jsonOutput {
+		out := map[string]interface{}{
+			"assessment_ref": asm.Ref,
+			"target_base":    targetBase,
+			"summary":        summary,
+			"results":        results,
+		}
+		b, _ := json.MarshalIndent(out, "", "  ")
+		fmt.Println(string(b))
+		return 0
+	}
+
+	fmt.Println("================================================================================")
+	fmt.Printf("  FELIX :: BFLA / BROKEN FUNCTION LEVEL AUTHORIZATION RESULTS: %s\n", asm.Ref)
+	fmt.Printf("  Assessment: %s | Target: %s\n", asm.Name, targetBase)
+	fmt.Println("================================================================================")
+
+	allCats := []bfla.Category{
+		bfla.CategoryBFLAAdminEndpoint,
+		bfla.CategoryBFLAPrivilegeEscalation,
+		bfla.CategoryBFLAMethodBypass,
+		bfla.CategoryBFLAWriteMutation,
+	}
+
+	if summary != nil && len(summary.CoverageMap) > 0 {
+		fmt.Println("\n[+] CATEGORY COVERAGE SUMMARY:")
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "CODE\tCATEGORY\tOWASP REF\tSTATUS\tTESTS\tVERIFIED\tCANDIDATES")
+		for _, cat := range allCats {
+			cov, ok := summary.CoverageMap[string(cat)]
+			if !ok {
+				meta := bfla.CategoryMetadata[cat]
+				cov = bfla.CategoryCoverage{
+					Code:     meta.Code,
+					Name:     meta.Name,
+					OWASPRef: meta.OWASP,
+					Status:   bfla.CoverageUntested,
+				}
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%d\t%d\n",
+				cov.Code, cov.Name, cov.OWASPRef, cov.Status, cov.TestsRun, cov.Verified, cov.Candidates)
+		}
+		_ = w.Flush()
+	}
+
+	if len(results) > 0 {
+		fmt.Println("\n[+] DETAILED TEST RESULTS:")
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		if verbose {
+			fmt.Fprintln(w, "CODE\tSTATE\tSEVERITY\tMETHOD\tENDPOINT\tTEST ROLE\tEVIDENCE & DETAILS")
+			for _, r := range results {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					r.VulnCode, r.VerificationState, r.Severity, r.Method, r.Endpoint, r.AccessorRole, r.EvidenceSummary)
+			}
+		} else {
+			fmt.Fprintln(w, "CODE\tSTATE\tSEVERITY\tMETHOD\tENDPOINT\tTEST ROLE\tEVIDENCE SUMMARY")
+			for _, r := range results {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					r.VulnCode, r.VerificationState, r.Severity, r.Method, r.Endpoint, r.AccessorRole, r.EvidenceSummary)
+			}
+		}
+		_ = w.Flush()
+	} else if summary == nil || summary.TotalTests == 0 {
+		fmt.Println("\nNo BFLA test results recorded.")
+		fmt.Printf("To run an authorized BFLA assessment:\n  felix assessment bfla %s --run\n", asm.Ref)
 	}
 
 	fmt.Println()
