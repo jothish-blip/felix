@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1341,5 +1342,326 @@ func TestSessionSec_SplitSetCookieHeaderExpiresHandling(t *testing.T) {
 	}
 	if !strings.HasPrefix(cookies[1], "user_pref=dark") {
 		t.Errorf("second cookie corrupted: %s", cookies[1])
+	}
+}
+
+// 27. Test Redirect Return to Original Host Defense (A -> B -> A)
+func TestSessionSec_RedirectOriginReturnToOriginalHost(t *testing.T) {
+	var aFirstHeaders, bHeaders, aSecondHeaders http.Header
+	var aCallCount int
+
+	var bServerURL string
+	var aServer *httptest.Server
+
+	aServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		aCallCount++
+		if aCallCount == 1 {
+			aFirstHeaders = r.Header.Clone()
+			// Redirect to untrusted intermediate origin B
+			http.Redirect(w, r, bServerURL, http.StatusFound)
+			return
+		}
+		// Second call: redirected back from B to A
+		aSecondHeaders = r.Header.Clone()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer aServer.Close()
+
+	bServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bHeaders = r.Header.Clone()
+		// Untrusted origin B redirects back to original origin A
+		http.Redirect(w, r, aServer.URL, http.StatusFound)
+	}))
+	defer bServer.Close()
+	bServerURL = bServer.URL
+
+	engine := NewEngine(nil, DefaultConfig())
+	actx := &AssessmentContext{
+		AssessmentID: "asm-return-to-origin",
+		BaseURL:      aServer.URL,
+		IsAllowed:    func(string) bool { return true },
+	}
+
+	client := engine.scopedClient(actx)
+	req, _ := http.NewRequest("GET", aServer.URL, nil)
+	req.Header.Set("Authorization", "Bearer canary_return_token")
+	req.Header.Set("Cookie", "session=canary_return_cookie")
+	req.Header.Set("X-API-Key", "canary_return_key")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("client Do failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// 1. Initial request to origin A has credentials
+	if aFirstHeaders.Get("Authorization") != "Bearer canary_return_token" {
+		t.Errorf("expected origin A first request to receive credentials")
+	}
+
+	// 2. Untrusted intermediate origin B must NOT receive credentials
+	for _, h := range []string{"Authorization", "Cookie", "X-API-Key"} {
+		if val := bHeaders.Get(h); val != "" {
+			t.Errorf("SECURITY LEAK: untrusted origin B received %s=%s", h, val)
+		}
+	}
+
+	// 3. Return to origin A must NOT have credentials forwarded or reinjected
+	for _, h := range []string{"Authorization", "Cookie", "X-API-Key"} {
+		if val := aSecondHeaders.Get(h); val != "" {
+			t.Errorf("SECURITY LEAK: redirected return to origin A retained %s=%s", h, val)
+		}
+	}
+}
+
+// 28. Test Redirect Scheme Transition Bidirectional (HTTP <-> HTTPS)
+func TestSessionSec_RedirectSchemeTransitionBidirectional(t *testing.T) {
+	engine := NewEngine(nil, DefaultConfig())
+	actx := &AssessmentContext{
+		AssessmentID: "asm-scheme-bidirectional",
+		BaseURL:      "http://example.com",
+		IsAllowed:    func(string) bool { return true },
+	}
+	client := engine.scopedClient(actx)
+
+	// Case 1: HTTP -> HTTPS redirect
+	reqHTTPtoHTTPS, _ := http.NewRequest("GET", "https://example.com/secure", nil)
+	reqHTTPtoHTTPS.Header.Set("Authorization", "Bearer http_to_https_token")
+	reqHTTPtoHTTPS.Header.Set("Cookie", "session=http_to_https_cookie")
+	viaHTTP, _ := http.NewRequest("GET", "http://example.com/start", nil)
+
+	err := client.CheckRedirect(reqHTTPtoHTTPS, []*http.Request{viaHTTP})
+	if err != nil {
+		t.Fatalf("unexpected CheckRedirect error: %v", err)
+	}
+	if val := reqHTTPtoHTTPS.Header.Get("Authorization"); val != "" {
+		t.Errorf("expected Authorization stripped on HTTP->HTTPS scheme transition, got: %s", val)
+	}
+	if val := reqHTTPtoHTTPS.Header.Get("Cookie"); val != "" {
+		t.Errorf("expected Cookie stripped on HTTP->HTTPS scheme transition, got: %s", val)
+	}
+
+	// Case 2: HTTPS -> HTTP redirect (scheme downgrade)
+	reqHTTPStoHTTP, _ := http.NewRequest("GET", "http://example.com/insecure", nil)
+	reqHTTPStoHTTP.Header.Set("Authorization", "Bearer https_to_http_token")
+	reqHTTPStoHTTP.Header.Set("Cookie", "session=https_to_http_cookie")
+	viaHTTPS, _ := http.NewRequest("GET", "https://example.com/secure", nil)
+
+	err = client.CheckRedirect(reqHTTPStoHTTP, []*http.Request{viaHTTPS})
+	if err != nil {
+		t.Fatalf("unexpected CheckRedirect error: %v", err)
+	}
+	if val := reqHTTPStoHTTP.Header.Get("Authorization"); val != "" {
+		t.Errorf("expected Authorization stripped on HTTPS->HTTP scheme downgrade, got: %s", val)
+	}
+	if val := reqHTTPStoHTTP.Header.Get("Cookie"); val != "" {
+		t.Errorf("expected Cookie stripped on HTTPS->HTTP scheme downgrade, got: %s", val)
+	}
+}
+
+// 29. Test Cookie Parser Advanced Delimiters, Optional Attributes & Malformed Headers
+func TestSessionSec_CookieParser_AdvancedDelimitersAndMalformed(t *testing.T) {
+	// 1. Multiple cookies with diverse Expires formats, Max-Age, Domain, Path, SameSite, Partitioned
+	complexHeader := "sess_a=123; Expires=Thu, 01 Jan 2030 00:00:00 GMT; Path=/api; Domain=example.com; Secure; HttpOnly; SameSite=Strict; Partitioned, " +
+		"sess_b=456; Max-Age=3600; Path=/; HttpOnly; SameSite=Lax, " +
+		"pref_c=dark; Path=/; SameSite=None; Secure"
+
+	cookies := ParseSetCookieHeaders([]string{complexHeader})
+	if len(cookies) != 3 {
+		t.Fatalf("expected 3 parsed cookies, got %d", len(cookies))
+	}
+
+	cA := cookies[0]
+	if cA.Name != "sess_a" || cA.Value != "123" || cA.Path != "/api" || cA.Domain != "example.com" {
+		t.Errorf("cookie A fields mismatch: %#v", cA)
+	}
+	if !cA.Secure || !cA.HttpOnly || cA.SameSite != http.SameSiteStrictMode || !cA.Partitioned {
+		t.Errorf("cookie A security flags mismatch: %#v", cA)
+	}
+
+	cB := cookies[1]
+	if cB.Name != "sess_b" || cB.Value != "456" || cB.MaxAge != 3600 || cB.SameSite != http.SameSiteLaxMode {
+		t.Errorf("cookie B fields mismatch: %#v", cB)
+	}
+
+	cC := cookies[2]
+	if cC.Name != "pref_c" || cC.Value != "dark" || cC.SameSite != http.SameSiteNoneMode || !cC.Secure {
+		t.Errorf("cookie C fields mismatch: %#v", cC)
+	}
+
+	// 2. Malformed headers: empty name, missing '=', extra semicolons, invalid attributes
+	malformedHeaders := []string{
+		"=missing_name; Path=/",
+		"missing_eq; Path=/",
+		";;;",
+		"valid_cookie=xyz; ; Path=/; ; Secure;;",
+		"bad_samesite=abc; SameSite=totally_invalid; HttpOnly",
+		"bad_maxage=def; Max-Age=not_a_number; Path=/",
+	}
+
+	parsed := ParseSetCookieHeaders(malformedHeaders)
+	// Only valid_cookie, bad_samesite, bad_maxage should parse as cookies
+	if len(parsed) != 3 {
+		t.Fatalf("expected exactly 3 validly parsed cookies from malformed inputs, got %d", len(parsed))
+	}
+
+	// valid_cookie should preserve Secure and Path=/ despite duplicate semicolons
+	if parsed[0].Name != "valid_cookie" || !parsed[0].Secure || parsed[0].Path != "/" {
+		t.Errorf("valid_cookie parsing failed: %#v", parsed[0])
+	}
+	// bad_samesite should fallback to DefaultMode
+	if parsed[1].Name != "bad_samesite" || parsed[1].SameSite != http.SameSiteDefaultMode {
+		t.Errorf("bad_samesite should default to DefaultMode, got: %v", parsed[1].SameSite)
+	}
+	// bad_maxage should not have HasMaxAge set
+	if parsed[2].Name != "bad_maxage" || parsed[2].HasMaxAge {
+		t.Errorf("bad_maxage should have HasMaxAge=false, got: %v", parsed[2].HasMaxAge)
+	}
+}
+
+// 30. Test Cookie Parser Defect Unmasking Across Multiple Combined Cookies
+func TestSessionSec_CookieParser_DefectUnmaskingAcrossMultipleCookies(t *testing.T) {
+	// Header contains one secure cookie followed by an insecure session cookie without Secure/HttpOnly
+	header := "auth_secure=token1; Expires=Wed, 21 Oct 2026 07:28:00 GMT; Path=/; Secure; HttpOnly, " +
+		"session_id=insecure_token2; Path=/; Domain=.com"
+
+	parsed := ParseSetCookieHeaders([]string{header})
+	if len(parsed) != 2 {
+		t.Fatalf("expected 2 parsed cookies, got %d", len(parsed))
+	}
+
+	// Evaluate second cookie: must uncover all defects (missing Secure, missing HttpOnly, overly broad domain)
+	defects, isSession := EvaluateCookieAttributes(parsed[1], "https://example.com")
+	if !isSession {
+		t.Fatalf("expected session_id to be classified as session cookie")
+	}
+
+	foundNoSecure := false
+	foundNoHttpOnly := false
+	foundBroadDomain := false
+	for _, d := range defects {
+		switch d.Code {
+		case "SS-COOKIE-NO-SECURE":
+			foundNoSecure = true
+		case "SS-COOKIE-NO-HTTPONLY":
+			foundNoHttpOnly = true
+		case "SS-COOKIE-BROAD-DOMAIN":
+			foundBroadDomain = true
+		}
+	}
+
+	if !foundNoSecure {
+		t.Errorf("expected SS-COOKIE-NO-SECURE defect to be detected on second cookie")
+	}
+	if !foundNoHttpOnly {
+		t.Errorf("expected SS-COOKIE-NO-HTTPONLY defect to be detected on second cookie")
+	}
+	if !foundBroadDomain {
+		t.Errorf("expected SS-COOKIE-BROAD-DOMAIN defect to be detected on second cookie")
+	}
+}
+
+// 31. Test Shared Request Budget and Authorization Fail-Closed Invariants
+func TestSessionSec_SharedRequestBudgetAndAuthorizationInvariants(t *testing.T) {
+	var dispatchedCount int32
+	var serverReceivedCount int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&serverReceivedCount, 1)
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"status":"ok"}`)
+	}))
+	defer server.Close()
+
+	engine := NewEngine(server.Client(), DefaultConfig())
+
+	// 1. Invariant: Missing Authorization Record fails-closed with zero network requests
+	actxNoAuth := &AssessmentContext{
+		AssessmentID:       "asm-inv-no-auth",
+		BaseURL:            server.URL,
+		SyntheticFixture:   false,
+		Authorization:      nil,
+		DispatchedRequests: &dispatchedCount,
+	}
+	_, _, _, errNoAuth := engine.Assess(context.Background(), actxNoAuth)
+	if errNoAuth == nil || !strings.Contains(errNoAuth.Error(), "authorization record required") {
+		t.Fatalf("expected authorization refusal, got: %v", errNoAuth)
+	}
+	if dispatchedCount != 0 || serverReceivedCount != 0 {
+		t.Fatalf("SECURITY VIOLATION: requests dispatched despite missing authorization: dispatched=%d, server=%d", dispatchedCount, serverReceivedCount)
+	}
+
+	// 2. Invariant: Expired Authorization Record fails-closed with zero network requests
+	expiredPast := time.Now().UTC().Add(-48 * time.Hour)
+	expiredUntil := time.Now().UTC().Add(-24 * time.Hour)
+	actxExpired := &AssessmentContext{
+		AssessmentID:     "asm-inv-expired",
+		BaseURL:          server.URL,
+		SyntheticFixture: false,
+		Authorization: &auth.AuthorizationRecord{
+			ID:                  "auth-expired",
+			AuthorizingParty:    "Security Team",
+			AuthorizationMethod: "WRITTEN_APPROVAL",
+			Status:              "APPROVED",
+			ValidFrom:           &expiredPast,
+			ValidUntil:          &expiredUntil,
+		},
+		DispatchedRequests: &dispatchedCount,
+	}
+	_, _, _, errExpired := engine.Assess(context.Background(), actxExpired)
+	if errExpired == nil || !strings.Contains(errExpired.Error(), "authorization is invalid") {
+		t.Fatalf("expected authorization invalid refusal, got: %v", errExpired)
+	}
+	if dispatchedCount != 0 || serverReceivedCount != 0 {
+		t.Fatalf("SECURITY VIOLATION: requests dispatched despite expired authorization: dispatched=%d, server=%d", dispatchedCount, serverReceivedCount)
+	}
+
+	// 3. Shared Request Budget: Ensure all requests share and strictly obey MaxRequests
+	validFrom := time.Now().UTC().Add(-1 * time.Hour)
+	validUntil := time.Now().UTC().Add(24 * time.Hour)
+	var budgetCounter int32
+
+	actxBudget := &AssessmentContext{
+		AssessmentID:     "asm-budget-enforced",
+		BaseURL:          server.URL,
+		SyntheticFixture: false,
+		Authorization: &auth.AuthorizationRecord{
+			ID:                  "auth-valid",
+			AuthorizingParty:    "Security Team",
+			AuthorizationMethod: "WRITTEN_APPROVAL",
+			Status:              "APPROVED",
+			ValidFrom:           &validFrom,
+			ValidUntil:          &validUntil,
+		},
+		Endpoints: []TargetEndpoint{
+			{Method: "POST", Path: "/login", Type: "login"},
+			{Method: "GET", Path: "/profile", Type: "protected"},
+		},
+		MaxRequests:        3, // Strict budget of 3 requests
+		DispatchedRequests: &budgetCounter,
+		IsAllowed:          func(string) bool { return true },
+	}
+
+	// Reset server count before budget test
+	atomic.StoreInt32(&serverReceivedCount, 0)
+
+	// Execute assessment with MaxRequests=3
+	results, _, _, errBudget := engine.Assess(context.Background(), actxBudget)
+	if errBudget != nil {
+		t.Fatalf("Assess returned unexpected top-level error: %v", errBudget)
+	}
+
+	_ = results
+	// Assert that dispatched requests and server received requests strictly equal and never exceed MaxRequests
+	if budgetCounter > 3 {
+		t.Fatalf("SECURITY VIOLATION: dispatched %d requests, exceeding MaxRequests limit of 3", budgetCounter)
+	}
+	if serverReceivedCount > 3 {
+		t.Fatalf("SECURITY VIOLATION: server received %d requests, exceeding MaxRequests limit of 3", serverReceivedCount)
+	}
+	if budgetCounter != serverReceivedCount {
+		t.Fatalf("mismatch: budgetCounter %d != serverReceivedCount %d", budgetCounter, serverReceivedCount)
+	}
+	if budgetCounter == 0 {
+		t.Fatalf("expected requests to be dispatched up to budget, got 0")
 	}
 }

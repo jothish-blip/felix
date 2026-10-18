@@ -3845,6 +3845,7 @@ func runAssessmentSessionSec(args []string) int {
 			}
 		}
 
+		var dispatchedRequests int32
 		actx := &sessionsec.AssessmentContext{
 			AssessmentID:            asm.ID,
 			ExecutionID:             execID,
@@ -3856,6 +3857,7 @@ func runAssessmentSessionSec(args []string) int {
 			Authorization:           authRec,
 			AllowStateChangingTests: allowStateChanging,
 			MaxRequests:             maxRequests,
+			DispatchedRequests:      &dispatchedRequests,
 		}
 
 		fmt.Println("================================================================================")
@@ -3878,7 +3880,7 @@ func runAssessmentSessionSec(args []string) int {
 		execRecord.Status = assessment.StatusCompleted
 		execRecord.CompletedAt = &completedAt
 		execRecord.DurationMs = duration.Milliseconds()
-		execRecord.RequestCount = len(results)
+		execRecord.RequestCount = int(dispatchedRequests)
 		execRecord.FindingCount = len(findings)
 
 		// Save results

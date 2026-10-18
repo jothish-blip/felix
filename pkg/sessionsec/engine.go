@@ -95,10 +95,17 @@ type credentialGuardedTransport struct {
 
 func (c *credentialGuardedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if c.maxRequests > 0 && c.reqCount != nil {
-		curr := atomic.AddInt32(c.reqCount, 1)
-		if int(curr) > c.maxRequests {
-			return nil, fmt.Errorf("request budget exceeded (limit: %d)", c.maxRequests)
+		for {
+			curr := atomic.LoadInt32(c.reqCount)
+			if int(curr) >= c.maxRequests {
+				return nil, fmt.Errorf("request budget exceeded (limit: %d)", c.maxRequests)
+			}
+			if atomic.CompareAndSwapInt32(c.reqCount, curr, curr+1) {
+				break
+			}
 		}
+	} else if c.reqCount != nil {
+		atomic.AddInt32(c.reqCount, 1)
 	}
 
 	// Withhold sensitive credentials when transmitting over remote unencrypted HTTP
@@ -151,11 +158,15 @@ func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
 		transport = crawler.NewRateLimitedTransport(transport, crawler.RateLimitOptions{})
 	}
 
-	var reqCounter int32
+	reqCounter := actx.DispatchedRequests
+	if reqCounter == nil {
+		var localCounter int32
+		reqCounter = &localCounter
+	}
 	guardedTransport := &credentialGuardedTransport{
 		base:        transport,
 		maxRequests: actx.MaxRequests,
-		reqCount:    &reqCounter,
+		reqCount:    reqCounter,
 	}
 
 	return &http.Client{

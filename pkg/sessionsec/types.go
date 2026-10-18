@@ -325,6 +325,7 @@ type AssessmentContext struct {
 	DryRun                  bool
 	Authorization           *auth.AuthorizationRecord
 	MaxRequests             int
+	DispatchedRequests      *int32
 }
 
 // Config defines the runtime configuration for the Session Security Engine.
