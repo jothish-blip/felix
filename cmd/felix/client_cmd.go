@@ -361,6 +361,9 @@ func runClientArchive(args []string) int {
 }
 
 func getAssessmentStore() (assessment.Store, error) {
+	if p := os.Getenv("FELIX_DB_PATH"); p != "" {
+		return assessment.NewSQLiteStore(p)
+	}
 	dbPath, err := assessment.DefaultDBPath()
 	if err != nil {
 		return nil, err

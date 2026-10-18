@@ -111,7 +111,7 @@ func printAssessmentHelp() {
 	fmt.Println("  run          Execute authorized assessment against approved targets")
 	fmt.Println("  findings     Inspect findings recorded for an assessment")
 	fmt.Println("  inventory    Inspect discovered attack-surface assets and relationships")
-	fmt.Println("  auth         Inspect discovered authentication surfaces, cookies, tokens, and protection")
+	fmt.Println("  auth         Inspect authentication surfaces, or verify active authentication security (--run/--verify)")
 	fmt.Println("  authz        Test and inspect API authorization, BOLA/IDOR, BFLA, BOPLA, and privilege escalation")
 	fmt.Println("  apisec       Assess OWASP API Security Top 10 (2023) categories and API inventory")
 	fmt.Println("  webvuln      Assess and verify web application vulnerabilities (XSS, SQLi, SSTI, SSRF, etc.)")
@@ -129,6 +129,8 @@ func printAssessmentHelp() {
 	fmt.Println("  felix assessment findings <asm-ref>")
 	fmt.Println("  felix assessment inventory <asm-ref>")
 	fmt.Println("  felix assessment auth <asm-ref> --verbose")
+	fmt.Println("  felix assessment auth <asm-ref> --dry-run")
+	fmt.Println("  felix assessment auth <asm-ref> --run --bearer <token> --protected /api/v1/profile")
 	fmt.Println("  felix assessment authz <asm-ref> --policy policy.json --run")
 	fmt.Println("  felix assessment apisec <asm-ref> --run --spec openapi.json")
 	fmt.Println("  felix assessment webvuln <asm-ref> --run")
@@ -1618,37 +1620,164 @@ func runAssessmentInventory(args []string) int {
 	return 0
 }
 
+func printAuthHelp() {
+	fmt.Println("Usage: felix assessment auth <assessment-ref> [flags]")
+	fmt.Println("\nStatic Intelligence Flags:")
+	fmt.Println("  --category, -c <string>  Filter by category (LOGIN, REGISTRATION, PASSWORD_RESET, MFA, SESSION, OAUTH_SSO, ALTERNATIVE, PROTECTED_ENDPOINT)")
+	fmt.Println("  --json                   Output authentication intelligence as JSON")
+	fmt.Println("  --verbose, -v            Display extended evidence details and auth state")
+	fmt.Println("\nActive Verification Flags (Phase 5.1):")
+	fmt.Println("  --run, --verify          Execute authorized active authentication security verification")
+	fmt.Println("  --dry-run                Plan authentication test checks without sending network requests")
+	fmt.Println("  --bearer <token>         Supply Bearer credential for authenticated testing")
+	fmt.Println("  --api-key <key>          Supply API Key credential for authenticated testing")
+	fmt.Println("  --api-key-header <name>  Custom header for API Key (default: X-API-Key)")
+	fmt.Println("  --api-key-query <param>  Custom query parameter for API Key")
+	fmt.Println("  --basic <user:pass>      Supply Basic authentication credentials")
+	fmt.Println("  --cookie <name=val>      Supply Cookie session credentials")
+	fmt.Println("  --expired-token <token>  Supply controlled expired token to test expiration handling")
+	fmt.Println("  --protected <routes>     Comma-separated list of expected protected routes (e.g. /api/user,/api/admin)")
+	fmt.Println("  --public <routes>        Comma-separated list of known public routes (e.g. /health,/public)")
+	fmt.Println("  --check-rate-limit       Enable bounded rate-limiting evaluation (max 5 non-brute-force probes)")
+	fmt.Println("  --max-requests <n>       Maximum global request budget (default: 30)")
+	fmt.Println("  --max-per-host <n>       Maximum requests per host (default: 15)")
+	fmt.Println("  --rate-limit <rps>       Maximum request rate per second (default: 10.0)")
+	fmt.Println("  --status, -s <string>    Filter verification results (PASSED, VERIFIED, CANDIDATE, INCONCLUSIVE, SKIPPED)")
+	fmt.Println("  --allow-loopback         Allow assessment against loopback destinations (testing only)")
+	fmt.Println("  --allow-private          Allow assessment against private IP destinations (testing only)")
+	fmt.Println("\nExamples:")
+	fmt.Println("  felix assessment auth <asm-ref> --verbose")
+	fmt.Println("  felix assessment auth <asm-ref> --dry-run")
+	fmt.Println("  felix assessment auth <asm-ref> --run --bearer <token> --protected /api/v1/profile")
+	fmt.Println("  felix assessment auth <asm-ref> --run --json")
+}
+
 func runAssessmentAuth(args []string) int {
 	var (
-		assessmentRef  string
-		categoryFilter string
-		jsonOutput     bool
-		verbose        bool
+		assessmentRef   string
+		categoryFilter  string
+		jsonOutput      bool
+		verbose         bool
+		runExecution    bool
+		dryRun          bool
+		bearerToken     string
+		apiKey          string
+		apiKeyHeader    string
+		apiKeyQuery     string
+		basicAuth       string
+		cookieAuth      string
+		expiredToken    string
+		protectedRoutes string
+		publicRoutes    string
+		checkRateLimit  bool
+		maxRequests     int     = 30
+		maxPerHost      int     = 15
+		rateLimit       float64 = 10.0
+		allowLoopback   bool
+		allowPrivate    bool
+		statusFilter    string
 	)
 
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
-		switch arg {
-		case "--assessment", "--id", "--ref":
+		switch {
+		case arg == "--assessment" || arg == "--id" || arg == "--ref":
 			if i+1 < len(args) {
 				assessmentRef = args[i+1]
 				i++
 			}
-		case "--category", "-c":
+		case arg == "--category" || arg == "-c":
 			if i+1 < len(args) {
 				categoryFilter = strings.ToUpper(args[i+1])
 				i++
 			}
-		case "--json":
+		case arg == "--run" || arg == "--verify":
+			runExecution = true
+		case arg == "--dry-run":
+			dryRun = true
+		case arg == "--bearer":
+			if i+1 < len(args) {
+				bearerToken = args[i+1]
+				i++
+			}
+		case arg == "--api-key":
+			if i+1 < len(args) {
+				apiKey = args[i+1]
+				i++
+			}
+		case arg == "--api-key-header":
+			if i+1 < len(args) {
+				apiKeyHeader = args[i+1]
+				i++
+			}
+		case arg == "--api-key-query":
+			if i+1 < len(args) {
+				apiKeyQuery = args[i+1]
+				i++
+			}
+		case arg == "--basic":
+			if i+1 < len(args) {
+				basicAuth = args[i+1]
+				i++
+			}
+		case arg == "--cookie":
+			if i+1 < len(args) {
+				cookieAuth = args[i+1]
+				i++
+			}
+		case arg == "--expired-token":
+			if i+1 < len(args) {
+				expiredToken = args[i+1]
+				i++
+			}
+		case arg == "--protected":
+			if i+1 < len(args) {
+				protectedRoutes = args[i+1]
+				i++
+			}
+		case arg == "--public":
+			if i+1 < len(args) {
+				publicRoutes = args[i+1]
+				i++
+			}
+		case arg == "--check-rate-limit":
+			checkRateLimit = true
+		case arg == "--max-requests":
+			if i+1 < len(args) {
+				if n, err := strconv.Atoi(args[i+1]); err == nil && n > 0 {
+					maxRequests = n
+				}
+				i++
+			}
+		case arg == "--max-per-host":
+			if i+1 < len(args) {
+				if n, err := strconv.Atoi(args[i+1]); err == nil && n > 0 {
+					maxPerHost = n
+				}
+				i++
+			}
+		case arg == "--rate-limit":
+			if i+1 < len(args) {
+				if r, err := strconv.ParseFloat(args[i+1], 64); err == nil && r > 0 {
+					rateLimit = r
+				}
+				i++
+			}
+		case arg == "--status" || arg == "-s":
+			if i+1 < len(args) {
+				statusFilter = strings.ToUpper(args[i+1])
+				i++
+			}
+		case arg == "--allow-loopback":
+			allowLoopback = true
+		case arg == "--allow-private":
+			allowPrivate = true
+		case arg == "--json":
 			jsonOutput = true
-		case "--verbose", "-v":
+		case arg == "--verbose" || arg == "-v":
 			verbose = true
-		case "--help", "-h":
-			fmt.Println("Usage: felix assessment auth <assessment-ref> [flags]")
-			fmt.Println("\nFlags:")
-			fmt.Println("  --category, -c <string>  Filter by category (LOGIN, REGISTRATION, PASSWORD_RESET, MFA, SESSION, OAUTH_SSO, ALTERNATIVE, PROTECTED_ENDPOINT)")
-			fmt.Println("  --json                   Output authentication intelligence as JSON")
-			fmt.Println("  --verbose, -v            Display extended evidence details and auth state")
+		case arg == "--help" || arg == "-h":
+			printAuthHelp()
 			return 0
 		default:
 			if !strings.HasPrefix(arg, "-") && assessmentRef == "" {
@@ -1673,6 +1802,237 @@ func runAssessmentAuth(args []string) int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[-] Assessment %q not found: %v\n", assessmentRef, err)
 		return 1
+	}
+
+	// Active Verification Workflow
+	if runExecution || dryRun {
+		asm.Targets, _ = store.GetTargets(asm.ID)
+		asm.Authorization, _ = store.GetAuthorization(asm.ID)
+		asm.Exclusions, _ = store.GetExclusions(asm.ID)
+		asm.ScopeRules, _ = store.GetScopeRules(asm.ID)
+
+		if asm.Authorization == nil {
+			fmt.Fprintf(os.Stderr, "[-] Security refusal: no authorization record found for assessment %s\n", asm.Ref)
+			return 1
+		}
+		valid, reason := asm.Authorization.IsCurrentlyValid(time.Now().UTC())
+		if !valid {
+			fmt.Fprintf(os.Stderr, "[-] Security refusal: authorization invalid: %s\n", reason)
+			return 1
+		}
+
+		if len(asm.Targets) == 0 {
+			fmt.Fprintf(os.Stderr, "[-] Error: no targets defined for assessment %s\n", asm.Ref)
+			return 2
+		}
+		targetBase := asm.Targets[0].TargetURL
+
+		var targetURLs []string
+		for _, t := range asm.Targets {
+			targetURLs = append(targetURLs, t.TargetURL)
+		}
+		scopeVal := assessment.NewScopeValidator(asm.ScopeMode, targetURLs, asm.ScopeRules, asm.Exclusions)
+
+		var primaryCred auth.Credential
+		if bearerToken != "" {
+			primaryCred = auth.Credential{
+				Type:  auth.CredTypeBearer,
+				Value: bearerToken,
+			}
+		} else if apiKey != "" {
+			primaryCred = auth.Credential{
+				Type:       auth.CredTypeAPIKey,
+				Value:      apiKey,
+				HeaderName: apiKeyHeader,
+				QueryParam: apiKeyQuery,
+			}
+		} else if basicAuth != "" {
+			parts := strings.SplitN(basicAuth, ":", 2)
+			u, p := parts[0], ""
+			if len(parts) > 1 {
+				p = parts[1]
+			}
+			primaryCred = auth.Credential{
+				Type:     auth.CredTypeBasic,
+				Username: u,
+				Password: p,
+			}
+		} else if cookieAuth != "" {
+			parts := strings.SplitN(cookieAuth, "=", 2)
+			cName, cVal := parts[0], ""
+			if len(parts) > 1 {
+				cVal = parts[1]
+			}
+			primaryCred = auth.Credential{
+				Type:       auth.CredTypeCookie,
+				CookieName: cName,
+				Value:      cVal,
+			}
+		}
+
+		var expCred *auth.Credential
+		if expiredToken != "" {
+			expCred = &auth.Credential{
+				Type:  auth.CredTypeBearer,
+				Value: expiredToken,
+			}
+		}
+
+		var endpoints []string
+		if protectedRoutes != "" {
+			for _, r := range strings.Split(protectedRoutes, ",") {
+				if tr := strings.TrimSpace(r); tr != "" {
+					endpoints = append(endpoints, tr)
+				}
+			}
+		}
+		if publicRoutes != "" {
+			for _, r := range strings.Split(publicRoutes, ",") {
+				if tr := strings.TrimSpace(r); tr != "" {
+					endpoints = append(endpoints, tr)
+				}
+			}
+		}
+		if len(endpoints) == 0 {
+			authInv, _ := store.GetAuthInventory(asm.ID, "", "")
+			if authInv != nil {
+				for _, pe := range authInv.ProtectedEndpoints {
+					endpoints = append(endpoints, pe.EndpointPath)
+				}
+			}
+		}
+		if len(endpoints) == 0 {
+			endpoints = append(endpoints, targetBase)
+		}
+
+		execID := "exec-" + uuid.New().String()
+		if runExecution {
+			execRecord := &assessment.AssessmentExecution{
+				ID:           execID,
+				AssessmentID: asm.ID,
+				Status:       assessment.StatusRunning,
+				StartedAt:    time.Now().UTC(),
+			}
+			_ = store.CreateExecution(execRecord)
+		}
+
+		authRec := &auth.AuthorizationRecord{
+			ID:                  asm.Authorization.ID,
+			AuthorizingParty:    asm.Authorization.AuthorizingParty,
+			AuthorizationMethod: asm.Authorization.AuthorizationMethod,
+			Status:              string(asm.Authorization.Status),
+			ValidFrom:           asm.Authorization.ValidFrom,
+			ValidUntil:          asm.Authorization.ValidUntil,
+		}
+
+		var pubList []string
+		if publicRoutes != "" {
+			for _, r := range strings.Split(publicRoutes, ",") {
+				if tr := strings.TrimSpace(r); tr != "" {
+					pubList = append(pubList, tr)
+				}
+			}
+		}
+		var protList []string
+		if protectedRoutes != "" {
+			for _, r := range strings.Split(protectedRoutes, ",") {
+				if tr := strings.TrimSpace(r); tr != "" {
+					protList = append(protList, tr)
+				}
+			}
+		}
+
+		vCfg := auth.VerificationConfig{
+			TargetURL:               targetBase,
+			Endpoints:               endpoints,
+			PrimaryCredential:       primaryCred,
+			ExpiredCredential:       expCred,
+			ExpectedProtectedRoutes: protList,
+			PublicRoutes:            pubList,
+			MaxRequestsTotal:        maxRequests,
+			MaxRequestsPerHost:      maxPerHost,
+			RateLimit:               rateLimit,
+			AllowLoopback:           allowLoopback,
+			AllowPrivateIPs:         allowPrivate,
+			DryRun:                  dryRun,
+			CheckRateLimiting:       checkRateLimit,
+			Authorization:           authRec,
+			IsAllowed:               scopeVal.IsAllowed,
+			IsExcluded:              func(u string) bool { excluded, _ := scopeVal.IsExcluded(u); return excluded },
+		}
+
+		verifier := auth.NewVerifier()
+		rep, err := verifier.Verify(context.Background(), vCfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Verification error: %v\n", err)
+			return 1
+		}
+
+		if runExecution && len(rep.Findings) > 0 {
+			var asmFindings []assessment.AssessmentFinding
+			for _, f := range rep.Findings {
+				asmFindings = append(asmFindings, assessment.ToAssessmentFinding(asm.ID, execID, asm.Targets[0].ID, f))
+			}
+			if err := store.SaveFindings(asmFindings); err != nil {
+				fmt.Fprintf(os.Stderr, "[-] Warning: failed to save findings: %v\n", err)
+			}
+		}
+
+		if jsonOutput {
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			_ = enc.Encode(rep)
+			return 0
+		}
+
+		fmt.Println("===========================================================")
+		modeStr := "ACTIVE VERIFICATION"
+		if dryRun {
+			modeStr = "DRY-RUN PLAN"
+		}
+		fmt.Printf("  FELIX :: AUTHENTICATION %s: %s\n", modeStr, asm.Ref)
+		fmt.Printf("  Target: %s | Endpoints: %d | Requests Sent: %d\n", rep.TargetURL, rep.Summary.TotalEndpoints, rep.Summary.TotalRequests)
+		fmt.Printf("  Passed: %d | Weaknesses: %d | Candidates: %d | Inconclusive: %d | Skipped: %d\n",
+			rep.Summary.TotalPassed, rep.Summary.TotalWeaknesses, rep.Summary.TotalCandidates, rep.Summary.TotalInconclusive, rep.Summary.TotalSkipped)
+		fmt.Println("===========================================================")
+
+		if len(rep.Results) > 0 {
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "ENDPOINT\tMETHOD\tCHECK TYPE\tDISPOSITION\tSTATUS\tEVIDENCE")
+			for _, r := range rep.Results {
+				if statusFilter != "" && !strings.EqualFold(string(r.Disposition), statusFilter) {
+					continue
+				}
+				statusStr := "-"
+				if r.HTTPStatus > 0 {
+					statusStr = fmt.Sprintf("%d", r.HTTPStatus)
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+					r.Endpoint, r.Method, r.TestType, r.Disposition, statusStr, r.EvidenceSummary)
+			}
+			_ = w.Flush()
+		}
+
+		if len(rep.Findings) > 0 {
+			fmt.Printf("\n[!] VERIFIED FINDINGS (%d)\n", len(rep.Findings))
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "RULE ID\tSEVERITY\tCONFIDENCE\tTARGET\tTITLE")
+			for _, f := range rep.Findings {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+					f.RuleID, f.Severity, f.Confidence, f.Target, f.Title)
+			}
+			_ = w.Flush()
+		}
+
+		if len(rep.Limitations) > 0 {
+			fmt.Println("\nLimitations / Notes:")
+			for _, l := range rep.Limitations {
+				fmt.Printf("  - %s\n", l)
+			}
+		}
+
+		fmt.Println()
+		return 0
 	}
 
 	var authInv *auth.AuthInventory
