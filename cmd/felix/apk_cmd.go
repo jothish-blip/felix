@@ -39,6 +39,8 @@ func runAPK(args []string) int {
 		concurrency      int
 		perReqTimeout    time.Duration
 		overallDeadline  time.Duration
+		generateReport   bool
+		reportPath       string
 		apkPath          string
 		limits           = apk.DefaultLimits()
 	)
@@ -49,6 +51,39 @@ func runAPK(args []string) int {
 		if arg == "--help" || arg == "-h" {
 			printAPKHelp()
 			return 0
+		}
+		if arg == "--report" || arg == "--html" {
+			generateReport = true
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") && !strings.HasSuffix(strings.ToLower(args[i+1]), ".apk") {
+				i++
+				reportPath = args[i]
+			}
+			continue
+		}
+		if strings.HasPrefix(arg, "--report=") {
+			generateReport = true
+			reportPath = strings.TrimPrefix(arg, "--report=")
+			continue
+		}
+		if strings.HasPrefix(arg, "--html=") {
+			generateReport = true
+			reportPath = strings.TrimPrefix(arg, "--html=")
+			continue
+		}
+		if arg == "--output" || arg == "-o" {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				fmt.Fprintf(os.Stderr, "[-] error: %s requires a file path argument\n", arg)
+				return 2
+			}
+			i++
+			reportPath = args[i]
+			generateReport = true
+			continue
+		}
+		if strings.HasPrefix(arg, "--output=") {
+			reportPath = strings.TrimPrefix(arg, "--output=")
+			generateReport = true
+			continue
 		}
 		if arg == "--extract" {
 			extract = true
@@ -298,6 +333,15 @@ func runAPK(args []string) int {
 		return 2
 	}
 
+	if generateReport && reportPath == "" {
+		reportPath = apk.DefaultMobileAuditReportName
+	}
+	if generateReport && !analyzeManifest && !analyzeArtifacts && !buildInventory && !assessBackend {
+		analyzeManifest = true
+		analyzeArtifacts = true
+		buildInventory = true
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -470,6 +514,14 @@ func runAPK(args []string) int {
 		}
 		if handoffReport != nil {
 			outObj["backend_handoff"] = handoffReport
+		}
+		if generateReport {
+			reportData := apk.BuildMobileReportData(apkPath, res, manifestRes, artifactRes, inventoryRes, handoffReport)
+			if err := apk.WriteMobileAuditReport(reportData, reportPath, apkPath); err != nil {
+				fmt.Fprintf(os.Stderr, "[-] Failed generating mobile audit report: %v\n", err)
+				return 2
+			}
+			outObj["report_file"] = reportPath
 		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -662,6 +714,19 @@ func runAPK(args []string) int {
 		}
 	}
 
+	if generateReport {
+		reportData := apk.BuildMobileReportData(apkPath, res, manifestRes, artifactRes, inventoryRes, handoffReport)
+		if err := apk.WriteMobileAuditReport(reportData, reportPath, apkPath); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Failed generating mobile audit report: %v\n", err)
+			return 2
+		}
+		if !quiet {
+			fmt.Println("===========================================================")
+			fmt.Printf("  Mobile Audit Report:     %s\n", reportPath)
+			fmt.Println("===========================================================")
+		}
+	}
+
 	return 0
 }
 
@@ -683,6 +748,9 @@ func printAPKHelp() {
 	fmt.Println("  --allow-inferred              Permit testing of resolved inferred routes (default: false)")
 	fmt.Println("  --allow-third-party           Permit testing of third-party domains (default: false)")
 	fmt.Println("  --dry-run                     Plan candidates and dispositions without sending active network traffic")
+	fmt.Println("  --report [file]               Generate standalone mobile audit HTML report (default: mobile_audit.html)")
+	fmt.Println("  --html [file]                 Alias for --report")
+	fmt.Println("  --output <file>, -o <file>    Specify output report path (default: mobile_audit.html)")
 	fmt.Println("  --max-requests <n>            Maximum total network requests allowed for the assessment (default: 50)")
 	fmt.Println("  --max-per-host <n>            Maximum network requests allowed per backend host (default: 20)")
 	fmt.Println("  --rate-limit <rps>            Maximum request rate in requests per second (default: 10)")

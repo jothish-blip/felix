@@ -693,3 +693,148 @@ func TestCLI_APK_StaticOnly_ActiveAssessmentDisabled(t *testing.T) {
 		t.Errorf("expected active assessment disabled notice in static analysis output, got:\n%s", output)
 	}
 }
+
+func TestCLI_APK_Report_DefaultPath(t *testing.T) {
+	apkPath := createCLIArtifactAPK(t, []string{"https://api.mycorp.com/v1"})
+	defer os.Remove("mobile_audit.html")
+
+	code, output := captureAPKOutput(func() int {
+		return runAPK([]string{"--report", apkPath})
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d, out:\n%s", code, output)
+	}
+	if !strings.Contains(output, "Mobile Audit Report:     mobile_audit.html") {
+		t.Errorf("expected report path in output, got:\n%s", output)
+	}
+
+	content, err := os.ReadFile("mobile_audit.html")
+	if err != nil {
+		t.Fatalf("failed to read generated report: %v", err)
+	}
+	if !strings.Contains(string(content), "<!DOCTYPE html>") {
+		t.Errorf("expected valid HTML doctype in report")
+	}
+	if !strings.Contains(string(content), "FELIX Mobile Security Assessment Report") {
+		t.Errorf("expected report title in html")
+	}
+}
+
+func TestCLI_APK_Report_CustomPath(t *testing.T) {
+	apkPath := createCLIArtifactAPK(t, []string{"https://api.mycorp.com/v1"})
+	customReport := filepath.Join(t.TempDir(), "custom_audit.html")
+
+	code, output := captureAPKOutput(func() int {
+		return runAPK([]string{"--report", customReport, apkPath})
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d, out:\n%s", code, output)
+	}
+	if !strings.Contains(output, customReport) {
+		t.Errorf("expected custom report path in output, got:\n%s", output)
+	}
+
+	content, err := os.ReadFile(customReport)
+	if err != nil {
+		t.Fatalf("failed to read custom report: %v", err)
+	}
+	if !strings.Contains(string(content), "<!DOCTYPE html>") {
+		t.Errorf("expected valid HTML doctype in report")
+	}
+}
+
+func TestCLI_APK_Report_OutputFlag(t *testing.T) {
+	apkPath := createCLIArtifactAPK(t, []string{"https://api.mycorp.com/v1"})
+	customReport := filepath.Join(t.TempDir(), "output_flag_audit.html")
+
+	code, output := captureAPKOutput(func() int {
+		return runAPK([]string{"-o", customReport, apkPath})
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d, out:\n%s", code, output)
+	}
+
+	content, err := os.ReadFile(customReport)
+	if err != nil {
+		t.Fatalf("failed to read report generated with -o: %v", err)
+	}
+	if len(content) == 0 {
+		t.Errorf("expected non-empty report content")
+	}
+}
+
+func TestCLI_APK_Report_JSONOutput(t *testing.T) {
+	apkPath := createCLIArtifactAPK(t, []string{"https://api.mycorp.com/v1"})
+	customReport := filepath.Join(t.TempDir(), "json_mode_audit.html")
+
+	code, output := captureAPKOutput(func() int {
+		return runAPK([]string{"--json", "--report", customReport, apkPath})
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d, out:\n%s", code, output)
+	}
+
+	var res map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &res); err != nil {
+		t.Fatalf("failed to unmarshal JSON: %v, raw:\n%s", err, output)
+	}
+
+	if res["report_file"] != customReport {
+		t.Errorf("expected report_file %q, got %v", customReport, res["report_file"])
+	}
+
+	if _, err := os.Stat(customReport); err != nil {
+		t.Fatalf("report file was not created: %v", err)
+	}
+}
+
+func TestCLI_APK_Report_RefuseOverwriteAPK(t *testing.T) {
+	apkPath := createCLIArtifactAPK(t, []string{"https://api.mycorp.com/v1"})
+
+	code, errOut := captureAPKStderr(func() int {
+		return runAPK([]string{"-o", apkPath, apkPath})
+	})
+
+	if code != 2 {
+		t.Errorf("expected exit code 2 when output equals input apk, got %d", code)
+	}
+	if !strings.Contains(errOut, "refusing to overwrite") {
+		t.Errorf("expected refusal message in stderr, got:\n%s", errOut)
+	}
+}
+
+func TestCLI_APK_Report_WithAssess_DryRun(t *testing.T) {
+	apkPath := createCLIArtifactAPK(t, []string{"https://api.mycorp.com/v1/users"})
+	customReport := filepath.Join(t.TempDir(), "assess_report.html")
+
+	code, _ := captureAPKOutput(func() int {
+		return runAPK([]string{
+			"--assess",
+			"--target", "https://api.mycorp.com",
+			"--auth-confirm",
+			"--dry-run",
+			"--report", customReport,
+			apkPath,
+		})
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d", code)
+	}
+
+	content, err := os.ReadFile(customReport)
+	if err != nil {
+		t.Fatalf("failed to read report: %v", err)
+	}
+	s := string(content)
+	if !strings.Contains(s, "Authorized Backend Assessment Results") {
+		t.Errorf("expected assessment section in report")
+	}
+	if !strings.Contains(s, "Dry-Run Plan") {
+		t.Errorf("expected dry-run badge in report")
+	}
+}
