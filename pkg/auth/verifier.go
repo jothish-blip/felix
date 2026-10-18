@@ -465,6 +465,9 @@ func (v *Verifier) Verify(ctx context.Context, cfg VerificationConfig) (*Verific
 					req.Header.Del("Authorization")
 					req.Header.Del("Cookie")
 					req.Header.Del("X-API-Key")
+					if cfg.PrimaryCredential.HeaderName != "" {
+						req.Header.Del(cfg.PrimaryCredential.HeaderName)
+					}
 				}
 			}
 			return nil
@@ -556,8 +559,9 @@ func (v *Verifier) Verify(ctx context.Context, cfg VerificationConfig) (*Verific
 			continue
 		}
 
-		// Transport check: unencrypted HTTP (non-loopback destinations)
-		if strings.HasPrefix(strings.ToLower(fullURL), "http://") && cfg.PrimaryCredential.Value != "" && !isLoopbackHost(parsedHost(fullURL)) {
+		// Transport check: unencrypted HTTP (non-loopback destinations outside allowed private environments)
+		isCleartextDisallowed := strings.HasPrefix(strings.ToLower(fullURL), "http://") && !isLoopbackHost(parsedHost(fullURL)) && !cfg.AllowPrivateIPs
+		if isCleartextDisallowed && (cfg.PrimaryCredential.Value != "" || cfg.PrimaryCredential.Password != "") {
 			f := buildCleartextFinding(cleanURL, cfg.PrimaryCredential.Type)
 			rep.Findings = append(rep.Findings, f)
 			rep.Results = append(rep.Results, AuthTestResult{
@@ -573,6 +577,7 @@ func (v *Verifier) Verify(ctx context.Context, cfg VerificationConfig) (*Verific
 				Timestamp:         time.Now().UTC(),
 			})
 			rep.Summary.TotalWeaknesses++
+			rep.Limitations = append(rep.Limitations, fmt.Sprintf("Credentials withheld for %s: cleartext HTTP transport is prohibited for active credential transmission outside allowed environments", cleanURL))
 		}
 
 		// Query parameter credential check
@@ -675,7 +680,7 @@ func (v *Verifier) Verify(ctx context.Context, cfg VerificationConfig) (*Verific
 			authErr  error
 		)
 
-		hasAuthCred := cfg.PrimaryCredential.Value != "" || (cfg.PrimaryCredential.Username != "" && cfg.PrimaryCredential.Password != "")
+		hasAuthCred := (cfg.PrimaryCredential.Value != "" || (cfg.PrimaryCredential.Username != "" && cfg.PrimaryCredential.Password != "")) && !isCleartextDisallowed
 		if hasAuthCred && !budgetTracker.IsExhausted() && budgetTracker.TryAcquire(epHost) {
 			authResp, authBody, authErr = sendProbe(runCtx, httpClient, "GET", fullURL, &cfg.PrimaryCredential, maxRespSize)
 		}
@@ -687,9 +692,13 @@ func (v *Verifier) Verify(ctx context.Context, cfg VerificationConfig) (*Verific
 		// -------------------------------------------------------------
 		// Analyze Authentication Enforcement
 		// -------------------------------------------------------------
-		if baseResp.StatusCode == http.StatusUnauthorized || baseResp.StatusCode == http.StatusForbidden {
+		loginEnforced, loginReason := isLoginRedirectOrLoginForm(fullURL, baseResp, baseBody)
+		if baseResp.StatusCode == http.StatusUnauthorized || baseResp.StatusCode == http.StatusForbidden || loginEnforced {
 			observedProtected = append(observedProtected, cleanURL)
-			// Endpoint correctly required authentication on unauthenticated request!
+			evidenceMsg := fmt.Sprintf("Endpoint correctly rejected unauthenticated request with HTTP %d", baseResp.StatusCode)
+			if loginEnforced {
+				evidenceMsg = fmt.Sprintf("Endpoint enforced authentication on unauthenticated request: %s", loginReason)
+			}
 			rep.Results = append(rep.Results, AuthTestResult{
 				ID:                computeResultID(cleanURL, "GET", TestMissingCredential),
 				Endpoint:          cleanURL,
@@ -698,7 +707,7 @@ func (v *Verifier) Verify(ctx context.Context, cfg VerificationConfig) (*Verific
 				Disposition:       DispositionPassed,
 				HTTPStatus:        baseResp.StatusCode,
 				BaselineStatus:    baseResp.StatusCode,
-				EvidenceSummary:   fmt.Sprintf("Endpoint correctly rejected unauthenticated request with HTTP %d", baseResp.StatusCode),
+				EvidenceSummary:   evidenceMsg,
 				RequestDispatched: true,
 				DurationMs:        baseDuration,
 				Timestamp:         time.Now().UTC(),
@@ -748,7 +757,7 @@ func (v *Verifier) Verify(ctx context.Context, cfg VerificationConfig) (*Verific
 							Timestamp:         time.Now().UTC(),
 						})
 						rep.Summary.TotalWeaknesses++
-					} else {
+					} else if invResp.StatusCode == http.StatusUnauthorized || invResp.StatusCode == http.StatusForbidden || invResp.StatusCode == http.StatusBadRequest {
 						// Server properly rejected invalid token!
 						rep.Results = append(rep.Results, AuthTestResult{
 							ID:                computeResultID(cleanURL, "GET", TestInvalidCredential),
@@ -763,6 +772,64 @@ func (v *Verifier) Verify(ctx context.Context, cfg VerificationConfig) (*Verific
 							Timestamp:         time.Now().UTC(),
 						})
 						rep.Summary.TotalPassed++
+					} else if invResp.StatusCode == http.StatusOK {
+						if isLoginRedir, rReason := isLoginRedirectOrLoginForm(fullURL, invResp, invBody); isLoginRedir {
+							rep.Results = append(rep.Results, AuthTestResult{
+								ID:                computeResultID(cleanURL, "GET", TestInvalidCredential),
+								Endpoint:          cleanURL,
+								Method:            "GET",
+								TestType:          TestInvalidCredential,
+								Disposition:       DispositionPassed,
+								HTTPStatus:        invResp.StatusCode,
+								BaselineStatus:    baseResp.StatusCode,
+								EvidenceSummary:   fmt.Sprintf("Endpoint rejected invalid credential by redirecting/serving login form: %s", rReason),
+								RequestDispatched: true,
+								Timestamp:         time.Now().UTC(),
+							})
+							rep.Summary.TotalPassed++
+						} else if isAuthErrorPayload(invBody) {
+							rep.Results = append(rep.Results, AuthTestResult{
+								ID:                computeResultID(cleanURL, "GET", TestInvalidCredential),
+								Endpoint:          cleanURL,
+								Method:            "GET",
+								TestType:          TestInvalidCredential,
+								Disposition:       DispositionPassed,
+								HTTPStatus:        invResp.StatusCode,
+								BaselineStatus:    baseResp.StatusCode,
+								EvidenceSummary:   "Endpoint rejected invalid credential with application error payload (soft-401)",
+								RequestDispatched: true,
+								Timestamp:         time.Now().UTC(),
+							})
+							rep.Summary.TotalPassed++
+						} else {
+							rep.Results = append(rep.Results, AuthTestResult{
+								ID:                computeResultID(cleanURL, "GET", TestInvalidCredential),
+								Endpoint:          cleanURL,
+								Method:            "GET",
+								TestType:          TestInvalidCredential,
+								Disposition:       DispositionInconclusive,
+								HTTPStatus:        invResp.StatusCode,
+								BaselineStatus:    baseResp.StatusCode,
+								EvidenceSummary:   "Endpoint returned HTTP 200 on invalid credential, but payload does not contain verified application data",
+								RequestDispatched: true,
+								Timestamp:         time.Now().UTC(),
+							})
+							rep.Summary.TotalInconclusive++
+						}
+					} else {
+						rep.Results = append(rep.Results, AuthTestResult{
+							ID:                computeResultID(cleanURL, "GET", TestInvalidCredential),
+							Endpoint:          cleanURL,
+							Method:            "GET",
+							TestType:          TestInvalidCredential,
+							Disposition:       DispositionInconclusive,
+							HTTPStatus:        invResp.StatusCode,
+							BaselineStatus:    baseResp.StatusCode,
+							EvidenceSummary:   fmt.Sprintf("Endpoint returned HTTP %d on invalid credential; inconclusive rejection evidence", invResp.StatusCode),
+							RequestDispatched: true,
+							Timestamp:         time.Now().UTC(),
+						})
+						rep.Summary.TotalInconclusive++
 					}
 				}
 			}
@@ -790,7 +857,7 @@ func (v *Verifier) Verify(ctx context.Context, cfg VerificationConfig) (*Verific
 							Timestamp:         time.Now().UTC(),
 						})
 						rep.Summary.TotalWeaknesses++
-					} else {
+					} else if malResp.StatusCode == http.StatusUnauthorized || malResp.StatusCode == http.StatusForbidden || malResp.StatusCode == http.StatusBadRequest {
 						rep.Results = append(rep.Results, AuthTestResult{
 							ID:                computeResultID(cleanURL, "GET", TestMalformedHeader),
 							Endpoint:          cleanURL,
@@ -803,6 +870,19 @@ func (v *Verifier) Verify(ctx context.Context, cfg VerificationConfig) (*Verific
 							Timestamp:         time.Now().UTC(),
 						})
 						rep.Summary.TotalPassed++
+					} else {
+						rep.Results = append(rep.Results, AuthTestResult{
+							ID:                computeResultID(cleanURL, "GET", TestMalformedHeader),
+							Endpoint:          cleanURL,
+							Method:            "GET",
+							TestType:          TestMalformedHeader,
+							Disposition:       DispositionInconclusive,
+							HTTPStatus:        malResp.StatusCode,
+							EvidenceSummary:   fmt.Sprintf("Endpoint returned HTTP %d on malformed header; inconclusive handling evidence", malResp.StatusCode),
+							RequestDispatched: true,
+							Timestamp:         time.Now().UTC(),
+						})
+						rep.Summary.TotalInconclusive++
 					}
 				}
 			}
@@ -830,7 +910,7 @@ func (v *Verifier) Verify(ctx context.Context, cfg VerificationConfig) (*Verific
 							Timestamp:         time.Now().UTC(),
 						})
 						rep.Summary.TotalWeaknesses++
-					} else {
+					} else if empResp.StatusCode == http.StatusUnauthorized || empResp.StatusCode == http.StatusForbidden || empResp.StatusCode == http.StatusBadRequest {
 						rep.Results = append(rep.Results, AuthTestResult{
 							ID:                computeResultID(cleanURL, "GET", TestEmptyCredential),
 							Endpoint:          cleanURL,
@@ -843,6 +923,60 @@ func (v *Verifier) Verify(ctx context.Context, cfg VerificationConfig) (*Verific
 							Timestamp:         time.Now().UTC(),
 						})
 						rep.Summary.TotalPassed++
+					} else if empResp.StatusCode == http.StatusOK {
+						if isLoginRedir, rReason := isLoginRedirectOrLoginForm(fullURL, empResp, empBody); isLoginRedir {
+							rep.Results = append(rep.Results, AuthTestResult{
+								ID:                computeResultID(cleanURL, "GET", TestEmptyCredential),
+								Endpoint:          cleanURL,
+								Method:            "GET",
+								TestType:          TestEmptyCredential,
+								Disposition:       DispositionPassed,
+								HTTPStatus:        empResp.StatusCode,
+								EvidenceSummary:   fmt.Sprintf("Endpoint rejected empty credential by redirecting/serving login form: %s", rReason),
+								RequestDispatched: true,
+								Timestamp:         time.Now().UTC(),
+							})
+							rep.Summary.TotalPassed++
+						} else if isAuthErrorPayload(empBody) {
+							rep.Results = append(rep.Results, AuthTestResult{
+								ID:                computeResultID(cleanURL, "GET", TestEmptyCredential),
+								Endpoint:          cleanURL,
+								Method:            "GET",
+								TestType:          TestEmptyCredential,
+								Disposition:       DispositionPassed,
+								HTTPStatus:        empResp.StatusCode,
+								EvidenceSummary:   "Endpoint rejected empty credential with application error payload (soft-401)",
+								RequestDispatched: true,
+								Timestamp:         time.Now().UTC(),
+							})
+							rep.Summary.TotalPassed++
+						} else {
+							rep.Results = append(rep.Results, AuthTestResult{
+								ID:                computeResultID(cleanURL, "GET", TestEmptyCredential),
+								Endpoint:          cleanURL,
+								Method:            "GET",
+								TestType:          TestEmptyCredential,
+								Disposition:       DispositionInconclusive,
+								HTTPStatus:        empResp.StatusCode,
+								EvidenceSummary:   "Endpoint returned HTTP 200 on empty credential, but payload does not contain verified application data",
+								RequestDispatched: true,
+								Timestamp:         time.Now().UTC(),
+							})
+							rep.Summary.TotalInconclusive++
+						}
+					} else {
+						rep.Results = append(rep.Results, AuthTestResult{
+							ID:                computeResultID(cleanURL, "GET", TestEmptyCredential),
+							Endpoint:          cleanURL,
+							Method:            "GET",
+							TestType:          TestEmptyCredential,
+							Disposition:       DispositionInconclusive,
+							HTTPStatus:        empResp.StatusCode,
+							EvidenceSummary:   fmt.Sprintf("Endpoint returned HTTP %d on empty credential; inconclusive rejection evidence", empResp.StatusCode),
+							RequestDispatched: true,
+							Timestamp:         time.Now().UTC(),
+						})
+						rep.Summary.TotalInconclusive++
 					}
 				}
 			}
@@ -869,7 +1003,7 @@ func (v *Verifier) Verify(ctx context.Context, cfg VerificationConfig) (*Verific
 							Timestamp:         time.Now().UTC(),
 						})
 						rep.Summary.TotalWeaknesses++
-					} else {
+					} else if expResp.StatusCode == http.StatusUnauthorized || expResp.StatusCode == http.StatusForbidden || expResp.StatusCode == http.StatusBadRequest {
 						rep.Results = append(rep.Results, AuthTestResult{
 							ID:                computeResultID(cleanURL, "GET", TestExpiredCredential),
 							Endpoint:          cleanURL,
@@ -882,6 +1016,60 @@ func (v *Verifier) Verify(ctx context.Context, cfg VerificationConfig) (*Verific
 							Timestamp:         time.Now().UTC(),
 						})
 						rep.Summary.TotalPassed++
+					} else if expResp.StatusCode == http.StatusOK {
+						if isLoginRedir, rReason := isLoginRedirectOrLoginForm(fullURL, expResp, expBody); isLoginRedir {
+							rep.Results = append(rep.Results, AuthTestResult{
+								ID:                computeResultID(cleanURL, "GET", TestExpiredCredential),
+								Endpoint:          cleanURL,
+								Method:            "GET",
+								TestType:          TestExpiredCredential,
+								Disposition:       DispositionPassed,
+								HTTPStatus:        expResp.StatusCode,
+								EvidenceSummary:   fmt.Sprintf("Server rejected expired credential by redirecting/serving login form: %s", rReason),
+								RequestDispatched: true,
+								Timestamp:         time.Now().UTC(),
+							})
+							rep.Summary.TotalPassed++
+						} else if isAuthErrorPayload(expBody) {
+							rep.Results = append(rep.Results, AuthTestResult{
+								ID:                computeResultID(cleanURL, "GET", TestExpiredCredential),
+								Endpoint:          cleanURL,
+								Method:            "GET",
+								TestType:          TestExpiredCredential,
+								Disposition:       DispositionPassed,
+								HTTPStatus:        expResp.StatusCode,
+								EvidenceSummary:   "Server rejected expired credential with application error payload (soft-401)",
+								RequestDispatched: true,
+								Timestamp:         time.Now().UTC(),
+							})
+							rep.Summary.TotalPassed++
+						} else {
+							rep.Results = append(rep.Results, AuthTestResult{
+								ID:                computeResultID(cleanURL, "GET", TestExpiredCredential),
+								Endpoint:          cleanURL,
+								Method:            "GET",
+								TestType:          TestExpiredCredential,
+								Disposition:       DispositionInconclusive,
+								HTTPStatus:        expResp.StatusCode,
+								EvidenceSummary:   "Server returned HTTP 200 on expired credential, but payload does not contain verified application data",
+								RequestDispatched: true,
+								Timestamp:         time.Now().UTC(),
+							})
+							rep.Summary.TotalInconclusive++
+						}
+					} else {
+						rep.Results = append(rep.Results, AuthTestResult{
+							ID:                computeResultID(cleanURL, "GET", TestExpiredCredential),
+							Endpoint:          cleanURL,
+							Method:            "GET",
+							TestType:          TestExpiredCredential,
+							Disposition:       DispositionInconclusive,
+							HTTPStatus:        expResp.StatusCode,
+							EvidenceSummary:   fmt.Sprintf("Server returned HTTP %d on expired credential; inconclusive rejection evidence", expResp.StatusCode),
+							RequestDispatched: true,
+							Timestamp:         time.Now().UTC(),
+						})
+						rep.Summary.TotalInconclusive++
 					}
 				}
 			}
@@ -892,24 +1080,61 @@ func (v *Verifier) Verify(ctx context.Context, cfg VerificationConfig) (*Verific
 			if !budgetTracker.IsExhausted() && budgetTracker.TryAcquire(epHost) {
 				headResp, _, headErr := sendProbe(runCtx, httpClient, "HEAD", fullURL, nil, maxRespSize)
 				if headErr == nil {
-					if headResp.StatusCode == http.StatusOK {
-						f := buildMethodBypassFinding(cleanURL, "HEAD")
-						rep.Findings = append(rep.Findings, f)
+					isHeadLogin, _ := isLoginRedirectOrLoginForm(fullURL, headResp, nil)
+					if isHeadLogin || loginEnforced {
 						rep.Results = append(rep.Results, AuthTestResult{
 							ID:                computeResultID(cleanURL, "HEAD", TestMethodBypass),
 							Endpoint:          cleanURL,
 							Method:            "HEAD",
 							TestType:          TestMethodBypass,
-							Disposition:       DispositionWeaknessVerified,
+							Disposition:       DispositionPassed,
 							HTTPStatus:        headResp.StatusCode,
 							BaselineStatus:    baseResp.StatusCode,
-							EvidenceSummary:   "Authentication enforced on GET but bypassed via HEAD returning HTTP 200",
-							Finding:           &f,
+							EvidenceSummary:   "HEAD method enforced authentication consistently with GET",
 							RequestDispatched: true,
 							Timestamp:         time.Now().UTC(),
 						})
-						rep.Summary.TotalWeaknesses++
-					} else {
+						rep.Summary.TotalPassed++
+					} else if headResp.StatusCode == http.StatusOK {
+						cLen := headResp.ContentLength
+						cType := strings.ToLower(headResp.Header.Get("Content-Type"))
+						hasRep := (cLen > 0 && !strings.Contains(cType, "text/html")) || strings.Contains(cType, "application/json") || strings.Contains(cType, "application/xml")
+						if hasRep {
+							f := buildMethodBypassFinding(cleanURL, "HEAD", true)
+							rep.Findings = append(rep.Findings, f)
+							rep.Results = append(rep.Results, AuthTestResult{
+								ID:                computeResultID(cleanURL, "HEAD", TestMethodBypass),
+								Endpoint:          cleanURL,
+								Method:            "HEAD",
+								TestType:          TestMethodBypass,
+								Disposition:       DispositionWeaknessVerified,
+								HTTPStatus:        headResp.StatusCode,
+								BaselineStatus:    baseResp.StatusCode,
+								EvidenceSummary:   "Authentication enforced on GET but bypassed via HEAD returning HTTP 200 with representation headers",
+								Finding:           &f,
+								RequestDispatched: true,
+								Timestamp:         time.Now().UTC(),
+							})
+							rep.Summary.TotalWeaknesses++
+						} else {
+							f := buildMethodBypassFinding(cleanURL, "HEAD", false)
+							rep.Findings = append(rep.Findings, f)
+							rep.Results = append(rep.Results, AuthTestResult{
+								ID:                computeResultID(cleanURL, "HEAD", TestMethodBypass),
+								Endpoint:          cleanURL,
+								Method:            "HEAD",
+								TestType:          TestMethodBypass,
+								Disposition:       DispositionCandidate,
+								HTTPStatus:        headResp.StatusCode,
+								BaselineStatus:    baseResp.StatusCode,
+								EvidenceSummary:   "HEAD returned HTTP 200 without GET credentials, but representation headers were absent; candidate bypass",
+								Finding:           &f,
+								RequestDispatched: true,
+								Timestamp:         time.Now().UTC(),
+							})
+							rep.Summary.TotalCandidates++
+						}
+					} else if headResp.StatusCode == http.StatusUnauthorized || headResp.StatusCode == http.StatusForbidden || headResp.StatusCode == http.StatusMethodNotAllowed || headResp.StatusCode == http.StatusBadRequest {
 						rep.Results = append(rep.Results, AuthTestResult{
 							ID:                computeResultID(cleanURL, "HEAD", TestMethodBypass),
 							Endpoint:          cleanURL,
@@ -922,14 +1147,24 @@ func (v *Verifier) Verify(ctx context.Context, cfg VerificationConfig) (*Verific
 							Timestamp:         time.Now().UTC(),
 						})
 						rep.Summary.TotalPassed++
+					} else {
+						rep.Results = append(rep.Results, AuthTestResult{
+							ID:                computeResultID(cleanURL, "HEAD", TestMethodBypass),
+							Endpoint:          cleanURL,
+							Method:            "HEAD",
+							TestType:          TestMethodBypass,
+							Disposition:       DispositionInconclusive,
+							HTTPStatus:        headResp.StatusCode,
+							EvidenceSummary:   fmt.Sprintf("HEAD method returned HTTP %d; inconclusive bypass evidence", headResp.StatusCode),
+							RequestDispatched: true,
+							Timestamp:         time.Now().UTC(),
+						})
+						rep.Summary.TotalInconclusive++
 					}
 				}
 			}
 
 		} else if baseResp.StatusCode == http.StatusOK {
-			if !isKnownPublic {
-				observedUnprotected = append(observedUnprotected, cleanURL)
-			}
 			// Unauthenticated request returned HTTP 200 OK!
 			if isKnownPublic {
 				// Expected public endpoint
@@ -949,6 +1184,7 @@ func (v *Verifier) Verify(ctx context.Context, cfg VerificationConfig) (*Verific
 			} else if isExpectedProtected {
 				// Explicitly expected to be protected, but returned 200 OK without authentication!
 				if hasMeaningfulApplicationPayload(baseResp, baseBody) {
+					observedUnprotected = append(observedUnprotected, cleanURL)
 					f := buildMissingAuthFinding(cleanURL, baseResp.StatusCode, true)
 					rep.Findings = append(rep.Findings, f)
 					rep.Results = append(rep.Results, AuthTestResult{
@@ -965,6 +1201,20 @@ func (v *Verifier) Verify(ctx context.Context, cfg VerificationConfig) (*Verific
 						Timestamp:         time.Now().UTC(),
 					})
 					rep.Summary.TotalWeaknesses++
+				} else if isAuthErrorPayload(baseBody) {
+					rep.Results = append(rep.Results, AuthTestResult{
+						ID:                computeResultID(cleanURL, "GET", TestEnforcementBaseline),
+						Endpoint:          cleanURL,
+						Method:            "GET",
+						TestType:          TestEnforcementBaseline,
+						Disposition:       DispositionPassed,
+						HTTPStatus:        baseResp.StatusCode,
+						EvidenceSummary:   "Endpoint enforced authentication with application error payload (soft-401)",
+						RequestDispatched: true,
+						DurationMs:        baseDuration,
+						Timestamp:         time.Now().UTC(),
+					})
+					rep.Summary.TotalPassed++
 				} else {
 					rep.Results = append(rep.Results, AuthTestResult{
 						ID:                computeResultID(cleanURL, "GET", TestEnforcementBaseline),
@@ -973,7 +1223,7 @@ func (v *Verifier) Verify(ctx context.Context, cfg VerificationConfig) (*Verific
 						TestType:          TestEnforcementBaseline,
 						Disposition:       DispositionInconclusive,
 						HTTPStatus:        baseResp.StatusCode,
-						EvidenceSummary:   "Protected route returned HTTP 200 OK but payload does not indicate application data",
+						EvidenceSummary:   "Protected route returned HTTP 200 OK but payload does not indicate application data or unauthenticated exposure",
 						RequestDispatched: true,
 						DurationMs:        baseDuration,
 						Timestamp:         time.Now().UTC(),
@@ -984,6 +1234,7 @@ func (v *Verifier) Verify(ctx context.Context, cfg VerificationConfig) (*Verific
 				// Policy unknown: compare against authenticated probe if available
 				if authResp != nil && authErr == nil && authResp.StatusCode == http.StatusOK {
 					if responsesSemanticallyEquivalent(baseResp, baseBody, authResp, authBody) && hasMeaningfulApplicationPayload(baseResp, baseBody) {
+						observedUnprotected = append(observedUnprotected, cleanURL)
 						// Identical application payload served with or without credentials
 						f := buildMissingAuthFinding(cleanURL, baseResp.StatusCode, false)
 						rep.Findings = append(rep.Findings, f)
@@ -1020,6 +1271,9 @@ func (v *Verifier) Verify(ctx context.Context, cfg VerificationConfig) (*Verific
 					}
 				} else {
 					// Single unauthenticated 200 without known policy
+					if hasMeaningfulApplicationPayload(baseResp, baseBody) {
+						observedUnprotected = append(observedUnprotected, cleanURL)
+					}
 					rep.Results = append(rep.Results, AuthTestResult{
 						ID:                computeResultID(cleanURL, "GET", TestEnforcementBaseline),
 						Endpoint:          cleanURL,
@@ -1036,7 +1290,7 @@ func (v *Verifier) Verify(ctx context.Context, cfg VerificationConfig) (*Verific
 				}
 			}
 		} else {
-			// Status other than 200, 401, 403 (e.g. 404, 301, 500)
+			// Status other than 200, 401, 403 (e.g. 404, 301, 304, 204, 500)
 			rep.Results = append(rep.Results, AuthTestResult{
 				ID:                computeResultID(cleanURL, "GET", TestEnforcementBaseline),
 				Endpoint:          cleanURL,
@@ -1304,23 +1558,183 @@ func hasSensitiveQueryToken(rawURL string) bool {
 	return false
 }
 
+func isEmptyOrTrivialPayload(body []byte) bool {
+	trimmed := bytes.TrimSpace(body)
+	return len(trimmed) == 0 || bytes.Equal(trimmed, []byte("{}")) || bytes.Equal(trimmed, []byte("[]")) || bytes.Equal(trimmed, []byte("null"))
+}
+
+func isAuthErrorPayload(body []byte) bool {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("{}")) || bytes.Equal(trimmed, []byte("[]")) || bytes.Equal(trimmed, []byte("null")) {
+		return false
+	}
+
+	// 1. JSON analysis
+	var obj map[string]interface{}
+	if err := json.Unmarshal(trimmed, &obj); err == nil {
+		if len(obj) == 0 {
+			return false
+		}
+		// Error field checks
+		if _, hasErr := obj["error"]; hasErr {
+			return true
+		}
+		if _, hasErrs := obj["errors"]; hasErrs {
+			return true
+		}
+		if statusVal, hasStatus := obj["status"]; hasStatus {
+			switch s := statusVal.(type) {
+			case float64:
+				if s == 400 || s == 401 || s == 403 || s == 404 || s == 500 {
+					return true
+				}
+			case string:
+				sLower := strings.ToLower(s)
+				if sLower == "error" || sLower == "unauthorized" || sLower == "forbidden" || sLower == "denied" || sLower == "failed" || sLower == "401" || sLower == "403" {
+					return true
+				}
+			}
+		}
+		if codeVal, hasCode := obj["code"]; hasCode {
+			switch c := codeVal.(type) {
+			case float64:
+				if c == 400 || c == 401 || c == 403 || c == 404 || c == 500 {
+					return true
+				}
+			case string:
+				cLower := strings.ToLower(c)
+				if strings.Contains(cLower, "unauthorized") || strings.Contains(cLower, "forbidden") || strings.Contains(cLower, "auth") || strings.Contains(cLower, "invalid") {
+					return true
+				}
+			}
+		}
+		if succVal, hasSucc := obj["success"]; hasSucc {
+			if succBool, ok := succVal.(bool); ok && !succBool {
+				return true
+			}
+		}
+		for _, key := range []string{"message", "msg", "detail", "description", "title"} {
+			if val, ok := obj[key]; ok {
+				if strVal, isStr := val.(string); isStr {
+					lower := strings.ToLower(strVal)
+					if strings.Contains(lower, "unauthorized") ||
+						strings.Contains(lower, "unauthenticated") ||
+						strings.Contains(lower, "login required") ||
+						strings.Contains(lower, "not logged in") ||
+						strings.Contains(lower, "authentication required") ||
+						strings.Contains(lower, "permission denied") ||
+						strings.Contains(lower, "access denied") ||
+						strings.Contains(lower, "forbidden") ||
+						strings.Contains(lower, "invalid token") ||
+						strings.Contains(lower, "token expired") ||
+						strings.Contains(lower, "bad credentials") ||
+						strings.Contains(lower, "invalid credentials") ||
+						strings.Contains(lower, "not authenticated") {
+						return true
+					}
+				}
+			}
+		}
+	}
+
+	// 2. HTML Login Form / Page detection
+	if isHtmlLoginForm(trimmed) {
+		return true
+	}
+
+	return false
+}
+
+func isHtmlLoginForm(body []byte) bool {
+	s := strings.ToLower(string(body))
+	hasForm := strings.Contains(s, "<form")
+	hasPasswordInput := strings.Contains(s, "type=\"password\"") || strings.Contains(s, "type='password'") ||
+		strings.Contains(s, "name=\"password\"") || strings.Contains(s, "name='password'") ||
+		strings.Contains(s, "name=\"pwd\"") || strings.Contains(s, "name='pwd'") ||
+		strings.Contains(s, "name=\"passwd\"")
+	if hasForm && hasPasswordInput {
+		return true
+	}
+	if strings.Contains(s, "<html") || strings.Contains(s, "<!doctype") || strings.Contains(s, "<body") {
+		if strings.Contains(s, "<title>login") || strings.Contains(s, "<title>sign in") ||
+			strings.Contains(s, "<title>log in") || strings.Contains(s, "id=\"login-form\"") ||
+			strings.Contains(s, "class=\"login-page\"") || strings.Contains(s, "data-testid=\"login\"") {
+			return true
+		}
+	}
+	return false
+}
+
+func isLoginRedirectOrLoginForm(origURL string, resp *http.Response, body []byte) (bool, string) {
+	if resp == nil {
+		return false, ""
+	}
+	// Check location header if 3xx redirect not followed
+	if loc := resp.Header.Get("Location"); loc != "" {
+		if isAuthOrLoginRoute(loc) {
+			return true, fmt.Sprintf("HTTP %d redirect to login path %s", resp.StatusCode, loc)
+		}
+	}
+	// Check if request followed redirect to login path
+	if resp.Request != nil && resp.Request.URL != nil {
+		reqURL := resp.Request.URL.String()
+		if normalizePath(origURL) != normalizePath(reqURL) {
+			if isAuthOrLoginRoute(resp.Request.URL.Path) {
+				return true, fmt.Sprintf("Redirected to login endpoint %s", resp.Request.URL.Path)
+			}
+			q := resp.Request.URL.Query()
+			if q.Get("next") != "" || q.Get("redirect") != "" || q.Get("return") != "" || q.Get("return_to") != "" {
+				return true, fmt.Sprintf("Redirected to authentication handler with return path: %s", reqURL)
+			}
+		}
+	}
+	// Check HTML login form in response body
+	if isHtmlLoginForm(body) {
+		return true, "Response presents HTML login authentication form"
+	}
+	return false, ""
+}
+
 func hasMeaningfulApplicationPayload(resp *http.Response, body []byte) bool {
 	if resp == nil || len(body) == 0 {
 		return false
 	}
-	cType := strings.ToLower(resp.Header.Get("Content-Type"))
-	if strings.Contains(cType, "application/json") || strings.Contains(cType, "application/xml") {
-		return true
+	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusNotModified {
+		return false
 	}
 	trimmed := bytes.TrimSpace(body)
-	if (bytes.HasPrefix(trimmed, []byte("{")) && bytes.HasSuffix(trimmed, []byte("}"))) ||
-		(bytes.HasPrefix(trimmed, []byte("[")) && bytes.HasSuffix(trimmed, []byte("]"))) {
-		return true
+	if isEmptyOrTrivialPayload(trimmed) {
+		return false
 	}
-	s := strings.ToLower(string(body))
+	if isAuthErrorPayload(trimmed) {
+		return false
+	}
+	cType := strings.ToLower(resp.Header.Get("Content-Type"))
+	if strings.Contains(cType, "application/json") {
+		var parsed interface{}
+		if err := json.Unmarshal(trimmed, &parsed); err == nil {
+			switch v := parsed.(type) {
+			case map[string]interface{}:
+				return len(v) > 0
+			case []interface{}:
+				return len(v) > 0
+			default:
+				return false
+			}
+		}
+	}
+	if strings.Contains(cType, "application/xml") || strings.Contains(cType, "text/xml") {
+		s := strings.ToLower(string(trimmed))
+		if strings.Contains(s, "<error>") || strings.Contains(s, "<fault>") {
+			return false
+		}
+		return len(trimmed) > 20
+	}
+	s := strings.ToLower(string(trimmed))
 	if strings.Contains(s, "\"email\":") || strings.Contains(s, "\"id\":") ||
 		strings.Contains(s, "\"username\":") || strings.Contains(s, "\"user_id\":") ||
-		strings.Contains(s, "\"balance\":") || strings.Contains(s, "\"role\":") {
+		strings.Contains(s, "\"balance\":") || strings.Contains(s, "\"role\":") ||
+		strings.Contains(s, "\"account\":") || strings.Contains(s, "\"profile\":") {
 		return true
 	}
 	return false
@@ -1604,7 +2018,21 @@ func buildExpiredAcceptedFinding(endpoint string) report.Finding {
 	}
 }
 
-func buildMethodBypassFinding(endpoint, bypassMethod string) report.Finding {
+func buildMethodBypassFinding(endpoint, bypassMethod string, confirmed bool) report.Finding {
+	status := report.FindingStatusSuspected
+	outcome := report.OutcomeSuspected
+	confidence := report.ConfidenceLow
+	severity := report.SeverityMedium
+	evidence := fmt.Sprintf("Endpoint returned HTTP 401 on GET, but returned HTTP 200 on %s without credentials (representation headers absent or inconclusive)", bypassMethod)
+
+	if confirmed {
+		status = report.FindingStatusConfirmed
+		outcome = report.OutcomeConfirmed
+		confidence = report.ConfidenceHigh
+		severity = report.SeverityHigh
+		evidence = fmt.Sprintf("Endpoint returned HTTP 401 on GET, but returned HTTP 200 on %s without credentials with resource representation headers", bypassMethod)
+	}
+
 	h := sha256.New()
 	h.Write([]byte(endpoint))
 	h.Write([]byte(bypassMethod))
@@ -1614,20 +2042,20 @@ func buildMethodBypassFinding(endpoint, bypassMethod string) report.Finding {
 	return report.Finding{
 		ID:                    fID,
 		RuleID:                "AUTH-METHOD-BYPASS",
-		Status:                report.FindingStatusConfirmed,
-		ClassificationOutcome: report.OutcomeConfirmed,
+		Status:                status,
+		ClassificationOutcome: outcome,
 		AnalysisMethod:        report.AnalysisMethodActive,
 		Category:              "Authentication / Method Enforcement",
 		Title:                 "Authentication Bypass via Alternative HTTP Method",
-		Severity:              report.SeverityHigh,
-		Confidence:            report.ConfidenceHigh,
+		Severity:              severity,
+		Confidence:            confidence,
 		Target:                endpoint,
 		Endpoint:              endpoint,
 		Method:                bypassMethod,
 		Description:           fmt.Sprintf("Authentication is enforced for GET requests, but unauthenticated access is permitted via the %s HTTP method.", bypassMethod),
-		Evidence:              fmt.Sprintf("Endpoint returned HTTP 401 on GET, but returned HTTP 200 on %s without credentials", bypassMethod),
+		Evidence:              evidence,
 		EvidenceDetails: report.EvidenceDetails{
-			Observation:     fmt.Sprintf("Bypass achieved via %s method", bypassMethod),
+			Observation:     fmt.Sprintf("Bypass observed via %s method (confirmed=%t)", bypassMethod, confirmed),
 			Location:        endpoint,
 			DetectionMethod: "active_auth_verification",
 		},

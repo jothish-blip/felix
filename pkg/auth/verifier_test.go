@@ -1011,3 +1011,353 @@ func TestVerifier_DryRun_NoNetworkDispatched(t *testing.T) {
 		t.Errorf("expected 2 skipped checks in dry-run mode, got %d", rep.Summary.TotalSkipped)
 	}
 }
+
+// ---------------------------------------------------------------------
+// 5. Final Audit Regression & Classification Hardening Tests (Phase 5.1 Audit)
+// ---------------------------------------------------------------------
+
+func TestVerifier_Audit_Soft401_ErrorPayload_NotClassifiedAsBypass(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		// Server returns HTTP 200 with soft-401 error payload
+		w.Write([]byte(`{"error":"unauthorized","message":"Authentication required to access this resource","code":401}`))
+	}))
+	defer ts.Close()
+
+	v := NewVerifier()
+	rep, err := v.Verify(context.Background(), VerificationConfig{
+		TargetURL:               ts.URL,
+		Endpoints:               []string{ts.URL + "/api/v1/profile"},
+		ExpectedProtectedRoutes: []string{"/api/v1/profile"},
+		Authorization:           testValidAuth(),
+		AllowLoopback:           true,
+	})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rep.Summary.TotalWeaknesses > 0 {
+		t.Errorf("soft-401 error response returning HTTP 200 must never be classified as a verified weakness; got %d weaknesses", rep.Summary.TotalWeaknesses)
+	}
+	if len(rep.Findings) != 0 {
+		t.Errorf("expected 0 confirmed findings on soft-401 response, got %d", len(rep.Findings))
+	}
+}
+
+func TestVerifier_Audit_RedirectToLogin_NotClassifiedAsBypass(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/user" {
+			http.Redirect(w, r, "/login?next=/api/v1/user", http.StatusFound)
+			return
+		}
+		if r.URL.Path == "/login" {
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`<html><head><title>Login</title></head><body><form action="/login" method="post"><input type="password" name="password"></form></body></html>`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	v := NewVerifier()
+	rep, err := v.Verify(context.Background(), VerificationConfig{
+		TargetURL:               ts.URL,
+		Endpoints:               []string{ts.URL + "/api/v1/user"},
+		ExpectedProtectedRoutes: []string{"/api/v1/user"},
+		Authorization:           testValidAuth(),
+		AllowLoopback:           true,
+	})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rep.Summary.TotalWeaknesses > 0 {
+		t.Errorf("redirect-to-login must not produce verified weakness; got %d weaknesses", rep.Summary.TotalWeaknesses)
+	}
+	if len(rep.Findings) != 0 {
+		t.Errorf("expected 0 findings when endpoint redirects to login, got %d", len(rep.Findings))
+	}
+	foundPassed := false
+	for _, res := range rep.Results {
+		if res.TestType == TestMissingCredential && res.Disposition == DispositionPassed {
+			foundPassed = true
+		}
+	}
+	if !foundPassed {
+		t.Errorf("expected TestMissingCredential to be marked DispositionPassed on login redirect")
+	}
+}
+
+func TestVerifier_Audit_HTML_LoginForm_At200OK_NotClassifiedAsBypass(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<!DOCTYPE html><html><head><title>Sign In - Internal Portal</title></head><body><form action="/auth/login"><input type="text" name="user"><input type="password" name="pwd"><input type="submit" value="Sign In"></form></body></html>`))
+	}))
+	defer ts.Close()
+
+	v := NewVerifier()
+	rep, err := v.Verify(context.Background(), VerificationConfig{
+		TargetURL:               ts.URL,
+		Endpoints:               []string{ts.URL + "/dashboard"},
+		ExpectedProtectedRoutes: []string{"/dashboard"},
+		Authorization:           testValidAuth(),
+		AllowLoopback:           true,
+	})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rep.Summary.TotalWeaknesses > 0 {
+		t.Errorf("HTML login page returning HTTP 200 must not be flagged as a weakness; got %d weaknesses", rep.Summary.TotalWeaknesses)
+	}
+	if len(rep.Findings) != 0 {
+		t.Errorf("expected 0 findings when endpoint serves HTML login form, got %d", len(rep.Findings))
+	}
+}
+
+func TestVerifier_Audit_InconclusiveResponses_EmptyBody_304NotModified_204NoContent(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/empty-json":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{}`))
+		case "/api/cached":
+			w.WriteHeader(http.StatusNotModified)
+		case "/api/no-content":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer ts.Close()
+
+	v := NewVerifier()
+	rep, err := v.Verify(context.Background(), VerificationConfig{
+		TargetURL:               ts.URL,
+		Endpoints:               []string{ts.URL + "/api/empty-json", ts.URL + "/api/cached", ts.URL + "/api/no-content"},
+		ExpectedProtectedRoutes: []string{"/api/empty-json", "/api/cached", "/api/no-content"},
+		Authorization:           testValidAuth(),
+		AllowLoopback:           true,
+	})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rep.Findings) != 0 {
+		t.Errorf("expected 0 findings for inconclusive responses, got %d", len(rep.Findings))
+	}
+	if rep.Summary.TotalInconclusive < 3 {
+		t.Errorf("expected at least 3 inconclusive results, got %d", rep.Summary.TotalInconclusive)
+	}
+}
+
+func TestVerifier_Audit_HEAD_MethodBypass_WithoutRepresentation_ClassifiedCandidateNotConfirmed(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "HEAD" {
+			// HEAD returns 200 without representation headers
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error":"unauthorized"}`))
+	}))
+	defer ts.Close()
+
+	v := NewVerifier()
+	rep, err := v.Verify(context.Background(), VerificationConfig{
+		TargetURL:     ts.URL,
+		Endpoints:     []string{ts.URL + "/api/res"},
+		Authorization: testValidAuth(),
+		AllowLoopback: true,
+	})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	foundSuspected := false
+	for _, f := range rep.Findings {
+		if f.RuleID == "AUTH-METHOD-BYPASS" && f.Status == report.FindingStatusSuspected {
+			foundSuspected = true
+		}
+	}
+	if !foundSuspected {
+		t.Errorf("expected HEAD method bypass without representation headers to be classified as Suspected candidate")
+	}
+}
+
+func TestVerifier_Audit_HEAD_MethodBypass_WithRepresentation_ClassifiedConfirmed(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "HEAD" {
+			// HEAD returns 200 with representation headers
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Length", "256")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error":"unauthorized"}`))
+	}))
+	defer ts.Close()
+
+	v := NewVerifier()
+	rep, err := v.Verify(context.Background(), VerificationConfig{
+		TargetURL:     ts.URL,
+		Endpoints:     []string{ts.URL + "/api/res2"},
+		Authorization: testValidAuth(),
+		AllowLoopback: true,
+	})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	foundConfirmed := false
+	for _, f := range rep.Findings {
+		if f.RuleID == "AUTH-METHOD-BYPASS" && f.Status == report.FindingStatusConfirmed {
+			foundConfirmed = true
+		}
+	}
+	if !foundConfirmed {
+		t.Errorf("expected HEAD method bypass with representation headers to be classified as Confirmed")
+	}
+}
+
+func TestVerifier_Audit_InvalidCredential_Returns200ErrorPayload_NotClassifiedAsVulnerability(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHdr := r.Header.Get("Authorization")
+		if authHdr == "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		// Invalid token probe returns 200 with error payload (soft-401)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"error":"invalid_token","error_description":"Signature verification failed"}`))
+	}))
+	defer ts.Close()
+
+	v := NewVerifier()
+	rep, err := v.Verify(context.Background(), VerificationConfig{
+		TargetURL: ts.URL,
+		Endpoints: []string{ts.URL + "/api/soft-reject"},
+		PrimaryCredential: Credential{
+			Type:  CredTypeBearer,
+			Value: "valid_dummy_token",
+		},
+		Authorization: testValidAuth(),
+		AllowLoopback: true,
+	})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, f := range rep.Findings {
+		if f.RuleID == "AUTH-CRED-INVALID-ACCEPTED" {
+			t.Errorf("AUTH-CRED-INVALID-ACCEPTED must not be flagged when server returns soft-401 error JSON on invalid token")
+		}
+	}
+}
+
+func TestVerifier_Audit_RouteConsistency_LegitimatelyPublicRoute_NotFlagged(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/v1/public/ping" {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status":"pong"}`))
+			return
+		}
+		if r.URL.Path == "/api/v1/users" {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"error":"unauthorized"}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	v := NewVerifier()
+	rep, err := v.Verify(context.Background(), VerificationConfig{
+		TargetURL:               ts.URL,
+		Endpoints:               []string{ts.URL + "/api/v1/public/ping", ts.URL + "/api/v1/users"},
+		PublicRoutes:            []string{"/api/v1/public/ping"},
+		ExpectedProtectedRoutes: []string{"/api/v1/users"},
+		Authorization:           testValidAuth(),
+		AllowLoopback:           true,
+	})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, f := range rep.Findings {
+		if f.RuleID == "AUTH-ROUTE-INCONSISTENCY" {
+			t.Errorf("legitimate public route must not trigger AUTH-ROUTE-INCONSISTENCY against protected sibling")
+		}
+	}
+}
+
+func TestVerifier_Audit_SentinelCredentialLeakTest_AcrossAllOutputs(t *testing.T) {
+	sentinelToken := "SENTINEL_SECRET_TOKEN_ALPHA_BETA_998877"
+	sentinelPass := "SENTINEL_SUPER_SECRET_PASS_998877"
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Server echoes some metadata and fails
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(fmt.Sprintf("Internal Error: processing token length %d", len(r.Header.Get("Authorization")))))
+	}))
+	defer ts.Close()
+
+	v := NewVerifier()
+	rep, err := v.Verify(context.Background(), VerificationConfig{
+		TargetURL: ts.URL,
+		Endpoints: []string{ts.URL + "/api/leak-check"},
+		PrimaryCredential: Credential{
+			Type:     CredTypeBasic,
+			Username: "audit_user",
+			Password: sentinelPass,
+			Value:    sentinelToken,
+		},
+		Authorization: testValidAuth(),
+		AllowLoopback: true,
+	})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Serialize entire report to JSON
+	repJSON, err := json.Marshal(rep)
+	if err != nil {
+		t.Fatalf("json.Marshal failed: %v", err)
+	}
+
+	jsonStr := string(repJSON)
+	if strings.Contains(jsonStr, sentinelToken) {
+		t.Fatalf("CRITICAL SECURITY LEAK: sentinel token found in serialized VerificationReport JSON!")
+	}
+	if strings.Contains(jsonStr, sentinelPass) {
+		t.Fatalf("CRITICAL SECURITY LEAK: sentinel password found in serialized VerificationReport JSON!")
+	}
+
+	// Check each finding and result individually
+	for _, fnd := range rep.Findings {
+		if strings.Contains(fnd.Evidence, sentinelToken) || strings.Contains(fnd.Evidence, sentinelPass) {
+			t.Fatalf("CRITICAL LEAK: finding evidence contains plain credential: %s", fnd.Evidence)
+		}
+		if strings.Contains(fnd.Description, sentinelToken) || strings.Contains(fnd.Description, sentinelPass) {
+			t.Fatalf("CRITICAL LEAK: finding description contains plain credential: %s", fnd.Description)
+		}
+	}
+
+	for _, res := range rep.Results {
+		if strings.Contains(res.EvidenceSummary, sentinelToken) || strings.Contains(res.EvidenceSummary, sentinelPass) {
+			t.Fatalf("CRITICAL LEAK: result evidence summary contains plain credential: %s", res.EvidenceSummary)
+		}
+	}
+}
