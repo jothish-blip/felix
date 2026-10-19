@@ -592,11 +592,10 @@ func buildSecurityImpact(f Finding) CommercialSecurityImpact {
 }
 
 func buildRiskContribution(f Finding, storyIDs, pathIDs []string, contrib CommercialRiskContribution) CommercialRiskContribution {
-	score := f.Score
-	if contrib.Score > 0 && contrib.Score <= 40 {
+	canonicalScore := CalculateFindingScore(f)
+	score := canonicalScore
+	if contrib.Score == canonicalScore && contrib.Score > 0 {
 		score = contrib.Score
-	} else if score <= 0 || score > 40 {
-		score = CalculateFindingScore(f)
 	}
 
 	riskType := "INDIVIDUAL"
@@ -609,11 +608,11 @@ func buildRiskContribution(f Finding, storyIDs, pathIDs []string, contrib Commer
 	}
 
 	weight := contrib.Weight
-	adjScore := contrib.AdjustedScore
 	if weight <= 0 {
 		weight = 1.0
 	}
-	if adjScore <= 0 && score > 0 {
+	adjScore := contrib.AdjustedScore
+	if adjScore <= 0 || contrib.Score != canonicalScore {
 		adjScore = math.Round(float64(score)*weight*100) / 100
 	}
 
@@ -622,11 +621,9 @@ func buildRiskContribution(f Finding, storyIDs, pathIDs []string, contrib Commer
 	}
 	formula := contrib.Formula
 	rationale := contrib.Rationale
-	if rationale == "" {
+	if rationale == "" || contrib.Score != canonicalScore {
 		expl := ExplainFindingScore(f)
-		if formula == "" {
-			formula = fmt.Sprintf("%s; report_weighted: %.2f * %.2fx = %.2f pts", expl.Formula, float64(score), weight, adjScore)
-		}
+		formula = fmt.Sprintf("%s; report_weighted: %.2f * %.2fx = %.2f pts", expl.Formula, float64(score), weight, adjScore)
 		rationale = fmt.Sprintf("Calculated risk score %d/40 (weight %.1fx, adjusted %.2f): %s",
 			score, weight, adjScore, expl.Rationale)
 	}

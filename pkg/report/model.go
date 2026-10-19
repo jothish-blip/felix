@@ -220,6 +220,7 @@ type FindingScoreExplanation struct {
 	Severity           string  `json:"severity"`
 	BaseScore          float64 `json:"base_score"`
 	CategoryModifier   float64 `json:"category_modifier"`
+	EffectiveBase      float64 `json:"effective_base,omitempty"`
 	Confidence         string  `json:"confidence"`
 	ConfidenceWeight   float64 `json:"confidence_weight"`
 	VerificationStatus string  `json:"verification_status"`

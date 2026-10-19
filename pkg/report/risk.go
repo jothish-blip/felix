@@ -22,12 +22,16 @@ func ExplainFindingScore(f Finding) FindingScoreExplanation {
 		return FindingScoreExplanation{
 			Score:              0,
 			Severity:           normSev,
+			BaseScore:          0,
+			EffectiveBase:      0,
 			Confidence:         normConf,
+			ConfidenceWeight:   0,
 			VerificationStatus: string(VerificationNotExposed),
+			VerificationWeight: 0,
 			IsDefended:         true,
 			DefendedReason:     "verification status confirmed not exposed (defensive boundary)",
 			Model:              "felix_finding_v1",
-			Formula:            "0/40 (defended / not exposed)",
+			Formula:            "0/40 (defended: verification confirmed not exposed)",
 			Rationale:          "Finding has zero risk score because verification confirmed defensive boundary enforcement.",
 		}
 	}
@@ -36,12 +40,15 @@ func ExplainFindingScore(f Finding) FindingScoreExplanation {
 		return FindingScoreExplanation{
 			Score:              0,
 			Severity:           normSev,
+			BaseScore:          0,
+			EffectiveBase:      0,
 			Confidence:         normConf,
+			ConfidenceWeight:   0,
 			VerificationStatus: "NOT_EXPOSED",
 			IsDefended:         true,
 			DefendedReason:     "detection status confirmed not exposed",
 			Model:              "felix_finding_v1",
-			Formula:            "0/40 (detection not exposed)",
+			Formula:            "0/40 (defended: detection confirmed not exposed)",
 			Rationale:          "Finding has zero risk score because detection confirmed endpoint is not exposed.",
 		}
 	}
@@ -52,12 +59,16 @@ func ExplainFindingScore(f Finding) FindingScoreExplanation {
 			return FindingScoreExplanation{
 				Score:              0,
 				Severity:           normSev,
+				BaseScore:          0,
+				EffectiveBase:      0,
 				Confidence:         normConf,
+				ConfidenceWeight:   0,
 				VerificationStatus: string(normVer),
+				VerificationWeight: 0,
 				IsDefended:         true,
 				DefendedReason:     fmt.Sprintf("access barrier enforced (auth_state: %s)", auth),
 				Model:              "felix_finding_v1",
-				Formula:            fmt.Sprintf("0/40 (barrier enforced: %s)", auth),
+				Formula:            fmt.Sprintf("0/40 (defended: access barrier %s enforced)", auth),
 				Rationale:          fmt.Sprintf("Finding has zero risk score because affirmative access barrier (%s) prevented unauthorized exposure.", auth),
 			}
 		}
@@ -141,17 +152,37 @@ func ExplainFindingScore(f Finding) FindingScoreExplanation {
 		effectiveVerStatus = "DEFAULT"
 	}
 
-	formula := fmt.Sprintf("round((%.2f base + %.2f mod) * %.2f conf * %.2f ver) = %d/40",
-		base, catMod, confMult, verMult, score)
+	rawBaseSum := base + catMod
+	var formula string
+	if rawBaseSum > 40.0 {
+		formula = fmt.Sprintf("round(min(40.00, %.2f base + %.2f mod) * %.2f conf * %.2f ver) = %d/40",
+			base, catMod, confMult, verMult, score)
+	} else if catMod > 0 {
+		formula = fmt.Sprintf("round((%.2f base + %.2f mod) * %.2f conf * %.2f ver) = %d/40",
+			base, catMod, confMult, verMult, score)
+	} else {
+		formula = fmt.Sprintf("round(%.2f base * %.2f conf * %.2f ver) = %d/40",
+			base, confMult, verMult, score)
+	}
 
-	rationale := fmt.Sprintf("Calculated score %d/40 (model felix_finding_v1) from %s severity (base %.1f, mod +%.1f), %s confidence (%.2fx), and %s verification (%.2fx).",
-		score, normSev, base, catMod, normConf, confMult, effectiveVerStatus, verMult)
+	var rationale string
+	if rawBaseSum > 40.0 {
+		rationale = fmt.Sprintf("Calculated score %d/40 (model felix_finding_v1) from %s severity base (%.1f) and modifier (+%.1f) capped at 40.0 pre-weight, %s confidence (%.2fx), and %s verification (%.2fx).",
+			score, normSev, base, catMod, normConf, confMult, effectiveVerStatus, verMult)
+	} else if catMod > 0 {
+		rationale = fmt.Sprintf("Calculated score %d/40 (model felix_finding_v1) from %s severity base (%.1f) and modifier (+%.1f), %s confidence (%.2fx), and %s verification (%.2fx).",
+			score, normSev, base, catMod, normConf, confMult, effectiveVerStatus, verMult)
+	} else {
+		rationale = fmt.Sprintf("Calculated score %d/40 (model felix_finding_v1) from %s severity base (%.1f), %s confidence (%.2fx), and %s verification (%.2fx).",
+			score, normSev, base, normConf, confMult, effectiveVerStatus, verMult)
+	}
 
 	return FindingScoreExplanation{
 		Score:              score,
 		Severity:           normSev,
 		BaseScore:          base,
 		CategoryModifier:   catMod,
+		EffectiveBase:      effectiveBase,
 		Confidence:         normConf,
 		ConfidenceWeight:   confMult,
 		VerificationStatus: effectiveVerStatus,
@@ -226,6 +257,10 @@ func CalculateRiskBreakdown(findings []Finding, stories []SecurityStory) ([]Comm
 			if auth == "AUTH_REQUIRED" || auth == "FORBIDDEN" || auth == "NOT_FOUND" {
 				continue
 			}
+		}
+
+		if ExplainFindingScore(f).IsDefended {
+			continue
 		}
 
 		s := f.Score

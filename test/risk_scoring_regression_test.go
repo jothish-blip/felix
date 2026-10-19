@@ -327,14 +327,13 @@ func TestRiskScoring_ScoreCapsEnforcement(t *testing.T) {
 // 5. Severity anchor rule: verified findings anchor categorical level even with lower accumulated score;
 // unverified candidate findings do not anchor.
 func TestRiskScoring_SeverityAnchorRule(t *testing.T) {
-	// A. Verified CRITICAL finding with score 30
+	// A. Verified CRITICAL finding with score 30 (40 base * 0.75 MEDIUM conf * 1.0 VERIFIED)
 	// 30 points falls into numerical band LOW (20-39), but anchor must escalate to CRITICAL
 	verifiedCrit := report.Finding{
 		ID:          "fnd-anchor-crit",
 		Category:    "sql-injection",
 		Severity:    "CRITICAL",
-		Confidence:  "HIGH",
-		Score:       30,
+		Confidence:  "MEDIUM",
 		Fingerprint: "fp-anchor-crit",
 		Verification: report.VerificationRecord{
 			Status: report.VerificationVerified,
@@ -361,14 +360,13 @@ func TestRiskScoring_SeverityAnchorRule(t *testing.T) {
 		t.Fatalf("AnchorRationale does not explain anchor: %s", bCrit.AnchorRationale)
 	}
 
-	// B. Unverified / Candidate CRITICAL finding with score 24 (30 * 0.8)
+	// B. Unverified / Candidate CRITICAL finding with score 24 (40 * 0.75 * 0.8)
 	// Must NOT anchor! Should remain at numerical score band (LOW for score 24)
 	candidateCrit := report.Finding{
 		ID:          "fnd-cand-crit",
 		Category:    "sql-injection",
 		Severity:    "CRITICAL",
-		Confidence:  "HIGH",
-		Score:       24,
+		Confidence:  "MEDIUM",
 		Fingerprint: "fp-cand-crit",
 		Verification: report.VerificationRecord{
 			Status: report.VerificationDetected, // Candidate / detected only
@@ -529,6 +527,9 @@ func TestRiskScoring_ExplanationAgreement(t *testing.T) {
 	if expl.CategoryModifier != 5.0 {
 		t.Fatalf("Expected CategoryModifier +5 for cloud-provider-token, got %.1f", expl.CategoryModifier)
 	}
+	if expl.EffectiveBase != 40.0 {
+		t.Fatalf("Expected EffectiveBase 40 (capped from 45), got %.1f", expl.EffectiveBase)
+	}
 	if expl.ConfidenceWeight != 1.0 {
 		t.Fatalf("Expected ConfidenceWeight 1.0, got %f", expl.ConfidenceWeight)
 	}
@@ -538,14 +539,14 @@ func TestRiskScoring_ExplanationAgreement(t *testing.T) {
 	if expl.Score != 40 {
 		t.Fatalf("Expected final score 40 (capped at 40), got %d", expl.Score)
 	}
-	if !strings.Contains(expl.Formula, "(40.00 base + 5.00 mod)") {
-		t.Fatalf("Formula %q does not match expected calculation string", expl.Formula)
+	if !strings.Contains(expl.Formula, "min(40.00, 40.00 base + 5.00 mod)") {
+		t.Fatalf("Formula %q does not match expected pre-weight cap calculation string", expl.Formula)
 	}
-	if !strings.Contains(expl.Rationale, "CRITICAL severity") {
+	if !strings.Contains(expl.Rationale, "CRITICAL severity base (40.0)") {
 		t.Fatalf("Rationale %q does not explain severity base", expl.Rationale)
 	}
-	if !strings.Contains(expl.Rationale, "mod +5.0") {
-		t.Fatalf("Rationale %q does not explain cloud modifier", expl.Rationale)
+	if !strings.Contains(expl.Rationale, "capped at 40.0 pre-weight") {
+		t.Fatalf("Rationale %q does not explain pre-weight cap", expl.Rationale)
 	}
 }
 
@@ -855,5 +856,184 @@ func TestRiskScoring_ReportGenerationReconciliation(t *testing.T) {
 	}
 	if unmarshaledComm.RiskOverview.ScoreBreakdown.TotalScore != commReport.RiskOverview.ScoreBreakdown.TotalScore {
 		t.Fatalf("ScoreBreakdown.TotalScore changed after JSON serialization")
+	}
+}
+
+// 11. Pre-weight score cap & mathematical formula consistency.
+// Verifies that when Base + Modifier exceeds 40 (e.g. 40 base + 5 modifier = 45),
+// the displayed formula, intermediate EffectiveBase, rationale, and final score
+// represent the exact calculation actually performed and never evaluate to 45.
+func TestRiskScoring_PreWeightCapAndFormulaConsistency(t *testing.T) {
+	// Example 1: Critical Base (40) + Modifier (+5), Conf (1.0), Ver (1.0)
+	fCritFull := report.Finding{
+		ID:          "fnd-cap-full",
+		Category:    "cloud-provider-token",
+		Severity:    "CRITICAL",
+		Confidence:  "HIGH",
+		Verification: report.VerificationRecord{Status: report.VerificationVerified},
+	}
+	expl1 := report.ExplainFindingScore(fCritFull)
+	if expl1.BaseScore != 40.0 {
+		t.Fatalf("Expected BaseScore 40.0, got %.2f", expl1.BaseScore)
+	}
+	if expl1.CategoryModifier != 5.0 {
+		t.Fatalf("Expected CategoryModifier 5.0, got %.2f", expl1.CategoryModifier)
+	}
+	if expl1.EffectiveBase != 40.0 {
+		t.Fatalf("Expected EffectiveBase 40.0 (pre-weight capped), got %.2f", expl1.EffectiveBase)
+	}
+	if expl1.Score != 40 {
+		t.Fatalf("Expected final score 40, got %d", expl1.Score)
+	}
+	expectedFormula1 := "round(min(40.00, 40.00 base + 5.00 mod) * 1.00 conf * 1.00 ver) = 40/40"
+	if expl1.Formula != expectedFormula1 {
+		t.Fatalf("Formula mismatch:\n  got:      %q\n  expected: %q", expl1.Formula, expectedFormula1)
+	}
+	if !strings.Contains(expl1.Rationale, "capped at 40.0 pre-weight") {
+		t.Fatalf("Rationale missing pre-weight cap explanation: %s", expl1.Rationale)
+	}
+
+	// Example 2: Critical Base (40) + Modifier (+5) with fractional weights (Conf 0.75, Ver 0.80)
+	// Without pre-weight cap: 45 * 0.75 * 0.80 = 27
+	// With pre-weight cap: 40 * 0.75 * 0.80 = 24
+	fCritFractional := report.Finding{
+		ID:          "fnd-cap-fractional",
+		Category:    "cloud-provider-token",
+		Severity:    "CRITICAL",
+		Confidence:  "MEDIUM",
+		Verification: report.VerificationRecord{Status: report.VerificationDetected},
+	}
+	expl2 := report.ExplainFindingScore(fCritFractional)
+	if expl2.EffectiveBase != 40.0 {
+		t.Fatalf("Expected EffectiveBase 40.0, got %.2f", expl2.EffectiveBase)
+	}
+	if expl2.Score != 24 {
+		t.Fatalf("Expected final score 24, got %d", expl2.Score)
+	}
+	expectedFormula2 := "round(min(40.00, 40.00 base + 5.00 mod) * 0.75 conf * 0.80 ver) = 24/40"
+	if expl2.Formula != expectedFormula2 {
+		t.Fatalf("Formula mismatch:\n  got:      %q\n  expected: %q", expl2.Formula, expectedFormula2)
+	}
+
+	// Example 3: Non-capped modifier: High Base (25) + Modifier (+5) = 30 <= 40
+	fHigh := report.Finding{
+		ID:          "fnd-high-mod",
+		Category:    "cloud-provider-token",
+		Severity:    "HIGH",
+		Confidence:  "HIGH",
+		Verification: report.VerificationRecord{Status: report.VerificationVerified},
+	}
+	expl3 := report.ExplainFindingScore(fHigh)
+	if expl3.EffectiveBase != 30.0 {
+		t.Fatalf("Expected EffectiveBase 30.0, got %.2f", expl3.EffectiveBase)
+	}
+	if expl3.Score != 30 {
+		t.Fatalf("Expected final score 30, got %d", expl3.Score)
+	}
+	expectedFormula3 := "round((25.00 base + 5.00 mod) * 1.00 conf * 1.00 ver) = 30/40"
+	if expl3.Formula != expectedFormula3 {
+		t.Fatalf("Formula mismatch:\n  got:      %q\n  expected: %q", expl3.Formula, expectedFormula3)
+	}
+
+	// Example 4: Zero modifier: Medium Base (12) + Mod (0), Conf 0.75, Ver 0.70
+	fMed := report.Finding{
+		ID:          "fnd-med-nomod",
+		Category:    "generic-api-finding",
+		Severity:    "MEDIUM",
+		Confidence:  "MEDIUM",
+		Verification: report.VerificationRecord{Status: report.VerificationNotVerified},
+	}
+	expl4 := report.ExplainFindingScore(fMed)
+	if expl4.EffectiveBase != 12.0 {
+		t.Fatalf("Expected EffectiveBase 12.0, got %.2f", expl4.EffectiveBase)
+	}
+	if expl4.Score != 6 {
+		t.Fatalf("Expected final score 6, got %d", expl4.Score)
+	}
+	expectedFormula4 := "round(12.00 base * 0.75 conf * 0.70 ver) = 6/40"
+	if expl4.Formula != expectedFormula4 {
+		t.Fatalf("Formula mismatch:\n  got:      %q\n  expected: %q", expl4.Formula, expectedFormula4)
+	}
+}
+
+// 12. Contribution score staleness and canonical reconciliation.
+// Verifies that a pre-existing finding score or contribution in the range 1-40
+// cannot become stale or disagree with the canonical score after finding changes.
+func TestRiskScoring_ContributionStalenessReconciliation(t *testing.T) {
+	// A finding whose severity was upgraded to CRITICAL, but retains a stale score of 12
+	staleFinding := report.Finding{
+		ID:          "fnd-stale-01",
+		Title:       "Upgraded Finding with Stale Score",
+		Category:    "sql-injection",
+		Severity:    "CRITICAL",
+		Confidence:  "HIGH",
+		Score:       12, // Stale score from previous MEDIUM severity
+		Fingerprint: "fp-stale-01",
+		Verification: report.VerificationRecord{Status: report.VerificationVerified},
+	}
+
+	// 1. Normalization and Deduplication must reconcile stale score to canonical 40
+	norm := report.NormalizeFinding(staleFinding)
+	if norm.Score != 40 {
+		t.Fatalf("NormalizeFinding retained stale score %d; expected canonical 40", norm.Score)
+	}
+	deduped := report.DeduplicateFindings([]report.Finding{staleFinding})
+	if len(deduped) != 1 || deduped[0].Score != 40 {
+		t.Fatalf("DeduplicateFindings retained stale score %d; expected canonical 40", deduped[0].Score)
+	}
+
+	contribs, breakdown, level := report.CalculateRiskBreakdown(deduped, nil)
+	if len(contribs) != 1 {
+		t.Fatalf("Expected 1 contribution, got %d", len(contribs))
+	}
+	if contribs[0].Score != 40 {
+		t.Fatalf("CalculateRiskBreakdown used stale score %d; expected canonical 40", contribs[0].Score)
+	}
+	if breakdown.TotalScore != 40 {
+		t.Fatalf("CalculateRiskBreakdown total %d; expected canonical 40", breakdown.TotalScore)
+	}
+	if level != "CRITICAL" { // Anchored to CRITICAL because finding is VERIFIED CRITICAL
+		t.Fatalf("Expected risk level CRITICAL (anchored), got %s", level)
+	}
+
+	// 2. Commercial Report must reconcile finding risk contribution to 40
+	rep := report.BuildReport("https://example.com", []report.Finding{staleFinding})
+	commReport := report.BuildCommercialReport(rep)
+
+	if len(commReport.RiskOverview.FindingRiskContributions) != 1 {
+		t.Fatalf("Expected 1 risk contribution in CommercialReport, got %d",
+			len(commReport.RiskOverview.FindingRiskContributions))
+	}
+	commContrib := commReport.RiskOverview.FindingRiskContributions[0]
+	if commContrib.Score != 40 {
+		t.Fatalf("CommercialRiskContribution retained stale score %d; expected canonical 40", commContrib.Score)
+	}
+	if !strings.Contains(commContrib.Rationale, "40/40") {
+		t.Fatalf("CommercialRiskContribution rationale contains stale score: %s", commContrib.Rationale)
+	}
+	if strings.Contains(commContrib.Rationale, "12/40") {
+		t.Fatalf("CommercialRiskContribution rationale contains conflicting stale score 12: %s", commContrib.Rationale)
+	}
+
+	// 3. Defended finding with stale positive score (25) must reconcile to 0
+	staleDefended := report.Finding{
+		ID:          "fnd-stale-defended",
+		Title:       "Defended Finding with Stale Score",
+		Category:    "sql-injection",
+		Severity:    "CRITICAL",
+		Confidence:  "HIGH",
+		Score:       25, // Stale positive score
+		Fingerprint: "fp-stale-def",
+		Verification: report.VerificationRecord{Status: report.VerificationNotExposed},
+	}
+	_, defBreakdown, _ := report.CalculateRiskBreakdown([]report.Finding{staleDefended}, nil)
+	if defBreakdown.TotalScore != 0 {
+		t.Fatalf("Defended finding with stale score contributed %d; expected 0", defBreakdown.TotalScore)
+	}
+
+	defRep := report.BuildReport("https://example.com", []report.Finding{staleDefended})
+	defCommReport := report.BuildCommercialReport(defRep)
+	if defCommReport.RiskOverview.RiskScore != 0 {
+		t.Fatalf("Commercial report for defended finding got score %d; expected 0", defCommReport.RiskOverview.RiskScore)
 	}
 }
