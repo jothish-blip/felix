@@ -1,6 +1,7 @@
 package correlation
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"fmt"
 	"net"
@@ -66,10 +67,24 @@ type CanonicalAsset struct {
 	Method       string              `json:"method,omitempty"`
 	ResourceID   string              `json:"resource_id,omitempty"`
 	TenantID     string              `json:"tenant_id,omitempty"`
+	AccountID    string              `json:"account_id,omitempty"`
 	Confidence   string              `json:"confidence"`
 	IsExact      bool                `json:"is_exact"`
 	Basis        string              `json:"basis"`
 	Evidence     string              `json:"evidence,omitempty"`
+}
+
+// stableQueryIdentityKey is a fixed domain separation key for HMAC-based token identity hashing.
+// It ensures query secret identity tokens cannot be reversed via generic offline rainbow tables.
+var stableQueryIdentityKey = []byte("felix-correlation-identity-token-v1")
+
+func hashSensitiveQueryValue(v string) string {
+	if v == "REDACTED" || v == "[REDACTED]" || strings.HasPrefix(v, "REDACTED_") {
+		return v
+	}
+	mac := hmac.New(sha256.New, stableQueryIdentityKey)
+	mac.Write([]byte(v))
+	return fmt.Sprintf("REDACTED_%x", mac.Sum(nil)[:8])
 }
 
 // CanonicalizeURL parses and normalizes a raw URL string according to strict semantic rules:
@@ -202,18 +217,11 @@ func CanonicalizeURL(rawURL string) (*CanonicalURL, error) {
 			for _, v := range vals {
 				if isSensitive {
 					displayValues.Add(k, "REDACTED")
-					// For identity, use non-reversible cryptographic hash to avoid collapsing distinct tokens
-					if v == "REDACTED" || v == "[REDACTED]" || strings.HasPrefix(v, "REDACTED_") {
-						newValues.Add(k, v)
-					} else {
-						h := sha256.Sum256([]byte(v))
-						newValues.Add(k, fmt.Sprintf("REDACTED_%x", h[:6]))
-					}
+					newValues.Add(k, hashSensitiveQueryValue(v))
 				} else {
 					if red := secrets.RedactText(v); red != v {
 						displayValues.Add(k, "REDACTED")
-						h := sha256.Sum256([]byte(v))
-						newValues.Add(k, fmt.Sprintf("REDACTED_%x", h[:6]))
+						newValues.Add(k, hashSensitiveQueryValue(v))
 					} else {
 						displayValues.Add(k, v)
 						newValues.Add(k, v)
@@ -257,6 +265,22 @@ func CanonicalizeURL(rawURL string) (*CanonicalURL, error) {
 		DisplayEndpoint: displayEndpointURL,
 		IsIPv6:          isIPv6,
 	}, nil
+}
+
+// formatBoundaryKey formats deterministic isolation prefix for multi-tenant and multi-account assets.
+func formatBoundaryKey(tenantID, accountID string) string {
+	cleanT := strings.TrimSpace(tenantID)
+	cleanA := strings.TrimSpace(accountID)
+	if cleanT != "" && cleanA != "" {
+		return fmt.Sprintf("tenant:%s:acct:%s", cleanT, cleanA)
+	}
+	if cleanT != "" {
+		return fmt.Sprintf("tenant:%s", cleanT)
+	}
+	if cleanA != "" {
+		return fmt.Sprintf("acct:%s", cleanA)
+	}
+	return ""
 }
 
 // ResolveFindingAsset resolves the primary canonical asset affected by a finding.
@@ -414,14 +438,13 @@ func ResolveFindingAsset(f report.Finding, inv *discovery.Inventory) (*Canonical
 		method = "GET"
 	}
 
-	// Tenant qualifier
-	tenantID := ""
+	// Boundary qualifiers (tenant_id and account_id)
+	var tenantID, accountID string
 	if f.EvidenceDetails.Details != nil {
-		tenantID = f.EvidenceDetails.Details["tenant_id"]
-		if tenantID == "" {
-			tenantID = f.EvidenceDetails.Details["account_id"]
-		}
+		tenantID = strings.TrimSpace(f.EvidenceDetails.Details["tenant_id"])
+		accountID = strings.TrimSpace(f.EvidenceDetails.Details["account_id"])
 	}
+	boundaryKey := formatBoundaryKey(tenantID, accountID)
 
 	displayEndpoint := canonURL.DisplayEndpoint
 	if displayEndpoint == "" {
@@ -433,8 +456,8 @@ func ResolveFindingAsset(f report.Finding, inv *discovery.Inventory) (*Canonical
 	hasSpecificRoute := canonURL.Path != "" && canonURL.Path != "/"
 	if hasSpecificRoute || canonURL.Query != "" {
 		canonEndpointKey := fmt.Sprintf("%s:%s", method, canonURL.Endpoint)
-		if tenantID != "" {
-			canonEndpointKey = fmt.Sprintf("tenant:%s:%s", tenantID, canonEndpointKey)
+		if boundaryKey != "" {
+			canonEndpointKey = fmt.Sprintf("%s:%s", boundaryKey, canonEndpointKey)
 		}
 		endpointAssetID := discovery.ComputeStableAssetID(discovery.AssetTypeEndpoint, canonEndpointKey)
 		epAsset := &CanonicalAsset{
@@ -448,6 +471,7 @@ func ResolveFindingAsset(f report.Finding, inv *discovery.Inventory) (*Canonical
 			Path:         canonURL.Path,
 			Method:       method,
 			TenantID:     tenantID,
+			AccountID:    accountID,
 			Confidence:   report.ConfidenceHigh,
 			IsExact:      true,
 			Basis:        "EXACT_ENDPOINT",
@@ -469,8 +493,8 @@ func ResolveFindingAsset(f report.Finding, inv *discovery.Inventory) (*Canonical
 
 	// Root application asset
 	appKey := canonURL.Origin
-	if tenantID != "" {
-		appKey = fmt.Sprintf("tenant:%s:%s", tenantID, canonURL.Origin)
+	if boundaryKey != "" {
+		appKey = fmt.Sprintf("%s:%s", boundaryKey, canonURL.Origin)
 	}
 	appAssetID := discovery.ComputeStableAssetID(discovery.AssetTypeApplication, appKey)
 	appAsset := &CanonicalAsset{
@@ -483,6 +507,7 @@ func ResolveFindingAsset(f report.Finding, inv *discovery.Inventory) (*Canonical
 		Port:         canonURL.Port,
 		Path:         "/",
 		TenantID:     tenantID,
+		AccountID:    accountID,
 		Confidence:   report.ConfidenceHigh,
 		IsExact:      true,
 		Basis:        "CANONICAL_APPLICATION",
@@ -532,6 +557,11 @@ func ResolveFindingAffectedAssets(f report.Finding, primary *CanonicalAsset, inv
 			tenantAssetID := discovery.ComputeStableAssetID(discovery.AssetTypeAsset, "tenant:"+primary.TenantID)
 			add(tenantAssetID)
 		}
+		if primary.AccountID != "" {
+			accountAssetID := discovery.ComputeStableAssetID(discovery.AssetTypeAsset, "acct:"+primary.AccountID)
+			add(accountAssetID)
+		}
+		bKey := formatBoundaryKey(primary.TenantID, primary.AccountID)
 		if primary.Type == discovery.AssetTypeEndpoint && primary.Scheme != "" && primary.Host != "" {
 			var formattedHost string
 			if primary.Port != "" {
@@ -541,22 +571,22 @@ func ResolveFindingAffectedAssets(f report.Finding, primary *CanonicalAsset, inv
 			}
 			origin := fmt.Sprintf("%s://%s", primary.Scheme, formattedHost)
 			appKey := origin
-			if primary.TenantID != "" {
-				appKey = fmt.Sprintf("tenant:%s:%s", primary.TenantID, origin)
+			if bKey != "" {
+				appKey = fmt.Sprintf("%s:%s", bKey, origin)
 			}
 			appID := discovery.ComputeStableAssetID(discovery.AssetTypeApplication, appKey)
 			add(appID)
 
 			hostKey := primary.Host
-			if primary.TenantID != "" {
-				hostKey = fmt.Sprintf("tenant:%s:%s", primary.TenantID, primary.Host)
+			if bKey != "" {
+				hostKey = fmt.Sprintf("%s:%s", bKey, primary.Host)
 			}
 			hostID := discovery.ComputeStableAssetID(discovery.AssetTypeHost, hostKey)
 			add(hostID)
 		} else if primary.Type == discovery.AssetTypeApplication && primary.Host != "" {
 			hostKey := primary.Host
-			if primary.TenantID != "" {
-				hostKey = fmt.Sprintf("tenant:%s:%s", primary.TenantID, primary.Host)
+			if bKey != "" {
+				hostKey = fmt.Sprintf("%s:%s", bKey, primary.Host)
 			}
 			hostID := discovery.ComputeStableAssetID(discovery.AssetTypeHost, hostKey)
 			add(hostID)
@@ -575,17 +605,15 @@ func extractCloudStorageAsset(f report.Finding) (*CanonicalAsset, bool) {
 		ep = f.Target
 	}
 
-	var bucket, provider, tenantID string
+	var bucket, provider, tenantID, accountID string
 	if f.EvidenceDetails.Details != nil {
 		bucket = f.EvidenceDetails.Details["bucket"]
 		if bucket == "" {
 			bucket = f.EvidenceDetails.Details["bucket_name"]
 		}
 		provider = f.EvidenceDetails.Details["cloud_provider"]
-		tenantID = f.EvidenceDetails.Details["tenant_id"]
-		if tenantID == "" {
-			tenantID = f.EvidenceDetails.Details["account_id"]
-		}
+		tenantID = strings.TrimSpace(f.EvidenceDetails.Details["tenant_id"])
+		accountID = strings.TrimSpace(f.EvidenceDetails.Details["account_id"])
 	}
 
 	epLower := strings.ToLower(ep)
@@ -635,8 +663,8 @@ func extractCloudStorageAsset(f report.Finding) (*CanonicalAsset, bool) {
 
 	cleanBucket := strings.ToLower(strings.TrimSpace(bucket))
 	canonKey := fmt.Sprintf("storage:%s:%s", provider, cleanBucket)
-	if tenantID != "" {
-		canonKey = fmt.Sprintf("storage:%s:tenant:%s:%s", provider, tenantID, cleanBucket)
+	if bKey := formatBoundaryKey(tenantID, accountID); bKey != "" {
+		canonKey = fmt.Sprintf("storage:%s:%s:%s", provider, bKey, cleanBucket)
 	}
 	assetID := discovery.ComputeStableAssetID(discovery.AssetTypeStorage, canonKey)
 
@@ -647,6 +675,7 @@ func extractCloudStorageAsset(f report.Finding) (*CanonicalAsset, bool) {
 		DisplayName:  fmt.Sprintf("%s bucket: %s", provider, cleanBucket),
 		ResourceID:   cleanBucket,
 		TenantID:     tenantID,
+		AccountID:    accountID,
 		Confidence:   report.ConfidenceHigh,
 		IsExact:      true,
 		Basis:        "CLOUD_STORAGE_RESOURCE",
@@ -661,17 +690,15 @@ func extractDatabaseAsset(f report.Finding) (*CanonicalAsset, bool) {
 		ep = f.Target
 	}
 
-	var projID, engine, tenantID string
+	var projID, engine, tenantID, accountID string
 	if f.EvidenceDetails.Details != nil {
 		projID = f.EvidenceDetails.Details["project_id"]
 		if projID == "" {
 			projID = f.EvidenceDetails.Details["database_name"]
 		}
 		engine = f.EvidenceDetails.Details["database_engine"]
-		tenantID = f.EvidenceDetails.Details["tenant_id"]
-		if tenantID == "" {
-			tenantID = f.EvidenceDetails.Details["account_id"]
-		}
+		tenantID = strings.TrimSpace(f.EvidenceDetails.Details["tenant_id"])
+		accountID = strings.TrimSpace(f.EvidenceDetails.Details["account_id"])
 	}
 
 	epLower := strings.ToLower(ep)
@@ -706,8 +733,8 @@ func extractDatabaseAsset(f report.Finding) (*CanonicalAsset, bool) {
 
 	cleanProj := strings.ToLower(strings.TrimSpace(projID))
 	canonKey := fmt.Sprintf("database:%s:%s", engine, cleanProj)
-	if tenantID != "" {
-		canonKey = fmt.Sprintf("database:%s:tenant:%s:%s", engine, tenantID, cleanProj)
+	if bKey := formatBoundaryKey(tenantID, accountID); bKey != "" {
+		canonKey = fmt.Sprintf("database:%s:%s:%s", engine, bKey, cleanProj)
 	}
 	assetID := discovery.ComputeStableAssetID(discovery.AssetTypeDatabase, canonKey)
 
@@ -718,6 +745,7 @@ func extractDatabaseAsset(f report.Finding) (*CanonicalAsset, bool) {
 		DisplayName:  fmt.Sprintf("%s instance: %s", engine, cleanProj),
 		ResourceID:   cleanProj,
 		TenantID:     tenantID,
+		AccountID:    accountID,
 		Confidence:   report.ConfidenceHigh,
 		IsExact:      true,
 		Basis:        "DATABASE_RESOURCE",
@@ -729,16 +757,14 @@ func extractAPKAsset(f report.Finding) (*CanonicalAsset, bool) {
 	cat := report.NormalizeCategory(f.Category)
 	src := f.Source
 
-	var pkgName, tenantID string
+	var pkgName, tenantID, accountID string
 	if f.EvidenceDetails.Details != nil {
 		pkgName = f.EvidenceDetails.Details["package_name"]
 		if pkgName == "" {
 			pkgName = f.EvidenceDetails.Details["app_id"]
 		}
-		tenantID = f.EvidenceDetails.Details["tenant_id"]
-		if tenantID == "" {
-			tenantID = f.EvidenceDetails.Details["account_id"]
-		}
+		tenantID = strings.TrimSpace(f.EvidenceDetails.Details["tenant_id"])
+		accountID = strings.TrimSpace(f.EvidenceDetails.Details["account_id"])
 	}
 
 	isAPK := src == "apk" ||
@@ -752,8 +778,8 @@ func extractAPKAsset(f report.Finding) (*CanonicalAsset, bool) {
 
 	cleanPkg := strings.ToLower(strings.TrimSpace(pkgName))
 	canonKey := fmt.Sprintf("apk:%s", cleanPkg)
-	if tenantID != "" {
-		canonKey = fmt.Sprintf("apk:tenant:%s:%s", tenantID, cleanPkg)
+	if bKey := formatBoundaryKey(tenantID, accountID); bKey != "" {
+		canonKey = fmt.Sprintf("apk:%s:%s", bKey, cleanPkg)
 	}
 	assetID := discovery.ComputeStableAssetID(discovery.AssetTypeAPK, canonKey)
 
@@ -764,6 +790,7 @@ func extractAPKAsset(f report.Finding) (*CanonicalAsset, bool) {
 		DisplayName:  fmt.Sprintf("Android Package: %s", cleanPkg),
 		ResourceID:   cleanPkg,
 		TenantID:     tenantID,
+		AccountID:    accountID,
 		Confidence:   report.ConfidenceHigh,
 		IsExact:      true,
 		Basis:        "APK_PACKAGE",

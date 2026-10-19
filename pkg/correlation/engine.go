@@ -9,6 +9,7 @@ import (
 
 	"felix/pkg/discovery"
 	"felix/pkg/report"
+	"felix/pkg/secrets"
 )
 
 // Engine performs evidence-driven correlation, relationship discovery,
@@ -242,9 +243,18 @@ func (e *Engine) constructPath(nodeIDs []string, nodes []NormalizedFinding, edge
 		}
 	}
 
-	terminalImpact := fmt.Sprintf("Direct exploitation of %s at %s", last.Title, last.Endpoint)
+	lastEP := last.DisplayEndpoint
+	if lastEP == "" {
+		lastEP = secrets.SanitizeURL(last.Endpoint)
+	}
+	terminalImpact := fmt.Sprintf("Direct exploitation of %s at %s", last.Title, lastEP)
 	if status != PathVerified {
-		terminalImpact = fmt.Sprintf("Potential exploitation of %s at %s (unverified candidate)", last.Title, last.Endpoint)
+		terminalImpact = fmt.Sprintf("Potential exploitation of %s at %s (unverified candidate)", last.Title, lastEP)
+	}
+
+	firstEP := first.DisplayEndpoint
+	if firstEP == "" {
+		firstEP = secrets.SanitizeURL(first.Endpoint)
 	}
 
 	path := AttackPath{
@@ -253,7 +263,7 @@ func (e *Engine) constructPath(nodeIDs []string, nodes []NormalizedFinding, edge
 		NodeIDs:           nodeIDs,
 		Nodes:             nodes,
 		Edges:             edges,
-		EntryPoint:        first.Endpoint,
+		EntryPoint:        firstEP,
 		TargetAsset:       last.Host,
 		PrimaryWeakness:   first.Title,
 		TerminalImpact:    terminalImpact,

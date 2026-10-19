@@ -191,7 +191,28 @@ func EvaluateRules(findings []NormalizedFinding, cfg Config) []Relationship {
 		}
 	}
 
-	// 3. Sort rels deterministically by ID, then SourceFindingID, then TargetFindingID
+	// 3. Deterministically sort candidate relationships by RuleCode, SourceFindingID, TargetFindingID
+	sort.Slice(rels, func(i, j int) bool {
+		if rels[i].RuleCode != rels[j].RuleCode {
+			return rels[i].RuleCode < rels[j].RuleCode
+		}
+		if rels[i].SourceFindingID != rels[j].SourceFindingID {
+			return rels[i].SourceFindingID < rels[j].SourceFindingID
+		}
+		return rels[i].TargetFindingID < rels[j].TargetFindingID
+	})
+
+	// 4. Resolve any ID collisions deterministically to strictly guarantee uniqueness across all relationship IDs
+	seenRelIDs := make(map[string]int)
+	for i := range rels {
+		baseID := rels[i].ID
+		if count := seenRelIDs[baseID]; count > 0 {
+			rels[i].ID = fmt.Sprintf("%s_c%d", baseID, count)
+		}
+		seenRelIDs[baseID]++
+	}
+
+	// 5. Final deterministic sort by ID, SourceFindingID, TargetFindingID
 	sort.Slice(rels, func(i, j int) bool {
 		if rels[i].ID != rels[j].ID {
 			return rels[i].ID < rels[j].ID
@@ -618,6 +639,40 @@ func evaluateCOR09(f1, f2 *NormalizedFinding) (Relationship, bool) {
 	}, true
 }
 
+// hasBoundaryConflict checks whether two findings have conflicting tenant or account isolation boundaries.
+// Returns (hasConflict, boundaryDesc1, boundaryDesc2).
+func hasBoundaryConflict(d1, d2 map[string]string) (bool, string, string) {
+	if d1 == nil || d2 == nil {
+		return false, "", ""
+	}
+	t1 := strings.TrimSpace(d1["tenant_id"])
+	t2 := strings.TrimSpace(d2["tenant_id"])
+	if t1 != "" && t2 != "" && !strings.EqualFold(t1, t2) {
+		return true, fmt.Sprintf("tenant:%s", t1), fmt.Sprintf("tenant:%s", t2)
+	}
+
+	a1 := strings.TrimSpace(d1["account_id"])
+	a2 := strings.TrimSpace(d2["account_id"])
+	if a1 != "" && a2 != "" && !strings.EqualFold(a1, a2) {
+		return true, fmt.Sprintf("account:%s", a1), fmt.Sprintf("account:%s", a2)
+	}
+
+	// Cross-key boundary check: one specifies tenant_id, the other specifies account_id
+	if (t1 != "" && a2 != "" && t2 == "" && a1 == "") || (t2 != "" && a1 != "" && t1 == "" && a2 == "") {
+		var desc1, desc2 string
+		if t1 != "" {
+			desc1 = fmt.Sprintf("tenant:%s", t1)
+			desc2 = fmt.Sprintf("account:%s", a2)
+		} else {
+			desc1 = fmt.Sprintf("account:%s", a1)
+			desc2 = fmt.Sprintf("tenant:%s", t2)
+		}
+		return true, desc1, desc2
+	}
+
+	return false, "", ""
+}
+
 // COR-SAME-ENDPOINT: Connects findings that demonstrably affect the exact same canonical endpoint
 func evaluateSameEndpoint(f1, f2 *NormalizedFinding) (Relationship, bool) {
 	ep1 := f1.Endpoint
@@ -656,16 +711,8 @@ func evaluateSameEndpoint(f1, f2 *NormalizedFinding) (Relationship, bool) {
 		return Relationship{}, false
 	}
 
-	// Tenant boundary check: distinct tenant IDs must not be SAME_ENDPOINT
-	t1 := f1.EvidenceDetails["tenant_id"]
-	if t1 == "" {
-		t1 = f1.EvidenceDetails["account_id"]
-	}
-	t2 := f2.EvidenceDetails["tenant_id"]
-	if t2 == "" {
-		t2 = f2.EvidenceDetails["account_id"]
-	}
-	if t1 != "" && t2 != "" && !strings.EqualFold(t1, t2) {
+	// Boundary check: distinct tenant or account IDs must not be SAME_ENDPOINT
+	if conflict, _, _ := hasBoundaryConflict(f1.EvidenceDetails, f2.EvidenceDetails); conflict {
 		return Relationship{}, false
 	}
 
@@ -710,16 +757,8 @@ func evaluateSameEndpoint(f1, f2 *NormalizedFinding) (Relationship, bool) {
 
 // COR-SAME-ASSET: Connects findings that demonstrably affect the same resolved asset identity
 func evaluateSameAsset(f1, f2 *NormalizedFinding) (Relationship, bool) {
-	// Tenant boundary check: distinct tenant IDs must not be SAME_ASSET
-	t1 := f1.EvidenceDetails["tenant_id"]
-	if t1 == "" {
-		t1 = f1.EvidenceDetails["account_id"]
-	}
-	t2 := f2.EvidenceDetails["tenant_id"]
-	if t2 == "" {
-		t2 = f2.EvidenceDetails["account_id"]
-	}
-	if t1 != "" && t2 != "" && !strings.EqualFold(t1, t2) {
+	// Boundary check: distinct tenant or account IDs must not be SAME_ASSET
+	if conflict, _, _ := hasBoundaryConflict(f1.EvidenceDetails, f2.EvidenceDetails); conflict {
 		return Relationship{}, false
 	}
 
@@ -929,16 +968,18 @@ func evaluatePossibleRelationship(f1, f2 *NormalizedFinding) (Relationship, bool
 		first, second = f2, f1
 	}
 
-	// Check cross-tenant isolation on shared host
-	t1 := first.EvidenceDetails["tenant_id"]
-	if t1 == "" {
-		t1 = first.EvidenceDetails["account_id"]
-	}
-	t2 := second.EvidenceDetails["tenant_id"]
-	if t2 == "" {
-		t2 = second.EvidenceDetails["account_id"]
-	}
-	if t1 != "" && t2 != "" && !strings.EqualFold(t1, t2) && first.Host != "" && first.Host == second.Host {
+	// Check cross-boundary (tenant or account) isolation on shared host
+	if conflict, b1, b2 := hasBoundaryConflict(first.EvidenceDetails, second.EvidenceDetails); conflict && first.Host != "" && first.Host == second.Host {
+		boundaryType := "isolation"
+		inconclusiveReason := "Distinct isolation boundaries on shared hosting infrastructure."
+		if strings.HasPrefix(b1, "tenant:") && strings.HasPrefix(b2, "tenant:") {
+			boundaryType = "tenant"
+			inconclusiveReason = "Distinct tenant boundaries on shared hosting infrastructure."
+		} else if strings.HasPrefix(b1, "account:") && strings.HasPrefix(b2, "account:") {
+			boundaryType = "account"
+			inconclusiveReason = "Distinct account boundaries on shared hosting infrastructure."
+		}
+
 		return Relationship{
 			ID:                 relationshipID(RuleCORPossible, first.ID, second.ID),
 			SourceFindingID:    first.ID,
@@ -952,9 +993,9 @@ func evaluatePossibleRelationship(f1, f2 *NormalizedFinding) (Relationship, bool
 			RuleCode:           RuleCORPossible,
 			MatchingRule:       string(RuleCORPossible),
 			EvidenceReferences: []string{findingRef(first), findingRef(second)},
-			Explanation: fmt.Sprintf("Findings '%s' and '%s' share host '%s' across distinct tenant boundaries (%s vs %s); shared infrastructure does not imply common root cause or identity.",
-				first.Title, second.Title, first.Host, t1, t2),
-			InconclusiveReason: "Distinct tenant boundaries on shared hosting infrastructure.",
+			Explanation: fmt.Sprintf("Findings '%s' and '%s' share host '%s' across distinct %s boundaries (%s vs %s); shared infrastructure does not imply common root cause or identity.",
+				first.Title, second.Title, first.Host, boundaryType, b1, b2),
+			InconclusiveReason: inconclusiveReason,
 		}, true
 	}
 
@@ -1053,6 +1094,13 @@ func evaluateCOR10(f1, f2 *NormalizedFinding) (Relationship, bool) {
 	}, true
 }
 
+// computeFindingKey produces a clean, readable finding key for relationship identifiers.
+// For identifiers longer than 48 characters, it preserves the leading prefix and appends
+// a compact SHA-256 digest for brevity.
+//
+// NOTE: Truncated hashes provide compact readability, NOT a mathematical uniqueness guarantee.
+// Strict uniqueness across all relationship identifiers is guaranteed post-generation via
+// deterministic collision resolution in EvaluateRules.
 func computeFindingKey(id string) string {
 	clean := strings.TrimSpace(id)
 	if clean == "" {
@@ -1065,11 +1113,11 @@ func computeFindingKey(id string) string {
 		return '_'
 	}, clean)
 
-	if len(clean) <= 32 {
+	if len(clean) <= 48 {
 		return clean
 	}
 	h := sha256.Sum256([]byte(id))
-	return fmt.Sprintf("%s_%x", clean[:24], h[:4])
+	return fmt.Sprintf("%s_%x", clean[:36], h[:6])
 }
 
 func relationshipID(ruleCode RuleCode, srcID, tgtID string) string {

@@ -1074,3 +1074,127 @@ func TestAudit_MultiTenantIsolationBoundaries(t *testing.T) {
 		t.Errorf("Bucket canonical keys lack tenant qualification: BA=%s, BB=%s", assetBA.CanonicalKey, assetBB.CanonicalKey)
 	}
 }
+
+// -----------------------------------------------------------------------------
+// Category 29 (Audit): Account ID Isolation Boundaries & Relationship ID Uniqueness
+// -----------------------------------------------------------------------------
+func TestAudit_AccountIDIsolationBoundaries(t *testing.T) {
+	// 1. Direct account_id boundary isolation on identical endpoint
+	fAcctA := helperMakeFinding("ACCT_A_01", "BFLA Account Alpha", "bfla", report.SeverityHigh, report.ConfidenceHigh, report.VerificationVerified, "https://shared.example.com", "https://shared.example.com/api/v1/orders", "GET")
+	fAcctA.EvidenceDetails.Details = map[string]string{
+		"account_id": "acct-111",
+	}
+
+	fAcctB := helperMakeFinding("ACCT_B_01", "BFLA Account Beta", "bfla", report.SeverityHigh, report.ConfidenceHigh, report.VerificationVerified, "https://shared.example.com", "https://shared.example.com/api/v1/orders", "GET")
+	fAcctB.EvidenceDetails.Details = map[string]string{
+		"account_id": "acct-222",
+	}
+
+	assetA, assocA := correlation.ResolveFindingAsset(fAcctA, nil)
+	assetB, assocB := correlation.ResolveFindingAsset(fAcctB, nil)
+
+	if assetA.ID == assetB.ID {
+		t.Fatalf("Account boundary failed: identical asset IDs for different accounts (%s == %s)", assetA.ID, assetB.ID)
+	}
+	if assetA.AccountID != "acct-111" || assetB.AccountID != "acct-222" {
+		t.Errorf("AccountID was not preserved on asset: A=%s, B=%s", assetA.AccountID, assetB.AccountID)
+	}
+	if assocA.CanonicalKey == assocB.CanonicalKey {
+		t.Errorf("Canonical keys must not collide across accounts: %s", assocA.CanonicalKey)
+	}
+
+	engine := correlation.NewEngine(correlation.DefaultConfig())
+	summary, _, _, err := engine.Correlate(context.Background(), []report.Finding{fAcctA, fAcctB})
+	if err != nil {
+		t.Fatalf("Correlate failed: %v", err)
+	}
+
+	hasPossibleRel := false
+	for _, rel := range summary.Relationships {
+		if rel.Type == correlation.RelSameEndpoint {
+			t.Errorf("Cross-account findings must not match as SAME_ENDPOINT: %+v", rel)
+		}
+		if rel.Type == correlation.RelSameAsset {
+			t.Errorf("Cross-account findings must not match as SAME_ASSET: %+v", rel)
+		}
+		if rel.Type == correlation.RelPossibleRelationship {
+			hasPossibleRel = true
+			if !strings.Contains(rel.Explanation, "distinct account boundaries") {
+				t.Errorf("Expected account boundary explanation, got: %s", rel.Explanation)
+			}
+		}
+	}
+	if !hasPossibleRel {
+		t.Errorf("Expected POSSIBLE_RELATIONSHIP noting shared host across distinct account boundaries")
+	}
+
+	// 2. Dual-boundary isolation: same tenant_id, distinct account_id
+	fDualA := helperMakeFinding("DUAL_A_01", "Flaw 1", "idor", report.SeverityHigh, report.ConfidenceHigh, report.VerificationVerified, "https://api.corp.local", "https://api.corp.local/v1/users", "GET")
+	fDualA.EvidenceDetails.Details = map[string]string{
+		"tenant_id":  "tenant-omega",
+		"account_id": "acct-primary",
+	}
+
+	fDualB := helperMakeFinding("DUAL_B_01", "Flaw 2", "idor", report.SeverityHigh, report.ConfidenceHigh, report.VerificationVerified, "https://api.corp.local", "https://api.corp.local/v1/users", "GET")
+	fDualB.EvidenceDetails.Details = map[string]string{
+		"tenant_id":  "tenant-omega",
+		"account_id": "acct-secondary",
+	}
+
+	assetDA, assocDA := correlation.ResolveFindingAsset(fDualA, nil)
+	assetDB, assocDB := correlation.ResolveFindingAsset(fDualB, nil)
+
+	if assetDA.ID == assetDB.ID {
+		t.Fatalf("Dual-boundary failed: identical asset IDs for different accounts under same tenant (%s == %s)", assetDA.ID, assetDB.ID)
+	}
+	if assocDA.CanonicalKey == assocDB.CanonicalKey {
+		t.Errorf("Canonical keys must not collide for different accounts under same tenant: %s", assocDA.CanonicalKey)
+	}
+
+	summaryDual, _, _, err := engine.Correlate(context.Background(), []report.Finding{fDualA, fDualB})
+	if err != nil {
+		t.Fatalf("Correlate failed: %v", err)
+	}
+	for _, rel := range summaryDual.Relationships {
+		if rel.Type == correlation.RelSameEndpoint {
+			t.Errorf("Dual-boundary findings with conflicting account_id must not match as SAME_ENDPOINT: %+v", rel)
+		}
+		if rel.Type == correlation.RelSameAsset {
+			t.Errorf("Dual-boundary findings with conflicting account_id must not match as SAME_ASSET: %+v", rel)
+		}
+	}
+
+	// 3. Multi-account Cloud Storage buckets
+	fStorageA := helperMakeFinding("S_A", "Bucket Prod", "s3-leak", report.SeverityHigh, report.ConfidenceHigh, report.VerificationVerified, "s3://backups", "s3://backups", "GET")
+	fStorageA.EvidenceDetails.Details = map[string]string{
+		"cloud_provider": "aws_s3",
+		"bucket":         "backups",
+		"account_id":     "acct-prod",
+	}
+
+	fStorageB := helperMakeFinding("S_B", "Bucket Dev", "s3-leak", report.SeverityHigh, report.ConfidenceHigh, report.VerificationVerified, "s3://backups", "s3://backups", "GET")
+	fStorageB.EvidenceDetails.Details = map[string]string{
+		"cloud_provider": "aws_s3",
+		"bucket":         "backups",
+		"account_id":     "acct-dev",
+	}
+
+	assetSA, _ := correlation.ResolveFindingAsset(fStorageA, nil)
+	assetSB, _ := correlation.ResolveFindingAsset(fStorageB, nil)
+
+	if assetSA.ID == assetSB.ID {
+		t.Fatalf("Bucket assets collapsed across account boundaries: %s == %s", assetSA.ID, assetSB.ID)
+	}
+	if !strings.Contains(assetSA.CanonicalKey, "acct-prod") || !strings.Contains(assetSB.CanonicalKey, "acct-dev") {
+		t.Errorf("Bucket canonical keys lack account qualification: SA=%s, SB=%s", assetSA.CanonicalKey, assetSB.CanonicalKey)
+	}
+
+	// 4. Strict relationship ID uniqueness verification across multiple relationships
+	seenIDs := make(map[string]bool)
+	for _, r := range summaryDual.Relationships {
+		if seenIDs[r.ID] {
+			t.Errorf("Duplicate relationship ID detected: %s", r.ID)
+		}
+		seenIDs[r.ID] = true
+	}
+}

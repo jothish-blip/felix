@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"felix/pkg/report"
+	"felix/pkg/secrets"
 )
 
 // GenerateSecurityStory synthesizes an AttackPath into a structured SecurityStory answering
@@ -19,7 +20,11 @@ func GenerateSecurityStory(path *AttackPath) report.SecurityStory {
 
 	for i := range path.Nodes {
 		n := &path.Nodes[i]
-		weaknessTitles = append(weaknessTitles, fmt.Sprintf("Step %d: %s (%s)", i+1, n.Title, n.Endpoint))
+		ep := n.DisplayEndpoint
+		if ep == "" {
+			ep = secrets.SanitizeURL(n.Endpoint)
+		}
+		weaknessTitles = append(weaknessTitles, fmt.Sprintf("Step %d: %s (%s)", i+1, n.Title, ep))
 		relatedIDs = append(relatedIDs, n.OriginalID)
 	}
 
@@ -36,7 +41,10 @@ func GenerateSecurityStory(path *AttackPath) report.SecurityStory {
 	// 1. Initial exposure
 	entryDesc := path.EntryPoint
 	if entryDesc == "" {
-		entryDesc = firstNode.Endpoint
+		entryDesc = firstNode.DisplayEndpoint
+		if entryDesc == "" {
+			entryDesc = secrets.SanitizeURL(firstNode.Endpoint)
+		}
 	}
 
 	// 2. Action enabled & 5. Asset affected & 6. Impact
@@ -125,6 +133,10 @@ func deriveBottleneckRemediation(path *AttackPath) (string, string) {
 
 	// Default fallback
 	firstNode := path.Nodes[0]
-	return fmt.Sprintf("Investigate root cause at entry point %s.", firstNode.Endpoint),
-		fmt.Sprintf("Implement defensive controls at %s to break the attack sequence.", firstNode.Endpoint)
+	fallbackEP := firstNode.DisplayEndpoint
+	if fallbackEP == "" {
+		fallbackEP = secrets.SanitizeURL(firstNode.Endpoint)
+	}
+	return fmt.Sprintf("Investigate root cause at entry point %s.", fallbackEP),
+		fmt.Sprintf("Implement defensive controls at %s to break the attack sequence.", fallbackEP)
 }
