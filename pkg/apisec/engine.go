@@ -37,7 +37,8 @@ func NewEngine(client *http.Client, cfg Config) *Engine {
 	}
 }
 
-func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
+// ScopedClient configures a hardened, rate-limited HTTP client enforcing assessment scope and safety boundaries.
+func (e *Engine) ScopedClient(actx *AssessmentContext) *http.Client {
 	base := e.client
 	if base == nil {
 		base = &http.Client{Timeout: e.cfg.Timeout}
@@ -51,8 +52,13 @@ func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
 		transport = crawler.NewRateLimitedTransport(transport, crawler.RateLimitOptions{})
 	}
 
+	wrappedTransport := &scopedTransport{
+		base: transport,
+		actx: actx,
+	}
+
 	return &http.Client{
-		Transport: transport,
+		Transport: wrappedTransport,
 		Timeout:   base.Timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
@@ -62,6 +68,13 @@ func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
 				if err := origCheck(req, via); err != nil {
 					return err
 				}
+			}
+			scheme := strings.ToLower(req.URL.Scheme)
+			if scheme != "http" && scheme != "https" {
+				return fmt.Errorf("redirect to unsupported scheme %q blocked", req.URL.Scheme)
+			}
+			if req.URL.User != nil {
+				return fmt.Errorf("redirect with embedded credentials blocked")
 			}
 			nextURL := req.URL.String()
 			if actx != nil {
@@ -73,17 +86,53 @@ func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
 				}
 			}
 			if len(via) > 0 {
-				lastHost := strings.ToLower(via[len(via)-1].URL.Hostname())
-				nextHost := strings.ToLower(req.URL.Hostname())
+				lastHost := strings.ToLower(via[len(via)-1].URL.Host)
+				nextHost := strings.ToLower(req.URL.Host)
 				if lastHost != "" && nextHost != "" && lastHost != nextHost {
 					if actx != nil && actx.IsAllowed != nil && !actx.IsAllowed(nextURL) {
 						return fmt.Errorf("cross-host redirect from %s to %s blocked", lastHost, nextHost)
 					}
+					req.Header.Del("Authorization")
+					req.Header.Del("Cookie")
+					req.Header.Del("X-API-Key")
+					req.Header.Del("apikey")
 				}
 			}
 			return nil
 		},
 	}
+}
+
+func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
+	return e.ScopedClient(actx)
+}
+
+type scopedTransport struct {
+	base http.RoundTripper
+	actx *AssessmentContext
+}
+
+func (st *scopedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL == nil {
+		return nil, fmt.Errorf("request URL is nil")
+	}
+	scheme := strings.ToLower(req.URL.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return nil, fmt.Errorf("request to unsupported scheme %q blocked", req.URL.Scheme)
+	}
+	if req.URL.User != nil {
+		return nil, fmt.Errorf("request with embedded credentials blocked")
+	}
+	if st.actx != nil {
+		reqURL := req.URL.String()
+		if st.actx.IsExcluded != nil && st.actx.IsExcluded(reqURL) {
+			return nil, fmt.Errorf("request to %s blocked: matches exclusion rule", reqURL)
+		}
+		if st.actx.IsAllowed != nil && !st.actx.IsAllowed(reqURL) {
+			return nil, fmt.Errorf("request to %s blocked: out of approved scope", reqURL)
+		}
+	}
+	return st.base.RoundTrip(req)
 }
 
 // AssessmentContext contains all available asset inventory, discovery data, and policies.
@@ -109,7 +158,7 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 	// Deduplicate endpoints across crawler links and discovery assets
 	actx.Endpoints = DeduplicateEndpoints(actx.Endpoints)
 
-	client := e.scopedClient(actx)
+	client := e.ScopedClient(actx)
 
 	var allResults []Result
 	var allFindings []report.Finding

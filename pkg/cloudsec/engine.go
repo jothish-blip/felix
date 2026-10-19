@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"felix/pkg/crawler"
@@ -29,12 +30,23 @@ func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
 	if _, ok := transport.(*crawler.RateLimitedTransport); !ok {
 		transport = crawler.NewRateLimitedTransport(transport, crawler.RateLimitOptions{})
 	}
+	wrappedTransport := &scopedTransport{
+		base: transport,
+		actx: actx,
+	}
 	return &http.Client{
-		Transport: transport,
+		Transport: wrappedTransport,
 		Timeout:   e.config.Timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return fmt.Errorf("stopped after 10 redirects")
+			}
+			scheme := strings.ToLower(req.URL.Scheme)
+			if scheme != "http" && scheme != "https" {
+				return fmt.Errorf("redirect to unsupported scheme %q blocked", req.URL.Scheme)
+			}
+			if req.URL.User != nil {
+				return fmt.Errorf("redirect with embedded credentials blocked")
 			}
 			destURL := req.URL.String()
 			if actx.IsExcluded != nil && actx.IsExcluded(destURL) {
@@ -43,9 +55,48 @@ func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
 			if actx.IsAllowed != nil && !actx.IsAllowed(destURL) {
 				return fmt.Errorf("redirect blocked: %s is out of authorized scope", destURL)
 			}
+			if len(via) > 0 {
+				lastHost := strings.ToLower(via[len(via)-1].URL.Host)
+				nextHost := strings.ToLower(req.URL.Host)
+				if lastHost != "" && nextHost != "" && lastHost != nextHost {
+					req.Header.Del("Authorization")
+					req.Header.Del("Cookie")
+					req.Header.Del("X-API-Key")
+					req.Header.Del("apikey")
+					req.Header.Del("x-amz-security-token")
+				}
+			}
 			return nil
 		},
 	}
+}
+
+type scopedTransport struct {
+	base http.RoundTripper
+	actx *AssessmentContext
+}
+
+func (st *scopedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL == nil {
+		return nil, fmt.Errorf("request URL is nil")
+	}
+	scheme := strings.ToLower(req.URL.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return nil, fmt.Errorf("request to unsupported scheme %q blocked", req.URL.Scheme)
+	}
+	if req.URL.User != nil {
+		return nil, fmt.Errorf("request with embedded credentials blocked")
+	}
+	if st.actx != nil {
+		reqURL := req.URL.String()
+		if st.actx.IsExcluded != nil && st.actx.IsExcluded(reqURL) {
+			return nil, fmt.Errorf("request to %s blocked: matches exclusion rule", reqURL)
+		}
+		if st.actx.IsAllowed != nil && !st.actx.IsAllowed(reqURL) {
+			return nil, fmt.Errorf("request to %s blocked: out of approved scope", reqURL)
+		}
+	}
+	return st.base.RoundTrip(req)
 }
 
 // Plan prepares a pre-assessment execution plan without dispatching state-changing requests.

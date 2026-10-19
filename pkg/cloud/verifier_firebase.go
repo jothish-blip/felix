@@ -110,8 +110,12 @@ func VerifyFirestoreAccess(
 ) AccessVerificationRecord {
 	now := time.Now().UTC()
 	target := projectID
-	if !strings.HasPrefix(target, "http") {
-		target = fmt.Sprintf("https://firestore.googleapis.com/v1/projects/%s/databases/(default)", projectID)
+	baseURL := fmt.Sprintf("https://firestore.googleapis.com/v1/projects/%s/databases/(default)", projectID)
+	if strings.HasPrefix(projectID, "http://") || strings.HasPrefix(projectID, "https://") {
+		baseURL = strings.TrimRight(projectID, "/")
+		target = baseURL
+	} else if !strings.HasPrefix(target, "http") {
+		target = baseURL
 	}
 
 	record := AccessVerificationRecord{
@@ -127,7 +131,7 @@ func VerifyFirestoreAccess(
 	}
 
 	// 1. Root database metadata probe
-	rootURL := fmt.Sprintf("https://firestore.googleapis.com/v1/projects/%s/databases/(default)", projectID)
+	rootURL := baseURL
 	req, err := http.NewRequestWithContext(ctx, "GET", rootURL, nil)
 	if err != nil {
 		record.Status = StatusAccessInconclusive
@@ -159,7 +163,7 @@ func VerifyFirestoreAccess(
 		record.Operation = OpBoundedRead
 		record.ResourceScope = testDocPath
 
-		docURL := fmt.Sprintf("https://firestore.googleapis.com/v1/projects/%s/databases/(default)/documents/%s", projectID, testDocPath)
+		docURL := fmt.Sprintf("%s/documents/%s", baseURL, testDocPath)
 		docReq, err := http.NewRequestWithContext(ctx, "GET", docURL, nil)
 		if err == nil {
 			if cred != nil && cred.Secret != "" {

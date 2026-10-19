@@ -2538,6 +2538,8 @@ func runAssessmentAPISec(args []string) int {
 		dryRun         bool
 		categoryFilter string
 		statusFilter   string
+		allowLoopback  bool
+		allowPrivate   bool
 		jsonOutput     bool
 		verbose        bool
 	)
@@ -2574,6 +2576,10 @@ func runAssessmentAPISec(args []string) int {
 				statusFilter = strings.ToUpper(args[i+1])
 				i++
 			}
+		case arg == "--allow-loopback":
+			allowLoopback = true
+		case arg == "--allow-private":
+			allowPrivate = true
 		case arg == "--json":
 			jsonOutput = true
 		case arg == "--verbose" || arg == "-v":
@@ -2761,9 +2767,16 @@ func runAssessmentAPISec(args []string) int {
 		if policy != nil && policy.AllowWriteTests {
 			cfg.AllowWriteTests = true
 		}
+		targetHost := ""
+		if u, err := url.Parse(targetBase); err == nil {
+			targetHost = u.Hostname()
+		}
+		isTargetLoopback := targetHost == "localhost" || targetHost == "127.0.0.1" || targetHost == "::1" || strings.HasPrefix(targetHost, "127.")
 		apisecHTTPClient := &http.Client{
 			Transport: crawler.NewRateLimitedTransport(crawler.NewSafeTransport(crawler.SafeTransportOptions{
-				Timeout: cfg.Timeout,
+				Timeout:         cfg.Timeout,
+				AllowLoopback:   allowLoopback || isTargetLoopback || os.Getenv("FELIX_ALLOW_LOOPBACK") == "true",
+				AllowPrivateIPs: allowPrivate || os.Getenv("FELIX_ALLOW_PRIVATE") == "true",
 			}), crawler.RateLimitOptions{}),
 			Timeout: cfg.Timeout,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -6727,6 +6740,8 @@ func runAssessmentCloudSec(args []string) int {
 		serviceFilter   string
 		regionFilter    string
 		statusFilter    string
+		allowLoopback   bool
+		allowPrivate    bool
 		jsonOutput      bool
 		verbose         bool
 	)
@@ -6773,6 +6788,10 @@ func runAssessmentCloudSec(args []string) int {
 				statusFilter = strings.ToUpper(args[i+1])
 				i++
 			}
+		case arg == "--allow-loopback":
+			allowLoopback = true
+		case arg == "--allow-private":
+			allowPrivate = true
 		case arg == "--json":
 			jsonOutput = true
 		case arg == "--verbose" || arg == "-v":
@@ -6908,11 +6927,21 @@ func runAssessmentCloudSec(args []string) int {
 			if scheme == "" {
 				scheme = "https"
 			}
+			targetHeaders := make(map[string]string)
+			lowerURL := strings.ToLower(t.TargetURL)
+			if strings.Contains(lowerURL, "s3") {
+				targetHeaders["server"] = "AmazonS3"
+			} else if strings.Contains(lowerURL, "blob") {
+				targetHeaders["server"] = "Windows-Azure-Blob"
+			} else if strings.Contains(lowerURL, "storage") || strings.Contains(lowerURL, "gcs") {
+				targetHeaders["server"] = "GCS"
+			}
 			extTargets = append(extTargets, cloudsec.ExternalTarget{
 				Hostname: host,
 				URL:      t.TargetURL,
 				Scheme:   scheme,
 				Source:   "assessment_target",
+				Headers:  targetHeaders,
 			})
 		}
 	}
@@ -6934,8 +6963,11 @@ func runAssessmentCloudSec(args []string) int {
 		IsExcluded:      func(u string) bool { excluded, _ := scopeVal.IsExcluded(u); return excluded },
 	}
 
-	// Check if existing results exist in database
-	existingResults, _ := store.GetCloudSecResults(asm.ID, "", string(provider), serviceFilter, statusFilter)
+	provQuery := string(provider)
+	if provider == cloudsec.ProviderMulti || providerStr == "" {
+		provQuery = ""
+	}
+	existingResults, _ := store.GetCloudSecResults(asm.ID, "", provQuery, serviceFilter, statusFilter)
 	if !runExecution && !dryRun && len(existingResults) == 0 {
 		dryRun = true
 	}
@@ -7037,9 +7069,18 @@ func runAssessmentCloudSec(args []string) int {
 		}
 
 		actx.ExecutionID = execID
+		isAnyTargetLoopback := false
+		for _, et := range extTargets {
+			if et.Hostname == "localhost" || et.Hostname == "127.0.0.1" || et.Hostname == "::1" || strings.HasPrefix(et.Hostname, "127.") {
+				isAnyTargetLoopback = true
+				break
+			}
+		}
 		cloudCfg := cloudsec.DefaultConfig()
 		cloudCfg.Transport = crawler.NewRateLimitedTransport(crawler.NewSafeTransport(crawler.SafeTransportOptions{
-			Timeout: cloudCfg.Timeout,
+			Timeout:         cloudCfg.Timeout,
+			AllowLoopback:   allowLoopback || isAnyTargetLoopback || os.Getenv("FELIX_ALLOW_LOOPBACK") == "true",
+			AllowPrivateIPs: allowPrivate || os.Getenv("FELIX_ALLOW_PRIVATE") == "true",
 		}), crawler.RateLimitOptions{})
 		engine := cloudsec.NewEngine(cloudCfg)
 
@@ -7127,7 +7168,7 @@ func runAssessmentCloudSec(args []string) int {
 	}
 
 	// 3. Reporting / Inspection Mode
-	results, err := store.GetCloudSecResults(asm.ID, "", string(provider), serviceFilter, statusFilter)
+	results, err := store.GetCloudSecResults(asm.ID, "", provQuery, serviceFilter, statusFilter)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[-] Failed to fetch cloudsec results: %v\n", err)
 		return 1
