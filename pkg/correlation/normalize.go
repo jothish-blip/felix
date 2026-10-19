@@ -1,6 +1,8 @@
 package correlation
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"net/url"
 	"strings"
 
@@ -16,6 +18,22 @@ func NormalizeFinding(f report.Finding) NormalizedFinding {
 	normVer := report.NormalizeVerificationStatus(f.Verification.Status)
 
 	host, origin, path := extractHostAndPath(f.Target, f.Endpoint)
+
+	rawURLVal := f.Endpoint
+	if rawURLVal == "" {
+		rawURLVal = f.Target
+	}
+	dispEndpointVal := rawURLVal
+	if rawURLVal != "" {
+		if c, err := CanonicalizeURL(rawURLVal); err == nil {
+			if c.RawURL != "" {
+				rawURLVal = c.RawURL
+			}
+			if c.DisplayEndpoint != "" {
+				dispEndpointVal = c.DisplayEndpoint
+			}
+		}
+	}
 
 	score := f.Score
 	if score == 0 {
@@ -142,6 +160,8 @@ func NormalizeFinding(f report.Finding) NormalizedFinding {
 		Host:               host,
 		Origin:             origin,
 		Endpoint:           f.Endpoint,
+		DisplayEndpoint:    dispEndpointVal,
+		RawURL:             rawURLVal,
 		Path:               path,
 		Method:             strings.ToUpper(f.Method),
 		Score:              score,
@@ -168,11 +188,27 @@ func NormalizeFinding(f report.Finding) NormalizedFinding {
 	}
 }
 
-// NormalizeFindings normalizes a collection of findings.
+// NormalizeFindings normalizes a collection of findings, ensuring deterministic surrogate IDs
+// for empty or duplicate finding IDs so that relationships and asset mappings never collide.
 func NormalizeFindings(findings []report.Finding) []NormalizedFinding {
 	out := make([]NormalizedFinding, 0, len(findings))
-	for _, f := range findings {
-		out = append(out, NormalizeFinding(f))
+	seenIDs := make(map[string]int)
+
+	for i, f := range findings {
+		norm := NormalizeFinding(f)
+
+		cleanID := strings.TrimSpace(norm.ID)
+		if cleanID == "" {
+			// Deterministic surrogate ID based on index, title, category, endpoint
+			h := sha256.Sum256([]byte(fmt.Sprintf("%d:%s:%s:%s", i, f.Title, f.Category, f.Endpoint)))
+			norm.ID = fmt.Sprintf("synth_%x", h[:6])
+		} else if count := seenIDs[cleanID]; count > 0 {
+			// Disambiguate duplicate ID deterministically
+			h := sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%s", cleanID, count, f.Endpoint)))
+			norm.ID = fmt.Sprintf("%s_dup%d_%x", cleanID, count, h[:4])
+		}
+		seenIDs[cleanID]++
+		out = append(out, norm)
 	}
 	return out
 }

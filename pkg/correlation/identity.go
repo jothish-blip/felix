@@ -1,6 +1,7 @@
 package correlation
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"net"
 	"net/url"
@@ -39,14 +40,17 @@ var sensitiveQueryKeys = map[string]struct{}{
 
 // CanonicalURL represents a thoroughly parsed and normalized URL for deterministic asset identification.
 type CanonicalURL struct {
-	Scheme   string `json:"scheme"`
-	Host     string `json:"host"`
-	Port     string `json:"port,omitempty"`
-	Path     string `json:"path"`
-	Query    string `json:"query,omitempty"`
-	Origin   string `json:"origin"`
-	Endpoint string `json:"endpoint"`
-	IsIPv6   bool   `json:"is_ipv6"`
+	RawURL          string `json:"raw_url,omitempty"`
+	Scheme          string `json:"scheme"`
+	Host            string `json:"host"`
+	Port            string `json:"port,omitempty"`
+	Path            string `json:"path"`
+	Query           string `json:"query,omitempty"`            // Canonical identity query (non-reversible secret token hashes)
+	DisplayQuery    string `json:"display_query,omitempty"`     // Display-safe query (secrets redacted to "REDACTED")
+	Origin          string `json:"origin"`
+	Endpoint        string `json:"endpoint"`                    // Canonical identity endpoint URL
+	DisplayEndpoint string `json:"display_endpoint,omitempty"` // Display-safe endpoint URL for UI, stories, logs
+	IsIPv6          bool   `json:"is_ipv6"`
 }
 
 // CanonicalAsset models the resolved entity that a finding demonstrably affects.
@@ -149,8 +153,24 @@ func CanonicalizeURL(rawURL string) (*CanonicalURL, error) {
 	// 4. Origin: scheme://formattedHost
 	origin := fmt.Sprintf("%s://%s", scheme, formattedHost)
 
-	// 5. Clean path: preserve trailing slash on non-root paths, clean relative dots
-	cleanPath := path.Clean(u.Path)
+	// 5. Clean path: preserve encoded slashes (%2F) and trailing slashes on non-root paths
+	sourcePath := u.Path
+	hasEncodedSlash := strings.Contains(u.RawPath, "%2F") || strings.Contains(u.RawPath, "%2f") ||
+		strings.Contains(trimmed, "%2F") || strings.Contains(trimmed, "%2f")
+	if hasEncodedSlash {
+		targetPath := u.RawPath
+		if targetPath == "" {
+			targetPath = u.EscapedPath()
+		}
+		masked := strings.ReplaceAll(targetPath, "%2F", "___ESCAPED_SLASH___")
+		masked = strings.ReplaceAll(masked, "%2f", "___ESCAPED_SLASH___")
+		cleanedMasked := path.Clean(masked)
+		sourcePath = strings.ReplaceAll(cleanedMasked, "___ESCAPED_SLASH___", "%2F")
+	} else {
+		sourcePath = path.Clean(sourcePath)
+	}
+
+	cleanPath := sourcePath
 	if cleanPath == "." || cleanPath == "" {
 		cleanPath = "/"
 	} else if strings.HasSuffix(u.Path, "/") && !strings.HasSuffix(cleanPath, "/") {
@@ -159,6 +179,7 @@ func CanonicalizeURL(rawURL string) (*CanonicalURL, error) {
 
 	// 6. Query sanitization & deterministic sorting
 	cleanQuery := ""
+	displayQuery := ""
 	if u.RawQuery != "" {
 		q := u.Query()
 		var sortedKeys []string
@@ -168,44 +189,73 @@ func CanonicalizeURL(rawURL string) (*CanonicalURL, error) {
 		sort.Strings(sortedKeys)
 
 		newValues := url.Values{}
+		displayValues := url.Values{}
 		for _, k := range sortedKeys {
 			lowerK := strings.ToLower(k)
-			if _, isSensitive := sensitiveQueryKeys[lowerK]; isSensitive {
-				newValues.Set(k, "REDACTED")
-			} else {
-				vals := q[k]
-				sort.Strings(vals)
-				for _, v := range vals {
-					if red := secrets.RedactText(v); red != v {
-						newValues.Add(k, "REDACTED")
+			_, isSensitive := sensitiveQueryKeys[lowerK]
+			if !isSensitive {
+				isSensitive = secrets.IsSensitiveQueryParam(k)
+			}
+
+			vals := q[k]
+			sort.Strings(vals)
+			for _, v := range vals {
+				if isSensitive {
+					displayValues.Add(k, "REDACTED")
+					// For identity, use non-reversible cryptographic hash to avoid collapsing distinct tokens
+					if v == "REDACTED" || v == "[REDACTED]" || strings.HasPrefix(v, "REDACTED_") {
+						newValues.Add(k, v)
 					} else {
+						h := sha256.Sum256([]byte(v))
+						newValues.Add(k, fmt.Sprintf("REDACTED_%x", h[:6]))
+					}
+				} else {
+					if red := secrets.RedactText(v); red != v {
+						displayValues.Add(k, "REDACTED")
+						h := sha256.Sum256([]byte(v))
+						newValues.Add(k, fmt.Sprintf("REDACTED_%x", h[:6]))
+					} else {
+						displayValues.Add(k, v)
 						newValues.Add(k, v)
 					}
 				}
 			}
 		}
 		cleanQuery = newValues.Encode()
+		displayQuery = displayValues.Encode()
 	}
 
-	// 7. Full endpoint URL (excluding fragment)
-	var endpointURL string
+	// 7. Full endpoint URLs (excluding fragment)
+	var endpointURL, displayEndpointURL string
 	if cleanPath == "/" && cleanQuery == "" {
 		endpointURL = origin
-	} else if cleanQuery != "" {
-		endpointURL = fmt.Sprintf("%s%s?%s", origin, cleanPath, cleanQuery)
+		displayEndpointURL = origin
 	} else {
-		endpointURL = fmt.Sprintf("%s%s", origin, cleanPath)
+		if cleanQuery != "" {
+			endpointURL = fmt.Sprintf("%s%s?%s", origin, cleanPath, cleanQuery)
+		} else {
+			endpointURL = fmt.Sprintf("%s%s", origin, cleanPath)
+		}
+
+		if displayQuery != "" {
+			displayEndpointURL = fmt.Sprintf("%s%s?%s", origin, cleanPath, displayQuery)
+		} else {
+			displayEndpointURL = fmt.Sprintf("%s%s", origin, cleanPath)
+		}
 	}
 
 	return &CanonicalURL{
-		Scheme:   scheme,
-		Host:     cleanHostname,
-		Port:     effectivePort,
-		Path:     cleanPath,
-		Query:    cleanQuery,
-		Origin:   origin,
-		Endpoint: endpointURL,
-		IsIPv6:   isIPv6,
+		RawURL:          trimmed,
+		Scheme:          scheme,
+		Host:            cleanHostname,
+		Port:            effectivePort,
+		Path:            cleanPath,
+		Query:           cleanQuery,
+		DisplayQuery:    displayQuery,
+		Origin:          origin,
+		Endpoint:        endpointURL,
+		DisplayEndpoint: displayEndpointURL,
+		IsIPv6:          isIPv6,
 	}, nil
 }
 
@@ -364,26 +414,44 @@ func ResolveFindingAsset(f report.Finding, inv *discovery.Inventory) (*Canonical
 		method = "GET"
 	}
 
+	// Tenant qualifier
+	tenantID := ""
+	if f.EvidenceDetails.Details != nil {
+		tenantID = f.EvidenceDetails.Details["tenant_id"]
+		if tenantID == "" {
+			tenantID = f.EvidenceDetails.Details["account_id"]
+		}
+	}
+
+	displayEndpoint := canonURL.DisplayEndpoint
+	if displayEndpoint == "" {
+		displayEndpoint = canonURL.Endpoint
+	}
+
 	// Distinguish endpoint asset vs origin application asset:
 	// If the endpoint specifies a non-root path or method, it is primarily an Endpoint asset.
 	hasSpecificRoute := canonURL.Path != "" && canonURL.Path != "/"
 	if hasSpecificRoute || canonURL.Query != "" {
 		canonEndpointKey := fmt.Sprintf("%s:%s", method, canonURL.Endpoint)
+		if tenantID != "" {
+			canonEndpointKey = fmt.Sprintf("tenant:%s:%s", tenantID, canonEndpointKey)
+		}
 		endpointAssetID := discovery.ComputeStableAssetID(discovery.AssetTypeEndpoint, canonEndpointKey)
 		epAsset := &CanonicalAsset{
 			ID:           endpointAssetID,
 			Type:         discovery.AssetTypeEndpoint,
 			CanonicalKey: canonEndpointKey,
-			DisplayName:  fmt.Sprintf("%s %s", method, canonURL.Endpoint),
+			DisplayName:  fmt.Sprintf("%s %s", method, displayEndpoint),
 			Scheme:       canonURL.Scheme,
 			Host:         canonURL.Host,
 			Port:         canonURL.Port,
 			Path:         canonURL.Path,
 			Method:       method,
+			TenantID:     tenantID,
 			Confidence:   report.ConfidenceHigh,
 			IsExact:      true,
 			Basis:        "EXACT_ENDPOINT",
-			Evidence:     fmt.Sprintf("Direct endpoint match: %s %s", method, canonURL.Endpoint),
+			Evidence:     fmt.Sprintf("Direct endpoint match: %s %s", method, displayEndpoint),
 		}
 		assoc := AssetAssociation{
 			FindingID:    f.ID,
@@ -400,16 +468,21 @@ func ResolveFindingAsset(f report.Finding, inv *discovery.Inventory) (*Canonical
 	}
 
 	// Root application asset
-	appAssetID := discovery.ComputeStableAssetID(discovery.AssetTypeApplication, canonURL.Origin)
+	appKey := canonURL.Origin
+	if tenantID != "" {
+		appKey = fmt.Sprintf("tenant:%s:%s", tenantID, canonURL.Origin)
+	}
+	appAssetID := discovery.ComputeStableAssetID(discovery.AssetTypeApplication, appKey)
 	appAsset := &CanonicalAsset{
 		ID:           appAssetID,
 		Type:         discovery.AssetTypeApplication,
-		CanonicalKey: canonURL.Origin,
+		CanonicalKey: appKey,
 		DisplayName:  canonURL.Origin,
 		Scheme:       canonURL.Scheme,
 		Host:         canonURL.Host,
 		Port:         canonURL.Port,
 		Path:         "/",
+		TenantID:     tenantID,
 		Confidence:   report.ConfidenceHigh,
 		IsExact:      true,
 		Basis:        "CANONICAL_APPLICATION",
@@ -455,6 +528,10 @@ func ResolveFindingAffectedAssets(f report.Finding, primary *CanonicalAsset, inv
 
 	// 3. Hierarchical parents
 	if primary != nil {
+		if primary.TenantID != "" {
+			tenantAssetID := discovery.ComputeStableAssetID(discovery.AssetTypeAsset, "tenant:"+primary.TenantID)
+			add(tenantAssetID)
+		}
 		if primary.Type == discovery.AssetTypeEndpoint && primary.Scheme != "" && primary.Host != "" {
 			var formattedHost string
 			if primary.Port != "" {
@@ -463,13 +540,25 @@ func ResolveFindingAffectedAssets(f report.Finding, primary *CanonicalAsset, inv
 				formattedHost = primary.Host
 			}
 			origin := fmt.Sprintf("%s://%s", primary.Scheme, formattedHost)
-			appID := discovery.ComputeStableAssetID(discovery.AssetTypeApplication, origin)
+			appKey := origin
+			if primary.TenantID != "" {
+				appKey = fmt.Sprintf("tenant:%s:%s", primary.TenantID, origin)
+			}
+			appID := discovery.ComputeStableAssetID(discovery.AssetTypeApplication, appKey)
 			add(appID)
 
-			hostID := discovery.ComputeStableAssetID(discovery.AssetTypeHost, primary.Host)
+			hostKey := primary.Host
+			if primary.TenantID != "" {
+				hostKey = fmt.Sprintf("tenant:%s:%s", primary.TenantID, primary.Host)
+			}
+			hostID := discovery.ComputeStableAssetID(discovery.AssetTypeHost, hostKey)
 			add(hostID)
 		} else if primary.Type == discovery.AssetTypeApplication && primary.Host != "" {
-			hostID := discovery.ComputeStableAssetID(discovery.AssetTypeHost, primary.Host)
+			hostKey := primary.Host
+			if primary.TenantID != "" {
+				hostKey = fmt.Sprintf("tenant:%s:%s", primary.TenantID, primary.Host)
+			}
+			hostID := discovery.ComputeStableAssetID(discovery.AssetTypeHost, hostKey)
 			add(hostID)
 		}
 	}
@@ -486,13 +575,17 @@ func extractCloudStorageAsset(f report.Finding) (*CanonicalAsset, bool) {
 		ep = f.Target
 	}
 
-	var bucket, provider string
+	var bucket, provider, tenantID string
 	if f.EvidenceDetails.Details != nil {
 		bucket = f.EvidenceDetails.Details["bucket"]
 		if bucket == "" {
 			bucket = f.EvidenceDetails.Details["bucket_name"]
 		}
 		provider = f.EvidenceDetails.Details["cloud_provider"]
+		tenantID = f.EvidenceDetails.Details["tenant_id"]
+		if tenantID == "" {
+			tenantID = f.EvidenceDetails.Details["account_id"]
+		}
 	}
 
 	epLower := strings.ToLower(ep)
@@ -542,6 +635,9 @@ func extractCloudStorageAsset(f report.Finding) (*CanonicalAsset, bool) {
 
 	cleanBucket := strings.ToLower(strings.TrimSpace(bucket))
 	canonKey := fmt.Sprintf("storage:%s:%s", provider, cleanBucket)
+	if tenantID != "" {
+		canonKey = fmt.Sprintf("storage:%s:tenant:%s:%s", provider, tenantID, cleanBucket)
+	}
 	assetID := discovery.ComputeStableAssetID(discovery.AssetTypeStorage, canonKey)
 
 	return &CanonicalAsset{
@@ -550,6 +646,7 @@ func extractCloudStorageAsset(f report.Finding) (*CanonicalAsset, bool) {
 		CanonicalKey: canonKey,
 		DisplayName:  fmt.Sprintf("%s bucket: %s", provider, cleanBucket),
 		ResourceID:   cleanBucket,
+		TenantID:     tenantID,
 		Confidence:   report.ConfidenceHigh,
 		IsExact:      true,
 		Basis:        "CLOUD_STORAGE_RESOURCE",
@@ -564,13 +661,17 @@ func extractDatabaseAsset(f report.Finding) (*CanonicalAsset, bool) {
 		ep = f.Target
 	}
 
-	var projID, engine string
+	var projID, engine, tenantID string
 	if f.EvidenceDetails.Details != nil {
 		projID = f.EvidenceDetails.Details["project_id"]
 		if projID == "" {
 			projID = f.EvidenceDetails.Details["database_name"]
 		}
 		engine = f.EvidenceDetails.Details["database_engine"]
+		tenantID = f.EvidenceDetails.Details["tenant_id"]
+		if tenantID == "" {
+			tenantID = f.EvidenceDetails.Details["account_id"]
+		}
 	}
 
 	epLower := strings.ToLower(ep)
@@ -605,6 +706,9 @@ func extractDatabaseAsset(f report.Finding) (*CanonicalAsset, bool) {
 
 	cleanProj := strings.ToLower(strings.TrimSpace(projID))
 	canonKey := fmt.Sprintf("database:%s:%s", engine, cleanProj)
+	if tenantID != "" {
+		canonKey = fmt.Sprintf("database:%s:tenant:%s:%s", engine, tenantID, cleanProj)
+	}
 	assetID := discovery.ComputeStableAssetID(discovery.AssetTypeDatabase, canonKey)
 
 	return &CanonicalAsset{
@@ -613,6 +717,7 @@ func extractDatabaseAsset(f report.Finding) (*CanonicalAsset, bool) {
 		CanonicalKey: canonKey,
 		DisplayName:  fmt.Sprintf("%s instance: %s", engine, cleanProj),
 		ResourceID:   cleanProj,
+		TenantID:     tenantID,
 		Confidence:   report.ConfidenceHigh,
 		IsExact:      true,
 		Basis:        "DATABASE_RESOURCE",
@@ -624,11 +729,15 @@ func extractAPKAsset(f report.Finding) (*CanonicalAsset, bool) {
 	cat := report.NormalizeCategory(f.Category)
 	src := f.Source
 
-	var pkgName string
+	var pkgName, tenantID string
 	if f.EvidenceDetails.Details != nil {
 		pkgName = f.EvidenceDetails.Details["package_name"]
 		if pkgName == "" {
 			pkgName = f.EvidenceDetails.Details["app_id"]
+		}
+		tenantID = f.EvidenceDetails.Details["tenant_id"]
+		if tenantID == "" {
+			tenantID = f.EvidenceDetails.Details["account_id"]
 		}
 	}
 
@@ -643,6 +752,9 @@ func extractAPKAsset(f report.Finding) (*CanonicalAsset, bool) {
 
 	cleanPkg := strings.ToLower(strings.TrimSpace(pkgName))
 	canonKey := fmt.Sprintf("apk:%s", cleanPkg)
+	if tenantID != "" {
+		canonKey = fmt.Sprintf("apk:tenant:%s:%s", tenantID, cleanPkg)
+	}
 	assetID := discovery.ComputeStableAssetID(discovery.AssetTypeAPK, canonKey)
 
 	return &CanonicalAsset{
@@ -651,6 +763,7 @@ func extractAPKAsset(f report.Finding) (*CanonicalAsset, bool) {
 		CanonicalKey: canonKey,
 		DisplayName:  fmt.Sprintf("Android Package: %s", cleanPkg),
 		ResourceID:   cleanPkg,
+		TenantID:     tenantID,
 		Confidence:   report.ConfidenceHigh,
 		IsExact:      true,
 		Basis:        "APK_PACKAGE",

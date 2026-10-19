@@ -1,6 +1,7 @@
 package correlation
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"sort"
 	"strings"
@@ -236,7 +237,7 @@ func evaluateCOR01(f1, f2 *NormalizedFinding) (Relationship, bool) {
 	}
 
 	return Relationship{
-		ID:                 fmt.Sprintf("REL-COR01-%s-%s", shortID(f1.ID), shortID(f2.ID)),
+		ID:                 relationshipID(RuleCOR01, f1.ID, f2.ID),
 		SourceFindingID:    f1.ID,
 		TargetFindingID:    f2.ID,
 		SourceTitle:        f1.Title,
@@ -245,9 +246,9 @@ func evaluateCOR01(f1, f2 *NormalizedFinding) (Relationship, bool) {
 		ValidationStatus:   status,
 		Confidence:         conf,
 		RuleCode:           RuleCOR01,
-		EvidenceReferences: []string{f1.Endpoint, f2.Endpoint},
+		EvidenceReferences: []string{findingRef(f1), findingRef(f2)},
 		Explanation: fmt.Sprintf("Public entry point '%s' (%s) provides external reachability directly to vulnerable component '%s' (%s).",
-			f1.Title, f1.Endpoint, f2.Title, f2.Endpoint),
+			f1.Title, findingRef(f1), f2.Title, findingRef(f2)),
 	}, true
 }
 
@@ -283,7 +284,7 @@ func evaluateCOR02(f1, f2 *NormalizedFinding) (Relationship, bool) {
 	}
 
 	return Relationship{
-		ID:                 fmt.Sprintf("REL-COR02-%s-%s", shortID(f1.ID), shortID(f2.ID)),
+		ID:                 relationshipID(RuleCOR02, f1.ID, f2.ID),
 		SourceFindingID:    f1.ID,
 		TargetFindingID:    f2.ID,
 		SourceTitle:        f1.Title,
@@ -292,7 +293,7 @@ func evaluateCOR02(f1, f2 *NormalizedFinding) (Relationship, bool) {
 		ValidationStatus:   status,
 		Confidence:         conf,
 		RuleCode:           RuleCOR02,
-		EvidenceReferences: []string{f1.Endpoint, f2.Endpoint},
+		EvidenceReferences: []string{findingRef(f1), findingRef(f2)},
 		Explanation: fmt.Sprintf("Authentication/identity boundary weakness '%s' enables caller to establish session context required to invoke protected authorization flaw '%s'.",
 			f1.Title, f2.Title),
 	}, true
@@ -331,7 +332,7 @@ func evaluateCOR03(f1, f2 *NormalizedFinding) (Relationship, bool) {
 	}
 
 	return Relationship{
-		ID:                 fmt.Sprintf("REL-COR03-%s-%s", shortID(f1.ID), shortID(f2.ID)),
+		ID:                 relationshipID(RuleCOR03, f1.ID, f2.ID),
 		SourceFindingID:    f1.ID,
 		TargetFindingID:    f2.ID,
 		SourceTitle:        f1.Title,
@@ -340,7 +341,7 @@ func evaluateCOR03(f1, f2 *NormalizedFinding) (Relationship, bool) {
 		ValidationStatus:   status,
 		Confidence:         conf,
 		RuleCode:           RuleCOR03,
-		EvidenceReferences: []string{f1.Endpoint, f2.Endpoint},
+		EvidenceReferences: []string{findingRef(f1), findingRef(f2)},
 		Explanation: fmt.Sprintf("Object-level authorization weakness '%s' permits unauthorized cross-tenant object access, directly exposing sensitive data '%s'.",
 			f1.Title, f2.Title),
 	}, true
@@ -376,7 +377,7 @@ func evaluateCOR04(f1, f2 *NormalizedFinding) (Relationship, bool) {
 	}
 
 	return Relationship{
-		ID:                 fmt.Sprintf("REL-COR04-%s-%s", shortID(f1.ID), shortID(f2.ID)),
+		ID:                 relationshipID(RuleCOR04, f1.ID, f2.ID),
 		SourceFindingID:    f1.ID,
 		TargetFindingID:    f2.ID,
 		SourceTitle:        f1.Title,
@@ -385,7 +386,7 @@ func evaluateCOR04(f1, f2 *NormalizedFinding) (Relationship, bool) {
 		ValidationStatus:   status,
 		Confidence:         conf,
 		RuleCode:           RuleCOR04,
-		EvidenceReferences: []string{f1.Endpoint, f2.Endpoint},
+		EvidenceReferences: []string{findingRef(f1), findingRef(f2)},
 		Explanation: fmt.Sprintf("Public service/storage exposure '%s' provides unauthenticated reachability, disclosing sensitive resource '%s'.",
 			f1.Title, f2.Title),
 	}, true
@@ -424,7 +425,7 @@ func evaluateCOR05(f1, f2 *NormalizedFinding) (Relationship, bool) {
 	}
 
 	return Relationship{
-		ID:                 fmt.Sprintf("REL-COR05-%s-%s", shortID(f1.ID), shortID(f2.ID)),
+		ID:                 relationshipID(RuleCOR05, f1.ID, f2.ID),
 		SourceFindingID:    f1.ID,
 		TargetFindingID:    f2.ID,
 		SourceTitle:        f1.Title,
@@ -433,7 +434,7 @@ func evaluateCOR05(f1, f2 *NormalizedFinding) (Relationship, bool) {
 		ValidationStatus:   status,
 		Confidence:         conf,
 		RuleCode:           RuleCOR05,
-		EvidenceReferences: []string{f1.Endpoint, f2.Endpoint},
+		EvidenceReferences: []string{findingRef(f1), findingRef(f2)},
 		Explanation: fmt.Sprintf("Unprivileged workflow access or role weakness '%s' enables elevation into privileged administrative capability '%s'.",
 			f1.Title, f2.Title),
 	}, true
@@ -475,7 +476,7 @@ func evaluateCOR06(f1, f2 *NormalizedFinding) (Relationship, bool) {
 	}
 
 	return Relationship{
-		ID:                 fmt.Sprintf("REL-COR06-%s-%s", shortID(f1.ID), shortID(f2.ID)),
+		ID:                 relationshipID(RuleCOR06, f1.ID, f2.ID),
 		SourceFindingID:    f1.ID,
 		TargetFindingID:    f2.ID,
 		SourceTitle:        f1.Title,
@@ -484,7 +485,7 @@ func evaluateCOR06(f1, f2 *NormalizedFinding) (Relationship, bool) {
 		ValidationStatus:   status,
 		Confidence:         conf,
 		RuleCode:           RuleCOR06,
-		EvidenceReferences: []string{f1.Endpoint, f2.Endpoint},
+		EvidenceReferences: []string{findingRef(f1), findingRef(f2)},
 		Explanation: fmt.Sprintf("Workflow circumvention or state transition flaw '%s' directly enables downstream business logic impact '%s'.",
 			f1.Title, f2.Title),
 	}, true
@@ -515,7 +516,7 @@ func evaluateCOR07(f1, f2 *NormalizedFinding) (Relationship, bool) {
 	}
 
 	return Relationship{
-		ID:                 fmt.Sprintf("REL-COR07-%s-%s", shortID(f1.ID), shortID(f2.ID)),
+		ID:                 relationshipID(RuleCOR07, f1.ID, f2.ID),
 		SourceFindingID:    f1.ID,
 		TargetFindingID:    f2.ID,
 		SourceTitle:        f1.Title,
@@ -524,7 +525,7 @@ func evaluateCOR07(f1, f2 *NormalizedFinding) (Relationship, bool) {
 		ValidationStatus:   status,
 		Confidence:         conf,
 		RuleCode:           RuleCOR07,
-		EvidenceReferences: []string{f1.Endpoint, f2.Endpoint},
+		EvidenceReferences: []string{findingRef(f1), findingRef(f2)},
 		Explanation: fmt.Sprintf("Resource action '%s' depends on persistent or improperly invalidated identity context '%s'.",
 			f2.Title, f1.Title),
 	}, true
@@ -561,7 +562,7 @@ func evaluateCOR08(f1, f2 *NormalizedFinding) (Relationship, bool) {
 	}
 
 	return Relationship{
-		ID:                 fmt.Sprintf("REL-COR08-%s-%s", shortID(f1.ID), shortID(f2.ID)),
+		ID:                 relationshipID(RuleCOR08, f1.ID, f2.ID),
 		SourceFindingID:    f1.ID,
 		TargetFindingID:    f2.ID,
 		SourceTitle:        f1.Title,
@@ -570,7 +571,7 @@ func evaluateCOR08(f1, f2 *NormalizedFinding) (Relationship, bool) {
 		ValidationStatus:   status,
 		Confidence:         conf,
 		RuleCode:           RuleCOR08,
-		EvidenceReferences: []string{f1.Endpoint, f2.Endpoint},
+		EvidenceReferences: []string{findingRef(f1), findingRef(f2)},
 		Explanation: fmt.Sprintf("Application exposure '%s' provides pivot capability or credentials directly accessing cloud infrastructure resource '%s'.",
 			f1.Title, f2.Title),
 	}, true
@@ -601,7 +602,7 @@ func evaluateCOR09(f1, f2 *NormalizedFinding) (Relationship, bool) {
 	}
 
 	return Relationship{
-		ID:                 fmt.Sprintf("REL-COR09-%s-%s", shortID(first.ID), shortID(second.ID)),
+		ID:                 relationshipID(RuleCOR09, first.ID, second.ID),
 		SourceFindingID:    first.ID,
 		TargetFindingID:    second.ID,
 		SourceTitle:        first.Title,
@@ -611,9 +612,9 @@ func evaluateCOR09(f1, f2 *NormalizedFinding) (Relationship, bool) {
 		Confidence:         report.ConfidenceHigh,
 		RuleCode:           RuleCOR09,
 		MatchingRule:       string(RuleCOR09),
-		EvidenceReferences: []string{secrets.SanitizeURL(first.Endpoint), secrets.SanitizeURL(second.Endpoint)},
+		EvidenceReferences: []string{findingRef(first), findingRef(second)},
 		Explanation: fmt.Sprintf("Findings '%s' and '%s' share a common underlying implementation defect or missing middleware at %s.",
-			first.Title, second.Title, secrets.SanitizeURL(first.Endpoint)),
+			first.Title, second.Title, findingRef(first)),
 	}, true
 }
 
@@ -655,6 +656,19 @@ func evaluateSameEndpoint(f1, f2 *NormalizedFinding) (Relationship, bool) {
 		return Relationship{}, false
 	}
 
+	// Tenant boundary check: distinct tenant IDs must not be SAME_ENDPOINT
+	t1 := f1.EvidenceDetails["tenant_id"]
+	if t1 == "" {
+		t1 = f1.EvidenceDetails["account_id"]
+	}
+	t2 := f2.EvidenceDetails["tenant_id"]
+	if t2 == "" {
+		t2 = f2.EvidenceDetails["account_id"]
+	}
+	if t1 != "" && t2 != "" && !strings.EqualFold(t1, t2) {
+		return Relationship{}, false
+	}
+
 	first, second := f1, f2
 	if first.ID > second.ID {
 		first, second = f2, f1
@@ -669,8 +683,13 @@ func evaluateSameEndpoint(f1, f2 *NormalizedFinding) (Relationship, bool) {
 		assetKey = second.CanonicalAssetKey
 	}
 
+	dispEP := canon1.DisplayEndpoint
+	if dispEP == "" {
+		dispEP = canon1.Endpoint
+	}
+
 	return Relationship{
-		ID:                 fmt.Sprintf("REL-SAME-ENDPOINT-%s-%s", shortID(first.ID), shortID(second.ID)),
+		ID:                 relationshipID(RuleCORSameEndpoint, first.ID, second.ID),
 		SourceFindingID:    first.ID,
 		TargetFindingID:    second.ID,
 		SourceTitle:        first.Title,
@@ -683,14 +702,27 @@ func evaluateSameEndpoint(f1, f2 *NormalizedFinding) (Relationship, bool) {
 		AssetID:            assetID,
 		AssetKey:           assetKey,
 		IsExact:            true,
-		EvidenceReferences: []string{secrets.SanitizeURL(first.Endpoint), secrets.SanitizeURL(second.Endpoint)},
+		EvidenceReferences: []string{findingRef(first), findingRef(second)},
 		Explanation: fmt.Sprintf("Findings '%s' and '%s' demonstrably affect the exact same canonical endpoint (%s %s).",
-			first.Title, second.Title, strings.ToUpper(m1), canon1.Endpoint),
+			first.Title, second.Title, strings.ToUpper(m1), dispEP),
 	}, true
 }
 
 // COR-SAME-ASSET: Connects findings that demonstrably affect the same resolved asset identity
 func evaluateSameAsset(f1, f2 *NormalizedFinding) (Relationship, bool) {
+	// Tenant boundary check: distinct tenant IDs must not be SAME_ASSET
+	t1 := f1.EvidenceDetails["tenant_id"]
+	if t1 == "" {
+		t1 = f1.EvidenceDetails["account_id"]
+	}
+	t2 := f2.EvidenceDetails["tenant_id"]
+	if t2 == "" {
+		t2 = f2.EvidenceDetails["account_id"]
+	}
+	if t1 != "" && t2 != "" && !strings.EqualFold(t1, t2) {
+		return Relationship{}, false
+	}
+
 	first, second := f1, f2
 	if first.ID > second.ID {
 		first, second = f2, f1
@@ -701,7 +733,7 @@ func evaluateSameAsset(f1, f2 *NormalizedFinding) (Relationship, bool) {
 		!strings.HasPrefix(first.CanonicalAssetKey, "unresolved") &&
 		!strings.HasPrefix(first.CanonicalAssetKey, "malformed") {
 		return Relationship{
-			ID:                 fmt.Sprintf("REL-SAME-ASSET-%s-%s", shortID(first.ID), shortID(second.ID)),
+			ID:                 relationshipID(RuleCORSameAsset, first.ID, second.ID),
 			SourceFindingID:    first.ID,
 			TargetFindingID:    second.ID,
 			SourceTitle:        first.Title,
@@ -714,7 +746,7 @@ func evaluateSameAsset(f1, f2 *NormalizedFinding) (Relationship, bool) {
 			AssetID:            first.PrimaryAssetID,
 			AssetKey:           first.CanonicalAssetKey,
 			IsExact:            true,
-			EvidenceReferences: []string{secrets.SanitizeURL(first.Endpoint), secrets.SanitizeURL(second.Endpoint)},
+			EvidenceReferences: []string{findingRef(first), findingRef(second)},
 			Explanation: fmt.Sprintf("Findings '%s' and '%s' demonstrably affect the same resolved asset (%s).",
 				first.Title, second.Title, first.CanonicalAssetKey),
 		}, true
@@ -724,7 +756,7 @@ func evaluateSameAsset(f1, f2 *NormalizedFinding) (Relationship, bool) {
 	if first.PrimaryAssetID != "" && first.PrimaryAssetID == second.PrimaryAssetID &&
 		first.PrimaryAssetID != "unresolved" {
 		return Relationship{
-			ID:                 fmt.Sprintf("REL-SAME-ASSET-%s-%s", shortID(first.ID), shortID(second.ID)),
+			ID:                 relationshipID(RuleCORSameAsset, first.ID, second.ID),
 			SourceFindingID:    first.ID,
 			TargetFindingID:    second.ID,
 			SourceTitle:        first.Title,
@@ -737,7 +769,7 @@ func evaluateSameAsset(f1, f2 *NormalizedFinding) (Relationship, bool) {
 			AssetID:            first.PrimaryAssetID,
 			AssetKey:           first.CanonicalAssetKey,
 			IsExact:            true,
-			EvidenceReferences: []string{secrets.SanitizeURL(first.Endpoint), secrets.SanitizeURL(second.Endpoint)},
+			EvidenceReferences: []string{findingRef(first), findingRef(second)},
 			Explanation: fmt.Sprintf("Findings '%s' and '%s' demonstrably affect the same asset ID (%s).",
 				first.Title, second.Title, first.PrimaryAssetID),
 		}, true
@@ -746,7 +778,7 @@ func evaluateSameAsset(f1, f2 *NormalizedFinding) (Relationship, bool) {
 	// 3. Check matching application Origin (compatible scheme and host:port)
 	if first.Origin != "" && second.Origin != "" && first.Origin == second.Origin {
 		return Relationship{
-			ID:                 fmt.Sprintf("REL-SAME-ASSET-%s-%s", shortID(first.ID), shortID(second.ID)),
+			ID:                 relationshipID(RuleCORSameAsset, first.ID, second.ID),
 			SourceFindingID:    first.ID,
 			TargetFindingID:    second.ID,
 			SourceTitle:        first.Title,
@@ -759,7 +791,7 @@ func evaluateSameAsset(f1, f2 *NormalizedFinding) (Relationship, bool) {
 			AssetID:            first.PrimaryAssetID,
 			AssetKey:           first.Origin,
 			IsExact:            true,
-			EvidenceReferences: []string{secrets.SanitizeURL(first.Endpoint), secrets.SanitizeURL(second.Endpoint)},
+			EvidenceReferences: []string{findingRef(first), findingRef(second)},
 			Explanation: fmt.Sprintf("Findings '%s' and '%s' affect different endpoints of the same application origin (%s).",
 				first.Title, second.Title, first.Origin),
 		}, true
@@ -778,7 +810,7 @@ func evaluateSharedComponent(f1, f2 *NormalizedFinding) (Relationship, bool) {
 	// 1. Shared AffectedResource (if explicitly set and not empty)
 	if first.AffectedResource != "" && first.AffectedResource == second.AffectedResource {
 		return Relationship{
-			ID:                 fmt.Sprintf("REL-SHARED-COMP-%s-%s", shortID(first.ID), shortID(second.ID)),
+			ID:                 relationshipID(RuleCORSharedComp, first.ID, second.ID),
 			SourceFindingID:    first.ID,
 			TargetFindingID:    second.ID,
 			SourceTitle:        first.Title,
@@ -788,7 +820,7 @@ func evaluateSharedComponent(f1, f2 *NormalizedFinding) (Relationship, bool) {
 			Confidence:         report.ConfidenceHigh,
 			RuleCode:           RuleCORSharedComp,
 			MatchingRule:       string(RuleCORSharedComp),
-			EvidenceReferences: []string{secrets.SanitizeURL(first.Endpoint), secrets.SanitizeURL(second.Endpoint)},
+			EvidenceReferences: []string{findingRef(first), findingRef(second)},
 			Explanation: fmt.Sprintf("Findings '%s' and '%s' share backend resource '%s'.",
 				first.Title, second.Title, first.AffectedResource),
 		}, true
@@ -801,7 +833,7 @@ func evaluateSharedComponent(f1, f2 *NormalizedFinding) (Relationship, bool) {
 		v2 := strings.TrimSpace(second.EvidenceDetails[k])
 		if v1 != "" && strings.EqualFold(v1, v2) {
 			return Relationship{
-				ID:                 fmt.Sprintf("REL-SHARED-COMP-%s-%s", shortID(first.ID), shortID(second.ID)),
+				ID:                 relationshipID(RuleCORSharedComp, first.ID, second.ID),
 				SourceFindingID:    first.ID,
 				TargetFindingID:    second.ID,
 				SourceTitle:        first.Title,
@@ -811,7 +843,7 @@ func evaluateSharedComponent(f1, f2 *NormalizedFinding) (Relationship, bool) {
 				Confidence:         report.ConfidenceHigh,
 				RuleCode:           RuleCORSharedComp,
 				MatchingRule:       string(RuleCORSharedComp),
-				EvidenceReferences: []string{secrets.SanitizeURL(first.Endpoint), secrets.SanitizeURL(second.Endpoint)},
+				EvidenceReferences: []string{findingRef(first), findingRef(second)},
 				Explanation: fmt.Sprintf("Findings '%s' and '%s' share underlying %s '%s'.",
 					first.Title, second.Title, k, v1),
 			}, true
@@ -844,7 +876,7 @@ func evaluateRelatedEvidence(f1, f2 *NormalizedFinding) (Relationship, bool) {
 				cleanP2 := strings.ToLower(strings.TrimSpace(p2))
 				if cleanP1 == cleanP2 {
 					return Relationship{
-						ID:                 fmt.Sprintf("REL-RELATED-EV-%s-%s", shortID(first.ID), shortID(second.ID)),
+						ID:                 relationshipID(RuleCORRelatedEv, first.ID, second.ID),
 						SourceFindingID:    first.ID,
 						TargetFindingID:    second.ID,
 						SourceTitle:        first.Title,
@@ -854,7 +886,7 @@ func evaluateRelatedEvidence(f1, f2 *NormalizedFinding) (Relationship, bool) {
 						Confidence:         report.ConfidenceMedium,
 						RuleCode:           RuleCORRelatedEv,
 						MatchingRule:       string(RuleCORRelatedEv),
-						EvidenceReferences: []string{secrets.SanitizeURL(first.Endpoint), secrets.SanitizeURL(second.Endpoint)},
+						EvidenceReferences: []string{findingRef(first), findingRef(second)},
 						Explanation: fmt.Sprintf("Findings '%s' and '%s' share parameter evidence '%s'.",
 							first.Title, second.Title, cleanP1),
 					}, true
@@ -870,7 +902,7 @@ func evaluateRelatedEvidence(f1, f2 *NormalizedFinding) (Relationship, bool) {
 		v2 := strings.TrimSpace(second.EvidenceDetails[k])
 		if v1 != "" && strings.EqualFold(v1, v2) {
 			return Relationship{
-				ID:                 fmt.Sprintf("REL-RELATED-EV-%s-%s", shortID(first.ID), shortID(second.ID)),
+				ID:                 relationshipID(RuleCORRelatedEv, first.ID, second.ID),
 				SourceFindingID:    first.ID,
 				TargetFindingID:    second.ID,
 				SourceTitle:        first.Title,
@@ -880,7 +912,7 @@ func evaluateRelatedEvidence(f1, f2 *NormalizedFinding) (Relationship, bool) {
 				Confidence:         report.ConfidenceMedium,
 				RuleCode:           RuleCORRelatedEv,
 				MatchingRule:       string(RuleCORRelatedEv),
-				EvidenceReferences: []string{secrets.SanitizeURL(first.Endpoint), secrets.SanitizeURL(second.Endpoint)},
+				EvidenceReferences: []string{findingRef(first), findingRef(second)},
 				Explanation: fmt.Sprintf("Findings '%s' and '%s' share %s indicator '%s'.",
 					first.Title, second.Title, k, v1),
 			}, true
@@ -897,12 +929,18 @@ func evaluatePossibleRelationship(f1, f2 *NormalizedFinding) (Relationship, bool
 		first, second = f2, f1
 	}
 
-	// 1. Shared IP address
-	ip1 := strings.TrimSpace(first.EvidenceDetails["ip"])
-	ip2 := strings.TrimSpace(second.EvidenceDetails["ip"])
-	if ip1 != "" && ip1 == ip2 {
+	// Check cross-tenant isolation on shared host
+	t1 := first.EvidenceDetails["tenant_id"]
+	if t1 == "" {
+		t1 = first.EvidenceDetails["account_id"]
+	}
+	t2 := second.EvidenceDetails["tenant_id"]
+	if t2 == "" {
+		t2 = second.EvidenceDetails["account_id"]
+	}
+	if t1 != "" && t2 != "" && !strings.EqualFold(t1, t2) && first.Host != "" && first.Host == second.Host {
 		return Relationship{
-			ID:                 fmt.Sprintf("REL-POSSIBLE-%s-%s", shortID(first.ID), shortID(second.ID)),
+			ID:                 relationshipID(RuleCORPossible, first.ID, second.ID),
 			SourceFindingID:    first.ID,
 			TargetFindingID:    second.ID,
 			SourceTitle:        first.Title,
@@ -913,7 +951,30 @@ func evaluatePossibleRelationship(f1, f2 *NormalizedFinding) (Relationship, bool
 			IsExact:            false,
 			RuleCode:           RuleCORPossible,
 			MatchingRule:       string(RuleCORPossible),
-			EvidenceReferences: []string{secrets.SanitizeURL(first.Endpoint), secrets.SanitizeURL(second.Endpoint)},
+			EvidenceReferences: []string{findingRef(first), findingRef(second)},
+			Explanation: fmt.Sprintf("Findings '%s' and '%s' share host '%s' across distinct tenant boundaries (%s vs %s); shared infrastructure does not imply common root cause or identity.",
+				first.Title, second.Title, first.Host, t1, t2),
+			InconclusiveReason: "Distinct tenant boundaries on shared hosting infrastructure.",
+		}, true
+	}
+
+	// 1. Shared IP address
+	ip1 := strings.TrimSpace(first.EvidenceDetails["ip"])
+	ip2 := strings.TrimSpace(second.EvidenceDetails["ip"])
+	if ip1 != "" && ip1 == ip2 {
+		return Relationship{
+			ID:                 relationshipID(RuleCORPossible, first.ID, second.ID),
+			SourceFindingID:    first.ID,
+			TargetFindingID:    second.ID,
+			SourceTitle:        first.Title,
+			TargetTitle:        second.Title,
+			Type:               RelPossibleRelationship,
+			ValidationStatus:   ValidationInconclusive,
+			Confidence:         report.ConfidenceLow,
+			IsExact:            false,
+			RuleCode:           RuleCORPossible,
+			MatchingRule:       string(RuleCORPossible),
+			EvidenceReferences: []string{findingRef(first), findingRef(second)},
 			Explanation: fmt.Sprintf("Findings '%s' and '%s' resolve to the same IP address (%s), but shared infrastructure does not imply common root cause or sequential relationship.",
 				first.Title, second.Title, ip1),
 			InconclusiveReason: "Shared IP address suggests common hosting infrastructure but does not establish application-level relationship or common defect.",
@@ -923,7 +984,7 @@ func evaluatePossibleRelationship(f1, f2 *NormalizedFinding) (Relationship, bool
 	// 2. Same Hostname with different schemes or ports (e.g. http:// vs https://, or :8080 vs :8443)
 	if first.Host != "" && second.Host != "" && first.Host == second.Host && first.Origin != second.Origin {
 		return Relationship{
-			ID:                 fmt.Sprintf("REL-POSSIBLE-%s-%s", shortID(first.ID), shortID(second.ID)),
+			ID:                 relationshipID(RuleCORPossible, first.ID, second.ID),
 			SourceFindingID:    first.ID,
 			TargetFindingID:    second.ID,
 			SourceTitle:        first.Title,
@@ -934,7 +995,7 @@ func evaluatePossibleRelationship(f1, f2 *NormalizedFinding) (Relationship, bool
 			IsExact:            false,
 			RuleCode:           RuleCORPossible,
 			MatchingRule:       string(RuleCORPossible),
-			EvidenceReferences: []string{secrets.SanitizeURL(first.Endpoint), secrets.SanitizeURL(second.Endpoint)},
+			EvidenceReferences: []string{findingRef(first), findingRef(second)},
 			Explanation: fmt.Sprintf("Findings '%s' and '%s' share hostname '%s' across different origins (%s vs %s); shared infrastructure does not imply common root cause or sequential relationship.",
 				first.Title, second.Title, first.Host, first.Origin, second.Origin),
 			InconclusiveReason: "Different origins on the same host may represent distinct services or isolation boundaries.",
@@ -977,7 +1038,7 @@ func evaluateCOR10(f1, f2 *NormalizedFinding) (Relationship, bool) {
 	}
 
 	return Relationship{
-		ID:                 fmt.Sprintf("REL-COR10-%s-%s", shortID(f1.ID), shortID(f2.ID)),
+		ID:                 relationshipID(RuleCOR10, f1.ID, f2.ID),
 		SourceFindingID:    f1.ID,
 		TargetFindingID:    f2.ID,
 		SourceTitle:        f1.Title,
@@ -986,15 +1047,44 @@ func evaluateCOR10(f1, f2 *NormalizedFinding) (Relationship, bool) {
 		ValidationStatus:   status,
 		Confidence:         conf,
 		RuleCode:           RuleCOR10,
-		EvidenceReferences: []string{f1.Endpoint, f2.Endpoint},
+		EvidenceReferences: []string{findingRef(f1), findingRef(f2)},
 		Explanation: fmt.Sprintf("Client/cross-origin condition '%s' amplifies the real-world exploitability and threat impact of '%s'.",
 			f1.Title, f2.Title),
 	}, true
 }
 
-func shortID(id string) string {
-	if len(id) > 8 {
-		return id[:8]
+func computeFindingKey(id string) string {
+	clean := strings.TrimSpace(id)
+	if clean == "" {
+		return "anon"
 	}
-	return id
+	clean = strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			return r
+		}
+		return '_'
+	}, clean)
+
+	if len(clean) <= 32 {
+		return clean
+	}
+	h := sha256.Sum256([]byte(id))
+	return fmt.Sprintf("%s_%x", clean[:24], h[:4])
+}
+
+func relationshipID(ruleCode RuleCode, srcID, tgtID string) string {
+	return fmt.Sprintf("REL-%s-%s-%s", ruleCode, computeFindingKey(srcID), computeFindingKey(tgtID))
+}
+
+func findingRef(f *NormalizedFinding) string {
+	if f == nil {
+		return ""
+	}
+	if f.DisplayEndpoint != "" {
+		return f.DisplayEndpoint
+	}
+	if f.Endpoint != "" {
+		return secrets.SanitizeURL(f.Endpoint)
+	}
+	return secrets.SanitizeURL(f.Target)
 }

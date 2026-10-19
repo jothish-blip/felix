@@ -120,9 +120,16 @@ func TestCorrelation_Category03_QueryRedactionAndSorting(t *testing.T) {
 		t.Errorf("fragment was not stripped: %s", canon.Endpoint)
 	}
 
-	expectedQuery := "a=first&api_key=REDACTED&sig=REDACTED&token=REDACTED&z=last"
-	if canon.Query != expectedQuery {
-		t.Errorf("expected sorted and redacted query %q, got %q", expectedQuery, canon.Query)
+	expectedDisplayQuery := "a=first&api_key=REDACTED&sig=REDACTED&token=REDACTED&z=last"
+	if canon.DisplayQuery != expectedDisplayQuery {
+		t.Errorf("expected sorted and display-redacted query %q, got %q", expectedDisplayQuery, canon.DisplayQuery)
+	}
+
+	if strings.Contains(canon.Query, "SECRET_JWT_123") || strings.Contains(canon.Query, "SECRET_KEY_456") {
+		t.Errorf("raw secret leaked in canon.Query: %s", canon.Query)
+	}
+	if !strings.Contains(canon.Query, "token=REDACTED_") || !strings.Contains(canon.Query, "api_key=REDACTED_") {
+		t.Errorf("expected token hash in canon.Query, got %s", canon.Query)
 	}
 }
 
@@ -853,5 +860,217 @@ func TestCorrelation_Category28_CLISummaryFormatting(t *testing.T) {
 		if st.Code != code {
 			t.Errorf("stat code mismatch: %s vs %s", st.Code, code)
 		}
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Final Asset Identity Audit Tests
+// -----------------------------------------------------------------------------
+
+func TestAudit_EncodedSlashSeparators(t *testing.T) {
+	u1 := "https://api.example.com/items/a%2Fb"
+	u2 := "https://api.example.com/items/a/b"
+
+	c1, err1 := correlation.CanonicalizeURL(u1)
+	c2, err2 := correlation.CanonicalizeURL(u2)
+
+	if err1 != nil || err2 != nil {
+		t.Fatalf("CanonicalizeURL failed: %v, %v", err1, err2)
+	}
+
+	if c1.Path == c2.Path {
+		t.Fatalf("Encoded slash %%2F was collapsed into a directory separator: %s == %s", c1.Path, c2.Path)
+	}
+
+	if !strings.Contains(c1.Path, "%2F") {
+		t.Errorf("Expected canonical path to preserve %%2F, got %s", c1.Path)
+	}
+
+	if c1.RawURL != u1 {
+		t.Errorf("Expected RawURL to preserve provenance %q, got %q", u1, c1.RawURL)
+	}
+}
+
+func TestAudit_QuerySecretSeparationAndCollisionPrevention(t *testing.T) {
+	// Two findings with different secret tokens at the same route
+	fAlice := helperMakeFinding("F_ALICE", "Token Leak", "token-leak", report.SeverityHigh, report.ConfidenceHigh, report.VerificationVerified, "https://api.example.com", "https://api.example.com/api/data?token=AliceSecret123&env=prod", "GET")
+	fBob := helperMakeFinding("F_BOB", "Token Leak", "token-leak", report.SeverityHigh, report.ConfidenceHigh, report.VerificationVerified, "https://api.example.com", "https://api.example.com/api/data?token=BobSecret456&env=prod", "GET")
+
+	// 1. Neither secret must leak in DisplayEndpoint or Evidence
+	cA, _ := correlation.CanonicalizeURL(fAlice.Endpoint)
+	cB, _ := correlation.CanonicalizeURL(fBob.Endpoint)
+
+	if strings.Contains(cA.DisplayEndpoint, "AliceSecret123") || strings.Contains(cB.DisplayEndpoint, "BobSecret456") {
+		t.Fatalf("Secrets leaked in DisplayEndpoint: A=%s, B=%s", cA.DisplayEndpoint, cB.DisplayEndpoint)
+	}
+
+	// 2. Both display endpoints show REDACTED
+	if !strings.Contains(cA.DisplayEndpoint, "token=REDACTED") || !strings.Contains(cB.DisplayEndpoint, "token=REDACTED") {
+		t.Fatalf("DisplayEndpoint did not redact tokens to REDACTED: A=%s, B=%s", cA.DisplayEndpoint, cB.DisplayEndpoint)
+	}
+
+	// 3. But their internal canonical endpoints must NOT collide
+	if cA.Endpoint == cB.Endpoint {
+		t.Fatalf("Distinct sensitive query tokens collapsed into identical canonical endpoint: %s", cA.Endpoint)
+	}
+
+	// 4. Running correlation must NOT report SAME_ENDPOINT between Alice and Bob
+	engine := correlation.NewEngine(correlation.DefaultConfig())
+	summary, _, _, err := engine.Correlate(context.Background(), []report.Finding{fAlice, fBob})
+	if err != nil {
+		t.Fatalf("Correlate failed: %v", err)
+	}
+
+	for _, rel := range summary.Relationships {
+		if rel.Type == correlation.RelSameEndpoint {
+			t.Errorf("Distinct token endpoints should not match as SAME_ENDPOINT: %+v", rel)
+		}
+	}
+
+	// 5. Conversely, identical tokens across two findings MUST match as SAME_ENDPOINT
+	fAliceDup := helperMakeFinding("F_ALICE_2", "SQLi", "sql-injection", report.SeverityCritical, report.ConfidenceHigh, report.VerificationVerified, "https://api.example.com", "https://api.example.com/api/data?env=prod&token=AliceSecret123", "GET")
+	summaryMatch, _, _, errMatch := engine.Correlate(context.Background(), []report.Finding{fAlice, fAliceDup})
+	if errMatch != nil {
+		t.Fatalf("Correlate failed: %v", errMatch)
+	}
+
+	foundExactMatch := false
+	for _, rel := range summaryMatch.Relationships {
+		if rel.Type == correlation.RelSameEndpoint {
+			foundExactMatch = true
+			if strings.Contains(rel.Explanation, "AliceSecret123") {
+				t.Errorf("Secret token leaked in relationship explanation: %s", rel.Explanation)
+			}
+			for _, ref := range rel.EvidenceReferences {
+				if strings.Contains(ref, "AliceSecret123") {
+					t.Errorf("Secret token leaked in evidence reference: %s", ref)
+				}
+			}
+		}
+	}
+	if !foundExactMatch {
+		t.Errorf("Identical tokens failed to correlate as SAME_ENDPOINT")
+	}
+}
+
+func TestAudit_EmptyAndDuplicateFindingIDs(t *testing.T) {
+	// Finding with empty ID and duplicate long-prefix IDs
+	fEmpty := helperMakeFinding("", "Empty ID Finding", "auth-bypass", report.SeverityHigh, report.ConfidenceHigh, report.VerificationVerified, "https://app.example.com", "https://app.example.com/auth/login", "POST")
+	fLong1 := helperMakeFinding("FINDING-VERY-LONG-COMMON-PREFIX-001", "BOLA 1", "bola", report.SeverityHigh, report.ConfidenceHigh, report.VerificationVerified, "https://app.example.com", "https://app.example.com/api/v1/users/1", "GET")
+	fLong2 := helperMakeFinding("FINDING-VERY-LONG-COMMON-PREFIX-002", "PII 1", "pii-leak", report.SeverityHigh, report.ConfidenceHigh, report.VerificationVerified, "https://app.example.com", "https://app.example.com/api/v1/users/1", "GET")
+	fDup := helperMakeFinding("FINDING-VERY-LONG-COMMON-PREFIX-001", "BOLA Duplicate", "bola", report.SeverityHigh, report.ConfidenceHigh, report.VerificationVerified, "https://app.example.com", "https://app.example.com/api/v1/users/1", "GET")
+
+	normList := correlation.NormalizeFindings([]report.Finding{fEmpty, fLong1, fLong2, fDup})
+
+	if len(normList) != 4 {
+		t.Fatalf("Expected 4 normalized findings, got %d", len(normList))
+	}
+
+	seenIDs := make(map[string]bool)
+	for i, nf := range normList {
+		if strings.TrimSpace(nf.ID) == "" {
+			t.Errorf("Normalized finding %d has empty ID", i)
+		}
+		if seenIDs[nf.ID] {
+			t.Errorf("Collision detected for normalized finding ID %q", nf.ID)
+		}
+		seenIDs[nf.ID] = true
+	}
+
+	engine := correlation.NewEngine(correlation.DefaultConfig())
+	summary, _, _, err := engine.Correlate(context.Background(), []report.Finding{fLong1, fLong2})
+	if err != nil {
+		t.Fatalf("Correlate failed: %v", err)
+	}
+
+	seenRelIDs := make(map[string]bool)
+	for _, rel := range summary.Relationships {
+		if seenRelIDs[rel.ID] {
+			t.Errorf("Duplicate relationship ID detected: %s", rel.ID)
+		}
+		seenRelIDs[rel.ID] = true
+		// Verify no truncated single-character artifact
+		if strings.Contains(rel.ID, "--") {
+			t.Errorf("Relationship ID contains empty or malformed segment: %s", rel.ID)
+		}
+	}
+}
+
+func TestAudit_MultiTenantIsolationBoundaries(t *testing.T) {
+	// Tenant A vs Tenant B on the same multi-tenant endpoint
+	fTenantA := helperMakeFinding("T_A_01", "Auth Flaw Tenant A", "auth-bypass", report.SeverityHigh, report.ConfidenceHigh, report.VerificationVerified, "https://shared.example.com", "https://shared.example.com/api/v1/accounts", "GET")
+	fTenantA.EvidenceDetails.Details = map[string]string{
+		"tenant_id": "tenant-alpha",
+	}
+
+	fTenantB := helperMakeFinding("T_B_01", "Auth Flaw Tenant B", "auth-bypass", report.SeverityHigh, report.ConfidenceHigh, report.VerificationVerified, "https://shared.example.com", "https://shared.example.com/api/v1/accounts", "GET")
+	fTenantB.EvidenceDetails.Details = map[string]string{
+		"tenant_id": "tenant-beta",
+	}
+
+	// 1. Asset identities must be distinct
+	assetA, assocA := correlation.ResolveFindingAsset(fTenantA, nil)
+	assetB, assocB := correlation.ResolveFindingAsset(fTenantB, nil)
+
+	if assetA.ID == assetB.ID {
+		t.Fatalf("Multi-tenant boundary failed: identical asset IDs for different tenants (%s == %s)", assetA.ID, assetB.ID)
+	}
+	if assetA.TenantID != "tenant-alpha" || assetB.TenantID != "tenant-beta" {
+		t.Errorf("TenantID was not preserved on asset: A=%s, B=%s", assetA.TenantID, assetB.TenantID)
+	}
+	if assocA.CanonicalKey == assocB.CanonicalKey {
+		t.Errorf("Canonical keys must not collide across tenants: %s", assocA.CanonicalKey)
+	}
+
+	// 2. Correlation must NOT mark SAME_ENDPOINT or SAME_ASSET across distinct tenants
+	engine := correlation.NewEngine(correlation.DefaultConfig())
+	summary, _, _, err := engine.Correlate(context.Background(), []report.Finding{fTenantA, fTenantB})
+	if err != nil {
+		t.Fatalf("Correlate failed: %v", err)
+	}
+
+	hasPossibleRel := false
+	for _, rel := range summary.Relationships {
+		if rel.Type == correlation.RelSameEndpoint {
+			t.Errorf("Cross-tenant findings must not match as SAME_ENDPOINT: %+v", rel)
+		}
+		if rel.Type == correlation.RelSameAsset {
+			t.Errorf("Cross-tenant findings must not match as SAME_ASSET: %+v", rel)
+		}
+		if rel.Type == correlation.RelPossibleRelationship {
+			hasPossibleRel = true
+			if !strings.Contains(rel.Explanation, "distinct tenant boundaries") {
+				t.Errorf("Expected tenant boundary explanation, got: %s", rel.Explanation)
+			}
+		}
+	}
+
+	if !hasPossibleRel {
+		t.Errorf("Expected POSSIBLE_RELATIONSHIP noting shared host across distinct tenant boundaries")
+	}
+
+	// 3. Multi-tenant Cloud Storage buckets with identical names
+	fBucketA := helperMakeFinding("B_A", "Bucket A", "s3-leak", report.SeverityHigh, report.ConfidenceHigh, report.VerificationVerified, "s3://exports", "s3://exports", "GET")
+	fBucketA.EvidenceDetails.Details = map[string]string{
+		"cloud_provider": "aws_s3",
+		"bucket":         "exports",
+		"tenant_id":      "tenant-alpha",
+	}
+
+	fBucketB := helperMakeFinding("B_B", "Bucket B", "s3-leak", report.SeverityHigh, report.ConfidenceHigh, report.VerificationVerified, "s3://exports", "s3://exports", "GET")
+	fBucketB.EvidenceDetails.Details = map[string]string{
+		"cloud_provider": "aws_s3",
+		"bucket":         "exports",
+		"tenant_id":      "tenant-beta",
+	}
+
+	assetBA, _ := correlation.ResolveFindingAsset(fBucketA, nil)
+	assetBB, _ := correlation.ResolveFindingAsset(fBucketB, nil)
+
+	if assetBA.ID == assetBB.ID {
+		t.Fatalf("Bucket assets collapsed across tenant boundaries: %s == %s", assetBA.ID, assetBB.ID)
+	}
+	if !strings.Contains(assetBA.CanonicalKey, "tenant-alpha") || !strings.Contains(assetBB.CanonicalKey, "tenant-beta") {
+		t.Errorf("Bucket canonical keys lack tenant qualification: BA=%s, BB=%s", assetBA.CanonicalKey, assetBB.CanonicalKey)
 	}
 }

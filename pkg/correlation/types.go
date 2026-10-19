@@ -240,6 +240,8 @@ type NormalizedFinding struct {
 	Host               string                    `json:"host"`
 	Origin             string                    `json:"origin"`
 	Endpoint           string                    `json:"endpoint"`
+	DisplayEndpoint    string                    `json:"display_endpoint,omitempty"`
+	RawURL             string                    `json:"raw_url,omitempty"`
 	Path               string                    `json:"path"`
 	Method             string                    `json:"method"`
 	Score              int                       `json:"score"`
