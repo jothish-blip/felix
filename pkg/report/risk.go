@@ -7,26 +7,64 @@ import (
 	"strings"
 )
 
-// CalculateFindingScore calculates the deterministic risk score (0-40) for an individual finding.
-// It is verification-aware: verified exposures receive full weight, while unverified,
-// observed, or confirmed non-exposures (defensive boundaries) receive reduced or zero weight.
-func CalculateFindingScore(f Finding) int {
-	// Defended / boundary confirmed findings contribute 0 risk
-	if NormalizeVerificationStatus(f.Verification.Status) == VerificationNotExposed {
-		return 0
+// ExplainFindingScore calculates the deterministic risk score (0-40) for an individual finding
+// and returns a full mathematical explanation detailing base severity, modifiers, confidence,
+// verification weight, formula, and rationale.
+func ExplainFindingScore(f Finding) FindingScoreExplanation {
+	normSev := NormalizeSeverity(f.Severity)
+	normConf := NormalizeConfidence(f.Confidence)
+
+	// Check defended / boundary confirmed conditions
+	normVer := NormalizeVerificationStatus(f.Verification.Status)
+	detStatus := strings.ToUpper(strings.TrimSpace(f.EvidenceDetails.DetectionStatus))
+
+	if normVer == VerificationNotExposed {
+		return FindingScoreExplanation{
+			Score:              0,
+			Severity:           normSev,
+			Confidence:         normConf,
+			VerificationStatus: string(VerificationNotExposed),
+			IsDefended:         true,
+			DefendedReason:     "verification status confirmed not exposed (defensive boundary)",
+			Model:              "felix_finding_v1",
+			Formula:            "0/40 (defended / not exposed)",
+			Rationale:          "Finding has zero risk score because verification confirmed defensive boundary enforcement.",
+		}
 	}
-	if strings.EqualFold(f.EvidenceDetails.DetectionStatus, "NOT_EXPOSED") {
-		return 0
+
+	if detStatus == "NOT_EXPOSED" {
+		return FindingScoreExplanation{
+			Score:              0,
+			Severity:           normSev,
+			Confidence:         normConf,
+			VerificationStatus: "NOT_EXPOSED",
+			IsDefended:         true,
+			DefendedReason:     "detection status confirmed not exposed",
+			Model:              "felix_finding_v1",
+			Formula:            "0/40 (detection not exposed)",
+			Rationale:          "Finding has zero risk score because detection confirmed endpoint is not exposed.",
+		}
 	}
+
 	if f.EvidenceDetails.Details != nil {
-		auth := strings.ToUpper(f.EvidenceDetails.Details["auth_state"])
+		auth := strings.ToUpper(strings.TrimSpace(f.EvidenceDetails.Details["auth_state"]))
 		if auth == "AUTH_REQUIRED" || auth == "FORBIDDEN" || auth == "NOT_FOUND" {
-			return 0
+			return FindingScoreExplanation{
+				Score:              0,
+				Severity:           normSev,
+				Confidence:         normConf,
+				VerificationStatus: string(normVer),
+				IsDefended:         true,
+				DefendedReason:     fmt.Sprintf("access barrier enforced (auth_state: %s)", auth),
+				Model:              "felix_finding_v1",
+				Formula:            fmt.Sprintf("0/40 (barrier enforced: %s)", auth),
+				Rationale:          fmt.Sprintf("Finding has zero risk score because affirmative access barrier (%s) prevented unauthorized exposure.", auth),
+			}
 		}
 	}
 
 	var base float64
-	switch NormalizeSeverity(f.Severity) {
+	switch normSev {
 	case SeverityCritical:
 		base = 40.0
 	case SeverityHigh:
@@ -43,14 +81,18 @@ func CalculateFindingScore(f Finding) int {
 
 	// Sensitivity & privilege modifier
 	cat := NormalizeCategory(f.Category)
-	if strings.Contains(cat, "service-key") || strings.Contains(cat, "service-role") ||
-		strings.Contains(cat, "aws-secret") || strings.Contains(cat, "private-key") {
-		base = math.Min(40.0, base+5.0)
+	var catMod float64
+	if normSev != SeverityInfo && (strings.Contains(cat, "service-key") || strings.Contains(cat, "service-role") ||
+		strings.Contains(cat, "aws-secret") || strings.Contains(cat, "private-key") ||
+		strings.Contains(cat, "service-secret") || strings.Contains(cat, "cloud-service-credential") ||
+		strings.Contains(cat, "cloud-provider-token") || strings.Contains(cat, "iam-credential-leak")) {
+		catMod = 5.0
 	}
+	effectiveBase := math.Min(40.0, base+catMod)
 
 	// Confidence weight
 	var confMult float64
-	switch NormalizeConfidence(f.Confidence) {
+	switch normConf {
 	case ConfidenceHigh:
 		confMult = 1.0
 	case ConfidenceMedium:
@@ -61,10 +103,15 @@ func CalculateFindingScore(f Finding) int {
 		confMult = 0.75
 	}
 
-	// Verification weight
+	// Verification weight with fallback to DetectionStatus
+	verStatusStr := string(f.Verification.Status)
+	if verStatusStr == "" && f.EvidenceDetails.DetectionStatus != "" {
+		verStatusStr = f.EvidenceDetails.DetectionStatus
+	}
+
 	verMult := 1.0
-	if f.Verification.Status != "" {
-		switch NormalizeVerificationStatus(f.Verification.Status) {
+	if verStatusStr != "" {
+		switch NormalizeVerificationStatus(VerificationStatus(verStatusStr)) {
 		case VerificationVerified:
 			verMult = 1.0
 		case VerificationDetected:
@@ -80,14 +127,46 @@ func CalculateFindingScore(f Finding) int {
 		}
 	}
 
-	score := int(math.Round(base * confMult * verMult))
+	rawScore := effectiveBase * confMult * verMult
+	score := int(math.Round(rawScore))
 	if score < 0 {
-		return 0
+		score = 0
 	}
 	if score > 40 {
-		return 40
+		score = 40
 	}
-	return score
+
+	effectiveVerStatus := verStatusStr
+	if effectiveVerStatus == "" {
+		effectiveVerStatus = "DEFAULT"
+	}
+
+	formula := fmt.Sprintf("round((%.2f base + %.2f mod) * %.2f conf * %.2f ver) = %d/40",
+		base, catMod, confMult, verMult, score)
+
+	rationale := fmt.Sprintf("Calculated score %d/40 (model felix_finding_v1) from %s severity (base %.1f, mod +%.1f), %s confidence (%.2fx), and %s verification (%.2fx).",
+		score, normSev, base, catMod, normConf, confMult, effectiveVerStatus, verMult)
+
+	return FindingScoreExplanation{
+		Score:              score,
+		Severity:           normSev,
+		BaseScore:          base,
+		CategoryModifier:   catMod,
+		Confidence:         normConf,
+		ConfidenceWeight:   confMult,
+		VerificationStatus: effectiveVerStatus,
+		VerificationWeight: verMult,
+		Model:              "felix_finding_v1",
+		Formula:            formula,
+		Rationale:          rationale,
+	}
+}
+
+// CalculateFindingScore calculates the deterministic risk score (0-40) for an individual finding.
+// It is verification-aware: verified exposures receive full weight, while unverified,
+// observed, or confirmed non-exposures (defensive boundaries) receive reduced or zero weight.
+func CalculateFindingScore(f Finding) int {
+	return ExplainFindingScore(f).Score
 }
 
 func isHardeningCategory(cat string) bool {
@@ -132,6 +211,7 @@ func CalculateRiskBreakdown(findings []Finding, stories []SecurityStory) ([]Comm
 
 	maxEligibleSeverityRank := 0
 	maxEligibleSeverity := ""
+	maxEligibleFindingID := ""
 
 	for _, f := range findings {
 		// Defended / boundary confirmed findings contribute 0 risk and do not escalate risk level
@@ -179,6 +259,7 @@ func CalculateRiskBreakdown(findings []Finding, stories []SecurityStory) ([]Comm
 			if confNorm != ConfidenceLow && rank > maxEligibleSeverityRank {
 				maxEligibleSeverityRank = rank
 				maxEligibleSeverity = sevNorm
+				maxEligibleFindingID = f.ID
 			}
 		}
 
@@ -191,18 +272,24 @@ func CalculateRiskBreakdown(findings []Finding, stories []SecurityStory) ([]Comm
 	}
 
 	// Sort descending for deterministic diminishing returns.
-	// Deterministic tie-breaking on finding ID.
+	// Deterministic tie-breaking on finding ID and fingerprint.
 	sort.Slice(exposureFindings, func(i, j int) bool {
 		if exposureFindings[i].score != exposureFindings[j].score {
 			return exposureFindings[i].score > exposureFindings[j].score
 		}
-		return exposureFindings[i].finding.ID < exposureFindings[j].finding.ID
+		if exposureFindings[i].finding.ID != exposureFindings[j].finding.ID {
+			return exposureFindings[i].finding.ID < exposureFindings[j].finding.ID
+		}
+		return exposureFindings[i].finding.Fingerprint < exposureFindings[j].finding.Fingerprint
 	})
 	sort.Slice(hardeningFindings, func(i, j int) bool {
 		if hardeningFindings[i].score != hardeningFindings[j].score {
 			return hardeningFindings[i].score > hardeningFindings[j].score
 		}
-		return hardeningFindings[i].finding.ID < hardeningFindings[j].finding.ID
+		if hardeningFindings[i].finding.ID != hardeningFindings[j].finding.ID {
+			return hardeningFindings[i].finding.ID < hardeningFindings[j].finding.ID
+		}
+		return hardeningFindings[i].finding.Fingerprint < hardeningFindings[j].finding.Fingerprint
 	})
 
 	weights := []float64{1.0, 0.5, 0.3, 0.2}
@@ -225,6 +312,11 @@ func CalculateRiskBreakdown(findings []Finding, stories []SecurityStory) ([]Comm
 			verStatus = "DETECTED"
 		}
 
+		expl := ExplainFindingScore(sf.finding)
+		contribFormula := fmt.Sprintf("%s; report_weighted: %.2f * %.2fx = %.2f pts", expl.Formula, float64(sf.score), weight, adj)
+		rationale := fmt.Sprintf("Raw score %d/40 (weight %.1fx, adjusted %.2f) weighted by severity (%s), confidence (%s), and verification status (%s). %s",
+			sf.score, weight, adj, sf.finding.Severity, sf.finding.Confidence, verStatus, expl.Rationale)
+
 		contributions = append(contributions, CommercialRiskContribution{
 			FindingID:          sf.finding.ID,
 			Title:              SanitizeEvidence(sf.finding.Title),
@@ -235,7 +327,8 @@ func CalculateRiskBreakdown(findings []Finding, stories []SecurityStory) ([]Comm
 			AdjustedScore:      adj,
 			Model:              "felix_deterministic_v1",
 			RiskType:           "EXPOSURE",
-			Rationale:          fmt.Sprintf("Raw score %d/40 (weight %.1fx, adjusted %.2f) weighted by severity (%s), confidence (%s), and verification status (%s).", sf.score, weight, adj, sf.finding.Severity, sf.finding.Confidence, verStatus),
+			Formula:            contribFormula,
+			Rationale:          rationale,
 			IsAvailable:        true,
 		})
 	}
@@ -257,6 +350,11 @@ func CalculateRiskBreakdown(findings []Finding, stories []SecurityStory) ([]Comm
 			verStatus = "DETECTED"
 		}
 
+		expl := ExplainFindingScore(sf.finding)
+		contribFormula := fmt.Sprintf("%s; hardening_weighted: %.2f * %.2fx = %.2f pts (subtotal capped at 20.00)", expl.Formula, float64(sf.score), weight, adj)
+		rationale := fmt.Sprintf("Raw score %d/40 (weight %.1fx, adjusted %.2f) defense-in-depth header finding under hardening cap (max 20 pts). %s",
+			sf.score, weight, adj, expl.Rationale)
+
 		contributions = append(contributions, CommercialRiskContribution{
 			FindingID:          sf.finding.ID,
 			Title:              SanitizeEvidence(sf.finding.Title),
@@ -267,7 +365,8 @@ func CalculateRiskBreakdown(findings []Finding, stories []SecurityStory) ([]Comm
 			AdjustedScore:      adj,
 			Model:              "felix_deterministic_v1",
 			RiskType:           "HARDENING_DEFENSE_IN_DEPTH",
-			Rationale:          fmt.Sprintf("Raw score %d/40 (weight %.1fx, adjusted %.2f) defense-in-depth header finding under hardening cap (max 20 pts).", sf.score, weight, adj),
+			Formula:            contribFormula,
+			Rationale:          rationale,
 			IsAvailable:        true,
 		})
 	}
@@ -282,6 +381,9 @@ func CalculateRiskBreakdown(findings []Finding, stories []SecurityStory) ([]Comm
 	var storyBonus float64
 	for _, st := range stories {
 		storyID := strings.TrimSpace(st.ID)
+		if storyID == "" {
+			storyID = strings.TrimSpace(st.Title)
+		}
 		if storyID != "" {
 			if seenStoryIDs[storyID] {
 				continue
@@ -294,11 +396,13 @@ func CalculateRiskBreakdown(findings []Finding, stories []SecurityStory) ([]Comm
 		}
 		storyBonus += float64(contrib)
 	}
+	rawStoryBonus := storyBonus
 	if storyBonus > 15.0 {
 		storyBonus = 15.0
 	}
 
-	totalScore := int(math.Round(exposureAccum + hardeningAccum + storyBonus))
+	rawTotalScore := int(math.Round(exposureAccum + hardeningAccum + storyBonus))
+	totalScore := rawTotalScore
 	if totalScore > 100 {
 		totalScore = 100
 	}
@@ -308,9 +412,10 @@ func CalculateRiskBreakdown(findings []Finding, stories []SecurityStory) ([]Comm
 
 	scoreBandLevel := RiskLevelBand(totalScore)
 	level := scoreBandLevel
+	anchorLevel := ""
+	anchorRationale := ""
 
 	if maxEligibleSeverityRank > 0 {
-		anchorLevel := "INFORMATIONAL"
 		switch maxEligibleSeverity {
 		case SeverityCritical:
 			anchorLevel = "CRITICAL"
@@ -326,6 +431,8 @@ func CalculateRiskBreakdown(findings []Finding, stories []SecurityStory) ([]Comm
 
 		if SeverityRank(anchorLevel) > SeverityRank(scoreBandLevel) {
 			level = anchorLevel
+			anchorRationale = fmt.Sprintf("Risk level elevated from %s (score band %d) to %s anchored by verified %s exposure finding %s",
+				scoreBandLevel, totalScore, anchorLevel, anchorLevel, maxEligibleFindingID)
 		}
 	}
 
@@ -333,17 +440,54 @@ func CalculateRiskBreakdown(findings []Finding, stories []SecurityStory) ([]Comm
 	hardSub := math.Round(hardeningAccum*100) / 100
 	storySub := math.Round(storyBonus*100) / 100
 
-	formula := fmt.Sprintf("round(%.2f exposure + %.2f hardening + %.2f story bonus) = %d", expSub, hardSub, storySub, totalScore)
+	isCapped := false
+	var capParts []string
+	var hardStr string
 	if rawHardeningAccum > 20.0 {
-		formula = fmt.Sprintf("round(%.2f exposure + 20.00 hardening [capped from %.2f] + %.2f story bonus) = %d", expSub, rawHardeningAccum, storySub, totalScore)
+		isCapped = true
+		hardStr = fmt.Sprintf("20.00 hardening [capped from %.2f]", rawHardeningAccum)
+		capParts = append(capParts, fmt.Sprintf("hardening capped at 20.00 from %.2f", rawHardeningAccum))
+	} else {
+		hardStr = fmt.Sprintf("%.2f hardening", hardSub)
 	}
 
+	var storyStr string
+	if rawStoryBonus > 15.0 {
+		isCapped = true
+		storyStr = fmt.Sprintf("15.00 story bonus [capped from %.2f]", rawStoryBonus)
+		capParts = append(capParts, fmt.Sprintf("story bonus capped at 15.00 from %.2f", rawStoryBonus))
+	} else {
+		storyStr = fmt.Sprintf("%.2f story bonus", storySub)
+	}
+
+	var totalStr string
+	if rawTotalScore > 100 {
+		isCapped = true
+		totalStr = fmt.Sprintf("= 100 [capped from %d]", rawTotalScore)
+		capParts = append(capParts, fmt.Sprintf("total score capped at 100 from %d", rawTotalScore))
+	} else {
+		totalStr = fmt.Sprintf("= %d", totalScore)
+	}
+	capRationale := strings.Join(capParts, "; ")
+
+	formula := fmt.Sprintf("round(%.2f exposure + %s + %s) %s", expSub, hardStr, storyStr, totalStr)
+
 	breakdown := CommercialScoreBreakdown{
-		ExposureSubtotal:  expSub,
-		HardeningSubtotal: hardSub,
-		StoryBonus:        storySub,
-		TotalScore:        totalScore,
-		Formula:           formula,
+		ExposureSubtotal:     expSub,
+		HardeningSubtotal:    hardSub,
+		RawHardeningSubtotal: math.Round(rawHardeningAccum*100) / 100,
+		StoryBonus:           storySub,
+		RawStoryBonus:        math.Round(rawStoryBonus*100) / 100,
+		TotalScore:           totalScore,
+		RawTotalScore:        rawTotalScore,
+		IsCapped:             isCapped,
+		CapRationale:         capRationale,
+		ScoreBandLevel:       scoreBandLevel,
+		AnchorLevel:          anchorLevel,
+		FinalRiskLevel:       level,
+		AnchorFindingID:      maxEligibleFindingID,
+		AnchorRationale:      anchorRationale,
+		Formula:              formula,
 	}
 
 	return contributions, breakdown, level

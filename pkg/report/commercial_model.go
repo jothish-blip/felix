@@ -123,12 +123,22 @@ type CommercialAttackSurfaceAsset struct {
 
 // CommercialScoreBreakdown provides explicit mathematical reconciliation of the final risk score.
 type CommercialScoreBreakdown struct {
-	ExposureSubtotal  float64 `json:"exposure_subtotal"`
-	HardeningSubtotal float64 `json:"hardening_subtotal"`
-	StoryBonus        float64 `json:"story_bonus"`
-	AttackPathScore   int     `json:"attack_path_score,omitempty"`
-	TotalScore        int     `json:"total_score"`
-	Formula           string  `json:"formula"`
+	ExposureSubtotal     float64 `json:"exposure_subtotal"`
+	HardeningSubtotal    float64 `json:"hardening_subtotal"`
+	RawHardeningSubtotal float64 `json:"raw_hardening_subtotal,omitempty"`
+	StoryBonus           float64 `json:"story_bonus"`
+	RawStoryBonus        float64 `json:"raw_story_bonus,omitempty"`
+	AttackPathScore      int     `json:"attack_path_score,omitempty"`
+	TotalScore           int     `json:"total_score"`
+	RawTotalScore        int     `json:"raw_total_score,omitempty"`
+	IsCapped             bool    `json:"is_capped,omitempty"`
+	CapRationale         string  `json:"cap_rationale,omitempty"`
+	ScoreBandLevel       string  `json:"score_band_level,omitempty"`
+	AnchorLevel          string  `json:"anchor_level,omitempty"`
+	FinalRiskLevel       string  `json:"final_risk_level,omitempty"`
+	AnchorFindingID      string  `json:"anchor_finding_id,omitempty"`
+	AnchorRationale      string  `json:"anchor_rationale,omitempty"`
+	Formula              string  `json:"formula"`
 }
 
 // CommercialRiskOverview details the deterministic risk calculation and correlation models.
@@ -254,6 +264,7 @@ type CommercialRiskContribution struct {
 	RiskType           string   `json:"risk_type"` // "EXPOSURE", "HARDENING_DEFENSE_IN_DEPTH", "CORRELATED", "ATTACK_PATH"
 	CorrelatedStoryIDs []string `json:"correlated_story_ids,omitempty"`
 	AttackPathIDs      []string `json:"attack_path_ids,omitempty"`
+	Formula            string   `json:"formula,omitempty"`
 	Rationale          string   `json:"rationale"`
 	IsAvailable        bool     `json:"is_available"`
 }

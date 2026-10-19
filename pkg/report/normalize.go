@@ -498,7 +498,14 @@ func NormalizeFinding(f Finding) Finding {
 		f.EvidenceDetails.Provenance = f.Provenance
 	}
 
-	f.Score = CalculateFindingScore(f)
+	expl := ExplainFindingScore(f)
+	f.Score = expl.Score
+	f.ScoreExplanation = &expl
+	if f.EvidenceDetails.Details == nil {
+		f.EvidenceDetails.Details = make(map[string]string)
+	}
+	f.EvidenceDetails.Details["score_formula"] = expl.Formula
+	f.EvidenceDetails.Details["score_rationale"] = expl.Rationale
 
 	return f
 }

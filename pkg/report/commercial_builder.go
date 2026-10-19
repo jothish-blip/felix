@@ -3,6 +3,7 @@ package report
 import (
 	"crypto/sha256"
 	"fmt"
+	"math"
 	"net/url"
 	"sort"
 	"strings"
@@ -592,7 +593,9 @@ func buildSecurityImpact(f Finding) CommercialSecurityImpact {
 
 func buildRiskContribution(f Finding, storyIDs, pathIDs []string, contrib CommercialRiskContribution) CommercialRiskContribution {
 	score := f.Score
-	if score == 0 {
+	if contrib.Score > 0 && contrib.Score <= 40 {
+		score = contrib.Score
+	} else if score <= 0 || score > 40 {
 		score = CalculateFindingScore(f)
 	}
 
@@ -607,20 +610,40 @@ func buildRiskContribution(f Finding, storyIDs, pathIDs []string, contrib Commer
 
 	weight := contrib.Weight
 	adjScore := contrib.AdjustedScore
+	if weight <= 0 {
+		weight = 1.0
+	}
+	if adjScore <= 0 && score > 0 {
+		adjScore = math.Round(float64(score)*weight*100) / 100
+	}
+
 	if contrib.RiskType != "" {
 		riskType = contrib.RiskType
 	}
+	formula := contrib.Formula
 	rationale := contrib.Rationale
 	if rationale == "" {
-		rationale = fmt.Sprintf("Calculated risk score %d/40 weighted by severity (%s), confidence (%s), and verification status (%s).",
-			score, f.Severity, f.Confidence, f.Verification.Status)
+		expl := ExplainFindingScore(f)
+		if formula == "" {
+			formula = fmt.Sprintf("%s; report_weighted: %.2f * %.2fx = %.2f pts", expl.Formula, float64(score), weight, adjScore)
+		}
+		rationale = fmt.Sprintf("Calculated risk score %d/40 (weight %.1fx, adjusted %.2f): %s",
+			score, weight, adjScore, expl.Rationale)
+	}
+
+	verStatus := string(f.Verification.Status)
+	if verStatus == "" {
+		verStatus = f.EvidenceDetails.DetectionStatus
+	}
+	if verStatus == "" {
+		verStatus = "DETECTED"
 	}
 
 	return CommercialRiskContribution{
 		FindingID:          f.ID,
 		Title:              SanitizeEvidence(f.Title),
-		Severity:           f.Severity,
-		VerificationStatus: string(f.Verification.Status),
+		Severity:           NormalizeSeverity(f.Severity),
+		VerificationStatus: verStatus,
 		Score:              score,
 		Weight:             weight,
 		AdjustedScore:      adjScore,
@@ -628,6 +651,7 @@ func buildRiskContribution(f Finding, storyIDs, pathIDs []string, contrib Commer
 		RiskType:           riskType,
 		CorrelatedStoryIDs: storyIDs,
 		AttackPathIDs:      pathIDs,
+		Formula:            formula,
 		Rationale:          rationale,
 		IsAvailable:        true,
 	}
@@ -932,6 +956,9 @@ func buildRiskOverview(
 		breakdown.TotalScore = rep.RiskScore
 		breakdown.Formula = fmt.Sprintf("max(%s, %d verified attack path) = %d", breakdown.Formula, rep.RiskScore, rep.RiskScore)
 	}
+	if rep.RiskLevel != "" {
+		breakdown.FinalRiskLevel = rep.RiskLevel
+	}
 
 	// Calculate concentrations by component
 	compMap := make(map[string]*CommercialRiskConcentration)
@@ -961,6 +988,9 @@ func buildRiskOverview(
 	})
 
 	modelDesc := "Felix Deterministic Risk Model (0–100): Weighted empirical verification, multi-exposure diminishing returns, hardening caps (max 20 pts), and correlated story bonuses (max +15 pts). This metric reflects demonstrable exposure and is deliberately distinct from standalone CVSS base scoring."
+	if breakdown.AnchorRationale != "" {
+		modelDesc += fmt.Sprintf(" %s.", breakdown.AnchorRationale)
+	}
 
 	status := rep.CompletionStatus
 	isAvailable := rep.RiskScoreAvailable

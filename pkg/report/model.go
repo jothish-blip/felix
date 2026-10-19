@@ -214,6 +214,23 @@ type RemediationAdvice struct {
 	CodeSnippet string   `json:"code_snippet,omitempty"`
 }
 
+// FindingScoreExplanation details how an individual finding's score was calculated.
+type FindingScoreExplanation struct {
+	Score              int     `json:"score"`
+	Severity           string  `json:"severity"`
+	BaseScore          float64 `json:"base_score"`
+	CategoryModifier   float64 `json:"category_modifier"`
+	Confidence         string  `json:"confidence"`
+	ConfidenceWeight   float64 `json:"confidence_weight"`
+	VerificationStatus string  `json:"verification_status"`
+	VerificationWeight float64 `json:"verification_weight"`
+	IsDefended         bool    `json:"is_defended,omitempty"`
+	DefendedReason     string  `json:"defended_reason,omitempty"`
+	Model              string  `json:"model"`
+	Formula            string  `json:"formula"`
+	Rationale          string  `json:"rationale"`
+}
+
 // Finding represents a normalized, deduplicated security observation or exposure.
 type Finding struct {
 	ID                string              `json:"id"`
@@ -244,6 +261,7 @@ type Finding struct {
 	Source            string              `json:"source"`
 	Fingerprint       string              `json:"fingerprint"`
 	Score             int                 `json:"score"`
+	ScoreExplanation  *FindingScoreExplanation `json:"score_explanation,omitempty"`
 	Timestamp         time.Time           `json:"timestamp,omitempty"`
 }
 

@@ -2156,6 +2156,13 @@ func (s *SQLiteStore) SaveFindings(findings []AssessmentFinding) error {
 			}
 		}
 
+		// Sync ScoreExplanation for lossless SQLite persistence
+		if f.ScoreExplanation != nil {
+			if explJSON, err := json.Marshal(f.ScoreExplanation); err == nil {
+				f.EvidenceDetails.Details["score_explanation_json"] = string(explJSON)
+			}
+		}
+
 		evJSON, err := json.Marshal(f.EvidenceDetails)
 		if err != nil {
 			evJSON = []byte("{}")
@@ -2263,6 +2270,12 @@ func (s *SQLiteStore) GetFindings(assessmentID string, executionID string) ([]As
 					f.RemediationAdvice = &adv
 				}
 			}
+			if explStr, ok := f.EvidenceDetails.Details["score_explanation_json"]; ok && explStr != "" {
+				var expl report.FindingScoreExplanation
+				if err := json.Unmarshal([]byte(explStr), &expl); err == nil {
+					f.ScoreExplanation = &expl
+				}
+			}
 		}
 		if f.Status == "" {
 			f.Status = report.FindingStatusFromVerification(f.VerificationStatus)
@@ -2278,6 +2291,10 @@ func (s *SQLiteStore) GetFindings(assessmentID string, executionID string) ([]As
 			} else if f.VerificationRecord.AnalysisMethod != "" {
 				f.AnalysisMethod = f.VerificationRecord.AnalysisMethod
 			}
+		}
+		if f.ScoreExplanation == nil {
+			expl := report.ExplainFindingScore(ToReportFinding(f))
+			f.ScoreExplanation = &expl
 		}
 
 		findings = append(findings, f)

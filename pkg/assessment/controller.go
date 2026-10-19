@@ -844,6 +844,14 @@ func ToAssessmentFinding(assessmentID, executionID, targetID string, f report.Fi
 	}
 	sanitized.EvidenceDetails.Provenance = prov
 
+	if sanitized.ScoreExplanation == nil {
+		expl := report.ExplainFindingScore(sanitized)
+		sanitized.ScoreExplanation = &expl
+	}
+	if sanitized.Score <= 0 || sanitized.Score > 40 {
+		sanitized.Score = sanitized.ScoreExplanation.Score
+	}
+
 	return AssessmentFinding{
 		ID:                 stableID,
 		AssessmentID:       assessmentID,
@@ -865,6 +873,7 @@ func ToAssessmentFinding(assessmentID, executionID, targetID string, f report.Fi
 		Method:             sanitized.Method,
 		Fingerprint:        sanitized.Fingerprint,
 		Score:              sanitized.Score,
+		ScoreExplanation:   sanitized.ScoreExplanation,
 		EvidenceDetails:    sanitized.EvidenceDetails,
 		VerificationRecord: sanitized.Verification,
 		Remediation:        sanitized.Remediation,

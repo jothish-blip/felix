@@ -91,6 +91,13 @@ func SanitizeFinding(f Finding) Finding {
 		cleanF.EvidenceDetails.Provenance = &sanProv
 	}
 
+	if cleanF.ScoreExplanation != nil {
+		cleanExpl := *cleanF.ScoreExplanation
+		cleanExpl.Rationale = SanitizeEvidence(cleanExpl.Rationale)
+		cleanExpl.DefendedReason = SanitizeEvidence(cleanExpl.DefendedReason)
+		cleanF.ScoreExplanation = &cleanExpl
+	}
+
 	return cleanF
 }
 

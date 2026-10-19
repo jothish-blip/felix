@@ -220,6 +220,7 @@ type AssessmentFinding struct {
 	Method             string                    `json:"method"`
 	Fingerprint        string                    `json:"fingerprint"`
 	Score              int                       `json:"score"`
+	ScoreExplanation   *report.FindingScoreExplanation `json:"score_explanation,omitempty"`
 	EvidenceDetails    report.EvidenceDetails    `json:"evidence"`
 	VerificationRecord report.VerificationRecord `json:"verification"`
 	Remediation        string                    `json:"remediation,omitempty"`
@@ -277,6 +278,7 @@ func ToReportFinding(f AssessmentFinding) report.Finding {
 		Method:            f.Method,
 		Fingerprint:       f.Fingerprint,
 		Score:             f.Score,
+		ScoreExplanation:  f.ScoreExplanation,
 		Evidence:          f.EvidenceDetails.Observation,
 		EvidenceDetails:   f.EvidenceDetails,
 		Verification:      f.VerificationRecord,
@@ -296,6 +298,10 @@ func ToReportFinding(f AssessmentFinding) report.Finding {
 	}
 	if rf.Fingerprint == "" {
 		rf.Fingerprint = report.ComputeFindingFingerprint(rf.Target, rf.Category, rf.Endpoint, rf.Method, rf.ID)
+	}
+	if rf.ScoreExplanation == nil {
+		expl := report.ExplainFindingScore(rf)
+		rf.ScoreExplanation = &expl
 	}
 	return rf
 }

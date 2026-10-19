@@ -273,9 +273,26 @@ func DeduplicateFindings(findings []Finding) []Finding {
 			}
 
 			// Update score with updated severity, confidence, and verification status
-			existing.Score = CalculateFindingScore(*existing)
+			expl := ExplainFindingScore(*existing)
+			existing.Score = expl.Score
+			existing.ScoreExplanation = &expl
+			if existing.EvidenceDetails.Details == nil {
+				existing.EvidenceDetails.Details = make(map[string]string)
+			}
+			existing.EvidenceDetails.Details["score_formula"] = expl.Formula
+			existing.EvidenceDetails.Details["score_rationale"] = expl.Rationale
 		} else {
 			copyFinding := norm
+			if copyFinding.ScoreExplanation == nil || copyFinding.Score <= 0 {
+				expl := ExplainFindingScore(copyFinding)
+				copyFinding.Score = expl.Score
+				copyFinding.ScoreExplanation = &expl
+				if copyFinding.EvidenceDetails.Details == nil {
+					copyFinding.EvidenceDetails.Details = make(map[string]string)
+				}
+				copyFinding.EvidenceDetails.Details["score_formula"] = expl.Formula
+				copyFinding.EvidenceDetails.Details["score_rationale"] = expl.Rationale
+			}
 			seen[fp] = &copyFinding
 			order = append(order, fp)
 		}

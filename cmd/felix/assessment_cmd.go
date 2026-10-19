@@ -1204,6 +1204,7 @@ func runAssessmentFindings(args []string) int {
 		verFil        string
 		execIDFil     string
 		jsonOutput    bool
+		verbose       bool
 	)
 
 	for i := 0; i < len(args); i++ {
@@ -1229,10 +1230,12 @@ func runAssessmentFindings(args []string) int {
 				execIDFil = args[i+1]
 				i++
 			}
+		case "--verbose":
+			verbose = true
 		case "--json":
 			jsonOutput = true
 		case "--help", "-h":
-			fmt.Println("Usage: felix assessment findings <assessment-id> [--severity HIGH] [--verification VERIFIED] [--json]")
+			fmt.Println("Usage: felix assessment findings <assessment-id> [--severity HIGH] [--verification VERIFIED] [--verbose] [--json]")
 			return 0
 		default:
 			if !strings.HasPrefix(arg, "-") && assessmentRef == "" {
@@ -1294,10 +1297,24 @@ func runAssessmentFindings(args []string) int {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(w, "SEVERITY\tSTATUS\tSCORE\tTITLE\tTARGET")
-	for _, f := range findings {
-		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\n",
-			f.Severity, f.VerificationStatus, f.Score, f.Title, f.TargetURL)
+	if verbose {
+		fmt.Fprintln(w, "SEVERITY\tSTATUS\tSCORE\tFORMULA\tTITLE\tTARGET")
+		for _, f := range findings {
+			formula := ""
+			if f.ScoreExplanation != nil && f.ScoreExplanation.Formula != "" {
+				formula = f.ScoreExplanation.Formula
+			} else if f.EvidenceDetails.Details != nil {
+				formula = f.EvidenceDetails.Details["score_formula"]
+			}
+			fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%s\n",
+				f.Severity, f.VerificationStatus, f.Score, formula, f.Title, f.TargetURL)
+		}
+	} else {
+		fmt.Fprintln(w, "SEVERITY\tSTATUS\tSCORE\tTITLE\tTARGET")
+		for _, f := range findings {
+			fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\n",
+				f.Severity, f.VerificationStatus, f.Score, f.Title, f.TargetURL)
+		}
 	}
 	_ = w.Flush()
 	return 0
