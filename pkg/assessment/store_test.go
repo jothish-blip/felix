@@ -21,6 +21,7 @@ import (
 	"felix/pkg/sessionsec"
 	"felix/pkg/verification"
 	"felix/pkg/webvuln"
+	"felix/pkg/workflow"
 	"github.com/google/uuid"
 )
 
@@ -2901,6 +2902,147 @@ func TestStore_BOPLAPersistenceAndMigration(t *testing.T) {
 	}
 	if summary.TotalTests != 5 {
 		t.Errorf("expected TotalTests = 5 from RunRecord, got %d", summary.TotalTests)
+	}
+	if summary.VerifiedCount != 1 {
+		t.Errorf("expected VerifiedCount = 1, got %d", summary.VerifiedCount)
+	}
+}
+
+func TestStore_WorkflowPersistenceAndMigration(t *testing.T) {
+	store, cleanup := newTestStore(t)
+	defer cleanup()
+
+	// 1. Create client and assessment
+	client := &Client{Name: "Workflow Security Client"}
+	if err := store.CreateClient(client); err != nil {
+		t.Fatalf("CreateClient failed: %v", err)
+	}
+	asm := &Assessment{
+		ClientID: client.ID,
+		Name:     "Workflow Integrity Assessment",
+		Status:   StatusReady,
+	}
+	if err := store.CreateAssessment(asm); err != nil {
+		t.Fatalf("CreateAssessment failed: %v", err)
+	}
+
+	execID := uuid.New().String()
+
+	// 2. Test SaveWorkflowRun and GetWorkflowRun
+	runRec := &workflow.RunRecord{
+		ID:                 uuid.New().String(),
+		AssessmentID:       asm.ID,
+		ExecutionID:        execID,
+		TargetURL:          "http://127.0.0.1:8080",
+		TotalWorkflows:     2,
+		TotalChecks:        6,
+		CategoriesAssessed: 3,
+		VerifiedCount:      1,
+		CandidateCount:     1,
+		NotVulnerableCount: 3,
+		InconclusiveCount:  0,
+		BlockedCount:       1,
+		SyntheticFixture:   true,
+		CoverageJSON:       `{"WORKFLOW-PREREQUISITE-SKIP":{"category":"WORKFLOW-PREREQUISITE-SKIP","code":"WORKFLOW-PREREQUISITE-SKIP","name":"Missing Prerequisite","owasp_ref":"API10:2023","status":"VERIFIED_ISSUE_FOUND","checks_run":1,"verified":1,"candidates":0,"inconclusive":0,"blocked":0,"not_vulnerable":0,"explanation":"Workflow circumvention verified"}}`,
+		CreatedAt:          time.Now().UTC(),
+	}
+	if err := store.SaveWorkflowRun(runRec); err != nil {
+		t.Fatalf("SaveWorkflowRun failed: %v", err)
+	}
+
+	fetchedRun, err := store.GetWorkflowRun(asm.ID, execID)
+	if err != nil {
+		t.Fatalf("GetWorkflowRun failed: %v", err)
+	}
+	if fetchedRun.TotalChecks != 6 || fetchedRun.VerifiedCount != 1 || !fetchedRun.SyntheticFixture {
+		t.Errorf("unexpected run record data: %+v", fetchedRun)
+	}
+
+	// 3. Test SaveWorkflowResults and GetWorkflowResults
+	res1 := workflow.Result{
+		ID:                "res-wf-001",
+		AssessmentID:      asm.ID,
+		ExecutionID:       execID,
+		Category:          workflow.CategoryPrerequisiteSkipping,
+		VulnCode:          "WORKFLOW-PREREQUISITE-SKIP",
+		WorkflowID:        "checkout-flow",
+		WorkflowName:      "Checkout Workflow",
+		StepID:            "pay",
+		CheckID:           "wf-checkout-prereq",
+		CheckName:         "Prerequisite Skip Check",
+		OWASPRef:          "API10:2023",
+		CWERef:            "CWE-840",
+		Endpoint:          "/checkout/pay",
+		Method:            "POST",
+		VerificationState: workflow.StateVerified,
+		Severity:          "HIGH",
+		Confidence:        "CONFIRMED",
+		ObservedStatus:    200,
+		EvidenceSummary:   "Workflow circumvention verified: paid without cart",
+		EvidenceDetails:   map[string]string{"prereq": "cart", "bypassed": "true"},
+		CreatedAt:         time.Now().UTC(),
+	}
+
+	res2 := workflow.Result{
+		ID:                "res-wf-002",
+		AssessmentID:      asm.ID,
+		ExecutionID:       execID,
+		Category:          workflow.CategoryReplayIdempotency,
+		VulnCode:          "WORKFLOW-REPLAY-DUPLICATE",
+		WorkflowID:        "coupon-flow",
+		WorkflowName:      "Coupon Redemption",
+		StepID:            "redeem",
+		CheckID:           "wf-coupon-replay",
+		CheckName:         "Coupon Replay Check",
+		OWASPRef:          "API10:2023",
+		CWERef:            "CWE-294",
+		Endpoint:          "/coupon/redeem",
+		Method:            "POST",
+		VerificationState: workflow.StateNotVulnerable,
+		Severity:          "INFO",
+		Confidence:        "CONFIRMED",
+		ObservedStatus:    409,
+		EvidenceSummary:   "Replay properly blocked: 409 conflict",
+		CreatedAt:         time.Now().UTC().Add(time.Second),
+	}
+
+	if err := store.SaveWorkflowResults([]workflow.Result{res1, res2}); err != nil {
+		t.Fatalf("SaveWorkflowResults failed: %v", err)
+	}
+
+	allResults, err := store.GetWorkflowResults(asm.ID, execID, "", "")
+	if err != nil {
+		t.Fatalf("GetWorkflowResults failed: %v", err)
+	}
+	if len(allResults) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(allResults))
+	}
+
+	// Filter by Category
+	catFiltered, err := store.GetWorkflowResults(asm.ID, execID, string(workflow.CategoryPrerequisiteSkipping), "")
+	if err != nil {
+		t.Fatalf("GetWorkflowResults by category failed: %v", err)
+	}
+	if len(catFiltered) != 1 || catFiltered[0].VulnCode != "WORKFLOW-PREREQUISITE-SKIP" {
+		t.Errorf("expected 1 result for WORKFLOW-PREREQUISITE-SKIP, got %d", len(catFiltered))
+	}
+
+	// Filter by Verification State
+	stateFiltered, err := store.GetWorkflowResults(asm.ID, execID, "", string(workflow.StateVerified))
+	if err != nil {
+		t.Fatalf("GetWorkflowResults by state failed: %v", err)
+	}
+	if len(stateFiltered) != 1 {
+		t.Errorf("expected 1 verified result, got %d", len(stateFiltered))
+	}
+
+	// 4. Test GetWorkflowSummary
+	summary, err := store.GetWorkflowSummary(asm.ID, execID)
+	if err != nil {
+		t.Fatalf("GetWorkflowSummary failed: %v", err)
+	}
+	if summary.TotalChecks != 6 {
+		t.Errorf("expected TotalChecks = 6 from RunRecord, got %d", summary.TotalChecks)
 	}
 	if summary.VerifiedCount != 1 {
 		t.Errorf("expected VerifiedCount = 1, got %d", summary.VerifiedCount)

@@ -30,6 +30,7 @@ import (
 	"felix/pkg/sessionsec"
 	"felix/pkg/verification"
 	"felix/pkg/webvuln"
+	"felix/pkg/workflow"
 	"github.com/google/uuid"
 )
 
@@ -82,6 +83,8 @@ func runAssessment(args []string) int {
 		return runAssessmentBFLA(subArgs)
 	case "bopla":
 		return runAssessmentBOPLA(subArgs)
+	case "workflow", "workflows", "integrity":
+		return runAssessmentWorkflow(subArgs)
 	case "apisec", "api":
 		return runAssessmentAPISec(subArgs)
 	case "webvuln", "vuln":
@@ -125,6 +128,7 @@ func printAssessmentHelp() {
 	fmt.Println("  bola         Assess Broken Object Level Authorization (BOLA/IDOR) across multi-user boundaries")
 	fmt.Println("  bfla         Assess Broken Function Level Authorization (BFLA) across privilege boundaries")
 	fmt.Println("  bopla        Assess Broken Object Property Level Authorization (BOPLA / API3:2023)")
+	fmt.Println("  workflow     Assess workflow integrity, business logic state transitions & race conditions (Phase 5.6)")
 	fmt.Println("  apisec       Assess OWASP API Security Top 10 (2023) categories and API inventory")
 	fmt.Println("  webvuln      Assess and verify web application vulnerabilities (XSS, SQLi, SSTI, SSRF, etc.)")
 	fmt.Println("  sessionsec   Assess session lifecycle, token handling, and identity boundaries (WSTG-SESS/ATHN)")
@@ -150,6 +154,8 @@ func printAssessmentHelp() {
 	fmt.Println("  felix assessment bfla <asm-ref> --run")
 	fmt.Println("  felix assessment bopla <asm-ref> --dry-run")
 	fmt.Println("  felix assessment bopla <asm-ref> --run")
+	fmt.Println("  felix assessment workflow <asm-ref> --dry-run")
+	fmt.Println("  felix assessment workflow <asm-ref> --run")
 	fmt.Println("  felix assessment apisec <asm-ref> --run --spec openapi.json")
 	fmt.Println("  felix assessment webvuln <asm-ref> --run")
 	fmt.Println("  felix assessment sessionsec <asm-ref> --run")
@@ -5952,6 +5958,730 @@ func runAssessmentBOPLA(args []string) int {
 	} else if summary == nil || summary.TotalTests == 0 {
 		fmt.Println("\nNo BOPLA test results recorded.")
 		fmt.Printf("To run an authorized BOPLA assessment:\n  felix assessment bopla %s --run\n", asm.Ref)
+	}
+
+	fmt.Println()
+	return 0
+}
+
+// -------------------------------------------------------------------------
+// Workflow Integrity Assessment CLI Subcommand (Phase 5.6)
+// -------------------------------------------------------------------------
+
+func printWorkflowHelp() {
+	fmt.Println("Usage: felix assessment workflow <assessment-ref> [flags]")
+	fmt.Println("\nWorkflow Integrity & Business Logic State Transition Assessment Engine (Phase 5.6)")
+	fmt.Println("Evaluates multi-step workflows, prerequisites, ordering, single-use replay, tokens, and race conditions")
+	fmt.Println("\nCategories:")
+	fmt.Println("  WORKFLOW-PREREQUISITE-SKIP  Missing prerequisite & step skipping circumvention")
+	fmt.Println("  WORKFLOW-INVALID-ORDER      Invalid step ordering & prohibited state transitions")
+	fmt.Println("  WORKFLOW-REPLAY-DUPLICATE   Single-use action replay & idempotency flaws")
+	fmt.Println("  WORKFLOW-TOKEN-REUSE        Workflow token & state continuity failure")
+	fmt.Println("  WORKFLOW-IDENTITY-MISMATCH  Ownership continuity & cross-principal takeover")
+	fmt.Println("  WORKFLOW-CONCURRENT-RACE    Concurrent transition race conditions & duplicate side-effects")
+	fmt.Println("\nFlags:")
+	fmt.Println("  --run                      Execute authorized active workflow integrity assessment")
+	fmt.Println("  --dry-run                  Output pre-assessment plan without network traffic")
+	fmt.Println("  -t, --target <url>         Override assessment target base URL")
+	fmt.Println("  --policy <path>            Path to workflow definitions JSON file")
+	fmt.Println("  --workflow <id>            Filter execution to a specific workflow ID")
+	fmt.Println("  --category <code>          Filter execution or results by category code")
+	fmt.Println("  --status <state>           Filter past results by verification state (VERIFIED, CANDIDATE, etc.)")
+	fmt.Println("  --owner-token <token>      Authorization token for workflow owner role")
+	fmt.Println("  --user-token <token>       Alias for --owner-token")
+	fmt.Println("  --attacker-token <token>   Authorization token for non-owner / secondary principal")
+	fmt.Println("  --admin-token <token>      Authorization token for approver / admin role")
+	fmt.Println("  --owner-cookie <cookie>    Session cookie for workflow owner")
+	fmt.Println("  --attacker-cookie <cookie> Session cookie for non-owner / secondary principal")
+	fmt.Println("  --owner-role <role>        Role name for workflow owner (default: user)")
+	fmt.Println("  --attacker-role <role>     Role name for non-owner (default: attacker)")
+	fmt.Println("  --allow-state-changing     Explicitly permit state-changing mutation tests")
+	fmt.Println("  --synthetic-fixture        Confirm target is an isolated synthetic fixture environment")
+	fmt.Println("  --authorized-fixture <h>   Explicitly authorize a fixture host or wildcard pattern")
+	fmt.Println("  --allow-loopback           Allow connections to localhost/loopback")
+	fmt.Println("  --allow-private            Allow connections to RFC1918 private IP ranges")
+	fmt.Println("  --max-requests <n>         Request budget limit (default: 30)")
+	fmt.Println("  --concurrency <n>          Concurrency level for race condition testing (default: 5)")
+	fmt.Println("  --json                     Output results in JSON format")
+	fmt.Println("  -v, --verbose              Display detailed test evidence and traces")
+	fmt.Println("  -h, --help                 Display this help message")
+	fmt.Println("\nExamples:")
+	fmt.Println("  felix assessment workflow <asm-ref> --dry-run")
+	fmt.Println("  felix assessment workflow <asm-ref> --run --policy workflows.json")
+	fmt.Println("  felix assessment workflow <asm-ref> --run --allow-state-changing --synthetic-fixture")
+	fmt.Println("  felix assessment workflow <asm-ref> --status VERIFIED --json")
+}
+
+func runAssessmentWorkflow(args []string) int {
+	var (
+		assessmentRef        string
+		runExecution         bool
+		dryRun               bool
+		targetOverride       string
+		policyPath           string
+		workflowIDFilter     string
+		categoryFilter       string
+		statusFilter         string
+		ownerToken           string
+		attackerToken        string
+		adminToken           string
+		ownerCookie          string
+		attackerCookie       string
+		ownerRole            string = "user"
+		attackerRole         string = "attacker"
+		adminRole            string = "admin"
+		allowStateChanging   bool
+		syntheticFixtureFlag bool
+		authorizedFixtures   []string
+		allowLoopback        bool
+		allowPrivate         bool
+		maxRequests          int = 30
+		concurrency          int = 5
+		jsonOutput           bool
+		verbose              bool
+	)
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--run":
+			runExecution = true
+		case arg == "--dry-run":
+			dryRun = true
+		case arg == "--target" || arg == "-t":
+			if i+1 < len(args) {
+				targetOverride = args[i+1]
+				i++
+			}
+		case arg == "--policy":
+			if i+1 < len(args) {
+				policyPath = args[i+1]
+				i++
+			}
+		case arg == "--workflow" || arg == "--workflow-id":
+			if i+1 < len(args) {
+				workflowIDFilter = args[i+1]
+				i++
+			}
+		case arg == "--category" || arg == "-c":
+			if i+1 < len(args) {
+				categoryFilter = strings.ToUpper(args[i+1])
+				i++
+			}
+		case arg == "--status" || arg == "-s":
+			if i+1 < len(args) {
+				statusFilter = strings.ToUpper(args[i+1])
+				i++
+			}
+		case arg == "--owner-token" || arg == "--user-token":
+			if i+1 < len(args) {
+				ownerToken = args[i+1]
+				i++
+			}
+		case arg == "--attacker-token" || arg == "--non-owner-token":
+			if i+1 < len(args) {
+				attackerToken = args[i+1]
+				i++
+			}
+		case arg == "--admin-token" || arg == "--approver-token":
+			if i+1 < len(args) {
+				adminToken = args[i+1]
+				i++
+			}
+		case arg == "--owner-cookie" || arg == "--user-cookie":
+			if i+1 < len(args) {
+				ownerCookie = args[i+1]
+				i++
+			}
+		case arg == "--attacker-cookie" || arg == "--non-owner-cookie":
+			if i+1 < len(args) {
+				attackerCookie = args[i+1]
+				i++
+			}
+		case arg == "--owner-role":
+			if i+1 < len(args) {
+				ownerRole = args[i+1]
+				i++
+			}
+		case arg == "--attacker-role":
+			if i+1 < len(args) {
+				attackerRole = args[i+1]
+				i++
+			}
+		case arg == "--allow-state-changing":
+			allowStateChanging = true
+		case arg == "--synthetic-fixture":
+			syntheticFixtureFlag = true
+		case arg == "--authorized-fixture":
+			if i+1 < len(args) {
+				authorizedFixtures = append(authorizedFixtures, args[i+1])
+				i++
+			}
+		case arg == "--allow-loopback":
+			allowLoopback = true
+		case arg == "--allow-private":
+			allowPrivate = true
+		case arg == "--max-requests":
+			if i+1 < len(args) {
+				if n, err := strconv.Atoi(args[i+1]); err == nil && n > 0 {
+					maxRequests = n
+				}
+				i++
+			}
+		case arg == "--concurrency":
+			if i+1 < len(args) {
+				if n, err := strconv.Atoi(args[i+1]); err == nil && n > 0 {
+					concurrency = n
+				}
+				i++
+			}
+		case arg == "--json":
+			jsonOutput = true
+		case arg == "--verbose" || arg == "-v":
+			verbose = true
+		case arg == "--help" || arg == "-h":
+			printWorkflowHelp()
+			return 0
+		default:
+			if !strings.HasPrefix(arg, "-") && assessmentRef == "" {
+				assessmentRef = arg
+			}
+		}
+	}
+
+	if assessmentRef == "" {
+		fmt.Fprintf(os.Stderr, "[-] Error: assessment ID or Ref is required\n\n")
+		printWorkflowHelp()
+		return 2
+	}
+
+	store, err := getAssessmentStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Database error: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+
+	asm, err := store.GetAssessment(assessmentRef)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Error finding assessment '%s': %v\n", assessmentRef, err)
+		return 1
+	}
+	asm.Targets, _ = store.GetTargets(asm.ID)
+	asm.Authorization, _ = store.GetAuthorization(asm.ID)
+	asm.Exclusions, _ = store.GetExclusions(asm.ID)
+	asm.ScopeRules, _ = store.GetScopeRules(asm.ID)
+
+	targetBase := "http://localhost"
+	if len(asm.Targets) > 0 {
+		targetBase = strings.TrimRight(asm.Targets[0].TargetURL, "/")
+	}
+	if targetOverride != "" {
+		targetBase = strings.TrimRight(targetOverride, "/")
+	}
+
+	parsedTarget, err := url.Parse(targetBase)
+	if err != nil || parsedTarget.Scheme == "" || parsedTarget.Host == "" {
+		fmt.Fprintf(os.Stderr, "[-] Error: invalid target URL '%s'\n", targetBase)
+		return 1
+	}
+
+	isTargetLoopback := workflow.IsLoopbackHost(parsedTarget.Hostname())
+
+	// 1. Load workflows
+	var workflows []workflow.Workflow
+	var loadedIdentities []workflow.TestIdentity
+
+	if policyPath != "" {
+		pData, err := os.ReadFile(policyPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Failed to read workflow policy file %s: %v\n", policyPath, err)
+			return 1
+		}
+		var pf workflow.PolicyFile
+		if err := json.Unmarshal(pData, &pf); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Failed to parse workflow policy file: %v\n", err)
+			return 1
+		}
+		workflows = pf.Workflows
+		loadedIdentities = pf.Identities
+	} else {
+		workflows = workflow.DefaultWorkflows()
+	}
+
+	// Filter by workflow ID if specified
+	if workflowIDFilter != "" {
+		var filtered []workflow.Workflow
+		for _, w := range workflows {
+			if strings.EqualFold(w.ID, workflowIDFilter) {
+				filtered = append(filtered, w)
+			}
+		}
+		if len(filtered) == 0 {
+			fmt.Fprintf(os.Stderr, "[-] Error: workflow ID %q not found in policy\n", workflowIDFilter)
+			return 1
+		}
+		workflows = filtered
+	}
+
+	// Filter by category if specified
+	if categoryFilter != "" {
+		cat := workflow.Category(categoryFilter)
+		for idx := range workflows {
+			workflows[idx].CategoriesToAssess = []workflow.Category{cat}
+		}
+	}
+
+	// 2. Build Identities
+	var identities []workflow.TestIdentity
+	if len(loadedIdentities) > 0 {
+		identities = loadedIdentities
+	} else {
+		headersOwner := make(map[string]string)
+		cookiesOwner := make(map[string]string)
+		if ownerToken != "" {
+			tVal := strings.TrimSpace(ownerToken)
+			if !strings.HasPrefix(strings.ToLower(tVal), "bearer ") {
+				tVal = "Bearer " + tVal
+			}
+			headersOwner["Authorization"] = tVal
+		}
+		if ownerCookie != "" {
+			cParts := strings.SplitN(ownerCookie, "=", 2)
+			if len(cParts) == 2 {
+				cookiesOwner[cParts[0]] = cParts[1]
+			} else {
+				cookiesOwner["session"] = ownerCookie
+			}
+		}
+
+		headersAttacker := make(map[string]string)
+		cookiesAttacker := make(map[string]string)
+		if attackerToken != "" {
+			tVal := strings.TrimSpace(attackerToken)
+			if !strings.HasPrefix(strings.ToLower(tVal), "bearer ") {
+				tVal = "Bearer " + tVal
+			}
+			headersAttacker["Authorization"] = tVal
+		}
+		if attackerCookie != "" {
+			cParts := strings.SplitN(attackerCookie, "=", 2)
+			if len(cParts) == 2 {
+				cookiesAttacker[cParts[0]] = cParts[1]
+			} else {
+				cookiesAttacker["session"] = attackerCookie
+			}
+		}
+
+		headersAdmin := make(map[string]string)
+		if adminToken != "" {
+			tVal := strings.TrimSpace(adminToken)
+			if !strings.HasPrefix(strings.ToLower(tVal), "bearer ") {
+				tVal = "Bearer " + tVal
+			}
+			headersAdmin["Authorization"] = tVal
+		}
+
+		if len(headersOwner) == 0 && len(cookiesOwner) == 0 {
+			headersOwner["Authorization"] = "Bearer token_owner_synthetic"
+		}
+		if len(headersAttacker) == 0 && len(cookiesAttacker) == 0 {
+			headersAttacker["Authorization"] = "Bearer token_attacker_synthetic"
+		}
+		if len(headersAdmin) == 0 {
+			headersAdmin["Authorization"] = "Bearer token_admin_synthetic"
+		}
+
+		identities = []workflow.TestIdentity{
+			{
+				Alias:          "owner_user",
+				Role:           ownerRole,
+				PrivilegeLevel: 1,
+				Headers:        headersOwner,
+				Cookies:        cookiesOwner,
+			},
+			{
+				Alias:          "attacker_user",
+				Role:           attackerRole,
+				PrivilegeLevel: 1,
+				Headers:        headersAttacker,
+				Cookies:        cookiesAttacker,
+			},
+			{
+				Alias:          "admin_user",
+				Role:           adminRole,
+				PrivilegeLevel: 5,
+				Headers:        headersAdmin,
+			},
+		}
+	}
+
+	// 3. Collect authorized fixture hosts
+	fixtureHosts := append([]string{}, authorizedFixtures...)
+	for _, t := range asm.Targets {
+		lbl := strings.ToLower(t.Label)
+		if strings.Contains(lbl, "fixture") ||
+			strings.Contains(lbl, "test") ||
+			strings.Contains(lbl, "synthetic") ||
+			strings.Contains(lbl, "sandbox") ||
+			strings.Contains(lbl, "staging") {
+			if parsed, err := url.Parse(t.TargetURL); err == nil && parsed.Hostname() != "" {
+				fixtureHosts = append(fixtureHosts, parsed.Hostname())
+			}
+		}
+	}
+	for _, r := range asm.ScopeRules {
+		pat := strings.ToLower(r.Pattern)
+		if strings.Contains(pat, "fixture") ||
+			strings.Contains(pat, "test") ||
+			strings.Contains(pat, "synthetic") ||
+			strings.Contains(pat, "sandbox") ||
+			strings.Contains(pat, "staging") {
+			fixtureHosts = append(fixtureHosts, r.Pattern)
+		}
+	}
+
+	syntheticFixture := syntheticFixtureFlag && workflow.IsIsolatedFixtureTarget(targetBase, fixtureHosts, nil)
+
+	// Mode 1: Dry-Run
+	if dryRun {
+		engine := workflow.NewEngine(nil, workflow.DefaultConfig())
+		actx := &workflow.AssessmentContext{
+			AssessmentID:            asm.ID,
+			BaseURL:                 targetBase,
+			Workflows:               workflows,
+			Identities:              identities,
+			AllowStateChangingTests: allowStateChanging,
+			SyntheticFixture:        syntheticFixture,
+			AuthorizedFixtureHosts:  fixtureHosts,
+			DryRun:                  true,
+			IsExcluded: func(target string) bool {
+				for _, exc := range asm.Exclusions {
+					if strings.Contains(target, exc.Pattern) {
+						return true
+					}
+				}
+				return false
+			},
+		}
+
+		plan, err := engine.Plan(context.Background(), actx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Planning error: %v\n", err)
+			return 1
+		}
+
+		if jsonOutput {
+			b, _ := json.MarshalIndent(plan, "", "  ")
+			fmt.Println(string(b))
+			return 0
+		}
+
+		fmt.Println("================================================================================")
+		fmt.Println("  FELIX :: WORKFLOW INTEGRITY ASSESSMENT PLAN (DRY-RUN)")
+		fmt.Printf("  Assessment: %s (%s) | Target: %s\n", asm.Name, asm.Ref, targetBase)
+		fmt.Println("================================================================================")
+		fmt.Printf("Total Workflows: %d | Planned Checks: %d (Ready: %d, Blocked/Skipped: %d, State-Changing: %d)\n\n",
+			plan.TotalWorkflows, plan.TotalPlannedChecks, plan.ReadyChecks, plan.BlockedChecks, plan.StateChangingChecks)
+
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "WORKFLOW\tCATEGORY\tNAME\tMETHOD\tENDPOINT\tSTATUS\tNOTE")
+		for _, pc := range plan.PlannedChecks {
+			note := "-"
+			if pc.BlockedReason != "" {
+				note = pc.BlockedReason
+			} else if pc.IsStateChanging {
+				note = "State-Changing [MUTATION]"
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				pc.WorkflowID, pc.Category, pc.Name, pc.Method, pc.Endpoint, pc.Status, note)
+		}
+		_ = w.Flush()
+		fmt.Println("\n[*] Dry run completed. Zero network requests were dispatched.")
+		return 0
+	}
+
+	// Mode 2: Active Run
+	if runExecution {
+		if asm.Authorization == nil {
+			fmt.Fprintf(os.Stderr, "[-] Assessment error: authorization record is required for active workflow verification\n")
+			fmt.Fprintf(os.Stderr, "    Please record authorization: felix assessment authorize %s ...\n", asm.Ref)
+			return 1
+		}
+		valid, reason := asm.Authorization.IsCurrentlyValid(time.Now().UTC())
+		if !valid {
+			fmt.Fprintf(os.Stderr, "[-] Assessment error: authorization record is invalid or expired (%s)\n", reason)
+			return 1
+		}
+
+		targetID := ""
+		if len(asm.Targets) > 0 {
+			targetID = asm.Targets[0].ID
+		}
+
+		execID := "exec-" + uuid.New().String()
+		now := time.Now().UTC()
+		execRecord := &assessment.AssessmentExecution{
+			ID:           execID,
+			AssessmentID: asm.ID,
+			Status:       assessment.StatusRunning,
+			StartedAt:    now,
+			ConfigSnapshot: assessment.ScanConfigSnapshot{
+				TimeoutSeconds: 15,
+				Concurrency:    concurrency,
+				ScopeMode:      asm.ScopeMode,
+				FelixVersion:   "2.0",
+			},
+		}
+		if err := store.CreateExecution(execRecord); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Failed to create execution record: %v\n", err)
+			return 1
+		}
+
+		var targetURLs []string
+		for _, t := range asm.Targets {
+			targetURLs = append(targetURLs, t.TargetURL)
+		}
+		scopeVal := assessment.NewScopeValidator(asm.ScopeMode, targetURLs, asm.ScopeRules, asm.Exclusions)
+
+		fmt.Println("================================================================================")
+		fmt.Println("  FELIX :: WORKFLOW INTEGRITY & STATE TRANSITION ASSESSMENT")
+		fmt.Printf("  Assessment: %s (%s) | Target: %s\n", asm.Name, asm.Ref, targetBase)
+		fmt.Println("================================================================================")
+		fmt.Printf("[*] Dispatched at %s | Max Requests: %d | Concurrency: %d\n",
+			now.Format(time.RFC3339), maxRequests, concurrency)
+
+		cfg := workflow.DefaultConfig()
+		cfg.Concurrency = concurrency
+
+		safeTransport := crawler.NewSafeTransport(crawler.SafeTransportOptions{
+			Timeout:         cfg.Timeout,
+			AllowLoopback:   allowLoopback || isTargetLoopback,
+			AllowPrivateIPs: allowPrivate,
+		})
+		httpClient := &http.Client{
+			Transport: crawler.NewRateLimitedTransport(safeTransport, crawler.RateLimitOptions{}),
+			Timeout:   cfg.Timeout,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 10 {
+					return fmt.Errorf("stopped after 10 redirects")
+				}
+				lastURL := ""
+				if len(via) > 0 {
+					lastURL = via[len(via)-1].URL.String()
+				}
+				return scopeVal.ValidateRedirect(lastURL, req.URL.String())
+			},
+		}
+
+		engine := workflow.NewEngine(httpClient, cfg)
+
+		authRec := &auth.AuthorizationRecord{
+			ID:                  asm.Authorization.ID,
+			AuthorizingParty:    asm.Authorization.AuthorizingParty,
+			AuthorizationMethod: asm.Authorization.AuthorizationMethod,
+			Status:              string(asm.Authorization.Status),
+			ValidFrom:           asm.Authorization.ValidFrom,
+			ValidUntil:          asm.Authorization.ValidUntil,
+		}
+
+		var dispatchedReqs int32
+		actx := &workflow.AssessmentContext{
+			AssessmentID:            asm.ID,
+			ExecutionID:             execID,
+			BaseURL:                 targetBase,
+			Workflows:               workflows,
+			Identities:              identities,
+			AllowStateChangingTests: allowStateChanging,
+			SyntheticFixture:        syntheticFixture,
+			AuthorizedFixtureHosts:  fixtureHosts,
+			Concurrency:             concurrency,
+			Authorization:           authRec,
+			MaxRequests:             maxRequests,
+			DispatchedRequests:      &dispatchedReqs,
+			IsAllowed:               scopeVal.IsAllowed,
+			IsExcluded:              func(u string) bool { excluded, _ := scopeVal.IsExcluded(u); return excluded },
+		}
+
+		startTime := time.Now()
+		results, summary, err := engine.Assess(context.Background(), actx)
+		duration := time.Since(startTime)
+		completedAt := time.Now().UTC()
+
+		if err != nil {
+			execRecord.Status = assessment.StatusFailed
+			execRecord.ErrorMessage = err.Error()
+			_ = store.UpdateExecution(execRecord)
+			fmt.Fprintf(os.Stderr, "[-] Assessment failed: %v\n", err)
+			return 1
+		}
+
+		execRecord.Status = assessment.StatusCompleted
+
+		// Save results
+		if err := store.SaveWorkflowResults(results); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Warning: failed to save workflow results: %v\n", err)
+		}
+
+		// Save run record
+		covJSON, _ := json.Marshal(summary.CategoryCoverageMap)
+		runRec := &workflow.RunRecord{
+			ID:                 uuid.New().String(),
+			AssessmentID:       asm.ID,
+			ExecutionID:        execID,
+			TargetURL:          targetBase,
+			TotalWorkflows:     summary.TotalWorkflows,
+			TotalChecks:        summary.TotalChecks,
+			CategoriesAssessed: summary.CategoriesAssessed,
+			VerifiedCount:      summary.VerifiedCount,
+			CandidateCount:     summary.CandidateCount,
+			NotVulnerableCount: summary.NotVulnerableCount,
+			InconclusiveCount:  summary.InconclusiveCount,
+			BlockedCount:       summary.BlockedCount,
+			SyntheticFixture:   syntheticFixture,
+			CoverageJSON:       string(covJSON),
+			CreatedAt:          completedAt,
+		}
+		if err := store.SaveWorkflowRun(runRec); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Warning: failed to save workflow run record: %v\n", err)
+		}
+
+		// Save findings
+		var asmFindings []assessment.AssessmentFinding
+		for _, r := range results {
+			if r.Finding != nil {
+				asmFindings = append(asmFindings, assessment.ToAssessmentFinding(asm.ID, execID, targetID, *r.Finding))
+			}
+		}
+		if len(asmFindings) > 0 {
+			if err := store.SaveFindings(asmFindings); err != nil {
+				fmt.Fprintf(os.Stderr, "[-] Warning: failed to save assessment findings: %v\n", err)
+			}
+		}
+
+		_ = store.UpdateExecution(execRecord)
+
+		if jsonOutput {
+			outMap := map[string]any{
+				"assessment_ref": asm.Ref,
+				"execution_id":   execID,
+				"target":         targetBase,
+				"duration_ms":    duration.Milliseconds(),
+				"dispatched":     dispatchedReqs,
+				"summary":        summary,
+				"results":        results,
+			}
+			b, _ := json.MarshalIndent(outMap, "", "  ")
+			fmt.Println(string(b))
+			return 0
+		}
+
+		fmt.Println("--------------------------------------------------------------------------------")
+		fmt.Printf("Workflow Assessment Complete in %s | Total Checks: %d\n", duration.Round(time.Millisecond), summary.TotalChecks)
+		fmt.Printf("Findings: [VERIFIED: %d] [CANDIDATE: %d] [NOT_VULNERABLE: %d] [INCONCLUSIVE: %d] [BLOCKED: %d]\n",
+			summary.VerifiedCount, summary.CandidateCount, summary.NotVulnerableCount, summary.InconclusiveCount, summary.BlockedCount)
+		fmt.Println("--------------------------------------------------------------------------------")
+
+		// Display category breakdown
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "CATEGORY\tCODE\tSTATUS\tVERIFIED\tCANDIDATES\tNOT VULN\tINCONCLUSIVE\tBLOCKED")
+		for _, cat := range workflow.AllCategories() {
+			cov, ok := summary.CategoryCoverageMap[string(cat)]
+			if !ok {
+				cov = workflow.CategoryCoverage{
+					Category: cat,
+					Code:     string(cat),
+					Status:   workflow.CoverageUntested,
+				}
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\n",
+				cat, cov.Code, cov.Status, cov.Verified, cov.Candidates, cov.NotVulnerable, cov.Inconclusive, cov.Blocked)
+		}
+		_ = w.Flush()
+
+		// If findings were generated, display findings table
+		if summary.VerifiedCount > 0 || summary.CandidateCount > 0 {
+			fmt.Println("\nIdentified Issues:")
+			wfWriter := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(wfWriter, "STATE\tSEVERITY\tWORKFLOW\tSTEP\tCATEGORY\tEVIDENCE")
+			for _, r := range results {
+				if r.VerificationState == workflow.StateVerified || r.VerificationState == workflow.StateCandidate {
+					fmt.Fprintf(wfWriter, "%s\t%s\t%s\t%s\t%s\t%s\n",
+						r.VerificationState, r.Severity, r.WorkflowID, r.StepID, r.Category, r.EvidenceSummary)
+				}
+			}
+			_ = wfWriter.Flush()
+		}
+
+		fmt.Println()
+		return 0
+	}
+
+	// Mode 3: View Past Results
+	summary, err := store.GetWorkflowSummary(asm.ID, "")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Failed to fetch workflow summary: %v\n", err)
+		return 1
+	}
+
+	results, err := store.GetWorkflowResults(asm.ID, "", categoryFilter, statusFilter)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Failed to fetch workflow results: %v\n", err)
+		return 1
+	}
+
+	if jsonOutput {
+		outMap := map[string]any{
+			"assessment_ref": asm.Ref,
+			"summary":        summary,
+			"results":        results,
+		}
+		b, _ := json.MarshalIndent(outMap, "", "  ")
+		fmt.Println(string(b))
+		return 0
+	}
+
+	fmt.Println("================================================================================")
+	fmt.Println("  FELIX :: WORKFLOW INTEGRITY ASSESSMENT RESULTS")
+	fmt.Printf("  Assessment: %s (%s) | Target: %s\n", asm.Name, asm.Ref, targetBase)
+	fmt.Println("================================================================================")
+
+	if summary != nil && summary.TotalChecks > 0 {
+		fmt.Printf("Summary: Total Checks: %d | Verified: %d | Candidate: %d | Not Vulnerable: %d | Inconclusive: %d | Blocked: %d\n\n",
+			summary.TotalChecks, summary.VerifiedCount, summary.CandidateCount, summary.NotVulnerableCount, summary.InconclusiveCount, summary.BlockedCount)
+
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "CATEGORY\tCODE\tSTATUS\tVERIFIED\tCANDIDATES\tNOT VULN\tINCONCLUSIVE\tBLOCKED")
+		for _, cat := range workflow.AllCategories() {
+			cov, ok := summary.CategoryCoverageMap[string(cat)]
+			if !ok {
+				cov = workflow.CategoryCoverage{
+					Category: cat,
+					Code:     string(cat),
+					Status:   workflow.CoverageUntested,
+				}
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\n",
+				cat, cov.Code, cov.Status, cov.Verified, cov.Candidates, cov.NotVulnerable, cov.Inconclusive, cov.Blocked)
+		}
+		_ = w.Flush()
+
+		if len(results) > 0 {
+			fmt.Println("\nRecorded Results:")
+			rw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(rw, "STATE\tSEVERITY\tWORKFLOW\tSTEP\tCATEGORY\tEVIDENCE")
+			for _, r := range results {
+				if !verbose && r.VerificationState == workflow.StateNotVulnerable {
+					continue
+				}
+				fmt.Fprintf(rw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+					r.VerificationState, r.Severity, r.WorkflowID, r.StepID, r.Category, r.EvidenceSummary)
+			}
+			_ = rw.Flush()
+		}
+	} else {
+		fmt.Println("\nNo workflow integrity test results recorded.")
+		fmt.Printf("To run an authorized workflow assessment:\n  felix assessment workflow %s --run\n", asm.Ref)
 	}
 
 	fmt.Println()

@@ -25,6 +25,7 @@ import (
 	"felix/pkg/sessionsec"
 	"felix/pkg/verification"
 	"felix/pkg/webvuln"
+	"felix/pkg/workflow"
 	_ "modernc.org/sqlite"
 )
 
@@ -187,6 +188,13 @@ type Store interface {
 	SaveBOPLAResults(results []bopla.Result) error
 	GetBOPLAResults(assessmentID string, executionID string, category string, state string) ([]bopla.Result, error)
 	GetBOPLASummary(assessmentID string, executionID string) (*bopla.Summary, error)
+
+	// Workflow Integrity Assessment Engine (Phase 5.6)
+	SaveWorkflowRun(record *workflow.RunRecord) error
+	GetWorkflowRun(assessmentID string, executionID string) (*workflow.RunRecord, error)
+	SaveWorkflowResults(results []workflow.Result) error
+	GetWorkflowResults(assessmentID string, executionID string, category string, state string) ([]workflow.Result, error)
+	GetWorkflowSummary(assessmentID string, executionID string) (*workflow.Summary, error)
 
 	// Close database
 	Close() error
@@ -1396,6 +1404,80 @@ func (s *SQLiteStore) migrate() error {
 
 		if _, err := tx.Exec(schemaV15); err != nil {
 			return fmt.Errorf("migration v15 failed: %w", err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+
+	// Migration 16: Workflow Integrity Assessment Engine (Phase 5.6)
+	if currentVersion < 16 {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		schemaV16 := `
+		CREATE TABLE IF NOT EXISTS assessment_workflow_runs (
+			id TEXT PRIMARY KEY,
+			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+			execution_id TEXT NOT NULL,
+			target_url TEXT NOT NULL,
+			total_workflows INTEGER NOT NULL DEFAULT 0,
+			total_checks INTEGER NOT NULL DEFAULT 0,
+			categories_assessed INTEGER NOT NULL DEFAULT 0,
+			verified_count INTEGER NOT NULL DEFAULT 0,
+			candidate_count INTEGER NOT NULL DEFAULT 0,
+			not_vulnerable_count INTEGER NOT NULL DEFAULT 0,
+			inconclusive_count INTEGER NOT NULL DEFAULT 0,
+			blocked_count INTEGER NOT NULL DEFAULT 0,
+			synthetic_fixture INTEGER NOT NULL DEFAULT 0,
+			coverage_json TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_workflow_runs_asm_id ON assessment_workflow_runs(assessment_id);
+		CREATE INDEX IF NOT EXISTS idx_workflow_runs_exec_id ON assessment_workflow_runs(execution_id);
+
+		CREATE TABLE IF NOT EXISTS assessment_workflow_results (
+			id TEXT PRIMARY KEY,
+			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+			execution_id TEXT NOT NULL,
+			category TEXT NOT NULL,
+			vuln_code TEXT NOT NULL,
+			workflow_id TEXT NOT NULL,
+			workflow_name TEXT NOT NULL,
+			step_id TEXT,
+			check_id TEXT NOT NULL,
+			check_name TEXT NOT NULL,
+			owasp_ref TEXT NOT NULL,
+			cwe_ref TEXT NOT NULL,
+			endpoint TEXT NOT NULL,
+			method TEXT NOT NULL,
+			verification_state TEXT NOT NULL,
+			severity TEXT NOT NULL,
+			confidence TEXT NOT NULL,
+			observed_status INTEGER,
+			state_before TEXT,
+			state_after TEXT,
+			evidence_summary TEXT NOT NULL,
+			evidence_details_json TEXT,
+			finding_id TEXT,
+			created_at TIMESTAMP NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_workflow_res_asm_id ON assessment_workflow_results(assessment_id);
+		CREATE INDEX IF NOT EXISTS idx_workflow_res_exec_id ON assessment_workflow_results(execution_id);
+		CREATE INDEX IF NOT EXISTS idx_workflow_res_cat ON assessment_workflow_results(category);
+		CREATE INDEX IF NOT EXISTS idx_workflow_res_state ON assessment_workflow_results(verification_state);
+
+		INSERT INTO schema_migrations (version, applied_at) VALUES (16, CURRENT_TIMESTAMP);
+		`
+
+		if _, err := tx.Exec(schemaV16); err != nil {
+			return fmt.Errorf("migration v16 failed: %w", err)
 		}
 
 		if err := tx.Commit(); err != nil {
@@ -5541,6 +5623,263 @@ func (s *SQLiteStore) GetBOPLASummary(assessmentID string, executionID string) (
 		case bopla.StateInconclusive:
 			summary.InconclusiveCount++
 		case bopla.StateSkipped:
+			summary.BlockedCount++
+		}
+	}
+	return summary, nil
+}
+
+// -------------------------------------------------------------------------
+// Workflow Integrity Assessment Engine (Phase 5.6)
+// -------------------------------------------------------------------------
+
+func (s *SQLiteStore) SaveWorkflowRun(record *workflow.RunRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	query := `
+		INSERT INTO assessment_workflow_runs (
+			id, assessment_id, execution_id, target_url, total_workflows, total_checks,
+			categories_assessed, verified_count, candidate_count, not_vulnerable_count,
+			inconclusive_count, blocked_count, synthetic_fixture, coverage_json, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			target_url = excluded.target_url,
+			total_workflows = excluded.total_workflows,
+			total_checks = excluded.total_checks,
+			categories_assessed = excluded.categories_assessed,
+			verified_count = excluded.verified_count,
+			candidate_count = excluded.candidate_count,
+			not_vulnerable_count = excluded.not_vulnerable_count,
+			inconclusive_count = excluded.inconclusive_count,
+			blocked_count = excluded.blocked_count,
+			synthetic_fixture = excluded.synthetic_fixture,
+			coverage_json = excluded.coverage_json;
+	`
+	now := record.CreatedAt
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+
+	synthInt := 0
+	if record.SyntheticFixture {
+		synthInt = 1
+	}
+
+	_, err := s.db.Exec(
+		query,
+		record.ID, record.AssessmentID, record.ExecutionID, record.TargetURL,
+		record.TotalWorkflows, record.TotalChecks, record.CategoriesAssessed,
+		record.VerifiedCount, record.CandidateCount, record.NotVulnerableCount,
+		record.InconclusiveCount, record.BlockedCount, synthInt,
+		record.CoverageJSON, now,
+	)
+	return err
+}
+
+func (s *SQLiteStore) GetWorkflowRun(assessmentID string, executionID string) (*workflow.RunRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := `
+		SELECT id, assessment_id, execution_id, target_url, total_workflows, total_checks,
+		       categories_assessed, verified_count, candidate_count, not_vulnerable_count,
+		       inconclusive_count, blocked_count, synthetic_fixture, coverage_json, created_at
+		FROM assessment_workflow_runs
+		WHERE assessment_id = ?
+	`
+	args := []interface{}{assessmentID}
+	if executionID != "" {
+		query += " AND execution_id = ?"
+		args = append(args, executionID)
+	}
+	query += " ORDER BY created_at DESC LIMIT 1"
+
+	var rec workflow.RunRecord
+	var synthInt int
+	err := s.db.QueryRow(query, args...).Scan(
+		&rec.ID, &rec.AssessmentID, &rec.ExecutionID, &rec.TargetURL,
+		&rec.TotalWorkflows, &rec.TotalChecks, &rec.CategoriesAssessed,
+		&rec.VerifiedCount, &rec.CandidateCount, &rec.NotVulnerableCount,
+		&rec.InconclusiveCount, &rec.BlockedCount, &synthInt,
+		&rec.CoverageJSON, &rec.CreatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	rec.SyntheticFixture = synthInt == 1
+	return &rec, nil
+}
+
+func (s *SQLiteStore) SaveWorkflowResults(results []workflow.Result) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO assessment_workflow_results (
+			id, assessment_id, execution_id, category, vuln_code, workflow_id, workflow_name,
+			step_id, check_id, check_name, owasp_ref, cwe_ref, endpoint, method,
+			verification_state, severity, confidence, observed_status,
+			state_before, state_after, evidence_summary, evidence_details_json, finding_id, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, r := range results {
+		var detailsJSON string
+		if len(r.EvidenceDetails) > 0 {
+			b, _ := json.Marshal(r.EvidenceDetails)
+			detailsJSON = string(b)
+		}
+
+		findingID := ""
+		if r.Finding != nil {
+			findingID = r.Finding.ID
+		}
+
+		now := r.CreatedAt
+		if now.IsZero() {
+			now = time.Now().UTC()
+		}
+
+		_, err := stmt.Exec(
+			r.ID, r.AssessmentID, r.ExecutionID, string(r.Category), r.VulnCode,
+			r.WorkflowID, r.WorkflowName, r.StepID, r.CheckID, r.CheckName,
+			r.OWASPRef, r.CWERef, r.Endpoint, r.Method,
+			string(r.VerificationState), r.Severity, r.Confidence, r.ObservedStatus,
+			r.StateBefore, r.StateAfter, r.EvidenceSummary, detailsJSON, findingID, now,
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+func (s *SQLiteStore) GetWorkflowResults(assessmentID string, executionID string, category string, state string) ([]workflow.Result, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := `
+		SELECT id, assessment_id, execution_id, category, vuln_code, workflow_id, workflow_name,
+		       step_id, check_id, check_name, owasp_ref, cwe_ref, endpoint, method,
+		       verification_state, severity, confidence, observed_status,
+		       state_before, state_after, evidence_summary, evidence_details_json, finding_id, created_at
+		FROM assessment_workflow_results
+		WHERE assessment_id = ?
+	`
+	args := []interface{}{assessmentID}
+
+	if executionID != "" {
+		query += " AND execution_id = ?"
+		args = append(args, executionID)
+	}
+	if category != "" {
+		query += " AND category = ?"
+		args = append(args, category)
+	}
+	if state != "" {
+		query += " AND verification_state = ?"
+		args = append(args, state)
+	}
+
+	query += " ORDER BY created_at ASC"
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []workflow.Result
+	for rows.Next() {
+		var r workflow.Result
+		var catStr, stateStr, detailsJSON, findingID sql.NullString
+		var obsStatus sql.NullInt64
+
+		err := rows.Scan(
+			&r.ID, &r.AssessmentID, &r.ExecutionID, &catStr, &r.VulnCode,
+			&r.WorkflowID, &r.WorkflowName, &r.StepID, &r.CheckID, &r.CheckName,
+			&r.OWASPRef, &r.CWERef, &r.Endpoint, &r.Method,
+			&stateStr, &r.Severity, &r.Confidence, &obsStatus,
+			&r.StateBefore, &r.StateAfter, &r.EvidenceSummary, &detailsJSON, &findingID, &r.CreatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		if catStr.Valid {
+			r.Category = workflow.Category(catStr.String)
+		}
+		if stateStr.Valid {
+			r.VerificationState = workflow.VerificationState(stateStr.String)
+		}
+		if obsStatus.Valid {
+			r.ObservedStatus = int(obsStatus.Int64)
+		}
+		if detailsJSON.Valid && detailsJSON.String != "" {
+			_ = json.Unmarshal([]byte(detailsJSON.String), &r.EvidenceDetails)
+		}
+
+		results = append(results, r)
+	}
+	return results, nil
+}
+
+func (s *SQLiteStore) GetWorkflowSummary(assessmentID string, executionID string) (*workflow.Summary, error) {
+	// 1. Try to load saved RunRecord
+	run, err := s.GetWorkflowRun(assessmentID, executionID)
+	if err == nil && run != nil && run.CoverageJSON != "" {
+		var covMap map[string]workflow.CategoryCoverage
+		if err := json.Unmarshal([]byte(run.CoverageJSON), &covMap); err == nil {
+			summary := &workflow.Summary{
+				TargetURL:           run.TargetURL,
+				TotalWorkflows:      run.TotalWorkflows,
+				TotalChecks:         run.TotalChecks,
+				CategoriesAssessed:  run.CategoriesAssessed,
+				VerifiedCount:      run.VerifiedCount,
+				CandidateCount:     run.CandidateCount,
+				NotVulnerableCount: run.NotVulnerableCount,
+				InconclusiveCount:  run.InconclusiveCount,
+				BlockedCount:       run.BlockedCount,
+				SyntheticFixture:   run.SyntheticFixture,
+				CategoryCoverageMap: covMap,
+			}
+			return summary, nil
+		}
+	}
+
+	// 2. Fallback to computing from raw results
+	results, err := s.GetWorkflowResults(assessmentID, executionID, "", "")
+	if err != nil {
+		return nil, err
+	}
+
+	summary := &workflow.Summary{
+		TotalChecks:         len(results),
+		CategoryCoverageMap: make(map[string]workflow.CategoryCoverage),
+	}
+	for _, r := range results {
+		switch r.VerificationState {
+		case workflow.StateVerified:
+			summary.VerifiedCount++
+		case workflow.StateCandidate:
+			summary.CandidateCount++
+		case workflow.StateNotVulnerable:
+			summary.NotVulnerableCount++
+		case workflow.StateInconclusive:
+			summary.InconclusiveCount++
+		case workflow.StateSkipped:
 			summary.BlockedCount++
 		}
 	}
