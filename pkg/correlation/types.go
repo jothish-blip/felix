@@ -3,6 +3,7 @@ package correlation
 import (
 	"time"
 
+	"felix/pkg/discovery"
 	"felix/pkg/report"
 )
 
@@ -10,18 +11,23 @@ import (
 type RelationshipType string
 
 const (
-	RelEnables         RelationshipType = "ENABLES"
-	RelExposes         RelationshipType = "EXPOSES"
-	RelBypasses        RelationshipType = "BYPASSES"
-	RelDependsOn       RelationshipType = "DEPENDS_ON"
-	RelAmplifiesImpact RelationshipType = "AMPLIFIES_IMPACT"
-	RelReaches         RelationshipType = "REACHES"
-	RelSharesRootCause RelationshipType = "SHARES_ROOT_CAUSE"
-	RelRelatedTo       RelationshipType = "RELATED_TO"
+	RelEnables              RelationshipType = "ENABLES"
+	RelExposes              RelationshipType = "EXPOSES"
+	RelBypasses             RelationshipType = "BYPASSES"
+	RelDependsOn            RelationshipType = "DEPENDS_ON"
+	RelAmplifiesImpact      RelationshipType = "AMPLIFIES_IMPACT"
+	RelReaches              RelationshipType = "REACHES"
+	RelSharesRootCause      RelationshipType = "SHARES_ROOT_CAUSE"
+	RelRelatedTo            RelationshipType = "RELATED_TO"
+	RelSameAsset            RelationshipType = "SAME_ASSET"
+	RelSameEndpoint         RelationshipType = "SAME_ENDPOINT"
+	RelSharedComponent      RelationshipType = "SHARED_COMPONENT"
+	RelRelatedEvidence      RelationshipType = "RELATED_EVIDENCE"
+	RelPossibleRelationship RelationshipType = "POSSIBLE_RELATIONSHIP"
 )
 
 // IsSequenceType returns true if the relationship type represents a valid sequential transition
-// in an attack path. Root cause sharing and generic relations must not form attack path edges.
+// in an attack path. Root cause sharing and structural asset relations must not form attack path edges.
 func (rt RelationshipType) IsSequenceType() bool {
 	switch rt {
 	case RelEnables, RelExposes, RelBypasses, RelDependsOn, RelAmplifiesImpact, RelReaches:
@@ -65,6 +71,13 @@ const (
 	RuleCOR08 RuleCode = "COR-08" // Cloud and Application Dependencies
 	RuleCOR09 RuleCode = "COR-09" // Common Root Cause
 	RuleCOR10 RuleCode = "COR-10" // Impact Amplification
+
+	// Phase 6.2 Structural Relationship Rules
+	RuleCORSameEndpoint RuleCode = "COR-SAME-ENDPOINT" // Same canonical endpoint on compatible origin
+	RuleCORSameAsset    RuleCode = "COR-SAME-ASSET"    // Same resolved asset identity
+	RuleCORSharedComp   RuleCode = "COR-SHARED-COMP"   // Shared component or backend resource
+	RuleCORRelatedEv    RuleCode = "COR-RELATED-EV"    // Shared technical indicator or evidence reference
+	RuleCORPossible     RuleCode = "COR-POSSIBLE"      // Heuristic infrastructure association
 )
 
 // RuleMetadata provides human-readable documentation and standards cross-references for a rule.
@@ -159,14 +172,58 @@ var RuleCatalog = map[RuleCode]RuleMetadata{
 		CWE:         "CWE-942",
 		WSTG:        "WSTG-CLNT-07",
 	},
+	RuleCORSameEndpoint: {
+		Code:        RuleCORSameEndpoint,
+		Name:        "Same Canonical Endpoint",
+		Description: "Connects findings that demonstrably affect the exact same canonical endpoint on compatible origins.",
+		EdgeType:    RelSameEndpoint,
+	},
+	RuleCORSameAsset: {
+		Code:        RuleCORSameAsset,
+		Name:        "Same Resolved Asset",
+		Description: "Connects findings that demonstrably affect the same resolved asset identity.",
+		EdgeType:    RelSameAsset,
+	},
+	RuleCORSharedComp: {
+		Code:        RuleCORSharedComp,
+		Name:        "Shared Component Dependency",
+		Description: "Connects findings that share an underlying backend service, library, database, or cloud resource.",
+		EdgeType:    RelSharedComponent,
+	},
+	RuleCORRelatedEv: {
+		Code:        RuleCORRelatedEv,
+		Name:        "Shared Technical Indicator",
+		Description: "Connects findings sharing documented technical indicators or specific evidence parameters.",
+		EdgeType:    RelRelatedEvidence,
+	},
+	RuleCORPossible: {
+		Code:        RuleCORPossible,
+		Name:        "Possible Heuristic Association",
+		Description: "Records heuristic associations where evidence suggests shared infrastructure but is insufficient for exact asset identity.",
+		EdgeType:    RelPossibleRelationship,
+	},
 }
 
-// AllRules returns the slice of all rule codes in canonical order COR-01 through COR-10.
+// AllRules returns the slice of all rule codes in canonical order COR-01 through COR-10 plus structural rules.
 func AllRules() []RuleCode {
 	return []RuleCode{
 		RuleCOR01, RuleCOR02, RuleCOR03, RuleCOR04, RuleCOR05,
 		RuleCOR06, RuleCOR07, RuleCOR08, RuleCOR09, RuleCOR10,
+		RuleCORSameEndpoint, RuleCORSameAsset, RuleCORSharedComp, RuleCORRelatedEv, RuleCORPossible,
 	}
+}
+
+// AssetAssociation defines the evidence-backed binding between a finding and a resolved asset.
+type AssetAssociation struct {
+	FindingID    string              `json:"finding_id"`
+	AssetID      string              `json:"asset_id"`
+	AssetType    discovery.AssetType `json:"asset_type"`
+	CanonicalKey string              `json:"canonical_key"`
+	DisplayName  string              `json:"display_name"`
+	Basis        string              `json:"basis"` // e.g. "EXPLICIT_INVENTORY", "EXACT_ENDPOINT", "CANONICAL_APPLICATION", "RESOLVED_HOST", "CLOUD_RESOURCE", "APK_PACKAGE"
+	Confidence   string              `json:"confidence"`
+	IsExact      bool                `json:"is_exact"`
+	Evidence     string              `json:"evidence,omitempty"`
 }
 
 // NormalizedFinding provides standardized attributes across finding sources for correlation analysis.
@@ -188,6 +245,10 @@ type NormalizedFinding struct {
 	Score              int                       `json:"score"`
 	Source             string                    `json:"source"`
 	Fingerprint        string                    `json:"fingerprint"`
+	PrimaryAssetID     string                    `json:"primary_asset_id,omitempty"`
+	AffectedAssetIDs   []string                  `json:"affected_asset_ids,omitempty"`
+	AssetType          discovery.AssetType       `json:"asset_type,omitempty"`
+	CanonicalAssetKey  string                    `json:"canonical_asset_key,omitempty"`
 	IsVerified         bool                      `json:"is_verified"`
 	IsCandidate        bool                      `json:"is_candidate"`
 	IsEntrypoint       bool                      `json:"is_entrypoint"`
@@ -204,7 +265,7 @@ type NormalizedFinding struct {
 	InferredHypothesis bool                      `json:"inferred_hypothesis"`
 }
 
-// Relationship models an evidence-backed directed connection between a source finding and a target finding.
+// Relationship models an evidence-backed connection between a source finding and a target finding.
 type Relationship struct {
 	ID                 string           `json:"id"`
 	SourceFindingID    string           `json:"source_finding_id"`
@@ -215,6 +276,10 @@ type Relationship struct {
 	ValidationStatus   ValidationStatus `json:"validation_status"`
 	Confidence         string           `json:"confidence"`
 	RuleCode           RuleCode         `json:"rule_code"`
+	MatchingRule       string           `json:"matching_rule,omitempty"`
+	AssetID            string           `json:"asset_id,omitempty"`
+	AssetKey           string           `json:"asset_key,omitempty"`
+	IsExact            bool             `json:"is_exact"`
 	EvidenceReferences []string         `json:"evidence_references"`
 	Explanation        string           `json:"explanation"`
 	Prerequisites      []string         `json:"prerequisites,omitempty"`
@@ -269,6 +334,8 @@ type Summary struct {
 	HighestRiskLevel         string                      `json:"highest_risk_level"`
 	HighestRiskScore         int                         `json:"highest_risk_score"`
 	AffectedAssets           []string                    `json:"affected_assets"`
+	AssetAssociations        []AssetAssociation          `json:"asset_associations,omitempty"`
+	Relationships            []Relationship              `json:"relationships,omitempty"`
 	KeyRemediationPriorities []string                    `json:"key_remediation_priorities"`
 	LimitsReached            bool                        `json:"limits_reached,omitempty"`
 	TruncationReason         string                      `json:"truncation_reason,omitempty"`
@@ -294,6 +361,7 @@ func DefaultConfig() Config {
 		RulesEnabled: []RuleCode{
 			RuleCOR01, RuleCOR02, RuleCOR03, RuleCOR04, RuleCOR05,
 			RuleCOR06, RuleCOR07, RuleCOR08, RuleCOR09, RuleCOR10,
+			RuleCORSameEndpoint, RuleCORSameAsset, RuleCORSharedComp, RuleCORRelatedEv, RuleCORPossible,
 		},
 		AllowSynthetic: true,
 	}

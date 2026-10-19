@@ -8026,6 +8026,7 @@ func runAssessmentCorrelate(args []string) int {
 
 		fmt.Printf("[+] Correlation analysis completed:\n")
 		fmt.Printf("    Evaluated Findings:        %d\n", summary.EvaluatedFindings)
+		fmt.Printf("    Asset Associations:        %d\n", len(summary.AssetAssociations))
 		fmt.Printf("    Candidate Relationships:   %d\n", summary.CandidateRelationships)
 		fmt.Printf("    Confirmed Relationships:   %d\n", summary.ConfirmedRelationships)
 		fmt.Printf("    Candidate Attack Paths:    %d\n", summary.CandidatePaths)
@@ -8086,11 +8087,12 @@ func runAssessmentCorrelate(args []string) int {
 		return 0
 	}
 
-	if summary != nil && (summary.CandidatePaths > 0 || summary.VerifiedPaths > 0 || len(paths) > 0) {
+	if summary != nil && (summary.CandidatePaths > 0 || summary.VerifiedPaths > 0 || len(paths) > 0 || len(summary.Relationships) > 0 || len(summary.AssetAssociations) > 0) {
 		fmt.Println("\n================================================================================")
 		fmt.Printf("CORRELATION & ATTACK PATH ANALYSIS SUMMARY: %s (%s)\n", asm.Name, asm.Ref)
 		fmt.Println("================================================================================")
 		fmt.Printf("Total Findings:         %d\n", summary.TotalFindings)
+		fmt.Printf("Asset Associations:     %d\n", len(summary.AssetAssociations))
 		fmt.Printf("Candidate Relationships: %d\n", summary.CandidateRelationships)
 		fmt.Printf("Confirmed Relationships: %d\n", summary.ConfirmedRelationships)
 		fmt.Printf("Candidate Paths:        %d\n", summary.CandidatePaths)
@@ -8115,6 +8117,28 @@ func runAssessmentCorrelate(args []string) int {
 				code, meta.Name, meta.EdgeType, st.RelationshipsGenerated, st.PathsGenerated)
 		}
 		_ = w.Flush()
+
+		if verbose && len(summary.AssetAssociations) > 0 {
+			fmt.Println("\nASSET ASSOCIATIONS:")
+			wAssoc := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(wAssoc, "FINDING ID\tASSET ID\tTYPE\tCANONICAL KEY\tBASIS\tCONFIDENCE")
+			for _, a := range summary.AssetAssociations {
+				fmt.Fprintf(wAssoc, "%s\t%s\t%s\t%s\t%s\t%s\n",
+					a.FindingID, a.AssetID, a.AssetType, a.CanonicalKey, a.Basis, a.Confidence)
+			}
+			_ = wAssoc.Flush()
+		}
+
+		if verbose && len(summary.Relationships) > 0 {
+			fmt.Println("\nFINDING RELATIONSHIPS:")
+			wRel := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(wRel, "REL ID\tSOURCE\tTARGET\tTYPE\tRULE\tSTATUS\tCONFIDENCE")
+			for _, r := range summary.Relationships {
+				fmt.Fprintf(wRel, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					r.ID, r.SourceFindingID, r.TargetFindingID, r.Type, r.RuleCode, r.ValidationStatus, r.Confidence)
+			}
+			_ = wRel.Flush()
+		}
 	}
 
 	if len(paths) > 0 {
@@ -8177,7 +8201,7 @@ func runAssessmentCorrelate(args []string) int {
 			_ = w.Flush()
 			fmt.Printf("\nUse --verbose to see full path chains, supporting evidence, and security stories.\n")
 		}
-	} else if summary == nil || (summary.CandidatePaths == 0 && summary.VerifiedPaths == 0) {
+	} else if summary == nil || (summary.CandidatePaths == 0 && summary.VerifiedPaths == 0 && len(summary.Relationships) == 0) {
 		fmt.Println("\nNo attack paths or correlations recorded.")
 		fmt.Printf("To run correlation analysis across findings:\n  felix assessment correlate %s --run\n", asm.Ref)
 	}

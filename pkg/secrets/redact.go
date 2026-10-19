@@ -687,6 +687,8 @@ func IsSensitiveQueryParam(k string) bool {
 		"refresh_token": {},
 		"id_token":      {},
 		"auth_token":    {},
+		"jwt":           {},
+		"bearer":        {},
 		"auth":          {},
 		"authorization": {},
 		"key":           {},

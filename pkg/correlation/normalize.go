@@ -121,8 +121,12 @@ func NormalizeFinding(f report.Finding) NormalizedFinding {
 	if affectedRes == "" {
 		affectedRes = details["object_id"]
 	}
-	if affectedRes == "" {
-		affectedRes = details["bucket"]
+	primaryAsset, _ := ResolveFindingAsset(f, nil)
+	affectedAssets := ResolveFindingAffectedAssets(f, primaryAsset, nil)
+
+	primaryID := f.PrimaryAssetID
+	if primaryID == "" && primaryAsset != nil {
+		primaryID = primaryAsset.ID
 	}
 
 	return NormalizedFinding{
@@ -143,6 +147,10 @@ func NormalizeFinding(f report.Finding) NormalizedFinding {
 		Score:              score,
 		Source:             f.Source,
 		Fingerprint:        f.Fingerprint,
+		PrimaryAssetID:     primaryID,
+		AffectedAssetIDs:   affectedAssets,
+		AssetType:          primaryAsset.Type,
+		CanonicalAssetKey:  primaryAsset.CanonicalKey,
 		IsVerified:         isVer,
 		IsCandidate:        isCand,
 		IsEntrypoint:       isEntry,
@@ -178,21 +186,24 @@ func extractHostAndPath(target, endpoint string) (string, string, string) {
 		return "", "", ""
 	}
 
+	canon, err := CanonicalizeURL(raw)
+	if err == nil {
+		return canon.Host, canon.Origin, canon.Path
+	}
+
+	// Fallback to basic parse if CanonicalizeURL fails
 	if !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://") {
 		raw = "https://" + raw
 	}
-
 	u, err := url.Parse(raw)
 	if err != nil {
 		return "", "", endpoint
 	}
-
-	host := u.Hostname()
-	origin := u.Scheme + "://" + u.Host
-	path := u.Path
-	if path == "" {
-		path = "/"
+	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+	origin := strings.ToLower(u.Scheme) + "://" + u.Host
+	p := u.Path
+	if p == "" {
+		p = "/"
 	}
-
-	return host, origin, path
+	return host, origin, p
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"felix/pkg/discovery"
 	"felix/pkg/report"
 )
 
@@ -36,11 +37,27 @@ func (e *Engine) Correlate(ctx context.Context, findings []report.Finding) (*Sum
 			HighestRiskLevel:  report.SeverityInfo,
 			HighestRiskScore:  0,
 			RuleStats:         make(map[string]RuleCoverageStat),
+			AffectedAssets:    []string{},
+			AssetAssociations: []AssetAssociation{},
+			Relationships:     []Relationship{},
 		}, nil, nil, nil
 	}
 
+	// Deterministically sort input findings by ID, Fingerprint, then Title
+	sortedFindings := make([]report.Finding, len(findings))
+	copy(sortedFindings, findings)
+	sort.Slice(sortedFindings, func(i, j int) bool {
+		if sortedFindings[i].ID != sortedFindings[j].ID {
+			return sortedFindings[i].ID < sortedFindings[j].ID
+		}
+		if sortedFindings[i].Fingerprint != sortedFindings[j].Fingerprint {
+			return sortedFindings[i].Fingerprint < sortedFindings[j].Fingerprint
+		}
+		return sortedFindings[i].Title < sortedFindings[j].Title
+	})
+
 	// 1. Finding Normalization
-	normalized := NormalizeFindings(findings)
+	normalized := NormalizeFindings(sortedFindings)
 
 	// 2. Relationship Candidate Generation & Validation
 	relationships := EvaluateRules(normalized, e.config)
@@ -327,8 +344,69 @@ func (e *Engine) compileSummary(
 	maxRiskScore := 0
 	highestRiskLevel := report.SeverityInfo
 
+	// Build AssetAssociations from normalized findings
+	var assetAssociations []AssetAssociation
+	seenAssocs := make(map[string]bool)
+	for _, f := range findings {
+		assocKey := fmt.Sprintf("%s:%s", f.ID, f.PrimaryAssetID)
+		if !seenAssocs[assocKey] {
+			seenAssocs[assocKey] = true
+			isExact := f.AssetType == discovery.AssetTypeEndpoint ||
+				f.AssetType == discovery.AssetTypeStorage ||
+				f.AssetType == discovery.AssetTypeDatabase ||
+				f.AssetType == discovery.AssetTypeAPK ||
+				f.AssetType == discovery.AssetTypeApplication
+
+			basis := "CANONICAL_ASSET"
+			if f.AssetType == discovery.AssetTypeEndpoint {
+				basis = "EXACT_ENDPOINT"
+			} else if f.AssetType == discovery.AssetTypeStorage {
+				basis = "CLOUD_STORAGE_RESOURCE"
+			} else if f.AssetType == discovery.AssetTypeDatabase {
+				basis = "DATABASE_RESOURCE"
+			} else if f.AssetType == discovery.AssetTypeAPK {
+				basis = "APK_PACKAGE"
+			} else if f.AssetType == discovery.AssetTypeApplication {
+				basis = "CANONICAL_APPLICATION"
+			}
+
+			assetAssociations = append(assetAssociations, AssetAssociation{
+				FindingID:    f.ID,
+				AssetID:      f.PrimaryAssetID,
+				AssetType:    f.AssetType,
+				CanonicalKey: f.CanonicalAssetKey,
+				DisplayName:  f.CanonicalAssetKey,
+				Basis:        basis,
+				Confidence:   f.Confidence,
+				IsExact:      isExact,
+				Evidence:     f.EvidenceSummary,
+			})
+		}
+	}
+
+	// Collect unique affected assets from findings and attack paths
 	seenAssets := make(map[string]bool)
 	var affectedAssets []string
+	addAsset := func(a string) {
+		trimmed := strings.TrimSpace(a)
+		if trimmed != "" && !seenAssets[trimmed] {
+			seenAssets[trimmed] = true
+			affectedAssets = append(affectedAssets, trimmed)
+		}
+	}
+
+	for _, f := range findings {
+		for _, id := range f.AffectedAssetIDs {
+			addAsset(id)
+		}
+		addAsset(f.PrimaryAssetID)
+		addAsset(f.CanonicalAssetKey)
+	}
+	for _, p := range paths {
+		addAsset(p.TargetAsset)
+	}
+	sort.Strings(affectedAssets)
+
 	seenRemediations := make(map[string]bool)
 	var keyRemediations []string
 	isSynth := false
@@ -348,11 +426,6 @@ func (e *Engine) compileSummary(
 			inconclusiveCount++
 		case PathObserved:
 			observedCount++
-		}
-
-		if p.TargetAsset != "" && !seenAssets[p.TargetAsset] {
-			seenAssets[p.TargetAsset] = true
-			affectedAssets = append(affectedAssets, p.TargetAsset)
 		}
 
 		if p.Remediation != "" && !seenRemediations[p.Remediation] && len(keyRemediations) < 3 {
@@ -391,6 +464,8 @@ func (e *Engine) compileSummary(
 		HighestRiskLevel:         highestRiskLevel,
 		HighestRiskScore:         maxRiskScore,
 		AffectedAssets:           affectedAssets,
+		AssetAssociations:        assetAssociations,
+		Relationships:            relationships,
 		KeyRemediationPriorities: keyRemediations,
 		LimitsReached:            limitsReached,
 		TruncationReason:         truncReason,
