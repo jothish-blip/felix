@@ -261,10 +261,10 @@ func ComparePrerequisiteSkipping(legitimateBaseline, skipResp, readBackResp Resp
 
 		// If no specific property configured but read-back succeeded
 		return ComparisonResult{
-			State:           StateVerified,
-			Severity:        "HIGH",
-			Confidence:      "CONFIRMED",
-			EvidenceSummary: fmt.Sprintf("Workflow Circumvention verified: step %q completed (HTTP %d) and confirmed persisted without predecessor prerequisite %v", step.ID, skipResp.StatusCode, step.Preconditions),
+			State:           StateCandidate,
+			Severity:        "MEDIUM",
+			Confidence:      "POSSIBLE",
+			EvidenceSummary: fmt.Sprintf("Server returned HTTP %d to step %q without prerequisite %v, but verification property was not configured; prerequisite bypass unconfirmed", skipResp.StatusCode, step.ID, step.Preconditions),
 			EvidenceDetails: details,
 		}
 	}
@@ -477,11 +477,44 @@ func CompareTokenContinuity(validResp, reusedResp, verifyResp ResponseData, wf W
 
 	if reusedResp.StatusCode >= 200 && reusedResp.StatusCode < 300 {
 		if verifyResp.StatusCode >= 200 && verifyResp.StatusCode < 300 {
+			if step.VerificationProperty != "" {
+				var verifyData any
+				if err := json.Unmarshal(verifyResp.Body, &verifyData); err == nil {
+					val, found := ExtractProperty(verifyData, step.VerificationProperty)
+					if found {
+						isVerified := false
+						if step.ExpectedVerifiedValue != nil {
+							isVerified = IsPropertyEqual(val, step.ExpectedVerifiedValue)
+						} else {
+							s := strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", val)))
+							isVerified = s != "" && s != "false" && s != "0" && s != "null" && s != "<nil>"
+						}
+						if isVerified {
+							details["persisted_value"] = RedactValue(val)
+							return ComparisonResult{
+								State:           StateVerified,
+								Severity:        "HIGH",
+								Confidence:      "CONFIRMED",
+								EvidenceSummary: fmt.Sprintf("Workflow Token Reuse verified: server accepted consumed or foreign token %q on step %q (HTTP %d), confirmed persisted via independent verification (%s=%v)", tokenName, step.ID, reusedResp.StatusCode, step.VerificationProperty, val),
+								EvidenceDetails: details,
+							}
+						}
+					}
+					return ComparisonResult{
+						State:           StateNotVulnerable,
+						Severity:        "INFO",
+						Confidence:      "CONFIRMED",
+						EvidenceSummary: fmt.Sprintf("Server accepted token request with HTTP %d, but independent verification showed token side effect was not applied (%s)", reusedResp.StatusCode, step.VerificationProperty),
+						EvidenceDetails: details,
+					}
+				}
+			}
+
 			return ComparisonResult{
-				State:           StateVerified,
-				Severity:        "HIGH",
-				Confidence:      "CONFIRMED",
-				EvidenceSummary: fmt.Sprintf("Workflow Token Reuse verified: server accepted consumed or foreign token %q on step %q (HTTP %d), confirmed persisted via independent verification", tokenName, step.ID, reusedResp.StatusCode),
+				State:           StateCandidate,
+				Severity:        "MEDIUM",
+				Confidence:      "POSSIBLE",
+				EvidenceSummary: fmt.Sprintf("Server accepted consumed or foreign token %q on step %q (HTTP %d), but verification property was not configured; token reuse unconfirmed", tokenName, step.ID, reusedResp.StatusCode),
 				EvidenceDetails: details,
 			}
 		}
@@ -534,11 +567,52 @@ func CompareIdentityContinuity(ownerResp, nonOwnerResp, verifyResp ResponseData,
 
 	if nonOwnerResp.StatusCode >= 200 && nonOwnerResp.StatusCode < 300 {
 		if verifyResp.StatusCode >= 200 && verifyResp.StatusCode < 300 {
+			if step.VerificationProperty != "" {
+				var verifyData any
+				if err := json.Unmarshal(verifyResp.Body, &verifyData); err == nil {
+					val, found := ExtractProperty(verifyData, step.VerificationProperty)
+					if found {
+						isVerified := false
+						if step.ExpectedVerifiedValue != nil {
+							isVerified = IsPropertyEqual(val, step.ExpectedVerifiedValue)
+						} else {
+							s := strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", val)))
+							isOwner := strings.EqualFold(s, strings.ToLower(strings.TrimSpace(ownerRole)))
+							isIntruder := strings.EqualFold(s, strings.ToLower(strings.TrimSpace(intruderRole)))
+							if isIntruder {
+								isVerified = true
+							} else if isOwner {
+								isVerified = false
+							} else {
+								isVerified = s != "" && s != "false" && s != "0" && s != "null" && s != "<nil>"
+							}
+						}
+						if isVerified {
+							details["persisted_value"] = RedactValue(val)
+							return ComparisonResult{
+								State:           StateVerified,
+								Severity:        "HIGH",
+								Confidence:      "CONFIRMED",
+								EvidenceSummary: fmt.Sprintf("Workflow Ownership Violation verified: non-owner role %s successfully advanced owner's workflow on step %q (HTTP %d), confirmed persisted via independent verification (%s=%v)", intruderRole, step.ID, nonOwnerResp.StatusCode, step.VerificationProperty, val),
+								EvidenceDetails: details,
+							}
+						}
+					}
+					return ComparisonResult{
+						State:           StateNotVulnerable,
+						Severity:        "INFO",
+						Confidence:      "CONFIRMED",
+						EvidenceSummary: fmt.Sprintf("Server returned HTTP %d to non-owner request, but independent verification showed ownership violation was not persisted (%s)", nonOwnerResp.StatusCode, step.VerificationProperty),
+						EvidenceDetails: details,
+					}
+				}
+			}
+
 			return ComparisonResult{
-				State:           StateVerified,
-				Severity:        "HIGH",
-				Confidence:      "CONFIRMED",
-				EvidenceSummary: fmt.Sprintf("Workflow Ownership Violation verified: non-owner role %s successfully advanced owner's workflow on step %q (HTTP %d), confirmed persisted via independent verification", intruderRole, step.ID, nonOwnerResp.StatusCode),
+				State:           StateCandidate,
+				Severity:        "MEDIUM",
+				Confidence:      "POSSIBLE",
+				EvidenceSummary: fmt.Sprintf("Non-owner role %s received HTTP %d on step %q, but verification property was not configured; ownership takeover unconfirmed", intruderRole, nonOwnerResp.StatusCode, step.ID),
 				EvidenceDetails: details,
 			}
 		}

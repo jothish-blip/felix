@@ -437,7 +437,11 @@ func (e *Engine) assessPrerequisiteSkipping(ctx context.Context, client *http.Cl
 			}
 		}
 
-		comp := ComparePrerequisiteSkipping(baselineResp, skipResp, readBackResp, wf, step, "admin", ident.Role)
+		testedRole := "unauthenticated"
+		if ident != nil && ident.Role != "" {
+			testedRole = ident.Role
+		}
+		comp := ComparePrerequisiteSkipping(baselineResp, skipResp, readBackResp, wf, step, "admin", testedRole)
 		res := Result{
 			ID:                uuid.New().String(),
 			AssessmentID:      actx.AssessmentID,
@@ -928,7 +932,15 @@ func (e *Engine) assessIdentityContinuity(ctx context.Context, client *http.Clie
 			}
 		}
 
-		comp := CompareIdentityContinuity(ownerResp, intruderResp, verifyResp, wf, step, ownerIdent.Role, intruderIdent.Role)
+		ownerRole := "owner"
+		if ownerIdent != nil && ownerIdent.Role != "" {
+			ownerRole = ownerIdent.Role
+		}
+		intruderRole := "intruder"
+		if intruderIdent != nil && intruderIdent.Role != "" {
+			intruderRole = intruderIdent.Role
+		}
+		comp := CompareIdentityContinuity(ownerResp, intruderResp, verifyResp, wf, step, ownerRole, intruderRole)
 		res := Result{
 			ID:                uuid.New().String(),
 			AssessmentID:      actx.AssessmentID,

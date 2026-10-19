@@ -1356,3 +1356,125 @@ func TestWorkflow_Plan_DryRunZeroRequests(t *testing.T) {
 		t.Errorf("expected %d workflows planned, got %d", len(DefaultWorkflows()), plan.TotalWorkflows)
 	}
 }
+
+// 27. Prerequisite skip with read-back 200 OK but NO verification property yields CANDIDATE (never VERIFIED)
+func TestWorkflow_PrerequisiteSkip_NoVerificationProperty_Candidate(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/order/complete":
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"status":"completed"}`)
+		case "/order/status":
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"status":"completed"}`)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer ts.Close()
+
+	engine := NewEngine(nil, DefaultConfig())
+	actx := &AssessmentContext{
+		AssessmentID:            "asm-prereq-cand",
+		ExecutionID:             "exec-cand",
+		BaseURL:                 ts.URL,
+		Authorization:           testApprovedAuth(),
+		AllowStateChangingTests: true,
+		SyntheticFixture:        true,
+		Workflows: []Workflow{
+			{
+				ID:   "wf-no-prop",
+				Name: "No Verification Property Configured",
+				Steps: []Step{
+					{ID: "cart", Name: "Cart Step", Endpoint: "/cart", Method: "POST"},
+					{
+						ID:                   "complete",
+						Name:                 "Complete Step",
+						Endpoint:             "/order/complete",
+						Method:               "POST",
+						Preconditions:        []string{"cart"},
+						VerificationEndpoint: "/order/status",
+						// VerificationProperty is deliberately omitted
+					},
+				},
+				CategoriesToAssess: []Category{CategoryPrerequisiteSkipping},
+			},
+		},
+		Identities: DefaultIdentities(),
+	}
+
+	results, _, err := engine.Assess(context.Background(), actx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].VerificationState != StateCandidate {
+		t.Errorf("expected CANDIDATE when verification property is missing, got %s", results[0].VerificationState)
+	}
+}
+
+// 28. Identity continuity where read-back shows owner remained unchanged -> NOT_VULNERABLE
+func TestWorkflow_IdentityContinuity_OwnerUnchanged_NotVulnerable(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/transfer/finalize":
+			// Server returns 200 to non-owner request, but does not actually transfer
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"received":true}`)
+		case "/transfer/status":
+			// Owner remained original owner!
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"status":"active","transferred_to":"owner"}`)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer ts.Close()
+
+	engine := NewEngine(nil, DefaultConfig())
+	actx := &AssessmentContext{
+		AssessmentID:            "asm-ident-safe",
+		ExecutionID:             "exec-safe",
+		BaseURL:                 ts.URL,
+		Authorization:           testApprovedAuth(),
+		AllowStateChangingTests: true,
+		SyntheticFixture:        true,
+		Workflows: []Workflow{
+			{
+				ID:        "transfer-safe",
+				Name:      "Transfer Safe Flow",
+				OwnerRole: "owner",
+				Steps: []Step{
+					{
+						ID:                   "step1",
+						Name:                 "Transfer Action",
+						Endpoint:             "/transfer/finalize",
+						Method:               "POST",
+						VerificationEndpoint: "/transfer/status",
+						VerificationProperty: "transferred_to",
+					},
+				},
+				CategoriesToAssess: []Category{CategoryIdentityContinuity},
+			},
+		},
+		Identities: []TestIdentity{
+			{Alias: "owner_user", Role: "owner", Headers: map[string]string{"Authorization": "Bearer token_owner"}},
+			{Alias: "attacker_user", Role: "attacker", Headers: map[string]string{"Authorization": "Bearer token_attacker"}},
+		},
+	}
+
+	results, _, err := engine.Assess(context.Background(), actx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].VerificationState != StateNotVulnerable {
+		t.Errorf("expected NOT_VULNERABLE when read-back shows owner unchanged, got %s", results[0].VerificationState)
+	}
+}
