@@ -26,6 +26,8 @@ func SanitizeFinding(f Finding) Finding {
 	cleanF.EvidenceDetails.Observation = SanitizeEvidence(f.EvidenceDetails.Observation)
 	cleanF.EvidenceDetails.Location = secrets.SanitizeURL(f.EvidenceDetails.Location)
 	cleanF.EvidenceDetails.NegativeEvidence = SanitizeEvidence(f.EvidenceDetails.NegativeEvidence)
+	cleanF.EvidenceDetails.ExpectedBehavior = SanitizeEvidence(f.EvidenceDetails.ExpectedBehavior)
+	cleanF.EvidenceDetails.ObservedBehavior = SanitizeEvidence(f.EvidenceDetails.ObservedBehavior)
 	cleanF.EvidenceDetails.DetectionStatus = SanitizeEvidence(f.EvidenceDetails.DetectionStatus)
 	cleanF.EvidenceDetails.DetectionMethod = SanitizeEvidence(f.EvidenceDetails.DetectionMethod)
 

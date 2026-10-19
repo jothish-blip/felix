@@ -547,7 +547,7 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 			execRecord.ErrorMessage = "Scan timed out: execution deadline exceeded"
 		} else {
 			execRecord.Status = StatusFailed
-			execRecord.ErrorMessage = fmt.Sprintf("Scan failed: %v", scanErr)
+			execRecord.ErrorMessage = secrets.RedactText(fmt.Sprintf("Scan failed: %v", scanErr))
 		}
 		_ = c.store.UpdateExecution(execRecord)
 		_ = c.store.UpdateAssessmentStatus(assessmentID, execRecord.Status)

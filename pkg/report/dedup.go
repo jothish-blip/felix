@@ -90,6 +90,18 @@ func DeduplicateFindings(findings []Finding) []Finding {
 				existing.EvidenceDetails.NegativeEvidence = existing.EvidenceDetails.NegativeEvidence + " " + norm.EvidenceDetails.NegativeEvidence
 			}
 
+			// Merge expected and observed behaviors
+			if existing.EvidenceDetails.ExpectedBehavior == "" && norm.EvidenceDetails.ExpectedBehavior != "" {
+				existing.EvidenceDetails.ExpectedBehavior = norm.EvidenceDetails.ExpectedBehavior
+			} else if norm.EvidenceDetails.ExpectedBehavior != "" && !strings.Contains(existing.EvidenceDetails.ExpectedBehavior, norm.EvidenceDetails.ExpectedBehavior) {
+				existing.EvidenceDetails.ExpectedBehavior = existing.EvidenceDetails.ExpectedBehavior + "; " + norm.EvidenceDetails.ExpectedBehavior
+			}
+			if existing.EvidenceDetails.ObservedBehavior == "" && norm.EvidenceDetails.ObservedBehavior != "" {
+				existing.EvidenceDetails.ObservedBehavior = norm.EvidenceDetails.ObservedBehavior
+			} else if norm.EvidenceDetails.ObservedBehavior != "" && !strings.Contains(existing.EvidenceDetails.ObservedBehavior, norm.EvidenceDetails.ObservedBehavior) {
+				existing.EvidenceDetails.ObservedBehavior = existing.EvidenceDetails.ObservedBehavior + "; " + norm.EvidenceDetails.ObservedBehavior
+			}
+
 			// Merge details map
 			if len(norm.EvidenceDetails.Details) > 0 {
 				if existing.EvidenceDetails.Details == nil {

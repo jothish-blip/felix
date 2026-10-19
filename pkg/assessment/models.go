@@ -257,3 +257,45 @@ func GenerateAssessmentRef() string {
 	_, _ = rand.Read(b)
 	return fmt.Sprintf("ASM-%d-%04X", now.Year(), binary.BigEndian.Uint16(b))
 }
+
+// ToReportFinding maps an AssessmentFinding back to a complete report.Finding,
+// ensuring no status, classification, provenance, remediation advice, or evidence metadata is lost.
+func ToReportFinding(f AssessmentFinding) report.Finding {
+	rf := report.Finding{
+		ID:                f.OriginalFindingID,
+		RuleID:            f.RuleID,
+		Status:            f.Status,
+		AnalysisMethod:    f.AnalysisMethod,
+		PrimaryAssetID:    f.PrimaryAssetID,
+		AffectedAssetIDs:  f.AffectedAssetIDs,
+		Title:             f.Title,
+		Category:          f.Category,
+		Severity:          f.Severity,
+		Confidence:        f.Confidence,
+		Target:            f.TargetURL,
+		Endpoint:          f.Endpoint,
+		Method:            f.Method,
+		Fingerprint:       f.Fingerprint,
+		Score:             f.Score,
+		Evidence:          f.EvidenceDetails.Observation,
+		EvidenceDetails:   f.EvidenceDetails,
+		Verification:      f.VerificationRecord,
+		Remediation:       f.Remediation,
+		RemediationAdvice: f.RemediationAdvice,
+		Provenance:        f.Provenance,
+		Timestamp:         f.CreatedAt,
+	}
+	if rf.ID == "" {
+		rf.ID = f.ID
+	}
+	if rf.Status == "" {
+		rf.Status = report.FindingStatusFromVerification(f.VerificationStatus)
+	}
+	if rf.Verification.Status == "" && f.VerificationStatus != "" {
+		rf.Verification.Status = f.VerificationStatus
+	}
+	if rf.Fingerprint == "" {
+		rf.Fingerprint = report.ComputeFindingFingerprint(rf.Target, rf.Category, rf.Endpoint, rf.Method, rf.ID)
+	}
+	return rf
+}

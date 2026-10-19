@@ -90,24 +90,7 @@ func GenerateCuratedCommercialReport(
 		switch status {
 		case ReviewStatusApproved:
 			// Map to report.Finding without mutating underlying assessment finding
-			verRec := f.VerificationRecord
-			if verRec.Status == "" && f.VerificationStatus != "" {
-				verRec.Status = f.VerificationStatus
-			}
-			rf := report.Finding{
-				ID:              f.OriginalFindingID,
-				Title:           f.Title,
-				Category:        f.Category,
-				Severity:        f.Severity,
-				Confidence:      f.Confidence,
-				Target:          f.TargetURL,
-				Endpoint:        f.Endpoint,
-				Method:          f.Method,
-				Evidence:        f.EvidenceDetails.Observation,
-				EvidenceDetails: f.EvidenceDetails,
-				Verification:    verRec,
-				Score:           f.Score,
-			}
+			rf := ToReportFinding(f)
 			approvedFindings = append(approvedFindings, rf)
 		case ReviewStatusRejected:
 			rejectedCount++

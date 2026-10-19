@@ -168,6 +168,12 @@ func ApplyVerificationToFindings(findings []report.Finding, results []Verificati
 		} else if res.ObservedBehavior != "" {
 			fCopy.Verification.Result = res.ObservedBehavior
 		}
+		if res.ExpectedBehavior != "" {
+			fCopy.EvidenceDetails.ExpectedBehavior = res.ExpectedBehavior
+		}
+		if res.ObservedBehavior != "" {
+			fCopy.EvidenceDetails.ObservedBehavior = res.ObservedBehavior
+		}
 
 		// Honest Status and AnalysisMethod assignment
 		if res.SafetyDecision == DecisionBlocked || (!res.Attempted && res.Status == StatusNotVerified) {

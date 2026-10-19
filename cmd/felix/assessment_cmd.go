@@ -1367,20 +1367,7 @@ func runAssessmentReports(args []string) int {
 		}
 		var reportFindings []report.Finding
 		for _, f := range rawFindings {
-			rf := report.Finding{
-				ID:              f.ID,
-				Title:           f.Title,
-				Category:        f.Category,
-				Severity:        f.Severity,
-				Confidence:      f.Confidence,
-				Target:          f.TargetURL,
-				Endpoint:        f.Endpoint,
-				Method:          f.Method,
-				EvidenceDetails: f.EvidenceDetails,
-				Verification:    f.VerificationRecord,
-				Remediation:     f.Remediation,
-			}
-			reportFindings = append(reportFindings, rf)
+			reportFindings = append(reportFindings, assessment.ToReportFinding(f))
 		}
 
 		var targetsList []string
@@ -7881,24 +7868,7 @@ func runAssessmentCorrelate(args []string) int {
 
 		var reportFindings []report.Finding
 		for _, f := range rawFindings {
-			rf := report.Finding{
-				ID:              f.OriginalFindingID,
-				Title:           f.Title,
-				Category:        f.Category,
-				Severity:        f.Severity,
-				Confidence:      f.Confidence,
-				Score:           f.Score,
-				Target:          f.TargetURL,
-				Endpoint:        f.Endpoint,
-				Method:          f.Method,
-				EvidenceDetails: f.EvidenceDetails,
-				Verification:    f.VerificationRecord,
-				Remediation:     f.Remediation,
-			}
-			if rf.ID == "" {
-				rf.ID = f.ID
-			}
-			reportFindings = append(reportFindings, rf)
+			reportFindings = append(reportFindings, assessment.ToReportFinding(f))
 		}
 
 		cfg := correlation.DefaultConfig()
@@ -8006,7 +7976,7 @@ func runAssessmentCorrelate(args []string) int {
 			htmlFile := filepath.Join(reportsDir, fmt.Sprintf("%s_%s.html", asm.Ref, execID))
 
 			if err := report.WriteJSON(rep, jsonFile); err == nil {
-				_ = store.SaveReport(&assessment.ReportRecord{
+				if err := store.SaveReport(&assessment.ReportRecord{
 					ID:           "rep-" + uuid.New().String(),
 					AssessmentID: asm.ID,
 					ExecutionID:  execID,
@@ -8014,10 +7984,14 @@ func runAssessmentCorrelate(args []string) int {
 					FilePath:     jsonFile,
 					FelixVersion: "2.0",
 					Status:       "GENERATED",
-				})
+				}); err != nil {
+					fmt.Fprintf(os.Stderr, "[-] Warning: failed to save JSON report record: %v\n", err)
+				}
+			} else {
+				fmt.Fprintf(os.Stderr, "[-] Warning: failed to write JSON report file: %v\n", err)
 			}
 			if err := report.WriteHTML(rep, htmlFile); err == nil {
-				_ = store.SaveReport(&assessment.ReportRecord{
+				if err := store.SaveReport(&assessment.ReportRecord{
 					ID:           "rep-" + uuid.New().String(),
 					AssessmentID: asm.ID,
 					ExecutionID:  execID,
@@ -8025,7 +7999,11 @@ func runAssessmentCorrelate(args []string) int {
 					FilePath:     htmlFile,
 					FelixVersion: "2.0",
 					Status:       "GENERATED",
-				})
+				}); err != nil {
+					fmt.Fprintf(os.Stderr, "[-] Warning: failed to save HTML report record: %v\n", err)
+				}
+			} else {
+				fmt.Fprintf(os.Stderr, "[-] Warning: failed to write HTML report file: %v\n", err)
 			}
 		}
 
@@ -8294,24 +8272,7 @@ func runAssessmentVerify(args []string) int {
 
 		var reportFindings []report.Finding
 		for _, f := range rawFindings {
-			rf := report.Finding{
-				ID:              f.OriginalFindingID,
-				Title:           f.Title,
-				Category:        f.Category,
-				Severity:        f.Severity,
-				Confidence:      f.Confidence,
-				Score:           f.Score,
-				Target:          f.TargetURL,
-				Endpoint:        f.Endpoint,
-				Method:          f.Method,
-				EvidenceDetails: f.EvidenceDetails,
-				Verification:    f.VerificationRecord,
-				Remediation:     f.Remediation,
-			}
-			if rf.ID == "" {
-				rf.ID = f.ID
-			}
-			reportFindings = append(reportFindings, rf)
+			reportFindings = append(reportFindings, assessment.ToReportFinding(f))
 		}
 
 		// Verify using SafetyChecker
@@ -8391,7 +8352,9 @@ func runAssessmentVerify(args []string) int {
 				rawFindings[i].VerificationRecord = uf.Verification
 			}
 		}
-		_ = store.SaveFindings(rawFindings)
+		if err := store.SaveFindings(rawFindings); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Warning: failed to save verified findings to database: %v\n", err)
+		}
 
 		fmt.Printf("[+] Verification Engine 2.0 completed:\n")
 		fmt.Printf("    Evaluated Findings:        %d\n", summary.TotalFindings)

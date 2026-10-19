@@ -58,6 +58,9 @@ var (
 
 	// redisTokenURLPattern matches standalone tokens in Redis URIs: redis://token@host:port
 	redisTokenURLPattern = regexp.MustCompile(`(?i)(rediss?://)([^:/\s?#@]+)@`)
+
+	// proseCredentialPattern matches credentials expressed in natural log or error phrases ("with password xyz", "using token abc")
+	proseCredentialPattern = regexp.MustCompile(`(?i)\b((?:with|using|having|entered|supplied|provided|is|was)\s+(?:password|passwd|pass|pwd|secret|api[_\s-]?key|token)\s+)(["'\x60]?)([^"'\x60\s,;<>]+)(["'\x60]?)`)
 )
 
 // RedactText sanitizes arbitrary text by redacting all recognized credentials, tokens,
@@ -227,6 +230,23 @@ func RedactText(input string) string {
 		}
 
 		return fmt.Sprintf("%s%s%s[REDACTED]", key, sep, leadingSpace)
+	})
+
+	// 11. Redact credentials mentioned in error and log prose ("with password xyz", "using token abc", "password is def")
+	s = proseCredentialPattern.ReplaceAllStringFunc(s, func(m string) string {
+		if strings.Contains(m, "[REDACTED") {
+			return m
+		}
+		sub := proseCredentialPattern.FindStringSubmatch(m)
+		if len(sub) == 5 {
+			prefix := sub[1]
+			quote := sub[2]
+			if quote != "" {
+				return fmt.Sprintf("%s%s[REDACTED]%s", prefix, quote, quote)
+			}
+			return fmt.Sprintf("%s[REDACTED]", prefix)
+		}
+		return m
 	})
 
 	return s

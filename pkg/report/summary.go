@@ -157,7 +157,15 @@ func Prioritize(findings []Finding) []Finding {
 		// 7. Endpoint
 		epi := strings.ToLower(fi.Endpoint)
 		epj := strings.ToLower(fj.Endpoint)
-		return epi < epj
+		if epi != epj {
+			return epi < epj
+		}
+
+		// 8. Deterministic tie-breaker
+		if fi.ID != fj.ID {
+			return fi.ID < fj.ID
+		}
+		return fi.Fingerprint < fj.Fingerprint
 	})
 
 	return sorted

@@ -2149,6 +2149,13 @@ func (s *SQLiteStore) SaveFindings(findings []AssessmentFinding) error {
 			f.Provenance = f.EvidenceDetails.Provenance
 		}
 
+		// Sync RemediationAdvice for lossless SQLite persistence
+		if f.RemediationAdvice != nil {
+			if advJSON, err := json.Marshal(f.RemediationAdvice); err == nil {
+				f.EvidenceDetails.Details["remediation_advice_json"] = string(advJSON)
+			}
+		}
+
 		evJSON, err := json.Marshal(f.EvidenceDetails)
 		if err != nil {
 			evJSON = []byte("{}")
@@ -2206,7 +2213,7 @@ func (s *SQLiteStore) GetFindings(assessmentID string, executionID string) ([]As
 		query += ` AND execution_id = ?`
 		args = append(args, executionID)
 	}
-	query += ` ORDER BY score DESC, created_at ASC`
+	query += ` ORDER BY score DESC, created_at ASC, id ASC`
 
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
@@ -2249,6 +2256,12 @@ func (s *SQLiteStore) GetFindings(assessmentID string, executionID string) ([]As
 			}
 			if asts, ok := f.EvidenceDetails.Details["affected_asset_ids"]; ok && asts != "" {
 				f.AffectedAssetIDs = strings.Split(asts, ",")
+			}
+			if advStr, ok := f.EvidenceDetails.Details["remediation_advice_json"]; ok && advStr != "" {
+				var adv report.RemediationAdvice
+				if err := json.Unmarshal([]byte(advStr), &adv); err == nil {
+					f.RemediationAdvice = &adv
+				}
 			}
 		}
 		if f.Status == "" {

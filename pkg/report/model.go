@@ -200,6 +200,8 @@ type EvidenceDetails struct {
 	DetectionMethod  string              `json:"detection_method"`
 	DetectionStatus  string              `json:"detection_status,omitempty"`
 	NegativeEvidence string              `json:"negative_evidence,omitempty"`
+	ExpectedBehavior string              `json:"expected_behavior,omitempty"`
+	ObservedBehavior string              `json:"observed_behavior,omitempty"`
 	Details          map[string]string   `json:"details,omitempty"`
 	Provenance       *EvidenceProvenance `json:"provenance,omitempty"`
 }
