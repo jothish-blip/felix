@@ -1233,3 +1233,196 @@ func TestBOPLA_RepresentationBypass_Verified(t *testing.T) {
 		t.Errorf("expected VERIFIED for representation bypass, got %s", results[0].VerificationState)
 	}
 }
+
+// 26. Both flags set against a target that is NOT an authorized fixture dispatch zero mutation requests
+func TestBOPLA_Write_BlockedWhenTargetNotAuthorizedFixture_ZeroRequests(t *testing.T) {
+	var dispatchedCount int32
+	engine := NewEngine(nil, DefaultConfig())
+	actx := &AssessmentContext{
+		AssessmentID:            "asm-prod-01",
+		ExecutionID:             "exec-prod-01",
+		BaseURL:                 "https://api.production.corp.acme.com", // Arbitrary production target!
+		Authorization:           testApprovedAuth(),
+		AllowStateChangingTests: true, // Both flags explicitly set!
+		SyntheticFixture:        true,
+		DispatchedRequests:      &dispatchedCount,
+		Policies: []PropertyPolicy{
+			{
+				PropertyID:      "role-mutation",
+				Name:            "Role Mutation Test",
+				Endpoint:        "/api/users/profile",
+				Method:          "PUT",
+				Category:        CategoryBOPLAPropertyWrite,
+				PropertyPath:    "role",
+				MutationValue:   "admin",
+				IsStateChanging: true,
+			},
+		},
+		Identities: []TestIdentity{
+			{Alias: "admin", Role: "admin", Headers: map[string]string{"Authorization": "Bearer token_admin"}},
+			{Alias: "user", Role: "user", Headers: map[string]string{"Authorization": "Bearer token_user"}},
+		},
+	}
+
+	results, _, err := engine.Assess(context.Background(), actx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].VerificationState != StateSkipped {
+		t.Errorf("security invariant violated: expected SKIPPED when target is not an authorized fixture, got %s", results[0].VerificationState)
+	}
+	if !strings.Contains(results[0].EvidenceSummary, "not an authorized synthetic fixture") {
+		t.Errorf("expected evidence summary to state target is not an authorized fixture, got: %s", results[0].EvidenceSummary)
+	}
+	if atomic.LoadInt32(&dispatchedCount) != 0 {
+		t.Errorf("security invariant violated: dispatched %d network requests against arbitrary production target", atomic.LoadInt32(&dispatchedCount))
+	}
+}
+
+// 27. Valid isolated fixture with explicit opt-in executes ONLY the configured mutation
+func TestBOPLA_Write_ValidIsolatedFixture_ExecutesConfiguredMutationOnly(t *testing.T) {
+	var putCount int32
+	var getCount int32
+	var currentRole = "user"
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == "PUT" {
+			atomic.AddInt32(&putCount, 1)
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if rVal, ok := body["role"]; ok {
+				currentRole = fmt.Sprintf("%v", rVal)
+			}
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{"status":"updated","role":"%s"}`, currentRole)
+			return
+		}
+		if r.Method == "GET" {
+			atomic.AddInt32(&getCount, 1)
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{"id":"u1","role":"%s"}`, currentRole)
+			return
+		}
+	}))
+	defer ts.Close()
+
+	engine := NewEngine(nil, DefaultConfig())
+	actx := &AssessmentContext{
+		AssessmentID:            "asm-fixture-01",
+		ExecutionID:             "exec-fixture-01",
+		BaseURL:                 ts.URL, // Valid local synthetic fixture (loopback)
+		Authorization:           testApprovedAuth(),
+		AllowStateChangingTests: true,
+		SyntheticFixture:        true,
+		Policies: []PropertyPolicy{
+			{
+				PropertyID:       "role-mutation",
+				Name:             "Role Mutation Test",
+				Endpoint:         "/api/users/profile",
+				Method:           "PUT",
+				Category:         CategoryBOPLAPropertyWrite,
+				PropertyPath:     "role",
+				MutationValue:    "admin",
+				ReadBackEndpoint: "/api/users/profile",
+				ReadBackMethod:   "GET",
+				IsStateChanging:  true,
+			},
+		},
+		Identities: []TestIdentity{
+			{Alias: "admin", Role: "admin", Headers: map[string]string{"Authorization": "Bearer token_admin"}},
+			{Alias: "user", Role: "user", Headers: map[string]string{"Authorization": "Bearer token_user"}},
+		},
+	}
+
+	results, _, err := engine.Assess(context.Background(), actx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].VerificationState != StateVerified {
+		t.Errorf("expected VERIFIED on valid fixture, got %s", results[0].VerificationState)
+	}
+	if atomic.LoadInt32(&putCount) != 1 {
+		t.Errorf("expected exactly 1 PUT write mutation request, got %d", atomic.LoadInt32(&putCount))
+	}
+}
+
+// 28. Failed or uncertain mutation is NEVER retried automatically
+func TestBOPLA_Write_FailedOrUncertainMutation_NoRetries(t *testing.T) {
+	var putCount int32
+	var deleteCount int32
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == "PUT" {
+			atomic.AddInt32(&putCount, 1)
+			// Server encounters an internal error / failure
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, `{"error":"database failure during mutation"}`)
+			return
+		}
+		if r.Method == "DELETE" {
+			atomic.AddInt32(&deleteCount, 1)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method == "GET" {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"id":"u1","role":"user"}`)
+			return
+		}
+	}))
+	defer ts.Close()
+
+	engine := NewEngine(nil, DefaultConfig())
+	actx := &AssessmentContext{
+		AssessmentID:            "asm-fail-01",
+		ExecutionID:             "exec-fail-01",
+		BaseURL:                 ts.URL,
+		Authorization:           testApprovedAuth(),
+		AllowStateChangingTests: true,
+		SyntheticFixture:        true,
+		Policies: []PropertyPolicy{
+			{
+				PropertyID:      "role-mutation",
+				Name:            "Role Mutation Test",
+				Endpoint:        "/api/users/profile",
+				Method:          "PUT",
+				Category:        CategoryBOPLAPropertyWrite,
+				PropertyPath:    "role",
+				MutationValue:   "admin",
+				IsStateChanging: true,
+			},
+		},
+		Identities: []TestIdentity{
+			{Alias: "admin", Role: "admin", Headers: map[string]string{"Authorization": "Bearer token_admin"}},
+			{Alias: "user", Role: "user", Headers: map[string]string{"Authorization": "Bearer token_user"}},
+		},
+	}
+
+	results, _, err := engine.Assess(context.Background(), actx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	// PUT must be attempted exactly once
+	if atomic.LoadInt32(&putCount) != 1 {
+		t.Errorf("expected exactly 1 PUT write attempt, got %d", atomic.LoadInt32(&putCount))
+	}
+	// Alternate write methods (e.g. DELETE) must never be attempted
+	if atomic.LoadInt32(&deleteCount) != 0 {
+		t.Errorf("security violation: engine dispatched DELETE request after PUT failed; write retries must not occur across write methods")
+	}
+	// Result must not be VERIFIED
+	if results[0].VerificationState == StateVerified {
+		t.Errorf("failed mutation must not be VERIFIED, got %s", results[0].VerificationState)
+	}
+}

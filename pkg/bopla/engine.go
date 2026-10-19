@@ -182,7 +182,7 @@ func (e *Engine) Plan(ctx context.Context, actx *AssessmentContext) (*TestPlan, 
 			pt.TestedAlias = testedIdent.Alias
 		}
 
-		// Check scope exclusions
+		// Check scope exclusions and safety guards
 		if actx.IsExcluded != nil && actx.IsExcluded(fullURL) {
 			pt.Status = PlanSkipped
 			pt.BlockedReason = "Target endpoint is excluded by assessment scope rules"
@@ -194,6 +194,18 @@ func (e *Engine) Plan(ctx context.Context, actx *AssessmentContext) (*TestPlan, 
 		} else if (pol.IsStateChanging || pol.Category == CategoryBOPLAPropertyWrite || pol.Category == CategoryBOPLAMassAssignment) && !actx.SyntheticFixture {
 			pt.Status = PlanBlocked
 			pt.BlockedReason = "State-changing property tests are restricted to designated synthetic fixtures or isolated test environments"
+			plan.BlockedTests++
+		} else if (pol.IsStateChanging || pol.Category == CategoryBOPLAPropertyWrite || pol.Category == CategoryBOPLAMassAssignment) && !IsIsolatedFixtureTarget(fullURL, actx.AuthorizedFixtureHosts, actx.IsFixtureTarget) {
+			pt.Status = PlanBlocked
+			pt.BlockedReason = "State-changing property tests blocked: target is not an authorized synthetic fixture or isolated test environment"
+			plan.BlockedTests++
+		} else if (pol.IsStateChanging || pol.Category == CategoryBOPLAPropertyWrite || pol.Category == CategoryBOPLAMassAssignment) && strings.TrimSpace(pol.PropertyPath) == "" {
+			pt.Status = PlanBlocked
+			pt.BlockedReason = "State-changing property test blocked: missing required property path"
+			plan.BlockedTests++
+		} else if (pol.IsStateChanging || pol.Category == CategoryBOPLAPropertyWrite || pol.Category == CategoryBOPLAMassAssignment) && pol.MutationValue == nil && strings.TrimSpace(pol.MutationPayload) == "" {
+			pt.Status = PlanBlocked
+			pt.BlockedReason = "State-changing property test blocked: missing required mutation value or payload"
 			plan.BlockedTests++
 		} else if testedIdent == nil {
 			pt.Status = PlanBlocked
@@ -271,6 +283,13 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 			continue
 		}
 
+		// Property path validation
+		if strings.TrimSpace(pol.PropertyPath) == "" {
+			res := makeSkippedResult(actx, pol, "Property test blocked: missing required property path")
+			results = append(results, res)
+			continue
+		}
+
 		// State-changing safety check
 		if pol.IsStateChanging || pol.Category == CategoryBOPLAPropertyWrite || pol.Category == CategoryBOPLAMassAssignment {
 			if !actx.AllowStateChangingTests {
@@ -280,6 +299,16 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 			}
 			if !actx.SyntheticFixture {
 				res := makeSkippedResult(actx, pol, "State-changing property test blocked: write mutations are restricted to designated synthetic fixtures or isolated test environments")
+				results = append(results, res)
+				continue
+			}
+			if !IsIsolatedFixtureTarget(fullURL, actx.AuthorizedFixtureHosts, actx.IsFixtureTarget) {
+				res := makeSkippedResult(actx, pol, fmt.Sprintf("State-changing property test blocked: target %q is not an authorized synthetic fixture or isolated test environment", fullURL))
+				results = append(results, res)
+				continue
+			}
+			if pol.MutationValue == nil && strings.TrimSpace(pol.MutationPayload) == "" {
+				res := makeSkippedResult(actx, pol, "State-changing property test blocked: missing required mutation value or payload")
 				results = append(results, res)
 				continue
 			}

@@ -5607,6 +5607,30 @@ func runAssessmentBOPLA(args []string) int {
 		}
 	}
 
+	var fixtureHosts []string
+	for _, t := range asm.Targets {
+		lbl := strings.ToLower(t.Label)
+		if strings.Contains(lbl, "fixture") ||
+			strings.Contains(lbl, "test") ||
+			strings.Contains(lbl, "synthetic") ||
+			strings.Contains(lbl, "sandbox") ||
+			strings.Contains(lbl, "staging") {
+			if parsed, err := url.Parse(t.TargetURL); err == nil && parsed.Hostname() != "" {
+				fixtureHosts = append(fixtureHosts, parsed.Hostname())
+			}
+		}
+	}
+	for _, r := range asm.ScopeRules {
+		pat := strings.ToLower(r.Pattern)
+		if strings.Contains(pat, "fixture") ||
+			strings.Contains(pat, "test") ||
+			strings.Contains(pat, "synthetic") ||
+			strings.Contains(pat, "sandbox") ||
+			strings.Contains(pat, "staging") {
+			fixtureHosts = append(fixtureHosts, r.Pattern)
+		}
+	}
+
 	// Mode 1: Dry-Run
 	if dryRun {
 		engine := bopla.NewEngine(nil, bopla.DefaultConfig())
@@ -5617,6 +5641,7 @@ func runAssessmentBOPLA(args []string) int {
 			Identities:              identities,
 			AllowStateChangingTests: allowStateChanging,
 			SyntheticFixture:        syntheticFixture,
+			AuthorizedFixtureHosts:  fixtureHosts,
 			DryRun:                  true,
 			IsExcluded: func(target string) bool {
 				for _, exc := range asm.Exclusions {
@@ -5756,6 +5781,7 @@ func runAssessmentBOPLA(args []string) int {
 			Identities:              identities,
 			AllowStateChangingTests: allowStateChanging,
 			SyntheticFixture:        syntheticFixture,
+			AuthorizedFixtureHosts:  fixtureHosts,
 			Authorization:           authRec,
 			MaxRequests:             maxRequests,
 			DispatchedRequests:      &dispatchedReqs,

@@ -330,6 +330,8 @@ type AssessmentContext struct {
 	Identities              []TestIdentity
 	AllowStateChangingTests bool
 	SyntheticFixture        bool
+	AuthorizedFixtureHosts  []string
+	IsFixtureTarget         func(target string) bool
 	DryRun                  bool
 	MaxRequests             int
 	DispatchedRequests      *int32
@@ -481,6 +483,64 @@ func BuildFindingID(assessmentID, propertyID, category string) string {
 func IsLoopbackHost(host string) bool {
 	h := strings.ToLower(strings.TrimSpace(host))
 	return h == "localhost" || h == "127.0.0.1" || h == "::1" || strings.HasPrefix(h, "127.")
+}
+
+// IsIsolatedFixtureTarget determines whether a target URL is bound to an authorized synthetic fixture
+// or explicitly designated isolated test environment, preventing mutations against arbitrary production targets.
+func IsIsolatedFixtureTarget(rawURL string, authorizedFixtures []string, isFixtureFunc func(string) bool) bool {
+	if isFixtureFunc != nil && isFixtureFunc(rawURL) {
+		return true
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	hostname := strings.ToLower(strings.TrimSpace(u.Hostname()))
+	if hostname == "" {
+		return false
+	}
+
+	// 1. Loopback addresses and local test harness fixtures
+	if IsLoopbackHost(hostname) {
+		return true
+	}
+
+	// 2. Safe local, test, or synthetic fixture domain suffixes
+	fixtureSuffixes := []string{
+		".local",
+		".internal",
+		".test",
+		".example",
+		".synthetic",
+		".mock",
+	}
+	for _, suffix := range fixtureSuffixes {
+		if strings.HasSuffix(hostname, suffix) {
+			return true
+		}
+	}
+
+	// 3. Explicitly configured authorized fixture hosts or patterns
+	for _, af := range authorizedFixtures {
+		clean := strings.ToLower(strings.TrimSpace(af))
+		if clean == "" {
+			continue
+		}
+		if strings.HasPrefix(clean, "*.") {
+			suffix := clean[1:]
+			if strings.HasSuffix(hostname, suffix) {
+				return true
+			}
+		} else if strings.EqualFold(hostname, clean) {
+			return true
+		} else if parsedAF, err := url.Parse(af); err == nil && parsedAF.Hostname() != "" {
+			if strings.EqualFold(hostname, parsedAF.Hostname()) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // EffectivePort returns the explicit or scheme-default port for a URL.
