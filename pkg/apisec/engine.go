@@ -86,21 +86,76 @@ func (e *Engine) ScopedClient(actx *AssessmentContext) *http.Client {
 				}
 			}
 			if len(via) > 0 {
-				lastHost := strings.ToLower(via[len(via)-1].URL.Host)
-				nextHost := strings.ToLower(req.URL.Host)
-				if lastHost != "" && nextHost != "" && lastHost != nextHost {
-					if actx != nil && actx.IsAllowed != nil && !actx.IsAllowed(nextURL) {
-						return fmt.Errorf("cross-host redirect from %s to %s blocked", lastHost, nextHost)
+				initialURL := via[0].URL
+				prevURL := via[len(via)-1].URL
+
+				crossPrev := !IsSameOrigin(prevURL, req.URL)
+				crossInitial := !IsSameOrigin(initialURL, req.URL)
+				chainedUntrusted := false
+				for _, v := range via {
+					if !IsSameOrigin(v.URL, initialURL) {
+						chainedUntrusted = true
+						break
 					}
+				}
+				isRemoteCleartext := strings.EqualFold(req.URL.Scheme, "http") && !isLoopbackHost(req.URL.Hostname())
+
+				if crossPrev || crossInitial || chainedUntrusted || isRemoteCleartext {
 					req.Header.Del("Authorization")
 					req.Header.Del("Cookie")
+					req.Header.Del("Cookie2")
 					req.Header.Del("X-API-Key")
 					req.Header.Del("apikey")
+					req.Header.Del("X-Auth-Token")
+					req.Header.Del("Proxy-Authorization")
 				}
 			}
 			return nil
 		},
 	}
+}
+
+// EffectivePort returns the explicit port from the URL, or the default port (80 for http, 443 for https).
+func EffectivePort(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	if p := u.Port(); p != "" {
+		return p
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return "443"
+	case "http":
+		return "80"
+	default:
+		return ""
+	}
+}
+
+// IsSameOrigin checks whether two URLs share the exact scheme, host, and effective port.
+func IsSameOrigin(u1, u2 *url.URL) bool {
+	if u1 == nil || u2 == nil {
+		return false
+	}
+	if !strings.EqualFold(u1.Scheme, u2.Scheme) {
+		return false
+	}
+	if !strings.EqualFold(u1.Hostname(), u2.Hostname()) {
+		return false
+	}
+	return EffectivePort(u1) == EffectivePort(u2)
+}
+
+func isLoopbackHost(host string) bool {
+	h := strings.ToLower(strings.TrimSpace(host))
+	if h == "localhost" || h == "127.0.0.1" || h == "::1" || h == "ip6-localhost" || h == "ip6-loopback" {
+		return true
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
 
 func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {

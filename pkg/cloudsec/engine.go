@@ -3,7 +3,9 @@ package cloudsec
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -21,8 +23,8 @@ func NewEngine(cfg Config) *Engine {
 	return &Engine{config: cfg}
 }
 
-// scopedClient creates an HTTP client strictly bound to assessment scope and redirect enforcement.
-func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
+// ScopedClient creates an HTTP client strictly bound to assessment scope and redirect enforcement.
+func (e *Engine) ScopedClient(actx *AssessmentContext) *http.Client {
 	transport := e.config.Transport
 	if transport == nil {
 		transport = http.DefaultTransport
@@ -56,19 +58,81 @@ func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
 				return fmt.Errorf("redirect blocked: %s is out of authorized scope", destURL)
 			}
 			if len(via) > 0 {
-				lastHost := strings.ToLower(via[len(via)-1].URL.Host)
-				nextHost := strings.ToLower(req.URL.Host)
-				if lastHost != "" && nextHost != "" && lastHost != nextHost {
+				initialURL := via[0].URL
+				prevURL := via[len(via)-1].URL
+
+				crossPrev := !IsSameOrigin(prevURL, req.URL)
+				crossInitial := !IsSameOrigin(initialURL, req.URL)
+				chainedUntrusted := false
+				for _, v := range via {
+					if !IsSameOrigin(v.URL, initialURL) {
+						chainedUntrusted = true
+						break
+					}
+				}
+				isRemoteCleartext := strings.EqualFold(req.URL.Scheme, "http") && !isLoopbackHost(req.URL.Hostname())
+
+				if crossPrev || crossInitial || chainedUntrusted || isRemoteCleartext {
 					req.Header.Del("Authorization")
 					req.Header.Del("Cookie")
+					req.Header.Del("Cookie2")
 					req.Header.Del("X-API-Key")
 					req.Header.Del("apikey")
+					req.Header.Del("X-Auth-Token")
+					req.Header.Del("Proxy-Authorization")
 					req.Header.Del("x-amz-security-token")
 				}
 			}
 			return nil
 		},
 	}
+}
+
+func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
+	return e.ScopedClient(actx)
+}
+
+// EffectivePort returns the explicit port from the URL, or the default port (80 for http, 443 for https).
+func EffectivePort(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	if p := u.Port(); p != "" {
+		return p
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return "443"
+	case "http":
+		return "80"
+	default:
+		return ""
+	}
+}
+
+// IsSameOrigin checks whether two URLs share the exact scheme, host, and effective port.
+func IsSameOrigin(u1, u2 *url.URL) bool {
+	if u1 == nil || u2 == nil {
+		return false
+	}
+	if !strings.EqualFold(u1.Scheme, u2.Scheme) {
+		return false
+	}
+	if !strings.EqualFold(u1.Hostname(), u2.Hostname()) {
+		return false
+	}
+	return EffectivePort(u1) == EffectivePort(u2)
+}
+
+func isLoopbackHost(host string) bool {
+	h := strings.ToLower(strings.TrimSpace(host))
+	if h == "localhost" || h == "127.0.0.1" || h == "::1" || h == "ip6-localhost" || h == "ip6-loopback" {
+		return true
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
 
 type scopedTransport struct {

@@ -237,7 +237,7 @@ func TestCrossEngine_APISec_AmbiguousAndMalformedResponses(t *testing.T) {
 
 // TestCrossEngine_APISec_ScopeAndCredentialStripping tests that scope enforcement
 // prevents out-of-scope requests, that embedded URL credentials are blocked,
-// and that cross-host redirects strip sensitive Authorization/Cookie headers.
+// and that cross-origin redirects strip sensitive Authorization/Cookie headers.
 func TestCrossEngine_APISec_ScopeAndCredentialStripping(t *testing.T) {
 	var capturedAuthHeader string
 	var capturedCookieHeader string
@@ -259,7 +259,7 @@ func TestCrossEngine_APISec_ScopeAndCredentialStripping(t *testing.T) {
 		Timeout: 5 * time.Second,
 	})
 
-	// 1. Test redirect credential stripping
+	// 1. Test live fixture redirect credential stripping (different port on 127.0.0.1)
 	actx := &apisec.AssessmentContext{
 		AssessmentID: "asm-test-redirect",
 		BaseURL:      redirectServer.URL,
@@ -310,6 +310,230 @@ func TestCrossEngine_APISec_ScopeAndCredentialStripping(t *testing.T) {
 	} else if !strings.Contains(err3.Error(), "embedded credentials") {
 		t.Errorf("expected embedded credentials rejection message, got: %v", err3)
 	}
+}
+
+// TestCrossEngine_RedirectOriginSecurity_SchemePortHostAndChaining tests all required
+// origin transition dimensions (HTTPS-to-HTTP same host/port, HTTP-to-HTTPS, same-host different-port,
+// different-host, same-origin preservation, chained redirect reintroduction defense, and scope checks)
+// for both APISec and CloudSec engines.
+func TestCrossEngine_RedirectOriginSecurity_SchemePortHostAndChaining(t *testing.T) {
+	// -------------------------------------------------------------------------
+	// Part A: APISec Engine CheckRedirect
+	// -------------------------------------------------------------------------
+	apiEngine := apisec.NewEngine(nil, apisec.DefaultConfig())
+	apiCtx := &apisec.AssessmentContext{
+		AssessmentID: "asm-origin-test",
+		IsAllowed: func(u string) bool {
+			// Allow everything except out-of-scope.example.com
+			return !strings.Contains(u, "out-of-scope.example.com")
+		},
+	}
+	apiClient := apiEngine.ScopedClient(apiCtx)
+
+	setSensitiveHeaders := func(req *http.Request) {
+		req.Header.Set("Authorization", "Bearer secret-token-xyz")
+		req.Header.Set("Cookie", "session=active-session-123")
+		req.Header.Set("X-API-Key", "api-key-999")
+		req.Header.Set("apikey", "supabase-anon-key-111")
+		req.Header.Set("X-Auth-Token", "auth-token-222")
+		req.Header.Set("Proxy-Authorization", "Basic dXNlcjpwYXNz")
+	}
+
+	assertHeadersStripped := func(t *testing.T, req *http.Request, caseName string) {
+		t.Helper()
+		for _, hdr := range []string{"Authorization", "Cookie", "X-API-Key", "apikey", "X-Auth-Token", "Proxy-Authorization"} {
+			if val := req.Header.Get(hdr); val != "" {
+				t.Errorf("[%s] expected %s to be stripped, got %q", caseName, hdr, val)
+			}
+		}
+	}
+
+	// 1. HTTPS-to-HTTP redirect on same hostname and explicit port (e.g. 8443 -> 8443)
+	t.Run("APISec_HTTPS_to_HTTP_SameHostExplicitPort", func(t *testing.T) {
+		initialReq, _ := http.NewRequest("GET", "https://api.example.com:8443/login", nil)
+		setSensitiveHeaders(initialReq)
+
+		redirectReq, _ := http.NewRequest("GET", "http://api.example.com:8443/insecure", nil)
+		setSensitiveHeaders(redirectReq)
+
+		err := apiClient.CheckRedirect(redirectReq, []*http.Request{initialReq})
+		if err != nil {
+			t.Fatalf("unexpected CheckRedirect error: %v", err)
+		}
+		assertHeadersStripped(t, redirectReq, "HTTPS-to-HTTP Same Host & Port")
+	})
+
+	// 2. HTTP-to-HTTPS redirect on same host
+	t.Run("APISec_HTTP_to_HTTPS_SameHost", func(t *testing.T) {
+		initialReq, _ := http.NewRequest("GET", "http://api.example.com/start", nil)
+		setSensitiveHeaders(initialReq)
+
+		redirectReq, _ := http.NewRequest("GET", "https://api.example.com/secure", nil)
+		setSensitiveHeaders(redirectReq)
+
+		err := apiClient.CheckRedirect(redirectReq, []*http.Request{initialReq})
+		if err != nil {
+			t.Fatalf("unexpected CheckRedirect error: %v", err)
+		}
+		assertHeadersStripped(t, redirectReq, "HTTP-to-HTTPS Same Host")
+	})
+
+	// 3. Same-host different-port redirect (e.g. 8443 -> 9443)
+	t.Run("APISec_SameHost_DifferentPort", func(t *testing.T) {
+		initialReq, _ := http.NewRequest("GET", "https://api.example.com:8443/data", nil)
+		setSensitiveHeaders(initialReq)
+
+		redirectReq, _ := http.NewRequest("GET", "https://api.example.com:9443/data", nil)
+		setSensitiveHeaders(redirectReq)
+
+		err := apiClient.CheckRedirect(redirectReq, []*http.Request{initialReq})
+		if err != nil {
+			t.Fatalf("unexpected CheckRedirect error: %v", err)
+		}
+		assertHeadersStripped(t, redirectReq, "Same Host Different Port")
+	})
+
+	// 4. Different-host redirect
+	t.Run("APISec_DifferentHost", func(t *testing.T) {
+		initialReq, _ := http.NewRequest("GET", "https://api.example.com/data", nil)
+		setSensitiveHeaders(initialReq)
+
+		redirectReq, _ := http.NewRequest("GET", "https://cdn.example.com/data", nil)
+		setSensitiveHeaders(redirectReq)
+
+		err := apiClient.CheckRedirect(redirectReq, []*http.Request{initialReq})
+		if err != nil {
+			t.Fatalf("unexpected CheckRedirect error: %v", err)
+		}
+		assertHeadersStripped(t, redirectReq, "Different Host")
+	})
+
+	// 5. Same-origin redirect preserves credentials within trust boundary
+	t.Run("APISec_SameOrigin_Preserved", func(t *testing.T) {
+		initialReq, _ := http.NewRequest("GET", "https://api.example.com:8443/v1/auth", nil)
+		setSensitiveHeaders(initialReq)
+
+		redirectReq, _ := http.NewRequest("GET", "https://api.example.com:8443/v1/dashboard", nil)
+		setSensitiveHeaders(redirectReq)
+
+		err := apiClient.CheckRedirect(redirectReq, []*http.Request{initialReq})
+		if err != nil {
+			t.Fatalf("unexpected CheckRedirect error: %v", err)
+		}
+		if redirectReq.Header.Get("Authorization") != "Bearer secret-token-xyz" {
+			t.Errorf("expected Authorization preserved on same-origin redirect, got %q",
+				redirectReq.Header.Get("Authorization"))
+		}
+		if redirectReq.Header.Get("Cookie") != "session=active-session-123" {
+			t.Errorf("expected Cookie preserved on same-origin redirect, got %q",
+				redirectReq.Header.Get("Cookie"))
+		}
+	})
+
+	// 6. Target-scope enforcement on redirect
+	t.Run("APISec_TargetScope_Enforcement", func(t *testing.T) {
+		initialReq, _ := http.NewRequest("GET", "https://api.example.com/start", nil)
+		redirectReq, _ := http.NewRequest("GET", "https://out-of-scope.example.com/dest", nil)
+
+		err := apiClient.CheckRedirect(redirectReq, []*http.Request{initialReq})
+		if err == nil {
+			t.Fatalf("expected redirect to out-of-scope target to be rejected, got nil")
+		}
+		if !strings.Contains(err.Error(), "out of approved scope") {
+			t.Errorf("expected scope rejection error, got: %v", err)
+		}
+	})
+
+	// 7. Chained redirect defense: Origin A -> Origin B -> Origin A (reintroduction prevention)
+	t.Run("APISec_ChainedRedirect_ReintroductionDefense", func(t *testing.T) {
+		reqA1, _ := http.NewRequest("GET", "https://app.example.com/step1", nil)
+		setSensitiveHeaders(reqA1)
+
+		reqB, _ := http.NewRequest("GET", "https://untrusted.cdn.com/bounce", nil)
+		setSensitiveHeaders(reqB)
+
+		// Hop 1: A -> B
+		err1 := apiClient.CheckRedirect(reqB, []*http.Request{reqA1})
+		if err1 != nil {
+			t.Fatalf("hop 1 failed: %v", err1)
+		}
+		assertHeadersStripped(t, reqB, "Hop 1 A->B")
+
+		// Hop 2: B -> A (attempting to bounce back to Origin A)
+		reqA2, _ := http.NewRequest("GET", "https://app.example.com/step2", nil)
+		// Even if an attacker attempted to reinject headers
+		setSensitiveHeaders(reqA2)
+
+		err2 := apiClient.CheckRedirect(reqA2, []*http.Request{reqA1, reqB})
+		if err2 != nil {
+			t.Fatalf("hop 2 failed: %v", err2)
+		}
+		assertHeadersStripped(t, reqA2, "Hop 2 B->A Chained Reintroduction")
+	})
+
+	// -------------------------------------------------------------------------
+	// Part B: CloudSec Engine CheckRedirect (including x-amz-security-token)
+	// -------------------------------------------------------------------------
+	cloudEngine := cloudsec.NewEngine(cloudsec.DefaultConfig())
+	cloudCtx := &cloudsec.AssessmentContext{
+		AssessmentID: "asm-cloud-origin-test",
+		IsAllowed: func(u string) bool {
+			return !strings.Contains(u, "blocked.example.com")
+		},
+	}
+	cloudClient := cloudEngine.ScopedClient(cloudCtx)
+
+	setCloudHeaders := func(req *http.Request) {
+		setSensitiveHeaders(req)
+		req.Header.Set("x-amz-security-token", "aws-session-token-456")
+	}
+
+	t.Run("CloudSec_HTTPS_to_HTTP_SchemeDowngrade", func(t *testing.T) {
+		initialReq, _ := http.NewRequest("GET", "https://mybucket.s3.amazonaws.com:8443/object", nil)
+		setCloudHeaders(initialReq)
+
+		redirectReq, _ := http.NewRequest("GET", "http://mybucket.s3.amazonaws.com:8443/cleartext", nil)
+		setCloudHeaders(redirectReq)
+
+		err := cloudClient.CheckRedirect(redirectReq, []*http.Request{initialReq})
+		if err != nil {
+			t.Fatalf("unexpected CheckRedirect error: %v", err)
+		}
+		assertHeadersStripped(t, redirectReq, "CloudSec HTTPS-to-HTTP")
+		if val := redirectReq.Header.Get("x-amz-security-token"); val != "" {
+			t.Errorf("expected x-amz-security-token to be stripped, got %q", val)
+		}
+	})
+
+	t.Run("CloudSec_DifferentHost_CloudCredentialsStripped", func(t *testing.T) {
+		initialReq, _ := http.NewRequest("GET", "https://mybucket.s3.amazonaws.com/obj", nil)
+		setCloudHeaders(initialReq)
+
+		redirectReq, _ := http.NewRequest("GET", "https://thirdparty-mirror.com/obj", nil)
+		setCloudHeaders(redirectReq)
+
+		err := cloudClient.CheckRedirect(redirectReq, []*http.Request{initialReq})
+		if err != nil {
+			t.Fatalf("unexpected CheckRedirect error: %v", err)
+		}
+		assertHeadersStripped(t, redirectReq, "CloudSec Different Host")
+		if val := redirectReq.Header.Get("x-amz-security-token"); val != "" {
+			t.Errorf("expected x-amz-security-token to be stripped on cloud redirect, got %q", val)
+		}
+	})
+
+	t.Run("CloudSec_TargetScope_Enforcement", func(t *testing.T) {
+		initialReq, _ := http.NewRequest("GET", "https://mybucket.s3.amazonaws.com/obj", nil)
+		redirectReq, _ := http.NewRequest("GET", "https://blocked.example.com/obj", nil)
+
+		err := cloudClient.CheckRedirect(redirectReq, []*http.Request{initialReq})
+		if err == nil {
+			t.Fatalf("expected out-of-scope cloud redirect to fail, got nil")
+		}
+		if !strings.Contains(err.Error(), "out of authorized scope") {
+			t.Errorf("expected scope rejection message, got: %v", err)
+		}
+	})
 }
 
 // =============================================================================
