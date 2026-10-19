@@ -15,6 +15,7 @@ import (
 	"felix/pkg/authz"
 	"felix/pkg/bfla"
 	"felix/pkg/bola"
+	"felix/pkg/bopla"
 	"felix/pkg/businesslogic"
 	"felix/pkg/cloudsec"
 	"felix/pkg/config"
@@ -179,6 +180,13 @@ type Store interface {
 	SaveBFLAResults(results []bfla.Result) error
 	GetBFLAResults(assessmentID string, executionID string, category string, state string) ([]bfla.Result, error)
 	GetBFLASummary(assessmentID string, executionID string) (*bfla.Summary, error)
+
+	// Broken Object Property Level Authorization Engine (Phase 5.5)
+	SaveBOPLARun(record *bopla.RunRecord) error
+	GetBOPLARun(assessmentID string, executionID string) (*bopla.RunRecord, error)
+	SaveBOPLAResults(results []bopla.Result) error
+	GetBOPLAResults(assessmentID string, executionID string, category string, state string) ([]bopla.Result, error)
+	GetBOPLASummary(assessmentID string, executionID string) (*bopla.Summary, error)
 
 	// Close database
 	Close() error
@@ -1317,6 +1325,77 @@ func (s *SQLiteStore) migrate() error {
 
 		if _, err := tx.Exec(schemaV14); err != nil {
 			return fmt.Errorf("migration v14 failed: %w", err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+
+	// Migration 15: BOPLA / Broken Object Property Level Authorization Engine (Phase 5.5)
+	if currentVersion < 15 {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		schemaV15 := `
+		CREATE TABLE IF NOT EXISTS assessment_bopla_runs (
+			id TEXT PRIMARY KEY,
+			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+			execution_id TEXT NOT NULL,
+			total_tests INTEGER NOT NULL DEFAULT 0,
+			categories_assessed INTEGER NOT NULL DEFAULT 0,
+			verified_count INTEGER NOT NULL DEFAULT 0,
+			candidate_count INTEGER NOT NULL DEFAULT 0,
+			not_vulnerable_count INTEGER NOT NULL DEFAULT 0,
+			inconclusive_count INTEGER NOT NULL DEFAULT 0,
+			blocked_count INTEGER NOT NULL DEFAULT 0,
+			coverage_json TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_bopla_runs_asm_id ON assessment_bopla_runs(assessment_id);
+		CREATE INDEX IF NOT EXISTS idx_bopla_runs_exec_id ON assessment_bopla_runs(execution_id);
+
+		CREATE TABLE IF NOT EXISTS assessment_bopla_results (
+			id TEXT PRIMARY KEY,
+			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+			execution_id TEXT NOT NULL,
+			category TEXT NOT NULL,
+			vuln_code TEXT NOT NULL,
+			test_id TEXT NOT NULL,
+			test_name TEXT NOT NULL,
+			owasp_ref TEXT NOT NULL,
+			cwe_ref TEXT NOT NULL,
+			endpoint TEXT NOT NULL,
+			method TEXT NOT NULL,
+			property_path TEXT NOT NULL,
+			expected_access TEXT NOT NULL,
+			required_role TEXT NOT NULL,
+			accessor_role TEXT NOT NULL,
+			accessor_alias TEXT NOT NULL,
+			verification_state TEXT NOT NULL,
+			severity TEXT NOT NULL,
+			confidence TEXT NOT NULL,
+			observed_status INTEGER,
+			evidence_summary TEXT NOT NULL,
+			evidence_details_json TEXT,
+			finding_id TEXT,
+			created_at TIMESTAMP NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_bopla_res_asm_id ON assessment_bopla_results(assessment_id);
+		CREATE INDEX IF NOT EXISTS idx_bopla_res_exec_id ON assessment_bopla_results(execution_id);
+		CREATE INDEX IF NOT EXISTS idx_bopla_res_cat ON assessment_bopla_results(category);
+		CREATE INDEX IF NOT EXISTS idx_bopla_res_state ON assessment_bopla_results(verification_state);
+
+		INSERT INTO schema_migrations (version, applied_at) VALUES (15, CURRENT_TIMESTAMP);
+		`
+
+		if _, err := tx.Exec(schemaV15); err != nil {
+			return fmt.Errorf("migration v15 failed: %w", err)
 		}
 
 		if err := tx.Commit(); err != nil {
@@ -5216,6 +5295,252 @@ func (s *SQLiteStore) GetBFLASummary(assessmentID string, executionID string) (*
 		case bfla.StateInconclusive:
 			summary.InconclusiveCount++
 		case bfla.StateSkipped:
+			summary.BlockedCount++
+		}
+	}
+	return summary, nil
+}
+
+// -------------------------------------------------------------------------
+// Broken Object Property Level Authorization (BOPLA) Engine Persistence (Phase 5.5)
+// -------------------------------------------------------------------------
+
+func (s *SQLiteStore) SaveBOPLARun(record *bopla.RunRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	query := `
+		INSERT INTO assessment_bopla_runs (
+			id, assessment_id, execution_id, total_tests, categories_assessed,
+			verified_count, candidate_count, not_vulnerable_count, inconclusive_count, blocked_count,
+			coverage_json, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			total_tests = excluded.total_tests,
+			categories_assessed = excluded.categories_assessed,
+			verified_count = excluded.verified_count,
+			candidate_count = excluded.candidate_count,
+			not_vulnerable_count = excluded.not_vulnerable_count,
+			inconclusive_count = excluded.inconclusive_count,
+			blocked_count = excluded.blocked_count,
+			coverage_json = excluded.coverage_json;
+	`
+	now := record.CreatedAt
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+
+	_, err := s.db.Exec(
+		query,
+		record.ID, record.AssessmentID, record.ExecutionID,
+		record.TotalTests, record.CategoriesAssessed,
+		record.VerifiedCount, record.CandidateCount, record.NotVulnerableCount,
+		record.InconclusiveCount, record.BlockedCount,
+		record.CoverageJSON, now,
+	)
+	return err
+}
+
+func (s *SQLiteStore) GetBOPLARun(assessmentID string, executionID string) (*bopla.RunRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := `
+		SELECT id, assessment_id, execution_id, total_tests, categories_assessed,
+		       verified_count, candidate_count, not_vulnerable_count, inconclusive_count, blocked_count,
+		       coverage_json, created_at
+		FROM assessment_bopla_runs
+		WHERE assessment_id = ?
+	`
+	args := []interface{}{assessmentID}
+	if executionID != "" {
+		query += " AND execution_id = ?"
+		args = append(args, executionID)
+	}
+	query += " ORDER BY created_at DESC LIMIT 1"
+
+	var rec bopla.RunRecord
+	err := s.db.QueryRow(query, args...).Scan(
+		&rec.ID, &rec.AssessmentID, &rec.ExecutionID,
+		&rec.TotalTests, &rec.CategoriesAssessed,
+		&rec.VerifiedCount, &rec.CandidateCount, &rec.NotVulnerableCount,
+		&rec.InconclusiveCount, &rec.BlockedCount,
+		&rec.CoverageJSON, &rec.CreatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &rec, nil
+}
+
+func (s *SQLiteStore) SaveBOPLAResults(results []bopla.Result) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO assessment_bopla_results (
+			id, assessment_id, execution_id, category, vuln_code, test_id, test_name,
+			owasp_ref, cwe_ref, endpoint, method, property_path, expected_access,
+			required_role, accessor_role, accessor_alias,
+			verification_state, severity, confidence, observed_status,
+			evidence_summary, evidence_details_json, finding_id, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, r := range results {
+		var detailsJSON string
+		if len(r.EvidenceDetails) > 0 {
+			b, _ := json.Marshal(r.EvidenceDetails)
+			detailsJSON = string(b)
+		}
+
+		findingID := ""
+		if r.Finding != nil {
+			findingID = r.Finding.ID
+		}
+
+		now := r.CreatedAt
+		if now.IsZero() {
+			now = time.Now().UTC()
+		}
+
+		_, err := stmt.Exec(
+			r.ID, r.AssessmentID, r.ExecutionID, string(r.Category), r.VulnCode, r.TestID, r.TestName,
+			r.OWASPRef, r.CWERef, r.Endpoint, r.Method, r.PropertyPath, r.ExpectedAccess,
+			r.RequiredRole, r.AccessorRole, r.AccessorAlias,
+			string(r.VerificationState), r.Severity, r.Confidence, r.ObservedStatus,
+			r.EvidenceSummary, detailsJSON, findingID, now,
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+func (s *SQLiteStore) GetBOPLAResults(assessmentID string, executionID string, category string, state string) ([]bopla.Result, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := `
+		SELECT id, assessment_id, execution_id, category, vuln_code, test_id, test_name,
+		       owasp_ref, cwe_ref, endpoint, method, property_path, expected_access,
+		       required_role, accessor_role, accessor_alias,
+		       verification_state, severity, confidence, observed_status,
+		       evidence_summary, evidence_details_json, finding_id, created_at
+		FROM assessment_bopla_results
+		WHERE assessment_id = ?
+	`
+	args := []interface{}{assessmentID}
+
+	if executionID != "" {
+		query += " AND execution_id = ?"
+		args = append(args, executionID)
+	}
+	if category != "" {
+		query += " AND category = ?"
+		args = append(args, category)
+	}
+	if state != "" {
+		query += " AND verification_state = ?"
+		args = append(args, state)
+	}
+
+	query += " ORDER BY created_at ASC"
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []bopla.Result
+	for rows.Next() {
+		var r bopla.Result
+		var catStr, stateStr, detailsJSON, findingID sql.NullString
+		var obsStatus sql.NullInt64
+
+		err := rows.Scan(
+			&r.ID, &r.AssessmentID, &r.ExecutionID, &catStr, &r.VulnCode, &r.TestID, &r.TestName,
+			&r.OWASPRef, &r.CWERef, &r.Endpoint, &r.Method, &r.PropertyPath, &r.ExpectedAccess,
+			&r.RequiredRole, &r.AccessorRole, &r.AccessorAlias,
+			&stateStr, &r.Severity, &r.Confidence, &obsStatus,
+			&r.EvidenceSummary, &detailsJSON, &findingID, &r.CreatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		if catStr.Valid {
+			r.Category = bopla.Category(catStr.String)
+		}
+		if stateStr.Valid {
+			r.VerificationState = bopla.VerificationState(stateStr.String)
+		}
+		if obsStatus.Valid {
+			r.ObservedStatus = int(obsStatus.Int64)
+		}
+		if detailsJSON.Valid && detailsJSON.String != "" {
+			_ = json.Unmarshal([]byte(detailsJSON.String), &r.EvidenceDetails)
+		}
+
+		results = append(results, r)
+	}
+	return results, nil
+}
+
+func (s *SQLiteStore) GetBOPLASummary(assessmentID string, executionID string) (*bopla.Summary, error) {
+	// 1. Try to load saved RunRecord
+	run, err := s.GetBOPLARun(assessmentID, executionID)
+	if err == nil && run != nil && run.CoverageJSON != "" {
+		var covMap map[string]bopla.CategoryCoverage
+		if err := json.Unmarshal([]byte(run.CoverageJSON), &covMap); err == nil {
+			summary := &bopla.Summary{
+				TotalTests:         run.TotalTests,
+				CategoriesCovered:  run.CategoriesAssessed,
+				VerifiedCount:      run.VerifiedCount,
+				CandidateCount:     run.CandidateCount,
+				NotVulnerableCount: run.NotVulnerableCount,
+				InconclusiveCount:  run.InconclusiveCount,
+				BlockedCount:       run.BlockedCount,
+				CoverageMap:        covMap,
+			}
+			return summary, nil
+		}
+	}
+
+	// 2. Fallback to computing from raw results
+	results, err := s.GetBOPLAResults(assessmentID, executionID, "", "")
+	if err != nil {
+		return nil, err
+	}
+
+	summary := &bopla.Summary{
+		TotalTests:  len(results),
+		CoverageMap: make(map[string]bopla.CategoryCoverage),
+	}
+	for _, r := range results {
+		switch r.VerificationState {
+		case bopla.StateVerified:
+			summary.VerifiedCount++
+		case bopla.StateCandidate:
+			summary.CandidateCount++
+		case bopla.StateNotVulnerable:
+			summary.NotVulnerableCount++
+		case bopla.StateInconclusive:
+			summary.InconclusiveCount++
+		case bopla.StateSkipped:
 			summary.BlockedCount++
 		}
 	}

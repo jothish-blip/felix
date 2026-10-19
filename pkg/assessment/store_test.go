@@ -12,6 +12,7 @@ import (
 	"felix/pkg/authz"
 	"felix/pkg/bfla"
 	"felix/pkg/bola"
+	"felix/pkg/bopla"
 	"felix/pkg/businesslogic"
 	"felix/pkg/cloudsec"
 	"felix/pkg/correlation"
@@ -2752,6 +2753,154 @@ func TestStore_BFLAPersistenceAndMigration(t *testing.T) {
 	}
 	if summary.TotalTests != 4 {
 		t.Errorf("expected TotalTests = 4 from RunRecord, got %d", summary.TotalTests)
+	}
+	if summary.VerifiedCount != 1 {
+		t.Errorf("expected VerifiedCount = 1, got %d", summary.VerifiedCount)
+	}
+}
+
+func TestStore_BOPLAPersistenceAndMigration(t *testing.T) {
+	store, cleanup := newTestStore(t)
+	defer cleanup()
+
+	// 1. Setup client and assessment
+	client := &Client{
+		ID:   "client-bopla-test",
+		Name: "BOPLA Test Client",
+	}
+	if err := store.CreateClient(client); err != nil {
+		t.Fatalf("CreateClient failed: %v", err)
+	}
+
+	asm := &Assessment{
+		ID:       "asm-bopla-test",
+		ClientID: client.ID,
+		Ref:      "ASM-BOPLA-TEST-001",
+		Name:     "BOPLA Verification Assessment",
+		Status:   StatusReady,
+	}
+	if err := store.CreateAssessment(asm); err != nil {
+		t.Fatalf("CreateAssessment failed: %v", err)
+	}
+
+	execID := "exec-bopla-001"
+
+	// 2. Test SaveBOPLARun and GetBOPLARun
+	runRec := &bopla.RunRecord{
+		ID:                 "run-bopla-001",
+		AssessmentID:       asm.ID,
+		ExecutionID:        execID,
+		TotalTests:         5,
+		CategoriesAssessed: 5,
+		VerifiedCount:      1,
+		CandidateCount:     1,
+		NotVulnerableCount: 2,
+		InconclusiveCount:  1,
+		BlockedCount:       0,
+		CoverageJSON:       `{"BOPLA-PROPERTY-READ":{"category":"BOPLA-PROPERTY-READ","code":"BOPLA-PROPERTY-READ","name":"Unauthorized Read of Protected Object Properties","owasp_ref":"API3:2023","status":"VERIFIED_ISSUE_FOUND","tests_run":1,"verified":1,"candidates":0,"inconclusive":0,"blocked":0,"explanation":"BOPLA verified"}}`,
+		CreatedAt:          time.Now().UTC(),
+	}
+	if err := store.SaveBOPLARun(runRec); err != nil {
+		t.Fatalf("SaveBOPLARun failed: %v", err)
+	}
+
+	fetchedRun, err := store.GetBOPLARun(asm.ID, execID)
+	if err != nil {
+		t.Fatalf("GetBOPLARun failed: %v", err)
+	}
+	if fetchedRun.TotalTests != 5 || fetchedRun.VerifiedCount != 1 {
+		t.Errorf("unexpected run record data: %+v", fetchedRun)
+	}
+
+	// 3. Test SaveBOPLAResults and GetBOPLAResults
+	res1 := bopla.Result{
+		ID:                "res-bopla-001",
+		AssessmentID:      asm.ID,
+		ExecutionID:       execID,
+		Category:          bopla.CategoryBOPLAPropertyRead,
+		VulnCode:          "BOPLA-PROPERTY-READ",
+		TestID:            "BOPLA-TEST-001",
+		TestName:          "Salary Exposure Test",
+		OWASPRef:          "API3:2023",
+		CWERef:            "CWE-213",
+		Endpoint:          "/api/users/profile",
+		Method:            "GET",
+		PropertyPath:      "salary",
+		ExpectedAccess:    "OMITTED",
+		RequiredRole:      "admin",
+		AccessorRole:      "user",
+		AccessorAlias:     "standard_user",
+		VerificationState: bopla.StateVerified,
+		Severity:          "HIGH",
+		Confidence:        "CONFIRMED",
+		ObservedStatus:    200,
+		EvidenceSummary:   "BOPLA verified: unauthorized user received salary property",
+		EvidenceDetails:   map[string]string{"property": "salary", "disclosed": "true"},
+		CreatedAt:         time.Now().UTC(),
+	}
+
+	res2 := bopla.Result{
+		ID:                "res-bopla-002",
+		AssessmentID:      asm.ID,
+		ExecutionID:       execID,
+		Category:          bopla.CategoryBOPLAPropertyWrite,
+		VulnCode:          "BOPLA-PROPERTY-WRITE",
+		TestID:            "BOPLA-TEST-002",
+		TestName:          "Role Mutation Test",
+		OWASPRef:          "API3:2023",
+		CWERef:            "CWE-915",
+		Endpoint:          "/api/users/profile",
+		Method:            "PUT",
+		PropertyPath:      "role",
+		ExpectedAccess:    "IMMUTABLE",
+		RequiredRole:      "admin",
+		AccessorRole:      "user",
+		AccessorAlias:     "standard_user",
+		VerificationState: bopla.StateCandidate,
+		Severity:          "MEDIUM",
+		Confidence:        "POSSIBLE",
+		ObservedStatus:    200,
+		EvidenceSummary:   "BOPLA candidate: server returned 200 to mutation",
+		CreatedAt:         time.Now().UTC().Add(time.Second),
+	}
+
+	if err := store.SaveBOPLAResults([]bopla.Result{res1, res2}); err != nil {
+		t.Fatalf("SaveBOPLAResults failed: %v", err)
+	}
+
+	allResults, err := store.GetBOPLAResults(asm.ID, execID, "", "")
+	if err != nil {
+		t.Fatalf("GetBOPLAResults failed: %v", err)
+	}
+	if len(allResults) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(allResults))
+	}
+
+	// Filter by Category
+	catFiltered, err := store.GetBOPLAResults(asm.ID, execID, string(bopla.CategoryBOPLAPropertyRead), "")
+	if err != nil {
+		t.Fatalf("GetBOPLAResults by category failed: %v", err)
+	}
+	if len(catFiltered) != 1 || catFiltered[0].VulnCode != "BOPLA-PROPERTY-READ" {
+		t.Errorf("expected 1 result for BOPLA-PROPERTY-READ, got %d", len(catFiltered))
+	}
+
+	// Filter by Verification State
+	stateFiltered, err := store.GetBOPLAResults(asm.ID, execID, "", string(bopla.StateVerified))
+	if err != nil {
+		t.Fatalf("GetBOPLAResults by state failed: %v", err)
+	}
+	if len(stateFiltered) != 1 {
+		t.Errorf("expected 1 verified result, got %d", len(stateFiltered))
+	}
+
+	// 4. Test GetBOPLASummary
+	summary, err := store.GetBOPLASummary(asm.ID, execID)
+	if err != nil {
+		t.Fatalf("GetBOPLASummary failed: %v", err)
+	}
+	if summary.TotalTests != 5 {
+		t.Errorf("expected TotalTests = 5 from RunRecord, got %d", summary.TotalTests)
 	}
 	if summary.VerifiedCount != 1 {
 		t.Errorf("expected VerifiedCount = 1, got %d", summary.VerifiedCount)

@@ -21,6 +21,7 @@ import (
 	"felix/pkg/authz"
 	"felix/pkg/bfla"
 	"felix/pkg/bola"
+	"felix/pkg/bopla"
 	"felix/pkg/businesslogic"
 	"felix/pkg/cloudsec"
 	"felix/pkg/correlation"
@@ -79,6 +80,8 @@ func runAssessment(args []string) int {
 		return runAssessmentBOLA(subArgs)
 	case "bfla":
 		return runAssessmentBFLA(subArgs)
+	case "bopla":
+		return runAssessmentBOPLA(subArgs)
 	case "apisec", "api":
 		return runAssessmentAPISec(subArgs)
 	case "webvuln", "vuln":
@@ -121,6 +124,7 @@ func printAssessmentHelp() {
 	fmt.Println("  authz        Test and inspect API authorization, BOLA/IDOR, BFLA, BOPLA, and privilege escalation")
 	fmt.Println("  bola         Assess Broken Object Level Authorization (BOLA/IDOR) across multi-user boundaries")
 	fmt.Println("  bfla         Assess Broken Function Level Authorization (BFLA) across privilege boundaries")
+	fmt.Println("  bopla        Assess Broken Object Property Level Authorization (BOPLA / API3:2023)")
 	fmt.Println("  apisec       Assess OWASP API Security Top 10 (2023) categories and API inventory")
 	fmt.Println("  webvuln      Assess and verify web application vulnerabilities (XSS, SQLi, SSTI, SSRF, etc.)")
 	fmt.Println("  sessionsec   Assess session lifecycle, token handling, and identity boundaries (WSTG-SESS/ATHN)")
@@ -144,6 +148,8 @@ func printAssessmentHelp() {
 	fmt.Println("  felix assessment bola <asm-ref> --run")
 	fmt.Println("  felix assessment bfla <asm-ref> --dry-run")
 	fmt.Println("  felix assessment bfla <asm-ref> --run")
+	fmt.Println("  felix assessment bopla <asm-ref> --dry-run")
+	fmt.Println("  felix assessment bopla <asm-ref> --run")
 	fmt.Println("  felix assessment apisec <asm-ref> --run --spec openapi.json")
 	fmt.Println("  felix assessment webvuln <asm-ref> --run")
 	fmt.Println("  felix assessment sessionsec <asm-ref> --run")
@@ -5255,6 +5261,671 @@ func runAssessmentBFLA(args []string) int {
 	} else if summary == nil || summary.TotalTests == 0 {
 		fmt.Println("\nNo BFLA test results recorded.")
 		fmt.Printf("To run an authorized BFLA assessment:\n  felix assessment bfla %s --run\n", asm.Ref)
+	}
+
+	fmt.Println()
+	return 0
+}
+
+func printBOPLAHelp() {
+	fmt.Println("Usage: felix assessment bopla <assessment-ref> [flags]")
+	fmt.Println("\nBroken Object Property Level Authorization (BOPLA / OWASP API3:2023)")
+	fmt.Println("Evaluates unauthorized property reading, excessive data exposure, property mutation, and mass assignment")
+	fmt.Println("\nFlags:")
+	fmt.Println("  --run                      Execute authorized active BOPLA assessment")
+	fmt.Println("  --dry-run                  Output pre-assessment plan without network traffic")
+	fmt.Println("  -t, --target <url>         Override assessment target base URL")
+	fmt.Println("  --endpoint <path>          Target endpoint path (e.g. /api/users/profile)")
+	fmt.Println("  --property <path>          Target property path (e.g. role, salary, billing.tenant_id)")
+	fmt.Println("  --method <method>          HTTP method to evaluate (default: GET)")
+	fmt.Println("  --expected-access <rule>   Expected property access rule (OMITTED, MASKED, READ_ONLY, IMMUTABLE)")
+	fmt.Println("  --mutation-value <val>     Value to attempt in write mutation (e.g. admin)")
+	fmt.Println("  --read-back <endpoint>     Endpoint to independently verify property persistence")
+	fmt.Println("  --admin-token <token>      Authorization header value for privileged role (admin)")
+	fmt.Println("  --user-token <token>       Authorization header value for lower-privilege role (user)")
+	fmt.Println("  --admin-cookie <cookie>    Session cookie value for privileged role (admin)")
+	fmt.Println("  --user-cookie <cookie>     Session cookie value for lower-privilege role (user)")
+	fmt.Println("  --admin-role <role>        Role name for privileged user (default: admin)")
+	fmt.Println("  --user-role <role>         Role name for lower-privilege user (default: user)")
+	fmt.Println("  --allow-state-changing     Explicitly permit write-operation BOPLA tests (PUT/POST/PATCH)")
+	fmt.Println("  --synthetic-fixture        Designate target as a controlled synthetic fixture or isolated test environment")
+	fmt.Println("  --allow-loopback           Allow testing on loopback addresses")
+	fmt.Println("  --allow-private            Allow testing on private network addresses")
+	fmt.Println("  --max-requests <n>         Maximum requests allowed during run (default: 30)")
+	fmt.Println("  --policy <path>            Path to JSON policy file")
+	fmt.Println("  -c, --category <name>      Filter results by BOPLA category (e.g. BOPLA-PROPERTY-READ)")
+	fmt.Println("  -s, --status <name>        Filter results by verification state (VERIFIED, CANDIDATE, etc.)")
+	fmt.Println("  --json                     Output results in JSON format")
+	fmt.Println("  -v, --verbose              Enable verbose output")
+	fmt.Println("  -h, --help                 Display this help message")
+}
+
+func runAssessmentBOPLA(args []string) int {
+	var (
+		assessmentRef        string
+		runExecution         bool
+		dryRun               bool
+		targetOverride       string
+		endpointFlag         string
+		propertyFlag         string
+		methodFlag           string = "GET"
+		expectedAccessFlag   string
+		mutationValueFlag    string
+		readBackFlag         string
+		adminToken           string
+		userToken            string
+		adminCookie          string
+		userCookie           string
+		adminRole            string = "admin"
+		userRole             string = "user"
+		policyPath           string
+		categoryFilter       string
+		statusFilter         string
+		jsonOutput           bool
+		verbose              bool
+		allowStateChanging   bool
+		syntheticFixtureFlag bool
+		allowLoopback        bool
+		allowPrivate         bool
+		maxRequests          int = 30
+	)
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--run":
+			runExecution = true
+		case arg == "--dry-run":
+			dryRun = true
+		case arg == "--target" || arg == "-t":
+			if i+1 < len(args) {
+				targetOverride = args[i+1]
+				i++
+			}
+		case arg == "--endpoint":
+			if i+1 < len(args) {
+				endpointFlag = args[i+1]
+				i++
+			}
+		case arg == "--property":
+			if i+1 < len(args) {
+				propertyFlag = args[i+1]
+				i++
+			}
+		case arg == "--method":
+			if i+1 < len(args) {
+				methodFlag = strings.ToUpper(args[i+1])
+				i++
+			}
+		case arg == "--expected-access":
+			if i+1 < len(args) {
+				expectedAccessFlag = strings.ToUpper(args[i+1])
+				i++
+			}
+		case arg == "--mutation-value":
+			if i+1 < len(args) {
+				mutationValueFlag = args[i+1]
+				i++
+			}
+		case arg == "--read-back":
+			if i+1 < len(args) {
+				readBackFlag = args[i+1]
+				i++
+			}
+		case arg == "--admin-token":
+			if i+1 < len(args) {
+				adminToken = args[i+1]
+				i++
+			}
+		case arg == "--user-token":
+			if i+1 < len(args) {
+				userToken = args[i+1]
+				i++
+			}
+		case arg == "--admin-cookie":
+			if i+1 < len(args) {
+				adminCookie = args[i+1]
+				i++
+			}
+		case arg == "--user-cookie":
+			if i+1 < len(args) {
+				userCookie = args[i+1]
+				i++
+			}
+		case arg == "--admin-role":
+			if i+1 < len(args) {
+				adminRole = args[i+1]
+				i++
+			}
+		case arg == "--user-role":
+			if i+1 < len(args) {
+				userRole = args[i+1]
+				i++
+			}
+		case arg == "--allow-state-changing":
+			allowStateChanging = true
+		case arg == "--synthetic-fixture":
+			syntheticFixtureFlag = true
+		case arg == "--allow-loopback":
+			allowLoopback = true
+		case arg == "--allow-private":
+			allowPrivate = true
+		case arg == "--max-requests":
+			if i+1 < len(args) {
+				if n, err := strconv.Atoi(args[i+1]); err == nil && n > 0 {
+					maxRequests = n
+				}
+				i++
+			}
+		case arg == "--policy":
+			if i+1 < len(args) {
+				policyPath = args[i+1]
+				i++
+			}
+		case arg == "--category" || arg == "-c":
+			if i+1 < len(args) {
+				categoryFilter = strings.ToUpper(args[i+1])
+				i++
+			}
+		case arg == "--status" || arg == "-s":
+			if i+1 < len(args) {
+				statusFilter = strings.ToUpper(args[i+1])
+				i++
+			}
+		case arg == "--json":
+			jsonOutput = true
+		case arg == "--verbose" || arg == "-v":
+			verbose = true
+		case arg == "--help" || arg == "-h":
+			printBOPLAHelp()
+			return 0
+		default:
+			if !strings.HasPrefix(arg, "-") && assessmentRef == "" {
+				assessmentRef = arg
+			}
+		}
+	}
+
+	if assessmentRef == "" {
+		fmt.Fprintf(os.Stderr, "[-] Error: assessment ID or Ref is required\n\n")
+		printBOPLAHelp()
+		return 2
+	}
+
+	store, err := getAssessmentStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Database error: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+
+	asm, err := store.GetAssessment(assessmentRef)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Error finding assessment '%s': %v\n", assessmentRef, err)
+		return 1
+	}
+	asm.Targets, _ = store.GetTargets(asm.ID)
+	asm.Authorization, _ = store.GetAuthorization(asm.ID)
+	asm.Exclusions, _ = store.GetExclusions(asm.ID)
+	asm.ScopeRules, _ = store.GetScopeRules(asm.ID)
+
+	targetBase := "http://localhost"
+	if len(asm.Targets) > 0 {
+		targetBase = strings.TrimRight(asm.Targets[0].TargetURL, "/")
+	}
+	if targetOverride != "" {
+		targetBase = strings.TrimRight(targetOverride, "/")
+	}
+
+	uTarget, _ := url.Parse(targetBase)
+	isTargetLoopback := uTarget != nil && bopla.IsLoopbackHost(uTarget.Hostname())
+	syntheticFixture := syntheticFixtureFlag || isTargetLoopback || policyPath != ""
+
+	// 1. Build Policies
+	var policies []bopla.PropertyPolicy
+	var loadedIdentities []bopla.TestIdentity
+
+	if policyPath != "" {
+		data, err := os.ReadFile(policyPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Error reading policy file: %v\n", err)
+			return 1
+		}
+		var pf bopla.PolicyFile
+		if err := json.Unmarshal(data, &pf); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Error parsing policy file: %v\n", err)
+			return 1
+		}
+		policies = pf.Policies
+		loadedIdentities = pf.Identities
+	} else if endpointFlag != "" {
+		isStateChanging := methodFlag == "POST" || methodFlag == "PUT" || methodFlag == "DELETE" || methodFlag == "PATCH"
+		cat := bopla.CategoryBOPLAPropertyRead
+		if isStateChanging {
+			cat = bopla.CategoryBOPLAPropertyWrite
+		}
+		expectedRule := bopla.ExpectedOmitted
+		if expectedAccessFlag != "" {
+			expectedRule = bopla.ExpectedAccessRule(expectedAccessFlag)
+		}
+		propPath := propertyFlag
+		if propPath == "" {
+			propPath = "role"
+		}
+		mutVal := any("admin")
+		if mutationValueFlag != "" {
+			mutVal = mutationValueFlag
+		}
+		rbEndpoint := readBackFlag
+		if rbEndpoint == "" && isStateChanging {
+			rbEndpoint = endpointFlag
+		}
+
+		policies = append(policies, bopla.PropertyPolicy{
+			PropertyID:              "cli-property-test",
+			Name:                    fmt.Sprintf("Property Authorization on %s %s [%s]", methodFlag, endpointFlag, propPath),
+			Endpoint:                endpointFlag,
+			Method:                  methodFlag,
+			Category:                cat,
+			PropertyPath:            propPath,
+			ExpectedAccess:          expectedRule,
+			AllowedRoles:            []string{adminRole},
+			RestrictedRoles:         []string{userRole},
+			PositiveControlRequired: true,
+			IsStateChanging:         isStateChanging,
+			MutationValue:           mutVal,
+			ReadBackEndpoint:        rbEndpoint,
+			ReadBackMethod:          "GET",
+		})
+	} else {
+		policies = bopla.DefaultPolicies()
+	}
+
+	// 2. Build Identities
+	var identities []bopla.TestIdentity
+	if len(loadedIdentities) > 0 {
+		identities = loadedIdentities
+	} else {
+		headersAdmin := make(map[string]string)
+		cookiesAdmin := make(map[string]string)
+		if adminToken != "" {
+			tokenVal := strings.TrimSpace(adminToken)
+			if !strings.HasPrefix(strings.ToLower(tokenVal), "bearer ") {
+				tokenVal = "Bearer " + tokenVal
+			}
+			headersAdmin["Authorization"] = tokenVal
+		}
+		if adminCookie != "" {
+			cParts := strings.SplitN(adminCookie, "=", 2)
+			if len(cParts) == 2 {
+				cookiesAdmin[cParts[0]] = cParts[1]
+			} else {
+				cookiesAdmin["session"] = adminCookie
+			}
+		}
+
+		headersUser := make(map[string]string)
+		cookiesUser := make(map[string]string)
+		if userToken != "" {
+			tokenVal := strings.TrimSpace(userToken)
+			if !strings.HasPrefix(strings.ToLower(tokenVal), "bearer ") {
+				tokenVal = "Bearer " + tokenVal
+			}
+			headersUser["Authorization"] = tokenVal
+		}
+		if userCookie != "" {
+			cParts := strings.SplitN(userCookie, "=", 2)
+			if len(cParts) == 2 {
+				cookiesUser[cParts[0]] = cParts[1]
+			} else {
+				cookiesUser["session"] = userCookie
+			}
+		}
+
+		if len(headersAdmin) == 0 && len(cookiesAdmin) == 0 {
+			headersAdmin["Authorization"] = "Bearer token_admin_synthetic"
+		}
+		if len(headersUser) == 0 && len(cookiesUser) == 0 {
+			headersUser["Authorization"] = "Bearer token_user_synthetic"
+		}
+
+		identities = []bopla.TestIdentity{
+			{
+				Alias:          "admin_user",
+				Role:           adminRole,
+				PrivilegeLevel: 5,
+				Headers:        headersAdmin,
+				Cookies:        cookiesAdmin,
+			},
+			{
+				Alias:          "standard_user",
+				Role:           userRole,
+				PrivilegeLevel: 1,
+				Headers:        headersUser,
+				Cookies:        cookiesUser,
+			},
+		}
+	}
+
+	// Mode 1: Dry-Run
+	if dryRun {
+		engine := bopla.NewEngine(nil, bopla.DefaultConfig())
+		actx := &bopla.AssessmentContext{
+			AssessmentID:            asm.ID,
+			BaseURL:                 targetBase,
+			Policies:                policies,
+			Identities:              identities,
+			AllowStateChangingTests: allowStateChanging,
+			SyntheticFixture:        syntheticFixture,
+			DryRun:                  true,
+			IsExcluded: func(target string) bool {
+				for _, exc := range asm.Exclusions {
+					if strings.Contains(target, exc.Pattern) {
+						return true
+					}
+				}
+				return false
+			},
+		}
+
+		plan, err := engine.Plan(context.Background(), actx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Planning error: %v\n", err)
+			return 1
+		}
+
+		if jsonOutput {
+			b, _ := json.MarshalIndent(plan, "", "  ")
+			fmt.Println(string(b))
+			return 0
+		}
+
+		fmt.Println("================================================================================")
+		fmt.Println("  FELIX :: BOPLA / BROKEN OBJECT PROPERTY LEVEL AUTHORIZATION PLAN (DRY-RUN)")
+		fmt.Printf("  Assessment: %s (%s) | Target: %s\n", asm.Name, asm.Ref, targetBase)
+		fmt.Println("================================================================================")
+		fmt.Printf("Total Planned Tests: %d | Ready: %d | Blocked: %d | State-Changing: %d\n\n",
+			plan.TotalTests, plan.ReadyTests, plan.BlockedTests, plan.StateChangingTests)
+
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "TEST ID\tCATEGORY\tMETHOD\tENDPOINT\tPROPERTY\tEXPECTED\tSTATUS")
+		for _, pt := range plan.Tests {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				pt.ID, pt.Category, pt.Method, pt.Endpoint, pt.PropertyPath, pt.ExpectedAccess, pt.Status)
+		}
+		_ = w.Flush()
+
+		fmt.Printf("\nTo execute active testing:\n  felix assessment bopla %s --run\n\n", asm.Ref)
+		return 0
+	}
+
+	// Mode 2: Active Run
+	if runExecution {
+		if asm.Authorization == nil {
+			fmt.Fprintln(os.Stderr, "[-] Refused: Assessment lacks authorization record.")
+			fmt.Fprintf(os.Stderr, "    Run: felix assessment authorize %s --authorizer <name> --role <role>\n", asm.Ref)
+			return 1
+		}
+		valid, reason := asm.Authorization.IsCurrentlyValid(time.Now().UTC())
+		if !valid {
+			fmt.Fprintf(os.Stderr, "[-] Refused: Authorization is invalid (%s).\n", reason)
+			return 1
+		}
+
+		targetID := ""
+		if len(asm.Targets) > 0 {
+			targetID = asm.Targets[0].ID
+		}
+
+		execID := "exec-" + uuid.New().String()
+		now := time.Now().UTC()
+		execRecord := &assessment.AssessmentExecution{
+			ID:           execID,
+			AssessmentID: asm.ID,
+			Status:       assessment.StatusRunning,
+			StartedAt:    now,
+			ConfigSnapshot: assessment.ScanConfigSnapshot{
+				TimeoutSeconds: 15,
+				Concurrency:    5,
+				ScopeMode:      asm.ScopeMode,
+				FelixVersion:   "2.0",
+			},
+		}
+		if err := store.CreateExecution(execRecord); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Failed to create execution record: %v\n", err)
+			return 1
+		}
+
+		var targetURLs []string
+		for _, t := range asm.Targets {
+			targetURLs = append(targetURLs, t.TargetURL)
+		}
+		scopeVal := assessment.NewScopeValidator(asm.ScopeMode, targetURLs, asm.ScopeRules, asm.Exclusions)
+
+		fmt.Println("================================================================================")
+		fmt.Println("  FELIX :: BOPLA / BROKEN OBJECT PROPERTY LEVEL AUTHORIZATION VERIFICATION")
+		fmt.Printf("  Assessment: %s (%s) | Target: %s\n", asm.Name, asm.Ref, targetBase)
+		fmt.Println("================================================================================")
+		fmt.Printf("[*] Dispatched at %s | Max Requests: %d | Concurrency: 3\n",
+			now.Format(time.RFC3339), maxRequests)
+
+		cfg := bopla.DefaultConfig()
+		cfg.AllowActiveTesting = true
+		cfg.AllowStateChangingTests = allowStateChanging
+
+		safeTransport := crawler.NewSafeTransport(crawler.SafeTransportOptions{
+			Timeout:         cfg.Timeout,
+			AllowLoopback:   allowLoopback || isTargetLoopback,
+			AllowPrivateIPs: allowPrivate,
+		})
+		httpClient := &http.Client{
+			Transport: crawler.NewRateLimitedTransport(safeTransport, crawler.RateLimitOptions{}),
+			Timeout:   cfg.Timeout,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 10 {
+					return fmt.Errorf("stopped after 10 redirects")
+				}
+				lastURL := ""
+				if len(via) > 0 {
+					lastURL = via[len(via)-1].URL.String()
+				}
+				return scopeVal.ValidateRedirect(lastURL, req.URL.String())
+			},
+		}
+
+		engine := bopla.NewEngine(httpClient, cfg)
+
+		var authRec *auth.AuthorizationRecord
+		if asm.Authorization != nil {
+			authRec = &auth.AuthorizationRecord{
+				ID:                  asm.Authorization.ID,
+				AuthorizingParty:    asm.Authorization.AuthorizingParty,
+				AuthorizationMethod: asm.Authorization.AuthorizationMethod,
+				Status:              string(asm.Authorization.Status),
+				ValidFrom:           asm.Authorization.ValidFrom,
+				ValidUntil:          asm.Authorization.ValidUntil,
+			}
+		}
+
+		var dispatchedReqs int32
+		actx := &bopla.AssessmentContext{
+			AssessmentID:            asm.ID,
+			ExecutionID:             execID,
+			BaseURL:                 targetBase,
+			Policies:                policies,
+			Identities:              identities,
+			AllowStateChangingTests: allowStateChanging,
+			SyntheticFixture:        syntheticFixture,
+			Authorization:           authRec,
+			MaxRequests:             maxRequests,
+			DispatchedRequests:      &dispatchedReqs,
+			IsAllowed:               scopeVal.IsAllowed,
+			IsExcluded:              func(u string) bool { excluded, _ := scopeVal.IsExcluded(u); return excluded },
+		}
+
+		startTime := time.Now()
+		results, summary, err := engine.Assess(context.Background(), actx)
+		duration := time.Since(startTime)
+		completedAt := time.Now().UTC()
+
+		if err != nil {
+			execRecord.Status = assessment.StatusFailed
+			execRecord.ErrorMessage = err.Error()
+			_ = store.UpdateExecution(execRecord)
+			fmt.Fprintf(os.Stderr, "[-] Assessment failed: %v\n", err)
+			return 1
+		}
+
+		execRecord.Status = assessment.StatusCompleted
+
+		// Save results
+		if err := store.SaveBOPLAResults(results); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Warning: failed to save BOPLA results: %v\n", err)
+		}
+
+		// Save run record
+		covJSON, _ := json.Marshal(summary.CoverageMap)
+		runRec := &bopla.RunRecord{
+			ID:                 uuid.New().String(),
+			AssessmentID:       asm.ID,
+			ExecutionID:        execID,
+			TotalTests:         summary.TotalTests,
+			CategoriesAssessed: summary.CategoriesCovered,
+			VerifiedCount:      summary.VerifiedCount,
+			CandidateCount:     summary.CandidateCount,
+			NotVulnerableCount: summary.NotVulnerableCount,
+			InconclusiveCount:  summary.InconclusiveCount,
+			BlockedCount:       summary.BlockedCount,
+			CoverageJSON:       string(covJSON),
+			CreatedAt:          completedAt,
+		}
+		if err := store.SaveBOPLARun(runRec); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Warning: failed to save BOPLA run record: %v\n", err)
+		}
+
+		// Save findings
+		var asmFindings []assessment.AssessmentFinding
+		for _, r := range results {
+			if r.Finding != nil {
+				asmFindings = append(asmFindings, assessment.ToAssessmentFinding(asm.ID, execID, targetID, *r.Finding))
+			}
+		}
+		if len(asmFindings) > 0 {
+			if err := store.SaveFindings(asmFindings); err != nil {
+				fmt.Fprintf(os.Stderr, "[-] Warning: failed to save assessment findings: %v\n", err)
+			}
+		}
+
+		_ = store.UpdateExecution(execRecord)
+
+		if jsonOutput {
+			outMap := map[string]any{
+				"assessment_ref": asm.Ref,
+				"execution_id":   execID,
+				"target":         targetBase,
+				"duration_ms":    duration.Milliseconds(),
+				"dispatched":     dispatchedReqs,
+				"summary":        summary,
+				"results":        results,
+			}
+			b, _ := json.MarshalIndent(outMap, "", "  ")
+			fmt.Println(string(b))
+			return 0
+		}
+
+		fmt.Println("--------------------------------------------------------------------------------")
+		fmt.Printf("BOPLA Assessment Complete in %s | Total Tests: %d\n", duration.Round(time.Millisecond), summary.TotalTests)
+		fmt.Printf("Findings: [VERIFIED: %d] [CANDIDATE: %d] [NOT_VULNERABLE: %d] [INCONCLUSIVE: %d] [SKIPPED: %d]\n",
+			summary.VerifiedCount, summary.CandidateCount, summary.NotVulnerableCount, summary.InconclusiveCount, summary.BlockedCount)
+		fmt.Println("--------------------------------------------------------------------------------")
+
+		// Display category breakdown
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "CATEGORY\tCODE\tSTATUS\tVERIFIED\tCANDIDATES\tNOT VULN\tINCONCLUSIVE\tBLOCKED")
+		for _, cat := range []bopla.Category{
+			bopla.CategoryBOPLAPropertyRead,
+			bopla.CategoryBOPLAExcessiveExposure,
+			bopla.CategoryBOPLAPropertyWrite,
+			bopla.CategoryBOPLAMassAssignment,
+			bopla.CategoryBOPLARepresentationBypass,
+		} {
+			cov := summary.CoverageMap[string(cat)]
+			notVuln := 0
+			for _, r := range results {
+				if r.Category == cat && r.VerificationState == bopla.StateNotVulnerable {
+					notVuln++
+				}
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\n",
+				cov.Category, cov.Code, cov.Status, cov.Verified, cov.Candidates, notVuln, cov.Inconclusive, cov.Blocked)
+		}
+		_ = w.Flush()
+		fmt.Println("--------------------------------------------------------------------------------")
+
+		// Results table
+		if len(results) > 0 {
+			wRes := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(wRes, "STATE\tSEVERITY\tMETHOD\tENDPOINT\tPROPERTY\tEVIDENCE SUMMARY")
+			for _, r := range results {
+				if statusFilter != "" && !strings.EqualFold(string(r.VerificationState), statusFilter) {
+					continue
+				}
+				if categoryFilter != "" && !strings.EqualFold(string(r.Category), categoryFilter) {
+					continue
+				}
+				fmt.Fprintf(wRes, "%s\t%s\t%s\t%s\t%s\t%s\n",
+					r.VerificationState, r.Severity, r.Method, r.Endpoint, r.PropertyPath, r.EvidenceSummary)
+			}
+			_ = wRes.Flush()
+		}
+		fmt.Println()
+		return 0
+	}
+
+	// Default Mode: Display Summary / Prior Results
+	summary, err := store.GetBOPLASummary(asm.ID, "")
+	results, _ := store.GetBOPLAResults(asm.ID, "", categoryFilter, statusFilter)
+
+	if jsonOutput {
+		outMap := map[string]any{
+			"assessment_ref": asm.Ref,
+			"summary":        summary,
+			"results":        results,
+		}
+		b, _ := json.MarshalIndent(outMap, "", "  ")
+		fmt.Println(string(b))
+		return 0
+	}
+
+	fmt.Println("================================================================================")
+	fmt.Println("  FELIX :: BOPLA / BROKEN OBJECT PROPERTY LEVEL AUTHORIZATION DOSSIER")
+	fmt.Printf("  Assessment: %s (%s) | Target: %s\n", asm.Name, asm.Ref, targetBase)
+	fmt.Println("================================================================================")
+
+	if summary != nil && summary.TotalTests > 0 {
+		fmt.Printf("Stored Run: Total: %d | Verified: %d | Candidates: %d | Not Vulnerable: %d | Blocked: %d\n\n",
+			summary.TotalTests, summary.VerifiedCount, summary.CandidateCount, summary.NotVulnerableCount, summary.BlockedCount)
+	}
+
+	if len(results) > 0 {
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		if verbose {
+			fmt.Fprintln(w, "STATE\tSEVERITY\tMETHOD\tENDPOINT\tPROPERTY\tROLE\tEVIDENCE & DETAILS")
+			for _, r := range results {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					r.VerificationState, r.Severity, r.Method, r.Endpoint, r.PropertyPath, r.AccessorRole, r.EvidenceSummary)
+			}
+		} else {
+			fmt.Fprintln(w, "STATE\tSEVERITY\tMETHOD\tENDPOINT\tPROPERTY\tROLE\tEVIDENCE SUMMARY")
+			for _, r := range results {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					r.VerificationState, r.Severity, r.Method, r.Endpoint, r.PropertyPath, r.AccessorRole, r.EvidenceSummary)
+			}
+		}
+		_ = w.Flush()
+	} else if summary == nil || summary.TotalTests == 0 {
+		fmt.Println("\nNo BOPLA test results recorded.")
+		fmt.Printf("To run an authorized BOPLA assessment:\n  felix assessment bopla %s --run\n", asm.Ref)
 	}
 
 	fmt.Println()
