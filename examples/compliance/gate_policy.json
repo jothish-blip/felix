@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0",
+  "id": "ci-release-gate",
+  "name": "CI/CD Release Compliance Gate",
+  "version": "1.0.0",
+  "description": "Standard evidence-backed compliance gating policy for automated CI/CD release pipelines",
+  "target_catalog": "nist-sp800-53-sample",
+  "enforced_controls": [
+    "AC-1",
+    "AC-3"
+  ],
+  "partially_compliant_policy": "fail",
+  "unassessed_policy": "fail_closed",
+  "insufficient_evidence_policy": "fail_closed",
+  "not_applicable_policy": "ignore",
+  "max_non_compliant": 0,
+  "max_partially_compliant": 0,
+  "min_compliance_percent": 100.0,
+  "min_assessed_percent": 100.0,
+  "require_integrity": false,
+  "require_hmac": false,
+  "strict_integrity": false,
+  "fail_on_overdue_sla": false
+}

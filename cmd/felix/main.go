@@ -37,6 +37,8 @@ func run(args []string) int {
 		return runReport(subArgs)
 	case "client":
 		return runClient(subArgs)
+	case "compliance":
+		return runCompliance(subArgs)
 	case "assessment":
 		return runAssessment(subArgs)
 	case "schedule", "schedules":
@@ -81,6 +83,8 @@ func run(args []string) int {
 				return runReport([]string{"--help"})
 			case "client":
 				return runClient([]string{"--help"})
+			case "compliance":
+				return runCompliance([]string{"--help"})
 			case "assessment":
 				return runAssessment([]string{"--help"})
 			case "schedule":
@@ -132,6 +136,7 @@ func printRootHelp() {
 	fmt.Println("  ci          Execute automated security assessments for CI/CD pipelines")
 	fmt.Println("  apk         Validate, isolate, and audit Android APK packages (generates mobile_audit.html)")
 	fmt.Println("  report      Generate assessment reports from existing scan results (zero network)")
+	fmt.Println("  compliance  Manage compliance catalogs, mapping, evaluations, integrity, SLAs, MTTR, and exports")
 	fmt.Println("  client      Manage clients and organizations for structured assessments")
 	fmt.Println("  assessment  Manage authorized security assessment projects and runs")
 	fmt.Println("  schedule    Manage recurring assessment schedules and automated execution")

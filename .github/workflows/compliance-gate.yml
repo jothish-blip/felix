@@ -1,0 +1,152 @@
+name: FELIX Compliance Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      policy_file:
+        description: 'Path to compliance gate policy file'
+        required: true
+        type: string
+        default: 'examples/compliance/gate_policy.json'
+      assessment_id:
+        description: 'Assessment identifier to evaluate'
+        required: false
+        type: string
+        default: ''
+      catalog_id:
+        description: 'Target control catalog ID or identity'
+        required: false
+        type: string
+        default: ''
+      dossier_file:
+        description: 'Path to pre-generated ComplianceDossier JSON file'
+        required: false
+        type: string
+        default: ''
+      strict_integrity:
+        description: 'Fail closed on missing verification key or cryptographic tampering'
+        required: false
+        type: boolean
+        default: false
+      output_dir:
+        description: 'Directory for gate report artifacts'
+        required: false
+        type: string
+        default: 'compliance-reports'
+  workflow_call:
+    inputs:
+      policy_file:
+        description: 'Path to compliance gate policy file'
+        required: true
+        type: string
+      assessment_id:
+        description: 'Assessment identifier to evaluate'
+        required: false
+        type: string
+        default: ''
+      catalog_id:
+        description: 'Target control catalog ID or identity'
+        required: false
+        type: string
+        default: ''
+      dossier_file:
+        description: 'Path to pre-generated ComplianceDossier JSON file'
+        required: false
+        type: string
+        default: ''
+      strict_integrity:
+        description: 'Fail closed on missing verification key or cryptographic tampering'
+        required: false
+        type: boolean
+        default: false
+      output_dir:
+        description: 'Directory for gate report artifacts'
+        required: false
+        type: string
+        default: 'compliance-reports'
+    outputs:
+      exit_code:
+        description: 'Compliance gate process exit code (0, 1, or 2)'
+        value: ${{ jobs.gate.outputs.exit_code }}
+      decision:
+        description: 'Gate conclusive decision (PASSED, POLICY_FAILED, OPERATIONAL_FAILED, INDETERMINATE)'
+        value: ${{ jobs.gate.outputs.decision }}
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: Evaluate Compliance Gate
+    runs-on: ubuntu-latest
+    outputs:
+      exit_code: ${{ steps.eval_gate.outputs.exit_code }}
+      decision: ${{ steps.eval_gate.outputs.decision }}
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Go Toolchain
+        uses: actions/setup-go@f111f330738ebb33059ca3288e89eb47411ba7b6 # v5.3.0
+        with:
+          go-version-file: 'go.mod'
+          check-latest: true
+
+      - name: Compile FELIX Binary
+        run: |
+          go build -trimpath -ldflags="-s -w" -o bin/felix ./cmd/felix
+          ./bin/felix version
+
+      - name: Create Reports Directory
+        run: mkdir -p "${{ inputs.output_dir }}"
+
+      - name: Run Noninteractive Compliance Gate
+        id: eval_gate
+        run: |
+          REPORT_FILE="${{ inputs.output_dir }}/compliance_gate_report.json"
+          ARGS=(compliance gate check --policy "${{ inputs.policy_file }}" --output "$REPORT_FILE" --overwrite)
+
+          if [ -n "${{ inputs.dossier_file }}" ]; then
+            ARGS+=(--dossier-file "${{ inputs.dossier_file }}")
+          fi
+          if [ -n "${{ inputs.assessment_id }}" ]; then
+            ARGS+=(--assessment "${{ inputs.assessment_id }}")
+          fi
+          if [ -n "${{ inputs.catalog_id }}" ]; then
+            ARGS+=(--catalog "${{ inputs.catalog_id }}")
+          fi
+          if [ "${{ inputs.strict_integrity }}" = "true" ]; then
+            ARGS+=(--strict-integrity)
+          fi
+
+          set +e
+          ./bin/felix "${ARGS[@]}"
+          GATE_EXIT=$?
+          set -e
+
+          echo "exit_code=$GATE_EXIT" >> "$GITHUB_OUTPUT"
+
+          if [ "$GATE_EXIT" -eq 0 ]; then
+            echo "decision=PASSED" >> "$GITHUB_OUTPUT"
+            echo "[+] Compliance Gate: PASSED (Exit Code: 0)"
+          elif [ "$GATE_EXIT" -eq 1 ]; then
+            echo "decision=POLICY_FAILED" >> "$GITHUB_OUTPUT"
+            echo "[-] Compliance Gate: POLICY FAILURE (Exit Code: 1)" >&2
+          else
+            echo "decision=OPERATIONAL_FAILED" >> "$GITHUB_OUTPUT"
+            echo "[!] Compliance Gate: OPERATIONAL FAILURE / INDETERMINATE (Exit Code: $GATE_EXIT)" >&2
+          fi
+
+          echo "GATE_EXIT_CODE=$GATE_EXIT" >> "$GITHUB_ENV"
+
+      - name: Upload Gate Report Artifact
+        if: always()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: compliance-gate-report
+          path: ${{ inputs.output_dir }}/
+          retention-days: 14
+
+      - name: Enforce Gate Exit Status
+        run: |
+          exit "${GATE_EXIT_CODE:-2}"
