@@ -10,7 +10,7 @@ import (
 
 const (
 	SARIFSchemaVersion = "2.1.0"
-	SARIFSchemaURI     = "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json"
+	SARIFSchemaURI     = "https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/schemas/sarif-schema-2.1.0.json"
 	DriverName         = "Felix"
 	DriverVersion      = "2.0.0"
 	DriverInfoURI      = "https://github.com/felix-security/felix"
@@ -23,10 +23,17 @@ type SARIFLog struct {
 	Runs    []SARIFRun `json:"runs"`
 }
 
+// SARIFInvocation specifies execution outcome information.
+type SARIFInvocation struct {
+	ExecutionSuccessful bool `json:"executionSuccessful"`
+}
+
 // SARIFRun represents a single assessment run.
 type SARIFRun struct {
-	Tool    SARIFTool     `json:"tool"`
-	Results []SARIFResult `json:"results"`
+	Tool        SARIFTool         `json:"tool"`
+	Invocations []SARIFInvocation `json:"invocations,omitempty"`
+	Results     []SARIFResult     `json:"results"`
+	Properties  map[string]any    `json:"properties,omitempty"`
 }
 
 // SARIFTool describes the analysis tool that produced the run.
@@ -67,13 +74,14 @@ type SARIFMultiformatMessage struct {
 
 // SARIFResult represents a single finding in SARIF.
 type SARIFResult struct {
-	RuleID       string                  `json:"ruleId"`
-	RuleIndex    int                     `json:"ruleIndex"`
-	Level        string                  `json:"level"` // "error", "warning", "note", "none"
-	Message      SARIFMultiformatMessage `json:"message"`
-	Locations    []SARIFLocation         `json:"locations,omitempty"`
-	Properties   map[string]any          `json:"properties,omitempty"`
-	Fingerprints map[string]string       `json:"fingerprints,omitempty"`
+	RuleID        string                  `json:"ruleId"`
+	RuleIndex     int                     `json:"ruleIndex"`
+	Level         string                  `json:"level"` // "error", "warning", "note", "none"
+	Message       SARIFMultiformatMessage `json:"message"`
+	Locations     []SARIFLocation         `json:"locations,omitempty"`
+	Properties    map[string]any          `json:"properties,omitempty"`
+	Fingerprints  map[string]string       `json:"fingerprints,omitempty"`
+	BaselineState string                  `json:"baselineState,omitempty"` // "new", "unchanged", "updated", "absent"
 }
 
 // SARIFLocation describes the location of a finding without fabricating fake code line numbers.
@@ -114,15 +122,60 @@ func SeverityToSARIFLevel(sev string) string {
 	}
 }
 
+// cleanArtifactURI normalizes a target or endpoint into a valid SARIF 2.1.0 uri-reference.
+func cleanArtifactURI(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	// Convert Windows path separators to forward slashes per SARIF 2.1.0 section 3.10.1
+	s = strings.ReplaceAll(s, "\\", "/")
+
+	// Strip leading HTTP methods if the raw endpoint included one (e.g. "GET /path" or "GET%20/path")
+	for _, m := range []string{"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"} {
+		if strings.HasPrefix(strings.ToUpper(s), m+" ") {
+			s = strings.TrimSpace(s[len(m)+1:])
+			break
+		}
+		if strings.HasPrefix(strings.ToUpper(s), m+"%20") {
+			s = strings.TrimSpace(s[len(m)+3:])
+			break
+		}
+	}
+
+	// Escape unencoded spaces so the output strictly conforms to RFC 3986 format: uri-reference
+	return strings.ReplaceAll(s, " ", "%20")
+}
+
 // BuildSARIFLog constructs a fully compliant SARIF 2.1.0 document from a sanitized Report.
 func BuildSARIFLog(rep Report) SARIFLog {
 	sanitized := SanitizeReport(rep)
+
+	// Deduplicate findings by fingerprint/identity while preserving original casing and metadata
+	cleanFindings := make([]Finding, 0, len(sanitized.Findings))
+	seenFingerprints := make(map[string]bool)
+	for _, f := range sanitized.Findings {
+		key := strings.TrimSpace(f.Fingerprint)
+		if key == "" {
+			key = strings.TrimSpace(f.ID)
+		}
+		if key != "" {
+			if seenFingerprints[key] {
+				continue
+			}
+			seenFingerprints[key] = true
+		}
+		cleanFindings = append(cleanFindings, f)
+	}
 
 	rulesMap := make(map[string]SARIFReportingDescriptor)
 	var ruleIDs []string
 
 	getRuleID := func(f Finding) string {
 		ruleID := strings.TrimSpace(f.Category)
+		if ruleID == "" {
+			ruleID = strings.TrimSpace(f.RuleID)
+		}
 		if ruleID == "" {
 			ruleID = strings.TrimSpace(f.ID)
 		}
@@ -133,7 +186,7 @@ func BuildSARIFLog(rep Report) SARIFLog {
 	}
 
 	// 1. Collect and deduplicate rules from findings
-	for _, f := range sanitized.Findings {
+	for _, f := range cleanFindings {
 		ruleID := getRuleID(f)
 		if _, exists := rulesMap[ruleID]; !exists {
 			ruleIDs = append(ruleIDs, ruleID)
@@ -148,6 +201,13 @@ func BuildSARIFLog(rep Report) SARIFLog {
 				desc = name
 			}
 
+			var helpMsg *SARIFMultiformatMessage
+			if strings.TrimSpace(f.Remediation) != "" {
+				helpMsg = &SARIFMultiformatMessage{
+					Text: SanitizeEvidence(strings.TrimSpace(f.Remediation)),
+				}
+			}
+
 			rulesMap[ruleID] = SARIFReportingDescriptor{
 				ID:   ruleID,
 				Name: name,
@@ -160,9 +220,7 @@ func BuildSARIFLog(rep Report) SARIFLog {
 				DefaultConfiguration: &SARIFReportingConfiguration{
 					Level: SeverityToSARIFLevel(f.Severity),
 				},
-				Help: &SARIFMultiformatMessage{
-					Text: f.Remediation,
-				},
+				Help: helpMsg,
 				Properties: map[string]any{
 					"category": ruleID,
 					"source":   f.Source,
@@ -174,7 +232,8 @@ func BuildSARIFLog(rep Report) SARIFLog {
 	// Sort rule IDs deterministically
 	sort.Strings(ruleIDs)
 
-	var rules []SARIFReportingDescriptor
+	// Ensure rules is initialized as an empty non-nil slice to serialize as [] instead of null
+	rules := make([]SARIFReportingDescriptor, 0, len(ruleIDs))
 	ruleIndexMap := make(map[string]int, len(ruleIDs))
 	for idx, id := range ruleIDs {
 		rules = append(rules, rulesMap[id])
@@ -182,15 +241,19 @@ func BuildSARIFLog(rep Report) SARIFLog {
 	}
 
 	// 2. Generate SARIF results from findings
-	var results []SARIFResult
-	for _, f := range sanitized.Findings {
+	// Ensure results is initialized as an empty non-nil slice to serialize as [] instead of null
+	results := make([]SARIFResult, 0, len(cleanFindings))
+	for _, f := range cleanFindings {
 		ruleID := getRuleID(f)
 		ruleIdx := ruleIndexMap[ruleID]
 		level := SeverityToSARIFLevel(f.Severity)
 
-		msgText := f.Description
+		msgText := strings.TrimSpace(f.Description)
 		if msgText == "" {
-			msgText = f.Title
+			msgText = strings.TrimSpace(f.Title)
+		}
+		if msgText == "" {
+			msgText = fmt.Sprintf("Security finding detected for rule %s", ruleID)
 		}
 		if f.Evidence != "" {
 			msgText += "\n\nEvidence: " + f.Evidence
@@ -198,26 +261,28 @@ func BuildSARIFLog(rep Report) SARIFLog {
 
 		// Logical & Physical locations (no fabricated line numbers)
 		var locations []SARIFLocation
-		targetLoc := f.Endpoint
-		if targetLoc == "" {
-			targetLoc = f.Target
+		rawLoc := f.Endpoint
+		if rawLoc == "" {
+			rawLoc = f.Target
 		}
-		if targetLoc != "" {
-			fqn := targetLoc
-			if f.Method != "" {
-				fqn = f.Method + " " + targetLoc
+
+		cleanedURI := cleanArtifactURI(rawLoc)
+		if cleanedURI != "" {
+			fqn := rawLoc
+			if f.Method != "" && !strings.HasPrefix(strings.ToUpper(rawLoc), f.Method+" ") {
+				fqn = f.Method + " " + rawLoc
 			}
 			locations = append(locations, SARIFLocation{
 				LogicalLocations: []SARIFLogicalLocation{
 					{
-						Name:               targetLoc,
+						Name:               rawLoc,
 						FullyQualifiedName: fqn,
 						Kind:               "endpoint",
 					},
 				},
 				PhysicalLocation: &SARIFPhysicalLocation{
 					ArtifactLocation: SARIFArtifactLocation{
-						URI: targetLoc,
+						URI: cleanedURI,
 					},
 				},
 			})
@@ -254,20 +319,72 @@ func BuildSARIFLog(rep Report) SARIFLog {
 			props["provenance"] = f.EvidenceDetails.Provenance
 		}
 
-		fingerprints := make(map[string]string)
+		var fingerprints map[string]string
 		if f.Fingerprint != "" {
-			fingerprints["felix/fingerprint/v1"] = f.Fingerprint
+			fingerprints = map[string]string{
+				"felix/fingerprint/v1": f.Fingerprint,
+			}
+		}
+
+		var baselineState string
+		lcStatus := strings.ToUpper(strings.TrimSpace(f.LifecycleStatus))
+		if lcStatus == "" && f.EvidenceDetails.Details != nil {
+			lcStatus = strings.ToUpper(strings.TrimSpace(f.EvidenceDetails.Details["lifecycle_status"]))
+		}
+		switch lcStatus {
+		case "NEW":
+			baselineState = "new"
+		case "PERSISTENT", "ACTIVE":
+			baselineState = "unchanged"
+		case "CHANGED", "REGRESSED":
+			baselineState = "updated"
+		case "RESOLVED":
+			baselineState = "absent"
+		}
+		if lcStatus != "" {
+			props["lifecycle_status"] = lcStatus
 		}
 
 		results = append(results, SARIFResult{
-			RuleID:       ruleID,
-			RuleIndex:    ruleIdx,
-			Level:        level,
-			Message:      SARIFMultiformatMessage{Text: SanitizeEvidence(msgText)},
-			Locations:    locations,
-			Properties:   props,
-			Fingerprints: fingerprints,
+			RuleID:        ruleID,
+			RuleIndex:     ruleIdx,
+			Level:         level,
+			Message:       SARIFMultiformatMessage{Text: SanitizeEvidence(msgText)},
+			Locations:     locations,
+			Properties:    props,
+			Fingerprints:  fingerprints,
+			BaselineState: baselineState,
 		})
+	}
+
+	// Determine execution completeness
+	isCompleted := rep.CompletionStatus == "COMPLETED" || (rep.CompletionStatus == "" && rep.RiskLevel != "UNAVAILABLE")
+	if rep.Metadata != nil {
+		if isPartial, ok := rep.Metadata["is_partial"].(bool); ok && isPartial {
+			isCompleted = false
+		}
+		if isPartialStr, ok := rep.Metadata["is_partial"].(string); ok && isPartialStr == "true" {
+			isCompleted = false
+		}
+	}
+
+	invocations := []SARIFInvocation{
+		{ExecutionSuccessful: isCompleted},
+	}
+
+	// Attach run-level properties from assessment report metadata (e.g. policy evaluation)
+	var runProps map[string]any
+	if len(rep.Metadata) > 0 {
+		runProps = make(map[string]any, len(rep.Metadata))
+		for k, v := range rep.Metadata {
+			runProps[k] = v
+		}
+	} else {
+		runProps = make(map[string]any)
+	}
+	runProps["is_partial"] = !isCompleted
+	if rep.CompletionStatus != "" {
+		runProps["completion_status"] = rep.CompletionStatus
 	}
 
 	return SARIFLog{
@@ -283,7 +400,9 @@ func BuildSARIFLog(rep Report) SARIFLog {
 						Rules:           rules,
 					},
 				},
-				Results: results,
+				Invocations: invocations,
+				Results:     results,
+				Properties:  runProps,
 			},
 		},
 	}
@@ -295,12 +414,17 @@ func GenerateSARIF(rep Report) ([]byte, error) {
 	return json.MarshalIndent(sarifLog, "", "  ")
 }
 
-// WriteSARIF writes the SARIF 2.1.0 export to disk.
+// WriteSARIF writes the SARIF 2.1.0 export to disk after validating against the official schema.
 func WriteSARIF(rep Report, filePath string) error {
 	data, err := GenerateSARIF(rep)
 	if err != nil {
 		return fmt.Errorf("failed to generate SARIF: %w", err)
 	}
+
+	if err := ValidateSARIF(data); err != nil {
+		return fmt.Errorf("generated SARIF failed schema validation: %w", err)
+	}
+
 	return os.WriteFile(filePath, data, 0644)
 }
 

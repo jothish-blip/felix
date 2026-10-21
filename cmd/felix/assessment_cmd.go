@@ -23,9 +23,12 @@ import (
 	"felix/pkg/bola"
 	"felix/pkg/bopla"
 	"felix/pkg/businesslogic"
+	"felix/pkg/clierror"
 	"felix/pkg/cloudsec"
+	"felix/pkg/config"
 	"felix/pkg/correlation"
 	"felix/pkg/crawler"
+	"felix/pkg/policy"
 	"felix/pkg/report"
 	"felix/pkg/sessionsec"
 	"felix/pkg/verification"
@@ -103,6 +106,18 @@ func runAssessment(args []string) int {
 		return runAssessmentReports(subArgs)
 	case "cancel":
 		return runAssessmentCancel(subArgs)
+	case "schedule", "schedules":
+		return runAssessmentSchedule(subArgs)
+	case "history":
+		return runAssessmentHistory(subArgs)
+	case "diff", "delta", "deltas":
+		return runAssessmentDiff(subArgs)
+	case "summary", "change-summary", "changes":
+		return runAssessmentSummary(subArgs)
+	case "notification", "notifications", "alert", "alerts":
+		return runAssessmentNotification(subArgs)
+	case "recover", "recovery":
+		return runAssessmentRecover(subArgs)
 	default:
 		fmt.Fprintf(os.Stderr, "[-] Unknown assessment subcommand: %s\n\n", sub)
 		printAssessmentHelp()
@@ -138,6 +153,12 @@ func printAssessmentHelp() {
 	fmt.Println("  verify       Verify finding evidence, reproduce findings, and calculate confidence")
 	fmt.Println("  reports      List generated report files for an assessment")
 	fmt.Println("  cancel       Cancel an active or pending assessment")
+	fmt.Println("  schedule     Manage recurring assessment schedules")
+	fmt.Println("  history      View persistent assessment execution history")
+	fmt.Println("  diff         Compare assessments and identify finding deltas")
+	fmt.Println("  summary      Generate change summary comparing assessments")
+	fmt.Println("  notification Manage notification outbox and alert dispatching")
+	fmt.Println("  recover      Detect and recover interrupted assessment executions")
 	fmt.Println("\nExamples:")
 	fmt.Println("  felix assessment create --client \"Acme Corp\" --name \"Q1 Web Audit\" --target https://example.com")
 	fmt.Println("  felix assessment authorize <asm-ref> --authorizer \"Jane Doe\" --role \"CISO\" --reference \"AUTH-001\" --valid-days 30")
@@ -172,13 +193,14 @@ func printAssessmentHelp() {
 
 func runAssessmentCreate(args []string) int {
 	var (
-		clientRef  string
-		name       string
-		notes      string
-		scopeMode  string
-		targets    []string
-		scopeRules []string
-		jsonOutput bool
+		clientRef      string
+		name           string
+		notes          string
+		scopeMode      string
+		targets        []string
+		scopeRules     []string
+		assessmentType string
+		jsonOutput     bool
 	)
 
 	for i := 0; i < len(args); i++ {
@@ -192,6 +214,11 @@ func runAssessmentCreate(args []string) int {
 		case "--name", "-n":
 			if i+1 < len(args) {
 				name = args[i+1]
+				i++
+			}
+		case "--type":
+			if i+1 < len(args) {
+				assessmentType = args[i+1]
 				i++
 			}
 		case "--notes", "--desc", "--description":
@@ -265,6 +292,18 @@ func runAssessmentCreate(args []string) int {
 		}
 	}
 
+	canonType := assessment.AssessmentTypeWebSecurity
+	if assessmentType != "" {
+		reg := assessment.DefaultEngineRegistry(store)
+		runner, err := reg.Get(assessmentType)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Error: unsupported --type %q (supported: %s)\n",
+				assessmentType, strings.Join(reg.ListSupportedTypes(), ", "))
+			return clierror.ExitOperational
+		}
+		canonType = runner.Capabilities().AssessmentType
+	}
+
 	asmID := uuid.New().String()
 	asmRef := assessment.GenerateAssessmentRef()
 	now := time.Now().UTC()
@@ -275,7 +314,7 @@ func runAssessmentCreate(args []string) int {
 		ClientID:       client.ID,
 		Name:           name,
 		Description:    notes,
-		AssessmentType: "WEB_SECURITY",
+		AssessmentType: canonType,
 		Status:         assessment.StatusDraft,
 		CreatedAt:      now,
 		UpdatedAt:      now,
@@ -1015,6 +1054,11 @@ func runAssessmentRun(args []string) int {
 		verbose        bool
 		exportHTMLPath string
 		exportJSONPath string
+		exportSARIFPath string
+		policyPath     string
+		idempotencyKey string
+		baselineRef    string
+		baselineScope  string
 	)
 
 	for i := 0; i < len(args); i++ {
@@ -1059,6 +1103,31 @@ func runAssessmentRun(args []string) int {
 				exportJSONPath = args[i+1]
 				i++
 			}
+		case "--sarif":
+			if i+1 < len(args) {
+				exportSARIFPath = args[i+1]
+				i++
+			}
+		case "--policy":
+			if i+1 < len(args) {
+				policyPath = args[i+1]
+				i++
+			}
+		case "--idempotency-key", "-k":
+			if i+1 < len(args) {
+				idempotencyKey = args[i+1]
+				i++
+			}
+		case "--baseline", "--base":
+			if i+1 < len(args) {
+				baselineRef = args[i+1]
+				i++
+			}
+		case "--baseline-scope", "--scope":
+			if i+1 < len(args) {
+				baselineScope = strings.ToLower(args[i+1])
+				i++
+			}
 		case "--help", "-h":
 			fmt.Println("Usage: felix assessment run <assessment-id> [flags]")
 			fmt.Println("\nFlags:")
@@ -1068,6 +1137,11 @@ func runAssessmentRun(args []string) int {
 			fmt.Println("  --max-response-size <mb> Maximum response body size in MB (default: 5)")
 			fmt.Println("  --html <path>            Custom destination path for assessment HTML report")
 			fmt.Println("  --json <path>            Custom destination path for assessment JSON report")
+			fmt.Println("  --sarif <path>           Custom destination path for assessment SARIF 2.1.0 report")
+			fmt.Println("  --policy <path>          Path to security threshold policy file for CI/CD gating")
+			fmt.Println("  --idempotency-key, -k    Deterministic idempotency key to prevent duplicate runs")
+			fmt.Println("  --baseline <ref>         Baseline execution or snapshot identifier for finding comparison")
+			fmt.Println("  --baseline-scope <scope> Scope for policy threshold evaluation: all (default), new, new_and_regressed")
 			fmt.Println("  --quiet, -q              Suppress live progress output")
 			fmt.Println("  --verbose, -v            Enable verbose execution logs")
 			return 0
@@ -1080,13 +1154,29 @@ func runAssessmentRun(args []string) int {
 
 	if assessmentRef == "" {
 		fmt.Fprintf(os.Stderr, "[-] Error: assessment ID or Ref is required\n")
-		return 2
+		return clierror.ExitOperational
+	}
+
+	// Resolve policy path: explicit CLI flag takes precedence over config
+	var pol *policy.ThresholdPolicy
+	cfgStore, _ := config.LoadWithEnv("")
+	resolvedPolicyPath := strings.TrimSpace(policyPath)
+	if resolvedPolicyPath == "" && cfgStore.PolicyPath != "" {
+		resolvedPolicyPath = strings.TrimSpace(cfgStore.PolicyPath)
+	}
+	if resolvedPolicyPath != "" {
+		p, err := policy.LoadPolicy(resolvedPolicyPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Policy error: %v\n", err)
+			return clierror.ExitOperational
+		}
+		pol = p
 	}
 
 	store, err := getAssessmentStore()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[-] Database error: %v\n", err)
-		return 1
+		return clierror.ExitOperational
 	}
 	defer store.Close()
 
@@ -1101,7 +1191,7 @@ func runAssessmentRun(args []string) int {
 	asm, err := store.GetAssessment(assessmentRef)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[-] Assessment %q not found: %v\n", assessmentRef, err)
-		return 1
+		return clierror.ExitOperational
 	}
 
 	// Setup context with interrupt handler
@@ -1144,6 +1234,10 @@ func runAssessmentRun(args []string) int {
 		BuildID:         GitCommit,
 		ExportHTMLPath:  exportHTMLPath,
 		ExportJSONPath:  exportJSONPath,
+		ExportSARIFPath: exportSARIFPath,
+		IdempotencyKey:  idempotencyKey,
+		BaselineRef:     baselineRef,
+		BaselineScope:   baselineScope,
 		Verbose:         verbose,
 		ProgressFunc: func(msg string) {
 			if !quiet {
@@ -1158,10 +1252,14 @@ func runAssessmentRun(args []string) int {
 		fmt.Printf("===========================================================\n")
 	}
 
+	if baselineScope != "" && pol != nil {
+		pol.EvaluationScope = baselineScope
+	}
+
 	res, err := controller.RunAssessment(ctx, asm.ID, opts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "\n[-] Assessment execution failed / refused:\n    %v\n", err)
-		return 1
+		return clierror.CodeFor(err)
 	}
 
 	if !quiet {
@@ -1185,16 +1283,46 @@ func runAssessmentRun(args []string) int {
 			fmt.Printf("    Low:           %d\n", res.Report.Summary.LowCount)
 			fmt.Printf("    Info:          %d\n", res.Report.Summary.InfoCount)
 		}
+		if res.ChangeSummary != nil {
+			if res.ChangeSummary.BaselineExecutionID != "" {
+				fmt.Printf("  Baseline Run:    %s\n", res.ChangeSummary.BaselineExecutionID)
+			}
+			fmt.Printf("  Finding Deltas:  %d new, %d persistent, %d resolved, %d changed, %d regressed, %d unverified\n",
+				res.ChangeSummary.Counts.New,
+				res.ChangeSummary.Counts.Persistent,
+				res.ChangeSummary.Counts.Resolved,
+				res.ChangeSummary.Counts.Changed,
+				res.ChangeSummary.Counts.Regressed,
+				res.ChangeSummary.Counts.Unverified,
+			)
+		}
 		if res.HTMLPath != "" {
 			fmt.Printf("  HTML Report:     %s\n", res.HTMLPath)
 		}
 		if res.JSONPath != "" {
 			fmt.Printf("  JSON Report:     %s\n", res.JSONPath)
 		}
+		if res.SARIFPath != "" {
+			fmt.Printf("  SARIF Report:    %s\n", res.SARIFPath)
+		}
 		fmt.Println()
 	}
 
-	return 0
+	decision, exitCode := res.ClassifyOutcomeWithPolicyAndArtifacts(pol, exportHTMLPath != "", exportJSONPath != "", exportSARIFPath != "")
+	if pol != nil && decision != nil && !quiet {
+		fmt.Print(policy.FormatDecisionSummary(decision))
+	}
+
+	if exitCode != clierror.ExitSuccess {
+		if res.Execution != nil && res.Execution.Status == assessment.StatusCompletedWithErrors {
+			fmt.Fprintf(os.Stderr, "[-] Assessment completed with operational crawl errors: %s\n", res.Execution.ErrorMessage)
+		} else if res.Error != nil {
+			fmt.Fprintf(os.Stderr, "[-] Assessment completed with operational error: %v\n", res.Error)
+		}
+		return exitCode
+	}
+
+	return clierror.ExitSuccess
 }
 
 func runAssessmentFindings(args []string) int {

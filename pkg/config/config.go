@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -36,42 +37,63 @@ type UpdateConfig struct {
 	AutoInstall bool `json:"auto_install"` // Automatic installation (always false by default)
 }
 
+// NotificationConfig holds settings for assessment alerting and webhook dispatching.
+type NotificationConfig struct {
+	Enabled           bool     `json:"enabled"`                      // Master switch for notification generation
+	Provider          string   `json:"provider"`                     // Notification provider (default "webhook")
+	WebhookURL        string   `json:"webhook_url"`                  // Destination HTTPS webhook URL
+	WebhookSecret     string   `json:"webhook_secret,omitempty"`     // Optional HMAC-SHA256 signature secret
+	TimeoutSeconds    int      `json:"timeout_seconds"`              // Request timeout in seconds (1..300)
+	MaxRetries        int      `json:"max_retries"`                  // Maximum retry attempts for transient delivery failures (0..10)
+	MinSeverity       string   `json:"min_severity"`                 // Minimum severity threshold (CRITICAL, HIGH, MEDIUM, LOW, INFO)
+	NotifyOnLifecycle []string `json:"notify_on_lifecycle"`          // Lifecycle events to alert on (completed, failed, interrupted, etc.)
+	NotifyOnDeltas    []string `json:"notify_on_deltas"`             // Security delta classifications to alert on (new, regressed, changed, resolved)
+	AllowInsecureHTTP bool     `json:"allow_insecure_http"`          // Allow unencrypted HTTP webhooks (default false)
+	AllowPrivateIPs   bool     `json:"allow_private_ips"`            // Allow webhooks to private/internal IPs (default false)
+	AllowLoopback     bool     `json:"allow_loopback"`               // Allow webhooks to loopback/127.0.0.1 (default false)
+	Concurrency       int      `json:"concurrency"`                  // Concurrency for background outbox workers (1..50)
+}
+
 // Config holds operational settings for Felix CLI and scanning pipelines.
 type Config struct {
-	Timeout            int          `json:"timeout"`              // Request timeout in seconds (1..3600)
-	Concurrency        int          `json:"concurrency"`          // Concurrent worker threads (1..1000)
-	Scope              string       `json:"scope"`                // same-origin, subdomains, explicit
-	MaxSizeMB          int          `json:"max_size_mb"`          // Max asset size in MB (1..1024)
-	UserAgent          string       `json:"user_agent"`           // User-Agent string
-	MaxAssets          int          `json:"max_assets"`           // Maximum assets discovered/budgeted (1..10000)
-	MaxDepth           int          `json:"max_depth"`            // Maximum crawl depth (1..20)
-	MaxRetries         int          `json:"max_retries"`          // Maximum network retries (0..10)
-	RetryDelayMs       int          `json:"retry_delay_ms"`       // Retry delay in milliseconds (0..5000)
-	MaxRedirects       int          `json:"max_redirects"`        // Maximum HTTP redirects to follow (0..20)
-	InsecureSkipVerify bool         `json:"insecure_skip_verify"` // Skip TLS certificate verification (default false)
-	AllowPrivateIPs    bool         `json:"allow_private_ips"`    // Allow RFC 1918 private subnets (default false)
-	AllowLoopback      bool         `json:"allow_loopback"`       // Allow 127.0.0.0/8 loopback (default false)
-	ActiveVerification bool         `json:"active_verification"`  // Permit active verification probes (default false)
-	Updates            UpdateConfig `json:"updates"`              // Update configuration
+	Timeout            int                `json:"timeout"`              // Request timeout in seconds (1..3600)
+	Concurrency        int                `json:"concurrency"`          // Concurrent worker threads (1..1000)
+	Scope              string             `json:"scope"`                // same-origin, subdomains, explicit
+	MaxSizeMB          int                `json:"max_size_mb"`          // Max asset size in MB (1..1024)
+	UserAgent          string             `json:"user_agent"`           // User-Agent string
+	MaxAssets          int                `json:"max_assets"`           // Maximum assets discovered/budgeted (1..10000)
+	MaxDepth           int                `json:"max_depth"`            // Maximum crawl depth (1..20)
+	MaxRetries         int                `json:"max_retries"`          // Maximum network retries (0..10)
+	RetryDelayMs       int                `json:"retry_delay_ms"`       // Retry delay in milliseconds (0..5000)
+	MaxRedirects       int                `json:"max_redirects"`        // Maximum HTTP redirects to follow (0..20)
+	InsecureSkipVerify bool               `json:"insecure_skip_verify"` // Skip TLS certificate verification (default false)
+	AllowPrivateIPs    bool               `json:"allow_private_ips"`    // Allow RFC 1918 private subnets (default false)
+	AllowLoopback      bool               `json:"allow_loopback"`       // Allow 127.0.0.0/8 loopback (default false)
+	ActiveVerification bool               `json:"active_verification"`  // Permit active verification probes (default false)
+	PolicyPath         string             `json:"policy_path,omitempty"`// Default path to security threshold policy file
+	Updates            UpdateConfig       `json:"updates"`              // Update configuration
+	Notification       NotificationConfig `json:"notification"`         // Alerting and notification settings
 }
 
 // diskConfigWire is used during disk unmarshaling to accurately distinguish explicitly present JSON fields.
 type diskConfigWire struct {
-	Timeout            *int          `json:"timeout"`
-	Concurrency        *int          `json:"concurrency"`
-	Scope              *string       `json:"scope"`
-	MaxSizeMB          *int          `json:"max_size_mb"`
-	UserAgent          *string       `json:"user_agent"`
-	MaxAssets          *int          `json:"max_assets"`
-	MaxDepth           *int          `json:"max_depth"`
-	MaxRetries         *int          `json:"max_retries"`
-	RetryDelayMs       *int          `json:"retry_delay_ms"`
-	MaxRedirects       *int          `json:"max_redirects"`
-	InsecureSkipVerify *bool         `json:"insecure_skip_verify"`
-	AllowPrivateIPs    *bool         `json:"allow_private_ips"`
-	AllowLoopback      *bool         `json:"allow_loopback"`
-	ActiveVerification *bool         `json:"active_verification"`
-	Updates            *UpdateConfig `json:"updates"`
+	Timeout            *int                `json:"timeout"`
+	Concurrency        *int                `json:"concurrency"`
+	Scope              *string             `json:"scope"`
+	MaxSizeMB          *int                `json:"max_size_mb"`
+	UserAgent          *string             `json:"user_agent"`
+	MaxAssets          *int                `json:"max_assets"`
+	MaxDepth           *int                `json:"max_depth"`
+	MaxRetries         *int                `json:"max_retries"`
+	RetryDelayMs       *int                `json:"retry_delay_ms"`
+	MaxRedirects       *int                `json:"max_redirects"`
+	InsecureSkipVerify *bool               `json:"insecure_skip_verify"`
+	AllowPrivateIPs    *bool               `json:"allow_private_ips"`
+	AllowLoopback      *bool               `json:"allow_loopback"`
+	ActiveVerification *bool               `json:"active_verification"`
+	PolicyPath         *string             `json:"policy_path,omitempty"`
+	Updates            *UpdateConfig       `json:"updates"`
+	Notification       *NotificationConfig `json:"notification"`
 }
 
 // Default returns standard, defensive configuration defaults.
@@ -94,6 +116,21 @@ func Default() Config {
 		Updates: UpdateConfig{
 			Check:       true,
 			AutoInstall: false,
+		},
+		Notification: NotificationConfig{
+			Enabled:           false,
+			Provider:          "webhook",
+			WebhookURL:        "",
+			WebhookSecret:     "",
+			TimeoutSeconds:    10,
+			MaxRetries:        3,
+			MinSeverity:       "LOW",
+			NotifyOnLifecycle: []string{"completed", "completed_with_errors", "failed", "interrupted"},
+			NotifyOnDeltas:    []string{"new", "regressed", "changed"},
+			AllowInsecureHTTP: false,
+			AllowPrivateIPs:   false,
+			AllowLoopback:     false,
+			Concurrency:       5,
 		},
 	}
 }
@@ -158,6 +195,49 @@ func (c Config) Validate() error {
 	if c.MaxRedirects > 20 {
 		return fmt.Errorf("max_redirects cannot exceed 20 (got %d)", c.MaxRedirects)
 	}
+
+	// Notification validation
+	if c.Notification.Enabled {
+		prov := strings.ToLower(strings.TrimSpace(c.Notification.Provider))
+		if prov != "webhook" {
+			return fmt.Errorf("invalid notification provider %q: currently supported: webhook", secrets.RedactText(c.Notification.Provider))
+		}
+		rawURL := strings.TrimSpace(c.Notification.WebhookURL)
+		if rawURL == "" {
+			return fmt.Errorf("webhook_url cannot be empty when notifications are enabled")
+		}
+		parsedURL, err := url.Parse(rawURL)
+		if err != nil || parsedURL.Host == "" {
+			return fmt.Errorf("invalid webhook_url %q: must be a valid URL", secrets.RedactText(rawURL))
+		}
+		scheme := strings.ToLower(parsedURL.Scheme)
+		if scheme != "https" {
+			if scheme == "http" {
+				if !c.Notification.AllowInsecureHTTP {
+					return fmt.Errorf("insecure HTTP webhook_url %q prohibited; HTTPS is required unless allow_insecure_http is true", secrets.RedactText(rawURL))
+				}
+			} else {
+				return fmt.Errorf("unsupported webhook_url scheme %q: must be https (or http if allow_insecure_http is set)", scheme)
+			}
+		}
+		if c.Notification.TimeoutSeconds <= 0 || c.Notification.TimeoutSeconds > 300 {
+			return fmt.Errorf("notification timeout_seconds must be between 1 and 300 (got %d)", c.Notification.TimeoutSeconds)
+		}
+		if c.Notification.MaxRetries < 0 || c.Notification.MaxRetries > 10 {
+			return fmt.Errorf("notification max_retries must be between 0 and 10 (got %d)", c.Notification.MaxRetries)
+		}
+		if c.Notification.Concurrency <= 0 || c.Notification.Concurrency > 50 {
+			return fmt.Errorf("notification concurrency must be between 1 and 50 (got %d)", c.Notification.Concurrency)
+		}
+		if sev := strings.ToUpper(strings.TrimSpace(c.Notification.MinSeverity)); sev != "" {
+			switch sev {
+			case "CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO":
+			default:
+				return fmt.Errorf("invalid notification min_severity %q: must be one of CRITICAL, HIGH, MEDIUM, LOW, INFO", secrets.RedactText(c.Notification.MinSeverity))
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -357,6 +437,113 @@ func applyEnv(cfg *Config) error {
 		cfg.Updates.AutoInstall = b
 	}
 
+	// 17. FELIX_NOTIFY_ENABLED
+	if v, ok := os.LookupEnv("FELIX_NOTIFY_ENABLED"); ok {
+		b, err := strconv.ParseBool(strings.TrimSpace(v))
+		if err != nil {
+			return fmt.Errorf("invalid FELIX_NOTIFY_ENABLED %q: must be true or false", secrets.RedactText(v))
+		}
+		cfg.Notification.Enabled = b
+	}
+
+	// 18. FELIX_NOTIFY_PROVIDER
+	if v, ok := os.LookupEnv("FELIX_NOTIFY_PROVIDER"); ok {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return fmt.Errorf("FELIX_NOTIFY_PROVIDER cannot be empty")
+		}
+		cfg.Notification.Provider = v
+	}
+
+	// 19. FELIX_NOTIFY_WEBHOOK_URL
+	if v, ok := os.LookupEnv("FELIX_NOTIFY_WEBHOOK_URL"); ok {
+		v = strings.TrimSpace(v)
+		cfg.Notification.WebhookURL = v
+	}
+
+	// 20. FELIX_NOTIFY_WEBHOOK_SECRET
+	if v, ok := os.LookupEnv("FELIX_NOTIFY_WEBHOOK_SECRET"); ok {
+		cfg.Notification.WebhookSecret = strings.TrimSpace(v)
+	}
+
+	// 21. FELIX_NOTIFY_TIMEOUT
+	if v, ok := os.LookupEnv("FELIX_NOTIFY_TIMEOUT"); ok {
+		v = strings.TrimSpace(v)
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 || n > 300 {
+			return fmt.Errorf("invalid FELIX_NOTIFY_TIMEOUT %q: must be a positive integer between 1 and 300 seconds", secrets.RedactText(v))
+		}
+		cfg.Notification.TimeoutSeconds = n
+	}
+
+	// 22. FELIX_NOTIFY_MAX_RETRIES
+	if v, ok := os.LookupEnv("FELIX_NOTIFY_MAX_RETRIES"); ok {
+		v = strings.TrimSpace(v)
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 || n > 10 {
+			return fmt.Errorf("invalid FELIX_NOTIFY_MAX_RETRIES %q: must be an integer between 0 and 10", secrets.RedactText(v))
+		}
+		cfg.Notification.MaxRetries = n
+	}
+
+	// 23. FELIX_NOTIFY_MIN_SEVERITY
+	if v, ok := os.LookupEnv("FELIX_NOTIFY_MIN_SEVERITY"); ok {
+		v = strings.ToUpper(strings.TrimSpace(v))
+		switch v {
+		case "CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO":
+			cfg.Notification.MinSeverity = v
+		default:
+			return fmt.Errorf("invalid FELIX_NOTIFY_MIN_SEVERITY %q: must be one of CRITICAL, HIGH, MEDIUM, LOW, INFO", secrets.RedactText(v))
+		}
+	}
+
+	// 24. FELIX_NOTIFY_ALLOW_INSECURE_HTTP
+	if v, ok := os.LookupEnv("FELIX_NOTIFY_ALLOW_INSECURE_HTTP"); ok {
+		b, err := strconv.ParseBool(strings.TrimSpace(v))
+		if err != nil {
+			return fmt.Errorf("invalid FELIX_NOTIFY_ALLOW_INSECURE_HTTP %q: must be true or false", secrets.RedactText(v))
+		}
+		cfg.Notification.AllowInsecureHTTP = b
+	}
+
+	// 25. FELIX_NOTIFY_ALLOW_PRIVATE_IPS
+	if v, ok := os.LookupEnv("FELIX_NOTIFY_ALLOW_PRIVATE_IPS"); ok {
+		b, err := strconv.ParseBool(strings.TrimSpace(v))
+		if err != nil {
+			return fmt.Errorf("invalid FELIX_NOTIFY_ALLOW_PRIVATE_IPS %q: must be true or false", secrets.RedactText(v))
+		}
+		cfg.Notification.AllowPrivateIPs = b
+	}
+
+	// 26. FELIX_NOTIFY_ALLOW_LOOPBACK
+	if v, ok := os.LookupEnv("FELIX_NOTIFY_ALLOW_LOOPBACK"); ok {
+		b, err := strconv.ParseBool(strings.TrimSpace(v))
+		if err != nil {
+			return fmt.Errorf("invalid FELIX_NOTIFY_ALLOW_LOOPBACK %q: must be true or false", secrets.RedactText(v))
+		}
+		cfg.Notification.AllowLoopback = b
+	}
+	if cfg.AllowLoopback {
+		cfg.Notification.AllowLoopback = true
+	}
+
+	// 27. FELIX_NOTIFY_CONCURRENCY
+	if v, ok := os.LookupEnv("FELIX_NOTIFY_CONCURRENCY"); ok {
+		v = strings.TrimSpace(v)
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 || n > 50 {
+			return fmt.Errorf("invalid FELIX_NOTIFY_CONCURRENCY %q: must be an integer between 1 and 50", secrets.RedactText(v))
+		}
+		cfg.Notification.Concurrency = n
+	}
+
+	// 28. FELIX_POLICY_PATH / FELIX_POLICY
+	if v, ok := os.LookupEnv("FELIX_POLICY_PATH"); ok {
+		cfg.PolicyPath = strings.TrimSpace(v)
+	} else if v, ok := os.LookupEnv("FELIX_POLICY"); ok {
+		cfg.PolicyPath = strings.TrimSpace(v)
+	}
+
 	return nil
 }
 
@@ -423,9 +610,16 @@ func LoadWithEnv(p string) (Config, error) {
 		if diskCfg.ActiveVerification != nil {
 			cfg.ActiveVerification = *diskCfg.ActiveVerification
 		}
+		if diskCfg.PolicyPath != nil {
+			cfg.PolicyPath = *diskCfg.PolicyPath
+		}
 		if diskCfg.Updates != nil {
 			cfg.Updates.Check = diskCfg.Updates.Check
 			cfg.Updates.AutoInstall = diskCfg.Updates.AutoInstall
+		}
+		if diskCfg.Notification != nil {
+			n := *diskCfg.Notification
+			cfg.Notification = n
 		}
 
 		if err := cfg.Validate(); err != nil {
@@ -528,9 +722,11 @@ func (c Config) Get(key string) (string, error) {
 		return strconv.FormatBool(c.Updates.Check), nil
 	case "auto_install", "auto-install", "updates.auto_install":
 		return strconv.FormatBool(c.Updates.AutoInstall), nil
+	case "policy_path", "policy-path", "policy":
+		return c.PolicyPath, nil
 	default:
 		safeKey := secrets.RedactText(key)
-		return "", fmt.Errorf("unknown configuration key %q (available: timeout, concurrency, scope, max_size_mb, user_agent, max_assets, max_depth, max_retries, retry_delay_ms, max_redirects, insecure_skip_verify, allow_private_ips, allow_loopback, active_verification, update_check, auto_install)", safeKey)
+		return "", fmt.Errorf("unknown configuration key %q (available: timeout, concurrency, scope, max_size_mb, user_agent, max_assets, max_depth, max_retries, retry_delay_ms, max_redirects, insecure_skip_verify, allow_private_ips, allow_loopback, active_verification, update_check, auto_install, policy_path)", safeKey)
 	}
 }
 
@@ -638,9 +834,11 @@ func (c *Config) Set(key, val string) error {
 			return fmt.Errorf("auto_install must be true or false")
 		}
 		c.Updates.AutoInstall = b
+	case "policy_path", "policy-path", "policy":
+		c.PolicyPath = v
 	default:
 		safeKey := secrets.RedactText(key)
-		return fmt.Errorf("unknown configuration key %q (available: timeout, concurrency, scope, max_size_mb, user_agent, max_assets, max_depth, max_retries, retry_delay_ms, max_redirects, insecure_skip_verify, allow_private_ips, allow_loopback, active_verification, update_check, auto_install)", safeKey)
+		return fmt.Errorf("unknown configuration key %q (available: timeout, concurrency, scope, max_size_mb, user_agent, max_assets, max_depth, max_retries, retry_delay_ms, max_redirects, insecure_skip_verify, allow_private_ips, allow_loopback, active_verification, update_check, auto_install, policy_path)", safeKey)
 	}
 
 	return nil

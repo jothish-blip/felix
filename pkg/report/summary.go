@@ -74,6 +74,19 @@ func Summarize(findings []Finding) Summary {
 
 		src := NormalizeSource(f.Source)
 		s.BySource[src]++
+
+		switch strings.ToUpper(strings.TrimSpace(f.LifecycleStatus)) {
+		case "NEW":
+			s.NewCount++
+		case "ACTIVE", "RECURRING":
+			s.ActiveCount++
+		case "RESOLVED":
+			s.ResolvedCount++
+		case "REGRESSED":
+			s.RegressedCount++
+		case "UNASSESSED":
+			s.UnassessedCount++
+		}
 	}
 
 	if s.AttemptedCount > 0 {

@@ -39,6 +39,10 @@ func TestSARIF_StructuralValidityAndSchema(t *testing.T) {
 		t.Fatalf("GenerateSARIF failed: %v", err)
 	}
 
+	if err := ValidateSARIF(data); err != nil {
+		t.Fatalf("official SARIF 2.1.0 schema validation failed: %v", err)
+	}
+
 	var sarifLog SARIFLog
 	if err := json.Unmarshal(data, &sarifLog); err != nil {
 		t.Fatalf("failed to unmarshal generated SARIF: %v", err)
@@ -121,6 +125,10 @@ func TestSARIF_RuleDeduplication(t *testing.T) {
 		t.Fatalf("GenerateSARIF failed: %v", err)
 	}
 
+	if err := ValidateSARIF(data); err != nil {
+		t.Fatalf("official SARIF 2.1.0 schema validation failed: %v", err)
+	}
+
 	var sarifLog SARIFLog
 	_ = json.Unmarshal(data, &sarifLog)
 
@@ -187,6 +195,10 @@ func TestSARIF_SecretScrubbing(t *testing.T) {
 	data, err := GenerateSARIF(rep)
 	if err != nil {
 		t.Fatalf("GenerateSARIF failed: %v", err)
+	}
+
+	if err := ValidateSARIF(data); err != nil {
+		t.Fatalf("official SARIF 2.1.0 schema validation failed: %v", err)
 	}
 
 	dataStr := string(data)

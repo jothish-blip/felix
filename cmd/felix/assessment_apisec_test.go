@@ -241,3 +241,89 @@ func TestCLI_AssessmentAPISec_ViewPastResults(t *testing.T) {
 		t.Errorf("expected at least 1 verified past result, got 0")
 	}
 }
+
+func TestCLI_AssessmentCreate_WithEngineType(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "felix-cli-create-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dbPath := filepath.Join(tmpDir, "assessments.db")
+	t.Setenv("FELIX_DB_PATH", dbPath)
+
+	store, err := assessment.NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	client := assessment.Client{
+		ID:        "client-type-test",
+		Name:      "Type Test Client",
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	if err := store.CreateClient(&client); err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	// 1. Create with --type API_SECURITY
+	code, out, errOut := captureStdoutStderr(func() int {
+		return runAssessmentCreate([]string{
+			"--client", client.ID,
+			"--name", "API Assessment",
+			"--target", "https://api.example.com",
+			"--type", "API_SECURITY",
+			"--json",
+		})
+	})
+	if code != 0 {
+		t.Fatalf("failed to create assessment with --type API_SECURITY: %s", errOut)
+	}
+
+	var created assessment.Assessment
+	if err := json.Unmarshal([]byte(out), &created); err != nil {
+		t.Fatalf("failed to unmarshal JSON output: %v", err)
+	}
+	if created.AssessmentType != assessment.AssessmentTypeAPISecurity {
+		t.Errorf("expected AssessmentType %s, got %s", assessment.AssessmentTypeAPISecurity, created.AssessmentType)
+	}
+
+	// 2. Create with --type cloud_security (case-insensitive alias normalization)
+	code2, out2, errOut2 := captureStdoutStderr(func() int {
+		return runAssessmentCreate([]string{
+			"--client", client.ID,
+			"--name", "Cloud Assessment",
+			"--target", "https://cloud.example.com",
+			"--type", "cloud_security",
+			"--json",
+		})
+	})
+	if code2 != 0 {
+		t.Fatalf("failed to create assessment with --type cloud_security: %s", errOut2)
+	}
+	var created2 assessment.Assessment
+	if err := json.Unmarshal([]byte(out2), &created2); err != nil {
+		t.Fatalf("failed to unmarshal JSON output 2: %v", err)
+	}
+	if created2.AssessmentType != assessment.AssessmentTypeCloudSecurity {
+		t.Errorf("expected AssessmentType %s, got %s", assessment.AssessmentTypeCloudSecurity, created2.AssessmentType)
+	}
+
+	// 3. Create with invalid type -> returns 2 with error
+	code3, _, errOut3 := captureStdoutStderr(func() int {
+		return runAssessmentCreate([]string{
+			"--client", client.ID,
+			"--name", "Invalid Assessment",
+			"--target", "https://example.com",
+			"--type", "non_existent_engine_xyz",
+		})
+	})
+	if code3 != 2 {
+		t.Errorf("expected exit code 2 for invalid type, got %d", code3)
+	}
+	if !strings.Contains(errOut3, "unsupported --type") {
+		t.Errorf("expected error message to mention unsupported --type, got: %s", errOut3)
+	}
+}

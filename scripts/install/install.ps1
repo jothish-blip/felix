@@ -9,6 +9,10 @@
 .PARAMETER BinaryPath
     Optional local path to felix_windows_amd64.exe or felix.exe. If omitted, downloads from official GitHub release.
 
+.PARAMETER ExpectedSHA256
+    Expected 64-character SHA-256 digest from an independently trusted source.
+    MANDATORY when downloading from GitHub Releases. Optional for local pre-built binaries.
+
 .PARAMETER Version
     The release version to install (defaults to 2.0.0).
 #>
@@ -16,6 +20,7 @@
 param(
     [string]$BinaryPath = "",
     [string]$Version = "2.0.0",
+    [string]$ExpectedSHA256 = "",
     [switch]$DevSign
 )
 
@@ -39,8 +44,29 @@ $TargetTmp = "$TargetExe.tmp"
 
 if ($BinaryPath -ne "" -and (Test-Path $BinaryPath)) {
     Write-Host "[*] Installing from local binary: $BinaryPath"
+    if ($ExpectedSHA256 -ne "") {
+        if ($ExpectedSHA256 -notmatch '^[a-fA-F0-9]{64}$') {
+            Write-Error "Provided ExpectedSHA256 '$ExpectedSHA256' is malformed. Must be exactly 64 hexadecimal characters."
+            exit 1
+        }
+        $localHash = (Get-FileHash -Path $BinaryPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($localHash -ne $ExpectedSHA256.ToLowerInvariant()) {
+            Write-Error "Cryptographic integrity verification failed for local binary! Expected: $ExpectedSHA256, Actual: $localHash"
+            exit 1
+        }
+        Write-Host "[+] Local binary SHA-256 verified: $localHash"
+    }
     Copy-Item -Path $BinaryPath -Destination $TargetTmp -Force
 } else {
+    if ([string]::IsNullOrWhiteSpace($ExpectedSHA256)) {
+        Write-Error "Downloading Felix binary requires an explicitly pinned ExpectedSHA256 digest from an independently trusted source. Download aborted to prevent execution of unverified binaries."
+        exit 1
+    }
+    if ($ExpectedSHA256 -notmatch '^[a-fA-F0-9]{64}$') {
+        Write-Error "Provided ExpectedSHA256 '$ExpectedSHA256' is malformed. Must be exactly 64 hexadecimal characters."
+        exit 1
+    }
+
     $ReleaseURL = "https://github.com/jothish-blip/felix/releases/download/v${Version}/felix_windows_amd64.exe"
     Write-Host "[*] Downloading Felix v$Version from GitHub Releases..."
     Write-Host "    $ReleaseURL"
@@ -60,6 +86,14 @@ if ($BinaryPath -ne "" -and (Test-Path $BinaryPath)) {
             exit 1
         }
     }
+
+    $downloadHash = (Get-FileHash -Path $TargetTmp -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($downloadHash -ne $ExpectedSHA256.ToLowerInvariant()) {
+        Remove-Item -Path $TargetTmp -Force -ErrorAction SilentlyContinue
+        Write-Error "Cryptographic integrity verification failed! Expected SHA256: $ExpectedSHA256, Actual SHA256: $downloadHash. Binary removed."
+        exit 1
+    }
+    Write-Host "[+] Downloaded binary cryptographic SHA-256 integrity verified: $downloadHash"
 }
 
 if (-not (Test-Path $TargetTmp) -or (Get-Item $TargetTmp).Length -eq 0) {

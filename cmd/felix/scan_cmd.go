@@ -15,9 +15,11 @@ import (
 	"time"
 
 	"felix/pkg/api"
+	"felix/pkg/clierror"
 	"felix/pkg/cloud"
 	"felix/pkg/config"
 	"felix/pkg/crawler"
+	"felix/pkg/policy"
 	"felix/pkg/report"
 	"felix/pkg/secrets"
 	"felix/pkg/ui"
@@ -44,6 +46,7 @@ func runScan(args []string) int {
 		htmlStr        string
 		outStr         string
 		sarifPath      string
+		policyPath     string
 		quiet          bool
 		verbose        bool
 		inputFile      string
@@ -257,6 +260,21 @@ func runScan(args []string) int {
 			continue
 		}
 
+		// --policy [file path]
+		if arg == "--policy" {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				fmt.Fprintf(os.Stderr, "[-] error: --policy requires a file path argument\n")
+				return 2
+			}
+			i++
+			policyPath = args[i]
+			continue
+		}
+		if strings.HasPrefix(arg, "--policy=") {
+			policyPath = strings.TrimPrefix(arg, "--policy=")
+			continue
+		}
+
 		// -l <targets file>
 		if arg == "-l" {
 			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
@@ -433,6 +451,21 @@ func runScan(args []string) int {
 		fmt.Fprintf(os.Stderr, "[-] Error: no target URLs specified\n\n")
 		printScanHelp()
 		return 2
+	}
+
+	// 11. Security Threshold Policy validation (upfront before execution)
+	var pol *policy.ThresholdPolicy
+	resolvedPolicyPath := strings.TrimSpace(policyPath)
+	if resolvedPolicyPath == "" && cfgStore.PolicyPath != "" {
+		resolvedPolicyPath = strings.TrimSpace(cfgStore.PolicyPath)
+	}
+	if resolvedPolicyPath != "" {
+		p, err := policy.LoadPolicy(resolvedPolicyPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Policy error: %v\n", err)
+			return 2
+		}
+		pol = p
 	}
 
 	// Validate and normalize all targets according to strict authorization & syntax rules
@@ -997,39 +1030,44 @@ func runScan(args []string) int {
 	report.RecalculateReportRisk(&rep)
 
 	var exported []string
+	var exportErrs []error
 
 	// 1. Export JSON scan result if requested
 	if outStr != "" {
 		if err := report.WriteJSON(rep, outStr); err != nil {
 			fmt.Fprintf(os.Stderr, "[-] Failed to save scan result to %s: %v\n", outStr, err)
-			return 2
+			exportErrs = append(exportErrs, err)
+		} else {
+			exported = append(exported, fmt.Sprintf("  Scan Result (JSON): %s", outStr))
 		}
-		exported = append(exported, fmt.Sprintf("  Scan Result (JSON): %s", outStr))
 	}
 	if jsonPath != "" {
 		if err := report.WriteJSON(rep, jsonPath); err != nil {
 			fmt.Fprintf(os.Stderr, "[-] Failed to export JSON report to %s: %v\n", jsonPath, err)
-			return 2
+			exportErrs = append(exportErrs, err)
+		} else {
+			exported = append(exported, fmt.Sprintf("  JSON Report:        %s", jsonPath))
 		}
-		exported = append(exported, fmt.Sprintf("  JSON Report:        %s", jsonPath))
 	}
 
 	// 2. Export HTML if requested via --html
 	if htmlStr != "" {
 		if err := report.WriteHTML(rep, htmlStr); err != nil {
 			fmt.Fprintf(os.Stderr, "[-] Failed to export HTML report to %s: %v\n", htmlStr, err)
-			return 2
+			exportErrs = append(exportErrs, err)
+		} else {
+			exported = append(exported, fmt.Sprintf("  HTML Report:        %s", htmlStr))
 		}
-		exported = append(exported, fmt.Sprintf("  HTML Report:        %s", htmlStr))
 	}
 
 	// 3. Export SARIF if requested via --sarif
 	if sarifPath != "" {
 		if err := report.WriteSARIF(rep, sarifPath); err != nil {
 			fmt.Fprintf(os.Stderr, "[-] Failed to export SARIF report to %s: %v\n", sarifPath, err)
-			return 2
+			exportErrs = append(exportErrs, err)
+		} else {
+			exported = append(exported, fmt.Sprintf("  SARIF Report:       %s", sarifPath))
 		}
-		exported = append(exported, fmt.Sprintf("  SARIF Report:       %s", sarifPath))
 	}
 
 	// 4. Export via canonical --export flag (single or comma-separated HTML/JSON/SARIF)
@@ -1044,21 +1082,24 @@ func runScan(args []string) int {
 			if strings.HasSuffix(lowerF, ".html") {
 				if err := report.WriteHTML(rep, f); err != nil {
 					fmt.Fprintf(os.Stderr, "[-] Failed to export HTML to %s: %v\n", f, err)
-					return 2
+					exportErrs = append(exportErrs, err)
+				} else {
+					exported = append(exported, fmt.Sprintf("  HTML Report:        %s", f))
 				}
-				exported = append(exported, fmt.Sprintf("  HTML Report:        %s", f))
 			} else if strings.HasSuffix(lowerF, ".sarif") {
 				if err := report.WriteSARIF(rep, f); err != nil {
 					fmt.Fprintf(os.Stderr, "[-] Failed to export SARIF to %s: %v\n", f, err)
-					return 2
+					exportErrs = append(exportErrs, err)
+				} else {
+					exported = append(exported, fmt.Sprintf("  SARIF Report:       %s", f))
 				}
-				exported = append(exported, fmt.Sprintf("  SARIF Report:       %s", f))
 			} else {
 				if err := report.WriteJSON(rep, f); err != nil {
 					fmt.Fprintf(os.Stderr, "[-] Failed to export JSON to %s: %v\n", f, err)
-					return 2
+					exportErrs = append(exportErrs, err)
+				} else {
+					exported = append(exported, fmt.Sprintf("  JSON Report:        %s", f))
 				}
-				exported = append(exported, fmt.Sprintf("  JSON Report:        %s", f))
 			}
 		}
 	}
@@ -1089,6 +1130,39 @@ func runScan(args []string) int {
 		}
 	}
 
+	var policyDecision *policy.EvaluationDecision
+	var policyErr error
+	if pol != nil {
+		ctx := policy.EvaluationContext{
+			Status:      rep.CompletionStatus,
+			TargetScope: targets,
+		}
+		decision, err := policy.EvaluateReport(pol, &rep, ctx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Policy evaluation error: %v\n", err)
+			policyErr = err
+		} else {
+			policyDecision = decision
+			if rep.Metadata == nil {
+				rep.Metadata = make(map[string]any)
+			}
+			rep.Metadata["policy_evaluation"] = decision
+			if !quiet && !jsonBare {
+				fmt.Print(policy.FormatDecisionSummary(decision))
+			}
+		}
+	}
+
+	if pol != nil {
+		hasViolation := policyDecision != nil && !policyDecision.Passed
+		cls := clierror.ClassifyAssessment(rep.CompletionStatus, nil, hasViolation, policyErr, exportErrs...)
+		return cls.ExitCode()
+	}
+
+	// No policy configured
+	if len(exportErrs) > 0 {
+		return clierror.ExitOperational
+	}
 	return determineExitCode(rep)
 }
 
@@ -1107,6 +1181,7 @@ func printScanHelp() {
 	fmt.Println("  --export <file>             Export assessment report to HTML, JSON, or SARIF file")
 	fmt.Println("  --json [file]               Save machine-readable scan result as JSON (or output to stdout)")
 	fmt.Println("  --sarif [file]              Export assessment report to SARIF 2.1.0 format")
+	fmt.Println("  --policy <file>             Evaluate security threshold policy against completed assessment")
 	fmt.Println("  --quiet, -q                 Suppress normal terminal output and banners")
 	fmt.Println("  --verbose, -v               Enable detailed operational output")
 	fmt.Println("  -l <file>                   Path to file containing target URLs (one per line)")

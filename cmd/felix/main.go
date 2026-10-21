@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"felix/pkg/clierror"
 	"felix/pkg/crawler"
 )
 
@@ -16,81 +17,110 @@ const banner = `
 ===========================================================
 `
 
-func main() {
-	if len(os.Args) < 2 {
+func run(args []string) int {
+	if len(args) == 0 {
 		printRootHelp()
-		os.Exit(0)
+		return clierror.ExitSuccess
 	}
 
-	cmd := os.Args[1]
+	cmd := args[0]
+	subArgs := args[1:]
 
 	switch cmd {
 	case "scan":
-		os.Exit(runScan(os.Args[2:]))
+		return runScan(subArgs)
+	case "ci":
+		return runCI(subArgs)
 	case "apk":
-		os.Exit(runAPK(os.Args[2:]))
+		return runAPK(subArgs)
 	case "report":
-		os.Exit(runReport(os.Args[2:]))
+		return runReport(subArgs)
 	case "client":
-		os.Exit(runClient(os.Args[2:]))
+		return runClient(subArgs)
 	case "assessment":
-		os.Exit(runAssessment(os.Args[2:]))
+		return runAssessment(subArgs)
+	case "schedule", "schedules":
+		return runAssessmentSchedule(subArgs)
+	case "history":
+		return runAssessmentHistory(subArgs)
+	case "diff":
+		return runAssessmentDiff(subArgs)
+	case "summary":
+		return runAssessmentSummary(subArgs)
+	case "recover":
+		return runAssessmentRecover(subArgs)
+	case "notification", "notifications", "alert", "alerts":
+		return runNotification(subArgs)
 	case "operator":
-		os.Exit(runOperator(os.Args[2:]))
+		return runOperator(subArgs)
 	case "config":
-		os.Exit(runConfig(os.Args[2:]))
+		return runConfig(subArgs)
 	case "doctor":
-		os.Exit(runDoctor(os.Args[2:]))
+		return runDoctor(subArgs)
 	case "version", "--version", "-V":
-		os.Exit(runVersion(os.Args[2:]))
+		return runVersion(subArgs)
 	case "install":
-		os.Exit(runInstall(os.Args[2:]))
+		return runInstall(subArgs)
 	case "uninstall":
-		os.Exit(runUninstall(os.Args[2:]))
+		return runUninstall(subArgs)
 	case "completion":
-		os.Exit(runCompletion(os.Args[2:]))
+		return runCompletion(subArgs)
 	case "update":
-		os.Exit(runUpdate(os.Args[2:]))
+		return runUpdate(subArgs)
 	case "help", "--help", "-h":
-		if len(os.Args) > 2 {
-			sub := os.Args[2]
+		if len(subArgs) > 0 {
+			sub := subArgs[0]
 			switch sub {
 			case "scan":
-				os.Exit(runScan([]string{"--help"}))
+				return runScan([]string{"--help"})
+			case "ci":
+				return runCI([]string{"--help"})
 			case "apk":
-				os.Exit(runAPK([]string{"--help"}))
+				return runAPK([]string{"--help"})
 			case "report":
-				os.Exit(runReport([]string{"--help"}))
+				return runReport([]string{"--help"})
 			case "client":
-				os.Exit(runClient([]string{"--help"}))
+				return runClient([]string{"--help"})
 			case "assessment":
-				os.Exit(runAssessment([]string{"--help"}))
+				return runAssessment([]string{"--help"})
+			case "schedule":
+				return runAssessmentSchedule([]string{"--help"})
+			case "history":
+				return runAssessmentHistory([]string{"--help"})
+			case "diff":
+				return runAssessmentDiff([]string{"--help"})
 			case "operator":
-				os.Exit(runOperator([]string{"--help"}))
+				return runOperator([]string{"--help"})
 			case "config":
-				os.Exit(runConfig([]string{"--help"}))
+				return runConfig([]string{"--help"})
 			case "doctor":
-				os.Exit(runDoctor([]string{"--help"}))
+				return runDoctor([]string{"--help"})
+			case "notification", "notifications", "alert", "alerts":
+				return runNotification([]string{"--help"})
 			case "update":
-				os.Exit(runUpdate([]string{"--help"}))
+				return runUpdate([]string{"--help"})
 			case "completion":
-				os.Exit(runCompletion([]string{"--help"}))
+				return runCompletion([]string{"--help"})
 			default:
 				printRootHelp()
-				os.Exit(0)
+				return clierror.ExitSuccess
 			}
 		}
 		printRootHelp()
-		os.Exit(0)
+		return clierror.ExitSuccess
 	default:
 		// If argument starts with '-' or looks like a URL/target, treat as 'scan' for convenience
 		if strings.HasPrefix(cmd, "-") || strings.Contains(cmd, "://") || strings.Contains(cmd, ".") {
-			os.Exit(runScan(os.Args[1:]))
+			return runScan(args)
 		}
 		fmt.Fprintf(os.Stderr, "[-] Unknown command: %s\n\n", cmd)
 		printRootHelp()
-		os.Exit(2)
+		return clierror.ExitOperational
 	}
+}
+
+func main() {
+	os.Exit(run(os.Args[1:]))
 }
 
 func printRootHelp() {
@@ -99,10 +129,15 @@ func printRootHelp() {
 	fmt.Println("  felix <command> [arguments]")
 	fmt.Println("\nCommands:")
 	fmt.Println("  scan        Audit target web applications for security exposures")
+	fmt.Println("  ci          Execute automated security assessments for CI/CD pipelines")
 	fmt.Println("  apk         Validate, isolate, and audit Android APK packages (generates mobile_audit.html)")
 	fmt.Println("  report      Generate assessment reports from existing scan results (zero network)")
 	fmt.Println("  client      Manage clients and organizations for structured assessments")
 	fmt.Println("  assessment  Manage authorized security assessment projects and runs")
+	fmt.Println("  schedule    Manage recurring assessment schedules and automated execution")
+	fmt.Println("  history     View persistent execution history for assessments and schedules")
+	fmt.Println("  diff        Compare assessment runs to identify finding deltas and regressions")
+	fmt.Println("  notification Manage alerting, webhooks, and outbox notification delivery")
 	fmt.Println("  operator    Launch local-first operator console for assessment and finding curation")
 	fmt.Println("  config      Manage persistent CLI configuration settings")
 	fmt.Println("  doctor      Diagnose environment, network stack, and permissions")

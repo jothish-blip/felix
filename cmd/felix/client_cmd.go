@@ -116,7 +116,7 @@ func runClientAdd(args []string) int {
 	store, err := getAssessmentStore()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[-] Database error: %v\n", err)
-		return 1
+		return 2
 	}
 	defer store.Close()
 
@@ -134,7 +134,7 @@ func runClientAdd(args []string) int {
 
 	if err := store.CreateClient(c); err != nil {
 		fmt.Fprintf(os.Stderr, "[-] Failed to create client: %v\n", err)
-		return 1
+		return 2
 	}
 
 	if jsonOutput {
@@ -178,14 +178,14 @@ func runClientList(args []string) int {
 	store, err := getAssessmentStore()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[-] Database error: %v\n", err)
-		return 1
+		return 2
 	}
 	defer store.Close()
 
 	clients, err := store.ListClients(all)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[-] Failed to list clients: %v\n", err)
-		return 1
+		return 2
 	}
 
 	if jsonOutput {
@@ -259,14 +259,14 @@ func runClientShow(args []string) int {
 	store, err := getAssessmentStore()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[-] Database error: %v\n", err)
-		return 1
+		return 2
 	}
 	defer store.Close()
 
 	c, err := store.GetClient(clientID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[-] Error: %v\n", err)
-		return 1
+		return 2
 	}
 
 	assessments, _ := store.ListAssessments(c.ID)
@@ -347,13 +347,13 @@ func runClientArchive(args []string) int {
 	store, err := getAssessmentStore()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[-] Database error: %v\n", err)
-		return 1
+		return 2
 	}
 	defer store.Close()
 
 	if err := store.ArchiveClient(clientID); err != nil {
 		fmt.Fprintf(os.Stderr, "[-] Failed to archive client: %v\n", err)
-		return 1
+		return 2
 	}
 
 	fmt.Printf("[+] Client %s archived successfully\n", clientID)

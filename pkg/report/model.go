@@ -263,6 +263,7 @@ type Finding struct {
 	Fingerprint       string              `json:"fingerprint"`
 	Score             int                 `json:"score"`
 	ScoreExplanation  *FindingScoreExplanation `json:"score_explanation,omitempty"`
+	LifecycleStatus   string              `json:"lifecycle_status,omitempty"`
 	Timestamp         time.Time           `json:"timestamp,omitempty"`
 }
 
@@ -330,6 +331,11 @@ type Summary struct {
 	ByStatus                  map[FindingStatus]int `json:"by_status,omitempty"`
 	ScoreAvailable            bool                  `json:"score_available"`
 	BySource                  map[string]int        `json:"by_source"`
+	NewCount                  int                   `json:"new_count,omitempty"`
+	ActiveCount               int                   `json:"active_count,omitempty"`
+	ResolvedCount             int                   `json:"resolved_count,omitempty"`
+	RegressedCount            int                   `json:"regressed_count,omitempty"`
+	UnassessedCount           int                   `json:"unassessed_count,omitempty"`
 }
 
 // Report represents the complete audit results ready for presentation or export.
@@ -352,6 +358,7 @@ type Report struct {
 	AttackPaths         []AttackPathSummary `json:"attack_paths,omitempty"`
 	VerificationSummary map[string]any      `json:"verification_summary,omitempty"`
 	CommercialReport    *CommercialReport   `json:"commercial_report,omitempty"`
+	ChangeSummary       *ChangeSummary      `json:"change_summary,omitempty"`
 	Metadata            map[string]any      `json:"metadata,omitempty"`
 }
 

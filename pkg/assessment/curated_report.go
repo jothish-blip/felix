@@ -5,23 +5,28 @@ import (
 	"path/filepath"
 	"time"
 
+	"strings"
+
 	"felix/pkg/report"
 	"github.com/google/uuid"
 )
 
 // CuratedReportOptions configures curated report generation.
 type CuratedReportOptions struct {
-	AllowDraft     bool   // If true, permits compiling report even if some findings are PENDING review
-	ExecutionID    string // Optional filter: restrict report to findings from a specific execution
-	ExportHTMLPath string // Optional explicit destination path
-	ExportJSONPath string // Optional explicit destination path
-	FelixVersion   string // Reporter version stamp
+	AllowDraft           bool   // If true, permits compiling report even if some findings are PENDING review
+	ExecutionID          string // Optional filter: restrict report to findings from a specific execution
+	BaselineExecutionID  string // Optional baseline execution ID for change summary
+	IncludeChangeSummary bool   // If true, computes and attaches ChangeSummary
+	ExportHTMLPath       string // Optional explicit destination path
+	ExportJSONPath       string // Optional explicit destination path
+	FelixVersion         string // Reporter version stamp
 }
 
 // CuratedReportResult holds the generated report artifacts and metadata.
 type CuratedReportResult struct {
 	Report           *report.Report
 	CommercialReport *report.CommercialReport
+	ChangeSummary    *report.ChangeSummary
 	IsDraft          bool
 	TotalFindings    int
 	ApprovedCount    int
@@ -190,8 +195,18 @@ func GenerateCuratedCommercialReport(
 		}
 	}
 
+	// Attach ChangeSummary if requested or available
+	if opts.IncludeChangeSummary || opts.BaselineExecutionID != "" {
+		if cs, err := store.GetAssessmentChangeSummary(asm.ID, opts.BaselineExecutionID, opts.ExecutionID, NewAdminAuthContext()); err == nil && cs != nil {
+			rep.ChangeSummary = cs
+		}
+	}
+
 	// 7. Compile Commercial Report 2.0
 	cr := report.BuildCommercialReport(rep)
+	if rep.ChangeSummary != nil && (cr.ExecutiveSummary.PostureStatement == "" || strings.HasPrefix(cr.ExecutiveSummary.PostureStatement, "Assessment identified")) {
+		cr.ExecutiveSummary.PostureStatement = rep.ChangeSummary.Headline
+	}
 	if isDraft {
 		cr.ExecutiveSummary.CompletionStatus = "[DRAFT - PENDING OPERATOR REVIEW]"
 		cr.ExecutiveSummary.PostureStatement = fmt.Sprintf(
@@ -288,6 +303,7 @@ func GenerateCuratedCommercialReport(
 	return &CuratedReportResult{
 		Report:           &rep,
 		CommercialReport: &cr,
+		ChangeSummary:    rep.ChangeSummary,
 		IsDraft:          isDraft,
 		TotalFindings:    len(rawFindings),
 		ApprovedCount:    len(approvedFindings),

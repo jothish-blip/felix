@@ -268,7 +268,9 @@ func TestController_HonestResultStatePreservation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	runRecord, err := ctrl.RunAssessment(ctx, asmID, ExecutionOptions{})
+	runRecord, err := ctrl.RunAssessment(ctx, asmID, ExecutionOptions{
+		AllowLoopback: true,
+	})
 	if err != nil {
 		t.Fatalf("RunAssessment failed: %v", err)
 	}

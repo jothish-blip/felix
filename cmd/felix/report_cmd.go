@@ -1,11 +1,15 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"strings"
 
+	"felix/pkg/clierror"
+	"felix/pkg/config"
+	"felix/pkg/policy"
 	"felix/pkg/report"
 )
 
@@ -13,12 +17,18 @@ import (
 // It loads an existing scan result file (JSON) and renders reports.
 // ZERO network requests are performed by this command.
 func runReport(args []string) int {
+	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h" || args[0] == "help") {
+		printReportHelp()
+		return clierror.ExitSuccess
+	}
+
 	fs := flag.NewFlagSet("felix report", flag.ContinueOnError)
 
 	var (
 		htmlPath   string
 		jsonPath   string
 		sarifPath  string
+		policyPath string
 		verbose    bool
 		silent     bool
 		commercial bool
@@ -27,6 +37,7 @@ func runReport(args []string) int {
 	fs.StringVar(&htmlPath, "html", "", "Export report to HTML file")
 	fs.StringVar(&jsonPath, "json", "", "Export report to JSON file")
 	fs.StringVar(&sarifPath, "sarif", "", "Export report to SARIF 2.1.0 file")
+	fs.StringVar(&policyPath, "policy", "", "Path to security threshold policy file for evaluation")
 	fs.BoolVar(&verbose, "v", false, "Verbose terminal output")
 	fs.BoolVar(&verbose, "verbose", false, "Verbose terminal output")
 	fs.BoolVar(&silent, "s", false, "Silent / minimal terminal output")
@@ -51,7 +62,7 @@ func runReport(args []string) int {
 			if !strings.Contains(arg, "=") && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
 				flagName := strings.TrimLeft(arg, "-")
 				switch flagName {
-				case "html", "json", "sarif":
+				case "html", "json", "sarif", "policy":
 					i++
 					flagArgs = append(flagArgs, args[i])
 				}
@@ -65,7 +76,10 @@ func runReport(args []string) int {
 	}
 
 	if err := fs.Parse(flagArgs); err != nil {
-		return 2
+		if errors.Is(err, flag.ErrHelp) {
+			return clierror.ExitSuccess
+		}
+		return clierror.ExitOperational
 	}
 
 	for _, extra := range fs.Args() {
@@ -93,35 +107,55 @@ func runReport(args []string) int {
 		return 2
 	}
 
+	// Resolve policy path: explicit CLI flag takes precedence over config
+	var pol *policy.ThresholdPolicy
+	cfgStore, _ := config.LoadWithEnv("")
+	resolvedPolicyPath := strings.TrimSpace(policyPath)
+	if resolvedPolicyPath == "" && cfgStore.PolicyPath != "" {
+		resolvedPolicyPath = strings.TrimSpace(cfgStore.PolicyPath)
+	}
+	if resolvedPolicyPath != "" {
+		p, err := policy.LoadPolicy(resolvedPolicyPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Policy error: %v\n", err)
+			return 2
+		}
+		pol = p
+	}
+
 	// Recalculate risk score and risk level to reflect current deterministic scoring model
 	report.RecalculateReportRisk(&rep)
 
 	// Export HTML if requested
 	var exported []string
+	var exportErrs []error
 	if htmlPath != "" {
 		if err := report.WriteHTML(rep, htmlPath); err != nil {
 			fmt.Fprintf(os.Stderr, "[-] Failed to write HTML report to %s: %v\n", htmlPath, err)
-			return 2
+			exportErrs = append(exportErrs, err)
+		} else {
+			exported = append(exported, fmt.Sprintf("  HTML: %s", htmlPath))
 		}
-		exported = append(exported, fmt.Sprintf("  HTML: %s", htmlPath))
 	}
 
 	// Export JSON if requested
 	if jsonPath != "" {
 		if err := report.WriteJSON(rep, jsonPath); err != nil {
 			fmt.Fprintf(os.Stderr, "[-] Failed to write JSON report to %s: %v\n", jsonPath, err)
-			return 2
+			exportErrs = append(exportErrs, err)
+		} else {
+			exported = append(exported, fmt.Sprintf("  JSON: %s", jsonPath))
 		}
-		exported = append(exported, fmt.Sprintf("  JSON: %s", jsonPath))
 	}
 
 	// Export SARIF if requested
 	if sarifPath != "" {
 		if err := report.WriteSARIF(rep, sarifPath); err != nil {
 			fmt.Fprintf(os.Stderr, "[-] Failed to write SARIF report to %s: %v\n", sarifPath, err)
-			return 2
+			exportErrs = append(exportErrs, err)
+		} else {
+			exported = append(exported, fmt.Sprintf("  SARIF 2.1.0: %s", sarifPath))
 		}
-		exported = append(exported, fmt.Sprintf("  SARIF 2.1.0: %s", sarifPath))
 	}
 
 	// Print terminal output unless silent
@@ -141,7 +175,58 @@ func runReport(args []string) int {
 		}
 	}
 
+	reportStatus := rep.CompletionStatus
+	if reportStatus == "" {
+		reportStatus = "COMPLETED"
+	}
+
+	var policyDecision *policy.EvaluationDecision
+	var policyErr error
+	if pol != nil {
+		ctx := policy.EvaluationContext{
+			Status: reportStatus,
+		}
+		decision, err := policy.EvaluateReport(pol, &rep, ctx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Policy evaluation error: %v\n", err)
+			policyErr = err
+		} else {
+			policyDecision = decision
+			if rep.Metadata == nil {
+				rep.Metadata = make(map[string]any)
+			}
+			rep.Metadata["policy_evaluation"] = decision
+			if !silent {
+				fmt.Print(policy.FormatDecisionSummary(decision))
+			}
+		}
+	}
+
+	if pol != nil {
+		hasViolation := policyDecision != nil && !policyDecision.Passed
+		cls := clierror.ClassifyAssessment(reportStatus, nil, hasViolation, policyErr, exportErrs...)
+		return cls.ExitCode()
+	}
+
+	// No policy configured
+	if len(exportErrs) > 0 {
+		return clierror.ExitOperational
+	}
 	return determineExitCode(rep)
+}
+
+func printReportHelp() {
+	fmt.Println("Usage: felix report <scan-result.json> [options]")
+	fmt.Println("\nGenerate assessment reports from an existing scan result file without re-scanning.")
+	fmt.Println("Zero network requests are performed during report generation.")
+	fmt.Println("\nOptions:")
+	fmt.Println("  --html <path>         Export report to HTML file")
+	fmt.Println("  --json <path>         Export report to JSON file")
+	fmt.Println("  --sarif <path>        Export report to SARIF 2.1.0 file")
+	fmt.Println("  --policy <path>       Evaluate security threshold policy against report")
+	fmt.Println("  --commercial          Render Commercial Report 2.0 specification")
+	fmt.Println("  -v, --verbose         Verbose terminal output")
+	fmt.Println("  -s, --silent          Silent / minimal terminal output")
 }
 
 // printCommercialReportSummary prints Commercial Report 2.0 sections in terminal.
@@ -374,16 +459,16 @@ func printReportSummary(rep report.Report, verbose bool) {
 	}
 }
 
-// determineExitCode returns:
-// 0: Clean scan / INFO only findings
-// 1: Actionable findings requiring attention (Low, Medium, High, Critical)
-// 2: Handled upstream on runtime / usage error, or assessment BLOCKED/FAILED
+// determineExitCode maps a scan or report result to its standard CLI exit code:
+// ExitSuccess (0): Completed scan with no security-policy failure established (clean / INFO only)
+// ExitSecurityFail (1): Completed scan with actionable security findings (Critical, High, Medium, Low)
+// ExitOperational (2): Blocked, failed, cancelled, interrupted, partial, or incomplete assessment
 func determineExitCode(rep report.Report) int {
-	if rep.CompletionStatus == "BLOCKED" || rep.CompletionStatus == "FAILED" {
-		return 2
+	status := rep.CompletionStatus
+	if status == "" {
+		status = "COMPLETED"
 	}
-	if rep.Summary.CriticalCount > 0 || rep.Summary.HighCount > 0 || rep.Summary.MediumCount > 0 || rep.Summary.LowCount > 0 {
-		return 1
-	}
-	return 0
+	hasViolation := rep.Summary.CriticalCount > 0 || rep.Summary.HighCount > 0 || rep.Summary.MediumCount > 0 || rep.Summary.LowCount > 0
+	cls := clierror.ClassifyAssessment(status, nil, hasViolation, nil)
+	return cls.ExitCode()
 }

@@ -1,0 +1,311 @@
+name: 'FELIX Security Assessment'
+description: 'Continuous security assessment, policy threshold enforcement, and SARIF 2.1.0 report generation'
+author: 'FELIX Security Assessment Platform'
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  target:
+    description: 'Explicit authorized target URL to assess (requires written authorization)'
+    required: false
+    default: ''
+  assessment:
+    description: 'Assessment project identifier or reference in persistent storage'
+    required: false
+    default: ''
+  policy:
+    description: 'Path to security threshold policy file (.json or .yaml) for automated gating'
+    required: false
+    default: ''
+  baseline:
+    description: 'Baseline execution or snapshot identifier for finding delta comparison'
+    required: false
+    default: ''
+  baseline-scope:
+    description: 'Scope for policy threshold evaluation: all (default), new, new_and_regressed'
+    required: false
+    default: 'all'
+  output-dir:
+    description: 'Directory where machine-readable reports will be saved'
+    required: false
+    default: 'felix-reports'
+  sarif-file:
+    description: 'Filename for generated SARIF 2.1.0 report'
+    required: false
+    default: 'felix.sarif'
+  json-file:
+    description: 'Filename for generated JSON report'
+    required: false
+    default: 'felix.json'
+  html-file:
+    description: 'Filename for generated HTML report'
+    required: false
+    default: 'felix.html'
+  timeout:
+    description: 'Network timeout duration (e.g. 10s, 30s, 1m)'
+    required: false
+    default: '30s'
+  felix-path:
+    description: 'Explicit path to pre-installed, verified felix executable'
+    required: false
+    default: ''
+  felix-version:
+    description: 'Expected pinned FELIX version string for verification'
+    required: false
+    default: ''
+  felix-sha256:
+    description: 'Expected SHA256 digest for binary integrity verification'
+    required: false
+    default: ''
+  require-sha256:
+    description: 'Enforce cryptographic SHA-256 integrity verification (fails closed if checksum is missing)'
+    required: false
+    default: 'false'
+  allow-loopback:
+    description: 'Explicitly permit scanning targets on loopback addresses (127.0.0.0/8, ::1)'
+    required: false
+    default: 'false'
+  allow-private:
+    description: 'Explicitly permit scanning targets on RFC 1918 private subnets'
+    required: false
+    default: 'false'
+  upload-sarif:
+    description: 'Automatically upload SARIF report to GitHub Code Scanning'
+    required: false
+    default: 'true'
+  upload-artifacts:
+    description: 'Automatically upload report artifacts to GitHub Actions'
+    required: false
+    default: 'true'
+  artifact-name:
+    description: 'Name of the uploaded workflow artifact'
+    required: false
+    default: 'felix-security-reports'
+  pr-comment:
+    description: 'Publish or update Pull Request summary comment on GitHub'
+    required: false
+    default: 'false'
+  pr-inline:
+    description: 'Publish inline code review comments on GitHub for findings with source locations'
+    required: false
+    default: 'false'
+  pr-number:
+    description: 'Target pull request number (defaults to auto-detection from CI event)'
+    required: false
+    default: ''
+  github-token:
+    description: 'GitHub token for PR feedback (defaults to GITHUB_TOKEN environment variable)'
+    required: false
+    default: ''
+  feedback-failure-policy:
+    description: 'Failure behavior if PR feedback fails: warn (default) or fail'
+    required: false
+    default: 'warn'
+
+outputs:
+  exit-code:
+    description: 'Assessment execution exit code (0: Success, 1: Policy Violation, 2: Operational Error)'
+    value: ${{ steps.run_felix.outputs.exit_code }}
+  policy-status:
+    description: 'Policy evaluation status (PASS, FAIL, NONE, ERROR)'
+    value: ${{ steps.run_felix.outputs.policy_status }}
+  findings-count:
+    description: 'Total number of detected security findings'
+    value: ${{ steps.run_felix.outputs.findings_count }}
+  sarif-path:
+    description: 'Path to generated SARIF 2.1.0 report'
+    value: ${{ steps.run_felix.outputs.sarif_path }}
+  json-path:
+    description: 'Path to generated JSON report'
+    value: ${{ steps.run_felix.outputs.json_path }}
+  html-path:
+    description: 'Path to generated HTML report'
+    value: ${{ steps.run_felix.outputs.html_path }}
+  feedback-published:
+    description: 'Whether pull request feedback was published successfully'
+    value: ${{ steps.run_felix.outputs.feedback_published }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Locate and Verify FELIX Executable
+      id: setup_felix
+      shell: bash
+      run: |
+        FELIX_BIN="${{ inputs.felix-path }}"
+        if [ -z "$FELIX_BIN" ]; then
+          if command -v felix >/dev/null 2>&1; then
+            FELIX_BIN="$(command -v felix)"
+          elif [ -f "bin/felix" ]; then
+            FELIX_BIN="bin/felix"
+          elif [ -f "bin/felix.exe" ]; then
+            FELIX_BIN="bin/felix.exe"
+          else
+            echo "[*] Building FELIX CLI binary from workspace..."
+            mkdir -p bin
+            go build -trimpath -ldflags="-s -w" -o bin/felix ./cmd/felix
+            FELIX_BIN="bin/felix"
+          fi
+        fi
+
+        if [ ! -f "$FELIX_BIN" ]; then
+          echo "[-] Error: FELIX binary not found at $FELIX_BIN" >&2
+          exit 2
+        fi
+
+        echo "[+] Located FELIX executable: $FELIX_BIN"
+        echo "felix_bin=$FELIX_BIN" >> "$GITHUB_OUTPUT"
+
+        # Cryptographic SHA-256 integrity verification BEFORE execution
+        EXPECTED_SHA="${{ inputs.felix-sha256 }}"
+        REQUIRE_SHA="${{ inputs.require-sha256 }}"
+
+        if [ "$REQUIRE_SHA" = "true" ] && [ -z "$EXPECTED_SHA" ]; then
+          echo "[-] Error: require-sha256 is enabled but felix-sha256 is not provided. Failing closed before execution." >&2
+          exit 2
+        fi
+
+        if [ -n "$EXPECTED_SHA" ]; then
+          if ! [[ "$EXPECTED_SHA" =~ ^[0-9a-fA-F]{64}$ ]]; then
+            echo "[-] Error: felix-sha256 '$EXPECTED_SHA' is malformed; must be exactly 64 hexadecimal characters." >&2
+            exit 2
+          fi
+
+          if command -v sha256sum >/dev/null 2>&1; then
+            ACTUAL_SHA=$(sha256sum "$FELIX_BIN" | awk '{print $1}')
+          elif command -v shasum >/dev/null 2>&1; then
+            ACTUAL_SHA=$(shasum -a 256 "$FELIX_BIN" | awk '{print $1}')
+          else
+            echo "[-] Error: No SHA-256 computation utility available in environment." >&2
+            exit 2
+          fi
+
+          EXPECTED_LOWER=$(echo "$EXPECTED_SHA" | tr '[:upper:]' '[:lower:]')
+          ACTUAL_LOWER=$(echo "$ACTUAL_SHA" | tr '[:upper:]' '[:lower:]')
+
+          if [ "$ACTUAL_LOWER" != "$EXPECTED_LOWER" ]; then
+            echo "[-] Error: Cryptographic SHA-256 verification failed before execution!" >&2
+            echo "    Expected: $EXPECTED_LOWER" >&2
+            echo "    Actual:   $ACTUAL_LOWER" >&2
+            exit 2
+          fi
+          echo "[+] Cryptographic SHA-256 integrity verified before execution: $ACTUAL_LOWER"
+        fi
+
+        # Verify binary runtime compatibility and formats
+        VERIFY_ARGS=("--verify-bin" "$FELIX_BIN")
+        if [ -n "${{ inputs.felix-version }}" ]; then
+          VERIFY_ARGS+=("--expected-version" "${{ inputs.felix-version }}")
+        fi
+        if [ -n "${{ inputs.felix-sha256 }}" ]; then
+          VERIFY_ARGS+=("--expected-sha256" "${{ inputs.felix-sha256 }}")
+        fi
+        if [ "${{ inputs.require-sha256 }}" = "true" ]; then
+          VERIFY_ARGS+=("--require-sha256")
+        fi
+
+        "$FELIX_BIN" ci "${VERIFY_ARGS[@]}"
+
+    - name: Execute Security Assessment
+      id: run_felix
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token || github.token }}
+      run: |
+        FELIX_BIN="${{ steps.setup_felix.outputs.felix_bin }}"
+        mkdir -p "${{ inputs.output-dir }}"
+
+        CMD_ARGS=("ci" "run" "--output-dir" "${{ inputs.output-dir }}")
+        CMD_ARGS+=("--sarif" "${{ inputs.sarif-file }}")
+        CMD_ARGS+=("--json" "${{ inputs.json-file }}")
+        CMD_ARGS+=("--html" "${{ inputs.html-file }}")
+        CMD_ARGS+=("--timeout" "${{ inputs.timeout }}")
+
+        if [ -n "${{ inputs.target }}" ]; then
+          CMD_ARGS+=("--target" "${{ inputs.target }}")
+        fi
+        if [ -n "${{ inputs.assessment }}" ]; then
+          CMD_ARGS+=("--assessment" "${{ inputs.assessment }}")
+        fi
+        if [ -n "${{ inputs.policy }}" ]; then
+          CMD_ARGS+=("--policy" "${{ inputs.policy }}")
+        fi
+        if [ -n "${{ inputs.baseline }}" ]; then
+          CMD_ARGS+=("--baseline" "${{ inputs.baseline }}")
+          CMD_ARGS+=("--baseline-scope" "${{ inputs.baseline-scope }}")
+        fi
+        if [ "${{ inputs.allow-loopback }}" = "true" ]; then
+          CMD_ARGS+=("--allow-loopback")
+        fi
+        if [ "${{ inputs.allow-private }}" = "true" ]; then
+          CMD_ARGS+=("--allow-private")
+        fi
+        if [ "${{ inputs.pr-comment }}" = "true" ]; then
+          CMD_ARGS+=("--pr-comment")
+        fi
+        if [ "${{ inputs.pr-inline }}" = "true" ]; then
+          CMD_ARGS+=("--pr-inline")
+        fi
+        if [ -n "${{ inputs.pr-number }}" ]; then
+          CMD_ARGS+=("--pr-number" "${{ inputs.pr-number }}")
+        fi
+        if [ -n "${{ inputs.github-token }}" ]; then
+          CMD_ARGS+=("--github-token" "${{ inputs.github-token }}")
+        fi
+        if [ -n "${{ inputs.feedback-failure-policy }}" ]; then
+          CMD_ARGS+=("--feedback-failure-policy" "${{ inputs.feedback-failure-policy }}")
+        fi
+
+        # Execute and capture exit code safely without aborting before report collection
+        set +e
+        "$FELIX_BIN" "${CMD_ARGS[@]}"
+        FELIX_EXIT=$?
+        set -e
+
+        echo "exit_code=$FELIX_EXIT" >> "$GITHUB_OUTPUT"
+        echo "FELIX_EXIT_CODE=$FELIX_EXIT" >> "$GITHUB_ENV"
+
+        SARIF_FULL="${{ inputs.output-dir }}/${{ inputs.sarif-file }}"
+        JSON_FULL="${{ inputs.output-dir }}/${{ inputs.json-file }}"
+        HTML_FULL="${{ inputs.output-dir }}/${{ inputs.html-file }}"
+
+        echo "sarif_path=$SARIF_FULL" >> "$GITHUB_OUTPUT"
+        echo "json_path=$JSON_FULL" >> "$GITHUB_OUTPUT"
+        echo "html_path=$HTML_FULL" >> "$GITHUB_OUTPUT"
+
+    - name: Upload SARIF to GitHub Code Scanning
+      uses: github/codeql-action/upload-sarif@6bb034414c761b3035773ea082901a030f54c642 # v3.28.11
+      if: ${{ inputs.upload-sarif == 'true' && hashFiles(steps.run_felix.outputs.sarif_path) != '' }}
+      continue-on-error: true
+      with:
+        sarif_file: ${{ steps.run_felix.outputs.sarif_path }}
+        category: felix-security-assessment
+
+    - name: Upload Report Artifacts
+      uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+      if: ${{ inputs.upload-artifacts == 'true' }}
+      continue-on-error: true
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: |
+          ${{ steps.run_felix.outputs.sarif_path }}
+          ${{ steps.run_felix.outputs.json_path }}
+          ${{ steps.run_felix.outputs.html_path }}
+        retention-days: 14
+
+    - name: Enforce Exit Code
+      shell: bash
+      run: |
+        CODE="${{ steps.run_felix.outputs.exit_code }}"
+        if [ "$CODE" -eq 1 ]; then
+          echo "::error title=FELIX Security Violation::Assessment established security policy threshold violations. Pipeline gated."
+          exit 1
+        elif [ "$CODE" -eq 2 ]; then
+          echo "::error title=FELIX Operational Error::Assessment encountered operational failure, crawl defect, or invalid configuration."
+          exit 2
+        elif [ "$CODE" -ne 0 ]; then
+          echo "::error title=FELIX Execution Error::Assessment exited with unclassified status code $CODE."
+          exit "$CODE"
+        fi
+        echo "[✓] FELIX assessment completed successfully with zero policy violations."

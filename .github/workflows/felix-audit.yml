@@ -13,6 +13,26 @@ on:
         required: true
         type: boolean
         default: false
+      policy_file:
+        description: 'Path to security threshold policy file (e.g. .felix-policy.yaml)'
+        required: false
+        type: string
+        default: ''
+      baseline_ref:
+        description: 'Baseline execution or snapshot identifier for finding delta comparison'
+        required: false
+        type: string
+        default: ''
+      baseline_scope:
+        description: 'Baseline evaluation scope (all, new, new_and_regressed)'
+        required: false
+        type: string
+        default: 'all'
+      output_dir:
+        description: 'Directory for assessment reports and machine-readable artifacts'
+        required: false
+        type: string
+        default: 'felix-reports'
       timeout:
         description: 'Scan timeout (e.g. 30s, 1m, 2m)'
         required: false
@@ -22,56 +42,51 @@ on:
 permissions:
   contents: read
   security-events: write
+  actions: read
 
 jobs:
   audit:
-    name: Run Authorized Assessment & Upload SARIF
+    name: Run Authorized Assessment & Policy Evaluation
     runs-on: ubuntu-latest
     steps:
       - name: Validate Target & Authorization
         run: |
           if [ -z "${{ inputs.target_url }}" ]; then
-            echo "[-] Error: target_url is required."
-            exit 1
+            echo "[-] Error: target_url is required." >&2
+            exit 2
           fi
           if [ "${{ inputs.authorization_confirmed }}" != "true" ]; then
-            echo "[-] Error: Security scanning requires explicit written authorization. Set authorization_confirmed to true."
-            exit 1
+            echo "[-] Error: Security scanning requires explicit written authorization. Set authorization_confirmed to true." >&2
+            exit 2
           fi
           echo "[+] Target validated: ${{ inputs.target_url }}"
-          echo "[+] Authorization confirmed."
+          echo "[+] Explicit written authorization confirmed."
 
       - name: Checkout Source Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Go Toolchain
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@f111f330738ebb33059ca3288e89eb47411ba7b6 # v5.3.0
         with:
           go-version-file: 'go.mod'
           check-latest: true
 
-      - name: Compile FELIX Standalone Binary
+      - name: Compile and Verify FELIX Standalone Binary
         run: |
           go build -trimpath -ldflags="-s -w" -o bin/felix ./cmd/felix
+          ./bin/felix ci --verify-bin ./bin/felix
           ./bin/felix version
 
-      - name: Execute Assessment & Generate SARIF 2.1.0 Report
-        run: |
-          ./bin/felix scan "${{ inputs.target_url }}" \
-            --timeout "${{ inputs.timeout }}" \
-            --sarif results.sarif
-
-      - name: Upload SARIF to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@v3
-        if: always() && hashFiles('results.sarif') != ''
+      - name: Run Security Assessment via Reusable Action
+        uses: ./.github/actions/felix-action
         with:
-          sarif_file: results.sarif
-          category: felix-security-assessment
-
-      - name: Upload SARIF Artifact
-        uses: actions/upload-artifact@v4
-        if: always() && hashFiles('results.sarif') != ''
-        with:
-          name: felix-assessment-sarif
-          path: results.sarif
-          retention-days: 14
+          target: ${{ inputs.target_url }}
+          policy: ${{ inputs.policy_file }}
+          baseline: ${{ inputs.baseline_ref }}
+          baseline-scope: ${{ inputs.baseline_scope }}
+          output-dir: ${{ inputs.output_dir }}
+          timeout: ${{ inputs.timeout }}
+          felix-path: ./bin/felix
+          upload-sarif: 'true'
+          upload-artifacts: 'true'
+          artifact-name: 'felix-audit-reports'
