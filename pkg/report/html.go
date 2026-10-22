@@ -496,9 +496,9 @@ const htmlReportTemplate = `<!DOCTYPE html>
       </div>
     </div>
     <div class="score-card">
-      {{if or (eq .CompletionStatus "BLOCKED") (eq .CompletionStatus "FAILED") (eq .RiskLevel "UNAVAILABLE")}}
+      {{if or (eq .CompletionStatus "BLOCKED") (eq .CompletionStatus "FAILED") (eq .CompletionStatus "PARTIAL") (eq .CompletionStatus "INCOMPLETE") (eq .RiskLevel "UNAVAILABLE")}}
       <div class="score-val" style="color: #ef4444;">N/A</div>
-      <div class="score-lbl">ASSESSMENT {{if eq .CompletionStatus "BLOCKED"}}BLOCKED{{else if eq .CompletionStatus "FAILED"}}FAILED{{else}}UNAVAILABLE{{end}}</div>
+      <div class="score-lbl">ASSESSMENT {{if eq .CompletionStatus "BLOCKED"}}BLOCKED{{else if eq .CompletionStatus "FAILED"}}FAILED{{else if or (eq .CompletionStatus "PARTIAL") (eq .CompletionStatus "INCOMPLETE")}}PARTIAL{{else}}UNAVAILABLE{{end}}</div>
       {{else}}
       <div class="score-val color-{{.RiskLevel}}">{{.RiskScore}}</div>
       <div class="score-lbl">Felix Risk Score ({{.RiskLevel}})</div>
@@ -514,6 +514,10 @@ const htmlReportTemplate = `<!DOCTYPE html>
   <div style="background: #200808; border: 1px solid #7f1d1d; border-radius: 0.5rem; padding: 1.25rem 1.5rem; margin-bottom: 2rem; color: #fca5a5;">
     <strong style="color: #ef4444; font-size: 1.05rem;">ASSESSMENT FAILED:</strong> Target reachability could not be established due to network, transport, or server errors. Security posture could not be evaluated.
   </div>
+  {{else if or (eq .CompletionStatus "PARTIAL") (eq .CompletionStatus "INCOMPLETE")}}
+  <div style="background: #261605; border: 1px solid #9a3412; border-radius: 0.5rem; padding: 1.25rem 1.5rem; margin-bottom: 2rem; color: #fdba74;">
+    <strong style="color: #f97316; font-size: 1.05rem;">PARTIAL ASSESSMENT:</strong> Assessment was completed with partial target coverage or interrupted scopes. Unassessed components remain unevaluated.
+  </div>
   {{end}}
 
   <!-- 2. Executive Summary -->
@@ -521,11 +525,13 @@ const htmlReportTemplate = `<!DOCTYPE html>
     <h2>Executive Summary</h2>
     <div class="summary-narrative">
       <p>
-        Felix {{if eq .CompletionStatus "BLOCKED"}}was blocked while assessing{{else if eq .CompletionStatus "FAILED"}}failed to connect to{{else}}completed an automated defensive security audit of{{end}} <strong>{{.Target}}</strong>.
+        Felix {{if eq .CompletionStatus "BLOCKED"}}was blocked while assessing{{else if eq .CompletionStatus "FAILED"}}failed to connect to{{else if or (eq .CompletionStatus "PARTIAL") (eq .CompletionStatus "INCOMPLETE")}}conducted a partial defensive security audit of{{else}}completed an automated defensive security audit of{{end}} <strong>{{.Target}}</strong>.
         {{if eq .CompletionStatus "BLOCKED"}}
         The target denied access or presented an automated challenge barrier (HTTP 403 Forbidden). No challenge bypasses or invasive circumventions were attempted. Because the application was unreachable for analysis, no risk score was computed and its security posture remains unevaluated.
         {{else if eq .CompletionStatus "FAILED"}}
         Connection could not be established to the target due to network or transport errors. Because the target was unreachable, no risk score was computed and its security posture remains unevaluated.
+        {{else if or (eq .CompletionStatus "PARTIAL") (eq .CompletionStatus "INCOMPLETE")}}
+        Assessment was completed with partial coverage or interrupted scope boundaries. Unassessed components remain unevaluated and should not be assumed secure.
         {{else if eq .RiskScore 0}}
         No active vulnerabilities, leaked credentials, or missing security baselines were observed during the audit.
         {{else if le .RiskScore 20}}
@@ -543,6 +549,190 @@ const htmlReportTemplate = `<!DOCTYPE html>
       </p>
       {{end}}
     </div>
+
+    {{if .HasCloudScope}}
+    <div style="background: var(--bg-surface-elevated); border: 1px solid var(--border-default); border-radius: 0.5rem; padding: 1rem 1.25rem; margin-top: 1.25rem;">
+      <div style="font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); margin-bottom: 0.6rem;">
+        Cloud & Database Services Assessed & Scope Coverage
+      </div>
+
+      {{if .CloudServicesAssessed}}
+      <div style="margin-bottom: 0.85rem;">
+        <div style="font-size: 0.78rem; font-weight: 600; color: #cbd5e1; margin-bottom: 0.35rem;">Actively Assessed Services:</div>
+        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+          {{range .CloudAssessedServicesDetails}}
+          {{if .HasFindings}}
+          <span class="badge badge-HIGH" style="font-size: 0.82rem; padding: 0.3rem 0.65rem;">{{.Name}} (Findings Detected)</span>
+          {{else}}
+          <span class="badge badge-INFO" style="font-size: 0.82rem; padding: 0.3rem 0.65rem;">{{.Name}} (0 Findings)</span>
+          {{end}}
+          {{end}}
+        </div>
+        <div style="font-size: 0.76rem; color: var(--text-muted); margin-top: 0.35rem;">
+          Note: Zero detected findings in an actively assessed service indicates no evaluated vulnerabilities were observed during testing within the defined scope. It does not establish the complete absence of unassessed or internal risks.
+        </div>
+      </div>
+      {{end}}
+
+      {{if .CloudServicesDiscovered}}
+      <div style="margin-bottom: 0.85rem;">
+        <div style="font-size: 0.78rem; font-weight: 600; color: #94a3b8; margin-bottom: 0.35rem;">Discovered Only (Passive / Unverified):</div>
+        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+          {{range .CloudServicesDiscovered}}
+          <span class="badge" style="background: rgba(148,163,184,0.15); border: 1px dashed var(--border-default); color: #94a3b8; font-size: 0.82rem; padding: 0.3rem 0.65rem;">{{.}} (Unverified)</span>
+          {{end}}
+        </div>
+        <div style="font-size: 0.76rem; color: var(--text-muted); margin-top: 0.35rem;">
+          These services were identified via static code references or connection indicators. Network accessibility, active credentials, and resource exposure remain unverified.
+        </div>
+      </div>
+      {{end}}
+
+      {{if .CloudServicesSkipped}}
+      <div>
+        <div style="font-size: 0.78rem; font-weight: 600; color: #64748b; margin-bottom: 0.35rem;">Skipped / Out of Scope:</div>
+        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+          {{range .CloudServicesSkipped}}
+          <span class="badge" style="background: rgba(100,116,139,0.15); color: #94a3b8; font-size: 0.82rem; padding: 0.3rem 0.65rem;">{{.}} (Skipped)</span>
+          {{end}}
+        </div>
+      </div>
+      {{end}}
+    </div>
+    {{end}}
+
+    {{if .HasMobileScope}}
+    <div style="background: var(--bg-surface-elevated); border: 1px solid var(--border-default); border-radius: 0.5rem; padding: 1.25rem; margin-top: 1.25rem;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; gap: 0.5rem;">
+        <div style="font-size: 0.85rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted);">
+          Android APK Audit & Mobile Assessment Summary
+        </div>
+        <div>
+          <span class="badge badge-INFO">{{.MobileAssessmentStatus}}</span>
+          <span class="badge" style="background: rgba(148,163,184,0.15); color: #94a3b8; font-size: 0.8rem; margin-left: 0.35rem;">{{.MobileAnalysisMode}}</span>
+        </div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.75rem; margin-bottom: 0.85rem; font-size: 0.85rem;">
+        <div>
+          <span style="color: var(--text-muted);">Package:</span>
+          <div><strong><code>{{.MobilePackageName}}</code></strong></div>
+        </div>
+        <div>
+          <span style="color: var(--text-muted);">Version:</span>
+          <div><code>{{.MobileVersion}}</code></div>
+        </div>
+        <div>
+          <span style="color: var(--text-muted);">SHA-256 Digest:</span>
+          <div style="word-break: break-all;"><code style="font-size: 0.78rem;">{{.MobileSHA256}}</code></div>
+        </div>
+        <div>
+          <span style="color: var(--text-muted);">SDK Compatibility:</span>
+          <div><code>{{.MobileSDKInfo}}</code></div>
+        </div>
+      </div>
+
+      {{if .MobileComponentSummary}}
+      <div style="font-size: 0.82rem; color: #cbd5e1; margin-bottom: 0.5rem;">
+        <strong>Component Scope:</strong> {{.MobileComponentSummary}}
+      </div>
+      {{end}}
+
+      {{if not .HasMobileFindings}}
+      <div style="background: rgba(56, 189, 248, 0.08); border-left: 3px solid #38bdf8; padding: 0.65rem 0.85rem; border-radius: 0.25rem; font-size: 0.8rem; color: #94a3b8; margin-top: 0.5rem;">
+        <strong>Scope Notice:</strong> Zero security findings were identified during static APK analysis within the evaluated ruleset. Static analysis does not guarantee the absence of dynamic runtime vulnerabilities, business logic weaknesses, or server-side backend flaws.
+      </div>
+      {{end}}
+
+      {{if .MobileLimitations}}
+      <div style="margin-top: 0.75rem; padding-top: 0.5rem; border-top: 1px solid var(--border-subtle); font-size: 0.78rem; color: var(--text-muted);">
+        <strong>Assessment Limitations:</strong>
+        <ul style="padding-left: 1.25rem; margin-top: 0.25rem;">
+          {{range .MobileLimitations}}
+          <li>{{.}}</li>
+          {{end}}
+        </ul>
+      </div>
+      {{end}}
+    </div>
+    {{end}}
+
+    {{if .HasFrameworkScope}}
+    <div style="background: var(--bg-surface-elevated); border: 1px solid var(--border-default); border-radius: 0.5rem; padding: 1.25rem; margin-top: 1.25rem;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; gap: 0.5rem;">
+        <div style="font-size: 0.85rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted);">
+          Backend Frameworks & Runtime Assessment Summary
+        </div>
+        <div>
+          <span class="badge badge-INFO">{{len .DetectedFrameworks}} Detected</span>
+        </div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 0.75rem; margin-bottom: 0.85rem;">
+        {{range .DetectedFrameworks}}
+        <div style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 0.375rem; padding: 0.75rem 1rem;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+            <strong style="color: #f8fafc; font-size: 0.95rem;">{{.Name}}</strong>
+            {{if .Version}}<code style="font-size: 0.8rem; color: #38bdf8;">v{{.Version}}</code>{{end}}
+          </div>
+          <div style="margin-bottom: 0.4rem;">
+            {{if eq .Status "VERIFIED_VULNERABILITY"}}
+            <span class="badge badge-CRITICAL" style="font-size: 0.75rem;">{{.StatusText}}</span>
+            {{else if eq .Status "CONFIGURATION_EXPOSURE"}}
+            <span class="badge badge-MEDIUM" style="font-size: 0.75rem;">{{.StatusText}}</span>
+            {{else if eq .Status "PROTECTED"}}
+            <span class="badge badge-INFO" style="background: rgba(34, 197, 94, 0.15); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.3); font-size: 0.75rem;">{{.StatusText}}</span>
+            {{else if eq .Status "OBSERVED_SURFACE"}}
+            <span class="badge badge-INFO" style="font-size: 0.75rem;">{{.StatusText}}</span>
+            {{else}}
+            <span class="badge badge-INFO" style="font-size: 0.75rem;">Clean (0 Findings)</span>
+            {{end}}
+          </div>
+          <div style="font-size: 0.78rem; color: var(--text-muted); line-height: 1.4;">
+            {{if gt .TotalFindings 0}}
+              <span>Findings: <strong>{{.TotalFindings}}</strong> (Verified: {{.VerifiedCount}}, Detected: {{.DetectedCount}}, Observations: {{.ObservationCount}})</span>
+            {{else}}
+              <span>Zero vulnerabilities or configuration exposures detected in evaluated routes.</span>
+            {{end}}
+            {{if .Endpoints}}
+            <div style="margin-top: 0.25rem; font-size: 0.75rem; color: #94a3b8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+              Endpoints: {{range $i, $ep := .Endpoints}}{{if $i}}, {{end}}<code>{{$ep}}</code>{{end}}
+            </div>
+            {{end}}
+          </div>
+        </div>
+        {{end}}
+      </div>
+
+      <div style="font-size: 0.78rem; color: var(--text-muted); line-height: 1.5; border-top: 1px solid var(--border-subtle); padding-top: 0.6rem; margin-top: 0.5rem;">
+        <strong>Framework Assessment Policy:</strong> Identifying a backend framework or runtime header is an informational inventory observation and does NOT automatically constitute a security vulnerability. High and Critical severities are strictly reserved for verified exposures (such as unauthenticated debug modes, active execution profiling, or sensitive environment leaks).
+      </div>
+    </div>
+    {{end}}
+
+    {{if .ChangeSummary}}
+    <div style="background: var(--bg-surface-elevated); border: 1px solid var(--border-default); border-radius: 0.5rem; padding: 1.25rem; margin-top: 1.25rem;">
+      <div style="font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); margin-bottom: 0.6rem;">
+        Security Posture Delta & Assessment History
+      </div>
+      <div style="font-size: 0.95rem; font-weight: 600; color: #ffffff; margin-bottom: 0.5rem;">
+        {{.ChangeSummary.Headline}}
+      </div>
+      <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.85rem;">
+        <span class="badge badge-HIGH" style="font-size: 0.8rem;">+{{.ChangeSummary.Counts.New}} New</span>
+        <span class="badge badge-LOW" style="font-size: 0.8rem;">-{{.ChangeSummary.Counts.Resolved}} Resolved</span>
+        <span class="badge" style="background: rgba(148,163,184,0.15); color: #cbd5e1; font-size: 0.8rem;">{{.ChangeSummary.Counts.Persistent}} Persistent</span>
+        {{if gt .ChangeSummary.Counts.SeverityIncreased 0}}<span class="badge badge-CRITICAL" style="font-size: 0.8rem;">▲ {{.ChangeSummary.Counts.SeverityIncreased}} Severity Increased</span>{{end}}
+        {{if gt .ChangeSummary.Counts.SeverityDecreased 0}}<span class="badge badge-INFO" style="font-size: 0.8rem;">▼ {{.ChangeSummary.Counts.SeverityDecreased}} Severity Decreased</span>{{end}}
+        {{if gt .ChangeSummary.Counts.Unknown 0}}<span class="badge badge-MEDIUM" style="font-size: 0.8rem;">? {{.ChangeSummary.Counts.Unknown}} Unverified</span>{{end}}
+      </div>
+      <div style="font-size: 0.8rem; color: var(--text-muted); line-height: 1.5;">
+        Baseline: <code>{{if .ChangeSummary.BaselineExecutionID}}{{.ChangeSummary.BaselineExecutionID}}{{else}}[Initial Assessment]{{end}}</code> |
+        Comparison Status: <strong>{{.ChangeSummary.ComparisonStatus}}</strong>
+        {{if not .ChangeSummary.IsReliable}} (Partial Coverage: {{.ChangeSummary.ReliabilityReason}}){{end}}
+      </div>
+    </div>
+    {{end}}
 
     {{if not (or (eq .CompletionStatus "BLOCKED") (eq .CompletionStatus "FAILED") (eq .RiskLevel "UNAVAILABLE"))}}
     <!-- 3. Risk Meter -->
@@ -818,6 +1008,9 @@ const htmlReportTemplate = `<!DOCTYPE html>
       <button class="filter-btn" onclick="filterFindings('LOW')">Low ({{.Summary.LowCount}})</button>
       <button class="filter-btn" onclick="filterFindings('INFO')">Info ({{.Summary.InfoCount}})</button>
       <button class="filter-btn" onclick="filterFindings('VERIFIED')">Verified ({{.Summary.VerifiedCount}})</button>
+      <button class="filter-btn" onclick="filterFindings('CLOUD')">Cloud & DB</button>
+      {{if .HasMobileScope}}<button class="filter-btn" onclick="filterFindings('MOBILE')">Mobile & APK</button>{{end}}
+      {{if .HasFrameworkScope}}<button class="filter-btn" onclick="filterFindings('FRAMEWORK')">Frameworks</button>{{end}}
       <input type="text" class="search-box" id="findingSearch" placeholder="Search findings..." onkeyup="searchFindings()">
     </div>
 
@@ -829,7 +1022,7 @@ const htmlReportTemplate = `<!DOCTYPE html>
       {{end}}
 
       {{range .Findings}}
-      <div class="item-card finding-item" data-severity="{{.Severity}}" data-verification="{{.Verification.Status}}">
+      <div class="item-card finding-item" data-severity="{{.Severity}}" data-verification="{{.Verification.Status}}" data-source="{{.Source}}" data-category="{{.Category}}" data-framework="{{.Framework}}">
         <div class="item-header">
           <div class="item-title">[{{.ID}}] {{.Title}}</div>
           <div style="display: flex; gap: 0.4rem; flex-wrap: wrap;">
@@ -840,12 +1033,25 @@ const htmlReportTemplate = `<!DOCTYPE html>
             {{if .Verification.Status}}
             <span class="badge badge-{{.Verification.Status}}">{{.Verification.Status}}</span>
             {{end}}
+            {{if and .Framework (ne .Framework "generic")}}
+            <span class="badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; font-size: 0.8rem; border: 1px solid rgba(56, 189, 248, 0.3);">{{.Framework}}{{if .FrameworkVersion}} v{{.FrameworkVersion}}{{end}}</span>
+            {{end}}
           </div>
         </div>
         <div class="item-meta">
           <strong>Location:</strong> {{if .EvidenceDetails.Location}}{{.EvidenceDetails.Location}}{{else}}{{.Endpoint}}{{end}} ({{.Method}})
           &bull; <strong>Detection:</strong> {{if .EvidenceDetails.DetectionMethod}}{{.EvidenceDetails.DetectionMethod}}{{else}}{{.Source}}{{end}}
           &bull; <strong>Category:</strong> {{.Category}}
+          {{if and .Framework (ne .Framework "generic")}}&bull; <strong>Framework:</strong> {{.Framework}}{{if .FrameworkVersion}} (v{{.FrameworkVersion}}){{end}}{{end}}
+          {{if .EvidenceDetails.Details}}
+            {{if .EvidenceDetails.Details.technology}}&bull; <strong>Service:</strong> {{.EvidenceDetails.Details.technology}} ({{.EvidenceDetails.Details.family}}){{end}}
+            {{if .EvidenceDetails.Details.resource_scope}}&bull; <strong>Resource:</strong> {{.EvidenceDetails.Details.resource_scope}}{{end}}
+            {{if .EvidenceDetails.Details.auth_context}}&bull; <strong>Auth:</strong> {{.EvidenceDetails.Details.auth_context}}{{end}}
+            {{if .EvidenceDetails.Details.package_name}}&bull; <strong>Package:</strong> {{.EvidenceDetails.Details.package_name}}{{end}}
+            {{if .EvidenceDetails.Details.component_name}}&bull; <strong>Component:</strong> {{.EvidenceDetails.Details.component_name}}{{end}}
+            {{if .EvidenceDetails.Details.resolved_name}}&bull; <strong>Component:</strong> {{.EvidenceDetails.Details.resolved_name}}{{end}}
+            {{if .EvidenceDetails.Details.permission}}&bull; <strong>Permission:</strong> {{.EvidenceDetails.Details.permission}}{{end}}
+          {{end}}
         </div>
         <div class="item-desc">{{.Description}}</div>
 
@@ -930,7 +1136,9 @@ const htmlReportTemplate = `<!DOCTYPE html>
 <script>
   function filterFindings(sev) {
     document.querySelectorAll('.filter-btn').forEach(btn => btn.classList.remove('active'));
-    event.target.classList.add('active');
+    if (window.event && window.event.target) {
+      window.event.target.classList.add('active');
+    }
 
     const items = document.querySelectorAll('.finding-item');
     items.forEach(item => {
@@ -938,6 +1146,18 @@ const htmlReportTemplate = `<!DOCTYPE html>
         item.style.display = 'block';
       } else if (sev === 'VERIFIED') {
         item.style.display = item.getAttribute('data-verification') === 'VERIFIED' ? 'block' : 'none';
+      } else if (sev === 'CLOUD') {
+        const src = (item.getAttribute('data-source') || '').toLowerCase();
+        const cat = (item.getAttribute('data-category') || '').toLowerCase();
+        item.style.display = (src === 'cloud' || cat.includes('cloud') || cat.includes('database') || cat.includes('storage') || cat.includes('indicator')) ? 'block' : 'none';
+      } else if (sev === 'MOBILE') {
+        const src = (item.getAttribute('data-source') || '').toLowerCase();
+        const cat = (item.getAttribute('data-category') || '').toLowerCase();
+        item.style.display = (src === 'apk' || src === 'mobile' || cat.includes('android') || cat.includes('apk')) ? 'block' : 'none';
+      } else if (sev === 'FRAMEWORK') {
+        const fw = (item.getAttribute('data-framework') || '').toLowerCase();
+        const cat = (item.getAttribute('data-category') || '').toLowerCase();
+        item.style.display = (fw !== '' && fw !== 'generic' || cat.includes('actuator') || cat.includes('django') || cat.includes('fastapi') || cat.includes('laravel') || cat.includes('ignition') || cat.includes('telescope') || cat.includes('node') || cat.includes('go-') || cat.includes('golang') || cat.includes('pprof') || cat.includes('vars')) ? 'block' : 'none';
       } else {
         item.style.display = item.getAttribute('data-severity') === sev ? 'block' : 'none';
       }

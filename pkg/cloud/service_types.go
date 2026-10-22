@@ -14,11 +14,11 @@ import (
 type ServiceFamily string
 
 const (
-	FamilyDirectDatabase    ServiceFamily = "direct_database"
-	FamilyDatabaseAdmin     ServiceFamily = "database_admin"
-	FamilyBackendInterface  ServiceFamily = "backend_interface"
-	FamilyFirebase          ServiceFamily = "firebase"
-	FamilyObjectStorage     ServiceFamily = "object_storage"
+	FamilyDirectDatabase   ServiceFamily = "direct_database"
+	FamilyDatabaseAdmin    ServiceFamily = "database_admin"
+	FamilyBackendInterface ServiceFamily = "backend_interface"
+	FamilyFirebase         ServiceFamily = "firebase"
+	FamilyObjectStorage    ServiceFamily = "object_storage"
 )
 
 // ServiceTechnology identifies the specific technology / product.
@@ -191,11 +191,39 @@ func (ds DiscoveredService) ToFinding() (CloudFinding, bool) {
 			Severity:    SeverityInfo,
 			Confidence:  ConfidenceHigh,
 			Fingerprint: GenerateFingerprint(Provider(ds.Technology), endpoint, category),
+			Details: map[string]string{
+				"technology":        string(ds.Technology),
+				"family":            string(ds.Family),
+				"detection_method":  string(ds.DetectionMethod),
+				"analysis_method":   "STATIC_ANALYSIS",
+				"discovery_outcome": string(ds.Outcome),
+				"scope_status":      "OUT_OF_SCOPE",
+			},
 		}, true
 	}
 
 	category := fmt.Sprintf("Service Discovery: %s", ds.Technology)
 	desc := fmt.Sprintf("Discovered %s service (%s)", ds.Technology, ds.Family)
+
+	details := map[string]string{
+		"technology":        string(ds.Technology),
+		"family":            string(ds.Family),
+		"detection_method":  string(ds.DetectionMethod),
+		"analysis_method":   "STATIC_ANALYSIS",
+		"discovery_outcome": string(ds.Outcome),
+	}
+	if ds.Host != "" {
+		details["host"] = ds.Host
+	}
+	if ds.Port > 0 {
+		details["port"] = fmt.Sprintf("%d", ds.Port)
+	}
+	if ds.Protocol != "" {
+		details["protocol"] = ds.Protocol
+	}
+	if ds.SourceAsset != "" {
+		details["source_asset"] = ds.SourceAsset
+	}
 
 	return CloudFinding{
 		Provider:    Provider(ds.Technology),
@@ -206,5 +234,6 @@ func (ds DiscoveredService) ToFinding() (CloudFinding, bool) {
 		Severity:    SeverityInfo,
 		Confidence:  conf,
 		Fingerprint: GenerateFingerprint(Provider(ds.Technology), endpoint, category),
+		Details:     details,
 	}, true
 }

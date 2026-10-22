@@ -54,6 +54,10 @@ func BuildChangeSummary(cmp *AssessmentComparison, opts ChangeSummaryOptions) *r
 	var counts report.ChangeClassificationCounts
 	counts.TotalBaseline = cmp.BaselineCount
 	counts.TotalComparison = cmp.CurrentCount
+	counts.SeverityIncreased = cmp.SeverityIncreasedCount
+	counts.SeverityDecreased = cmp.SeverityDecreasedCount
+	counts.Unchanged = cmp.UnchangedCount
+	counts.Unknown = cmp.UnknownCount
 
 	var (
 		reappearedCount int
@@ -124,19 +128,22 @@ func BuildChangeSummary(cmp *AssessmentComparison, opts ChangeSummaryOptions) *r
 		}
 
 		items = append(items, report.ChangeFindingItem{
-			FindingID:      findingID,
-			OriginalID:     originalID,
-			Fingerprint:    it.Fingerprint,
-			Title:          it.Title,
-			Severity:       report.NormalizeSeverity(it.Severity),
-			Category:       it.Category,
-			TargetURL:      targetURL,
-			Endpoint:       it.TargetEndpoint,
-			HTTPMethod:     httpMethod,
-			Classification: string(it.Classification),
-			Reason:         reason,
-			SeverityChange: it.SeverityChange,
-			Explanation:    explanation,
+			FindingID:        findingID,
+			OriginalID:       originalID,
+			Fingerprint:      it.Fingerprint,
+			Title:            it.Title,
+			Severity:         report.NormalizeSeverity(it.Severity),
+			Category:         it.Category,
+			TargetURL:        targetURL,
+			Endpoint:         it.TargetEndpoint,
+			HTTPMethod:       httpMethod,
+			Classification:   string(it.Classification),
+			CanonicalDelta:   it.CanonicalDelta,
+			SeverityDelta:    it.SeverityDelta,
+			AttributeChanges: it.AttributeChanges,
+			Reason:           reason,
+			SeverityChange:   it.SeverityChange,
+			Explanation:      explanation,
 		})
 	}
 

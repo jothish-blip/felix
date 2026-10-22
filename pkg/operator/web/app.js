@@ -194,6 +194,7 @@
       case 'assessments': loadAssessments(); break;
       case 'reviews': syncReviewSelectors(); break;
       case 'reports': syncReportsSelectors(); break;
+      case 'history': loadHistoryTab(); break;
       case 'audit': loadAuditEvents(); break;
     }
   };
@@ -762,7 +763,7 @@
             <td>${formatTime(r.created_at)}</td>
             <td><span class="badge badge-success">${escapeHTML(r.status)}</span></td>
             <td>
-              <a href="/api/v1/assessments/${asmId}/reports/${escapeHTML(r.id)}/${r.format.toLowerCase()}?token=${state.token}" target="_blank" class="btn btn-sm btn-secondary">Open</a>
+              <button class="btn btn-sm btn-secondary" onclick="openSecureReport('${escapeHTML(asmId)}', '${escapeHTML(r.id)}', '${escapeHTML(r.format.toLowerCase())}')">Open</button>
               <button class="btn btn-sm btn-primary" onclick="openRecordDeliveryModal('${escapeHTML(asmId)}', '${escapeHTML(r.id)}')">Record Delivery</button>
             </td>
           </tr>
@@ -789,6 +790,18 @@
       showNotification(`Failed to load reports: ${err.message}`, 'error');
     }
   }
+
+  window.openSecureReport = async function(asmId, reportId, format) {
+    try {
+      const tokenRes = await fetchAPI(`/api/v1/assessments/${asmId}/reports/${reportId}/token?format=${format}`, {
+        method: 'POST'
+      });
+      const downloadURL = format.toLowerCase() === 'json' ? tokenRes.json_url : tokenRes.html_url;
+      window.open(downloadURL, '_blank');
+    } catch (err) {
+      showNotification('Failed to generate secure download token: ' + err.message, 'error');
+    }
+  };
 
   function openGenerateReportModal(asmId) {
     const asm = state.assessments.find(a => a.id === asmId);
@@ -938,6 +951,261 @@
       return d.toISOString().replace('T', ' ').slice(0, 19) + 'Z';
     } catch {
       return dStr;
+    }
+  }
+
+
+  // --- HISTORY & POSTURE DELTAS (Phase 10.8) ---
+  let historyCurrentAsmId = null;
+  let historyBaselines = [];
+
+  window.viewAssessmentHistory = function() {
+    if (!state.selectedAssessmentId) return;
+    const asmId = state.selectedAssessmentId;
+    closeAssessmentDetail();
+    switchTab('history');
+    setTimeout(() => {
+      const sel = document.getElementById('history-asm-selector');
+      if (sel) {
+        sel.value = asmId;
+        onHistoryAssessmentChange(asmId);
+      }
+    }, 50);
+  };
+
+  async function loadHistoryTab() {
+    try {
+      const res = await fetchAPI('/api/v1/assessments');
+      state.assessments = res.assessments || [];
+
+      const asmSel = document.getElementById('history-asm-selector');
+      if (asmSel) {
+        const curVal = asmSel.value;
+        asmSel.innerHTML = '<option value="">Select Assessment...</option>' +
+          state.assessments.map(a => `<option value="${escapeHTML(a.id)}">${escapeHTML(a.ref)} — ${escapeHTML(a.name)} (${escapeHTML(a.status)})</option>`).join('');
+        if (curVal) {
+          asmSel.value = curVal;
+        } else if (state.selectedAssessmentId) {
+          asmSel.value = state.selectedAssessmentId;
+          onHistoryAssessmentChange(state.selectedAssessmentId);
+        }
+      }
+
+      initHistoryEvents();
+    } catch (err) {
+      showNotification('Failed to initialize history tab: ' + err.message, 'error');
+    }
+  }
+
+  function initHistoryEvents() {
+    const asmSel = document.getElementById('history-asm-selector');
+    if (asmSel && !asmSel._hasListener) {
+      asmSel._hasListener = true;
+      asmSel.addEventListener('change', (e) => {
+        onHistoryAssessmentChange(e.target.value);
+      });
+    }
+
+    const btnCompare = document.getElementById('btn-run-compare');
+    if (btnCompare && !btnCompare._hasListener) {
+      btnCompare._hasListener = true;
+      btnCompare.addEventListener('click', () => {
+        const curId = document.getElementById('history-asm-selector')?.value;
+        const baseId = document.getElementById('history-baseline-selector')?.value;
+        if (!curId) {
+          showNotification('Please select an assessment to compare', 'error');
+          return;
+        }
+        runAssessmentComparison(curId, baseId);
+      });
+    }
+  }
+
+  async function onHistoryAssessmentChange(asmId) {
+    historyCurrentAsmId = asmId;
+    const baseSel = document.getElementById('history-baseline-selector');
+    const tbody = document.getElementById('history-table-body');
+    const warningBanner = document.getElementById('history-warning-banner');
+    const summaryGrid = document.getElementById('history-summary-grid');
+    const narrativeCard = document.getElementById('history-narrative-card');
+    const deltasCard = document.getElementById('history-deltas-card');
+
+    if (warningBanner) warningBanner.classList.add('hidden');
+    if (summaryGrid) summaryGrid.classList.add('hidden');
+    if (narrativeCard) narrativeCard.classList.add('hidden');
+    if (deltasCard) deltasCard.classList.add('hidden');
+
+    if (!asmId) {
+      if (baseSel) baseSel.innerHTML = '<option value="">Auto-Select Eligible Baseline</option>';
+      if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">Select an assessment to view history.</td></tr>';
+      return;
+    }
+
+    try {
+      if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="text-center">Loading assessment history...</td></tr>';
+      const res = await fetchAPI(`/api/v1/assessments/${asmId}/history?limit=50`);
+      const history = res.history || [];
+
+      // Populate baseline selector with eligible predecessors
+      historyBaselines = history.filter(h => h.id !== asmId && h.is_eligible_baseline);
+      if (baseSel) {
+        baseSel.innerHTML = '<option value="">Auto-Select Eligible Baseline</option>' +
+          historyBaselines.map(b => `<option value="${escapeHTML(b.id)}">${escapeHTML(b.ref)} (${escapeHTML(b.name)}) — ${escapeHTML(b.status)}</option>`).join('');
+      }
+
+      if (history.length === 0) {
+        if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">No history found for this assessment.</td></tr>';
+        return;
+      }
+
+      if (tbody) {
+        tbody.innerHTML = history.map(h => {
+          const isCur = (h.id === asmId);
+          const eligBadge = h.is_eligible_baseline
+            ? '<span class="badge badge-success">Eligible Baseline</span>'
+            : `<span class="badge badge-warning" title="${escapeHTML(h.ineligibility_reason || 'Ineligible')}">Ineligible</span>`;
+          const actBtn = !isCur
+            ? `<button class="btn btn-sm btn-secondary" onclick="compareWithSpecificBaseline('${escapeHTML(h.id)}')">Compare</button>`
+            : '<span class="badge badge-primary">Current</span>';
+
+          return `
+            <tr style="${isCur ? 'background:rgba(56,189,248,0.06);' : ''}">
+              <td><code>${escapeHTML(h.ref)}</code></td>
+              <td><strong>${escapeHTML(h.name)}</strong></td>
+              <td><span class="badge ${getStatusBadgeClass(h.status)}">${escapeHTML(h.status)}</span></td>
+              <td>${formatTime(h.created_at)}</td>
+              <td>${h.target_count || 0}</td>
+              <td>${h.finding_count || 0}</td>
+              <td>${eligBadge}</td>
+              <td>${actBtn}</td>
+            </tr>
+          `;
+        }).join('');
+      }
+
+      // Auto-run comparison if there is at least one eligible baseline
+      if (historyBaselines.length > 0) {
+        runAssessmentComparison(asmId, '');
+      }
+    } catch (err) {
+      if (tbody) tbody.innerHTML = `<tr><td colspan="8" class="text-center text-danger">Failed to load history: ${escapeHTML(err.message)}</td></tr>`;
+      showNotification('Failed to load history: ' + err.message, 'error');
+    }
+  }
+
+  window.compareWithSpecificBaseline = function(baseId) {
+    if (!historyCurrentAsmId) return;
+    const baseSel = document.getElementById('history-baseline-selector');
+    if (baseSel) baseSel.value = baseId;
+    runAssessmentComparison(historyCurrentAsmId, baseId);
+  };
+
+  async function runAssessmentComparison(curId, baseId) {
+    const warningBanner = document.getElementById('history-warning-banner');
+    const summaryGrid = document.getElementById('history-summary-grid');
+    const narrativeCard = document.getElementById('history-narrative-card');
+    const deltasCard = document.getElementById('history-deltas-card');
+    const deltasBody = document.getElementById('history-deltas-table-body');
+
+    try {
+      if (deltasBody) deltasBody.innerHTML = '<tr><td colspan="5" class="text-center">Calculating security posture delta...</td></tr>';
+      if (deltasCard) deltasCard.classList.remove('hidden');
+
+      let url = `/api/v1/assessments/${curId}/compare`;
+      if (baseId) {
+        url += `?baseline_id=${encodeURIComponent(baseId)}`;
+      }
+
+      const res = await fetchAPI(url);
+
+      // Warning / Status Banner
+      if (warningBanner) {
+        warningBanner.classList.remove('hidden');
+        if (res.is_reliable && res.comparability_status === 'COMPARABLE') {
+          warningBanner.className = 'info-alert';
+          warningBanner.innerHTML = `<strong>Comparable Assessment Scope:</strong> Verified against baseline <code>${escapeHTML(res.baseline_assessment_ref || res.baseline_assessment_id)}</code>. All findings reliably verified.`;
+        } else {
+          warningBanner.className = 'info-alert' + (res.comparability_status === 'INELIGIBLE_BASELINE' || res.comparability_status === 'INCOMPATIBLE_SCOPE' ? ' alert-danger' : '');
+          warningBanner.innerHTML = `<strong>Comparability Notice (${escapeHTML(res.comparability_status)}):</strong> ${escapeHTML(res.comparability_reason || 'Incomplete coverage')}`;
+        }
+      }
+
+      // Counts Grid
+      if (summaryGrid) {
+        summaryGrid.classList.remove('hidden');
+        document.getElementById('delta-count-new').textContent = `+${res.new_count || 0}`;
+        document.getElementById('delta-count-resolved').textContent = `-${res.resolved_count || 0}`;
+        document.getElementById('delta-count-persistent').textContent = res.persistent_count || 0;
+        document.getElementById('delta-count-increased').textContent = `▲ ${res.severity_increased_count || 0}`;
+        document.getElementById('delta-count-decreased').textContent = `▼ ${res.severity_decreased_count || 0}`;
+        document.getElementById('delta-count-changed').textContent = res.changed_count || 0;
+        document.getElementById('delta-count-unchanged').textContent = res.unchanged_count || 0;
+        document.getElementById('delta-count-unknown').textContent = res.unknown_count || 0;
+      }
+
+      // Narrative Card
+      if (narrativeCard) {
+        narrativeCard.classList.remove('hidden');
+        document.getElementById('history-headline').textContent = res.summary_headline || 'Security Posture Delta';
+        const narrList = document.getElementById('history-narrative-list');
+        if (narrList) {
+          const stmts = res.summary_narrative || [];
+          narrList.innerHTML = stmts.map(s => `<li>${escapeHTML(s)}</li>`).join('');
+        }
+      }
+
+      // Delta Items Table
+      if (deltasBody) {
+        const items = res.items || [];
+        if (items.length === 0) {
+          deltasBody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">No findings observed in baseline or current assessments.</td></tr>';
+          return;
+        }
+
+        deltasBody.innerHTML = items.map(item => {
+          let badgeClass = 'badge-secondary';
+          switch (item.canonical_delta) {
+            case 'new': badgeClass = 'badge-danger'; break;
+            case 'resolved': badgeClass = 'badge-success'; break;
+            case 'severity_increased': badgeClass = 'badge-danger'; break;
+            case 'severity_decreased': badgeClass = 'badge-info'; break;
+            case 'changed': badgeClass = 'badge-warning'; break;
+            case 'unchanged': badgeClass = 'badge-secondary'; break;
+            case 'unknown': badgeClass = 'badge-warning'; break;
+          }
+
+          let sevDisplay = escapeHTML(item.severity);
+          if (item.severity_delta === 'severity_increased') {
+            sevDisplay = `<strong class="text-danger">▲ ${escapeHTML(item.severity_change || item.severity)}</strong>`;
+          } else if (item.severity_delta === 'severity_decreased') {
+            sevDisplay = `<strong class="text-success">▼ ${escapeHTML(item.severity_change || item.severity)}</strong>`;
+          }
+
+          const changesTag = (item.attribute_changes && item.attribute_changes.length > 0)
+            ? `<div style="font-size:0.75rem; color:var(--text-dim); margin-top:0.25rem;">Changed attributes: ${escapeHTML(item.attribute_changes.join(', '))}</div>`
+            : '';
+
+          return `
+            <tr>
+              <td>
+                <strong>${escapeHTML(item.title)}</strong>
+                <div style="font-size:0.75rem; color:var(--text-dim);">FP: <code>${escapeHTML((item.fingerprint || '').slice(0, 16))}</code></div>
+              </td>
+              <td><span class="badge ${badgeClass}">${escapeHTML(item.canonical_delta || item.lifecycle_status)}</span></td>
+              <td>${sevDisplay}</td>
+              <td><code>${escapeHTML(item.endpoint || item.target_url || '—')}</code></td>
+              <td>
+                <div>${escapeHTML(item.explanation || '—')}</div>
+                ${changesTag}
+                <div style="font-size:0.72rem; color:var(--text-dim); margin-top:0.25rem;">Basis: ${escapeHTML(item.identity_basis || 'CANONICAL_FINGERPRINT')}</div>
+              </td>
+            </tr>
+          `;
+        }).join('');
+      }
+    } catch (err) {
+      if (deltasBody) deltasBody.innerHTML = `<tr><td colspan="5" class="text-center text-danger">Comparison failed: ${escapeHTML(err.message)}</td></tr>`;
+      showNotification('Comparison failed: ' + err.message, 'error');
     }
   }
 

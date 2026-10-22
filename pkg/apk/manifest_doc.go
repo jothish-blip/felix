@@ -95,16 +95,17 @@ func (e *RawElement) FindChild(name string) *RawElement {
 
 // ManifestDocument encapsulates parsed and normalized security-relevant metadata from AndroidManifest.xml.
 type ManifestDocument struct {
-	Format       string
-	PackageName  string
-	VersionCode  string
-	VersionName  string
-	MinSDK       int
-	TargetSDK    int
-	CompileSDK   int
-	Permissions  []ManifestPermission
-	Application  ApplicationInfo
-	RawElement   *RawElement
+	Format          string
+	PackageName     string
+	VersionCode     string
+	VersionName     string
+	MinSDK          int
+	TargetSDK       int
+	CompileSDK      int
+	Permissions     []ManifestPermission
+	UsesPermissions []string
+	Application     ApplicationInfo
+	RawElement      *RawElement
 }
 
 // ManifestPermission represents a custom <permission> declared in the manifest.
@@ -262,6 +263,14 @@ func ExtractManifestDocument(root *RawElement, format string) *ManifestDocument 
 				ProtectionLevel: prot,
 				PermissionGroup: group,
 			})
+		}
+	}
+
+	// 3b. Uses-Permission (<uses-permission>)
+	for _, usesPerm := range root.FindChildren("uses-permission") {
+		name, _ := usesPerm.GetAndroidAttr("name")
+		if name != "" {
+			doc.UsesPermissions = append(doc.UsesPermissions, name)
 		}
 	}
 

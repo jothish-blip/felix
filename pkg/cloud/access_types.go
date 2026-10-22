@@ -79,10 +79,10 @@ const (
 type OperationTested string
 
 const (
-	OpProtocolProbe      OperationTested = "PROTOCOL_PROBE"
-	OpMetadataRead       OperationTested = "METADATA_READ"
-	OpBoundedRead        OperationTested = "BOUNDED_RESOURCE_READ"
-	OpControlledCanary   OperationTested = "CONTROLLED_CANARY_WRITE"
+	OpProtocolProbe    OperationTested = "PROTOCOL_PROBE"
+	OpMetadataRead     OperationTested = "METADATA_READ"
+	OpBoundedRead      OperationTested = "BOUNDED_RESOURCE_READ"
+	OpControlledCanary OperationTested = "CONTROLLED_CANARY_WRITE"
 )
 
 // ErrorClassification categorizes verification failures safely.
@@ -285,6 +285,23 @@ func (r AccessVerificationRecord) ToCloudFinding() (CloudFinding, bool) {
 		fp = GenerateScopedFingerprint(Provider(r.Technology), r.Target, category, r.ResourceScope)
 	}
 
+	details := map[string]string{
+		"technology":          string(r.Technology),
+		"family":              string(r.Family),
+		"access_status":       string(r.Status),
+		"decision":            string(r.Decision),
+		"auth_context":        string(r.AuthContext),
+		"operation":           string(r.Operation),
+		"verification_status": r.ToVerificationStatus(),
+		"analysis_method":     "ACTIVE_VERIFICATION",
+	}
+	if r.ResourceScope != "" {
+		details["resource_scope"] = r.ResourceScope
+	}
+	if r.ErrorClassification != "" && r.ErrorClassification != ErrClassNone {
+		details["error_classification"] = string(r.ErrorClassification)
+	}
+
 	return CloudFinding{
 		Provider:    Provider(r.Technology),
 		Category:    category,
@@ -294,6 +311,7 @@ func (r AccessVerificationRecord) ToCloudFinding() (CloudFinding, bool) {
 		Severity:    severity,
 		Confidence:  confidence,
 		Fingerprint: fp,
+		Details:     details,
 	}, true
 }
 

@@ -12,15 +12,18 @@ import (
 // Event types supported by Felix notification subsystem.
 const (
 	// Assessment lifecycle events
-	EventAssessmentCompleted          = "assessment.completed"
+	EventAssessmentCompleted           = "assessment.completed"
 	EventAssessmentCompletedWithErrors = "assessment.completed_with_errors"
-	EventAssessmentFailed             = "assessment.failed"
-	EventAssessmentCancelled          = "assessment.cancelled"
-	EventAssessmentInterrupted        = "assessment.interrupted"
-	EventAssessmentRecoveryFailed     = "assessment.recovery_failed"
+	EventAssessmentPartial             = "assessment.partial"
+	EventAssessmentBlocked             = "assessment.blocked"
+	EventAssessmentFailed              = "assessment.failed"
+	EventAssessmentCancelled           = "assessment.cancelled"
+	EventAssessmentInterrupted         = "assessment.interrupted"
+	EventAssessmentRecoveryFailed      = "assessment.recovery_failed"
 
 	// Security change / delta events
 	EventSecurityFindingNew        = "security.finding.new"
+	EventSecurityFindingCritical   = "security.finding.critical"
 	EventSecurityFindingRegressed  = "security.finding.regressed"
 	EventSecurityFindingChanged    = "security.finding.changed"
 	EventSecurityFindingResolved   = "security.finding.resolved"

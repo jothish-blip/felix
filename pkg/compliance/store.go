@@ -895,7 +895,7 @@ func (s *SQLiteComplianceStore) getEvaluationResultUnlocked(assessmentID, catalo
 	       evaluated_at, COALESCE(integrity_version, '')
 	FROM compliance_evaluation_results
 	WHERE id = ? OR (assessment_id = ? AND (? = '' OR catalog_id = ? OR catalog_identity = ? OR id LIKE ?))
-	ORDER BY evaluated_at DESC, created_at DESC
+	ORDER BY evaluated_at DESC, created_at DESC, rowid DESC
 	LIMIT 1;
 	`
 
@@ -1294,7 +1294,7 @@ func (s *SQLiteComplianceStore) GetControlEvaluation(evaluationID string) (*Cont
 	       contradicting_evidence_json, evaluated_at
 	FROM compliance_control_evaluations
 	WHERE id = ? OR id LIKE ?
-	ORDER BY evaluated_at DESC, created_at DESC
+	ORDER BY evaluated_at DESC, created_at DESC, rowid DESC
 	LIMIT 1;
 	`
 

@@ -372,6 +372,10 @@ const commercialHTMLReportTemplate = `<!DOCTYPE html>
     <div style="background: #200808; border: 1px solid #7f1d1d; border-radius: 0.5rem; padding: 1.25rem 1.5rem; margin-bottom: 1.5rem; color: #fca5a5;">
       <strong style="color: #ef4444; font-size: 1.05rem;">ASSESSMENT FAILED:</strong> Target reachability could not be established due to network, transport, or server errors. Security posture could not be evaluated.
     </div>
+    {{else if or (eq .ExecutiveSummary.CompletionStatus "PARTIAL") (eq .ExecutiveSummary.CompletionStatus "INCOMPLETE")}}
+    <div style="background: #261604; border: 1px solid #78350f; border-radius: 0.5rem; padding: 1.25rem 1.5rem; margin-bottom: 1.5rem; color: #fde68a;">
+      <strong style="color: #f59e0b; font-size: 1.05rem;">PARTIAL ASSESSMENT:</strong> Assessment was incomplete. Some engines, targets, or checks were skipped or encountered errors. Results reflect only the completed portion of the assessment.
+    </div>
     {{end}}
     <div class="narrative-box">
       <p><strong>Assessment Status:</strong> {{.ExecutiveSummary.CompletionStatus}} &bull; <strong>Scope:</strong> {{.ExecutiveSummary.ScopeSummary}}</p>
@@ -471,6 +475,17 @@ const commercialHTMLReportTemplate = `<!DOCTYPE html>
           {{end}}
         </ul>
       </div>
+
+      {{if .AssessmentScope.CloudResources}}
+      <div class="sub-box">
+        <div class="sub-box-title">Cloud & Database Resources in Scope</div>
+        <ul style="padding-left: 1.25rem;">
+          {{range .AssessmentScope.CloudResources}}
+          <li><code>{{.}}</code></li>
+          {{end}}
+        </ul>
+      </div>
+      {{end}}
 
       {{if .AssessmentScope.AuthenticationContexts}}
       <div class="sub-box">
@@ -682,12 +697,14 @@ const commercialHTMLReportTemplate = `<!DOCTYPE html>
           <span class="badge badge-INFO">Det Conf: {{.Confidence.DetectionConfidence}}</span>
           <span class="badge badge-INFO">Ver Conf: {{.Confidence.VerificationConfidence}}</span>
           {{if .SyntheticFixture}}<span class="badge badge-SYNTHETIC">[SYNTHETIC FIXTURE]</span>{{end}}
+          {{if and .Framework (ne .Framework "generic")}}<span class="badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; font-size: 0.8rem; border: 1px solid rgba(56, 189, 248, 0.3);">{{.Framework}}{{if .FrameworkVersion}} v{{.FrameworkVersion}}{{end}}</span>{{end}}
         </div>
       </div>
 
       <div class="item-meta">
         <span><strong>Affected Asset:</strong> <code>{{.AffectedAsset}}</code></span>
         <span><strong>Location:</strong> <code>{{.AssetLocation}}</code></span>
+        {{if and .Framework (ne .Framework "generic")}}<span><strong>Framework:</strong> {{.Framework}}{{if .FrameworkVersion}} (v{{.FrameworkVersion}}){{end}}</span>{{end}}
         <span><strong>Auth Context:</strong> {{.AuthenticationState}}</span>
         <span><strong>Detection Method:</strong> {{.DetectionMethod}}</span>
         <span><strong>Risk Contribution:</strong> {{.RiskContribution.Score}}/40 ({{.RiskContribution.RiskType}})</span>
@@ -763,11 +780,13 @@ const commercialHTMLReportTemplate = `<!DOCTYPE html>
           <span class="badge badge-INFO">Det Conf: {{.Confidence.DetectionConfidence}}</span>
           <span class="badge badge-INFO">Ver Conf: {{.Confidence.VerificationConfidence}}</span>
           {{if .SyntheticFixture}}<span class="badge badge-SYNTHETIC">[SYNTHETIC FIXTURE]</span>{{end}}
+          {{if and .Framework (ne .Framework "generic")}}<span class="badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; font-size: 0.8rem; border: 1px solid rgba(56, 189, 248, 0.3);">{{.Framework}}{{if .FrameworkVersion}} v{{.FrameworkVersion}}{{end}}</span>{{end}}
         </div>
       </div>
 
       <div class="item-meta">
         <span><strong>Affected Asset:</strong> <code>{{.AffectedAsset}}</code></span>
+        {{if and .Framework (ne .Framework "generic")}}<span><strong>Framework:</strong> {{.Framework}}{{if .FrameworkVersion}} (v{{.FrameworkVersion}}){{end}}</span>{{end}}
         <span><strong>Auth Context:</strong> {{.AuthenticationState}}</span>
         <span><strong>Detection Method:</strong> {{.DetectionMethod}}</span>
         <span><strong>Risk Contribution:</strong> {{.RiskContribution.Score}}/40</span>

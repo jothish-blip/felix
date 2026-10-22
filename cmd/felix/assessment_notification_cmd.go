@@ -134,6 +134,7 @@ func runNotificationStatus(args []string) int {
 		data := map[string]interface{}{
 			"enabled":            cfg.Notification.Enabled,
 			"provider":           cfg.Notification.Provider,
+			"supported_providers": []string{"webhook", "slack", "discord", "teams"},
 			"webhook_url":        webhookURLDisplay,
 			"webhook_secret_set": secretDisplay,
 			"timeout_seconds":    cfg.Notification.TimeoutSeconds,
@@ -142,6 +143,8 @@ func runNotificationStatus(args []string) int {
 			"notify_lifecycle":   cfg.Notification.NotifyOnLifecycle,
 			"notify_deltas":      cfg.Notification.NotifyOnDeltas,
 			"concurrency":        cfg.Notification.Concurrency,
+			"require_signing":    cfg.Notification.RequireSigning,
+			"previous_secret_set": cfg.Notification.WebhookPreviousSecret != "",
 			"stats":              stats,
 		}
 		enc := json.NewEncoder(os.Stdout)
@@ -157,6 +160,7 @@ func runNotificationStatus(args []string) int {
 	}
 	fmt.Printf("State:             %s\n", statusStr)
 	fmt.Printf("Provider:          %s\n", cfg.Notification.Provider)
+	fmt.Println("Supported:         webhook, slack, discord, teams")
 	if auth.IsAdmin() {
 		fmt.Printf("Webhook URL:       %s\n", notify.SafeWebhookURL(cfg.Notification.WebhookURL))
 	} else {
@@ -167,6 +171,12 @@ func runNotificationStatus(args []string) int {
 		secretStr = "[CONFIGURED]"
 	}
 	fmt.Printf("Webhook Secret:    %s\n", secretStr)
+	fmt.Printf("Require Signing:   %t\n", cfg.Notification.RequireSigning)
+	prevSecretStr := "None"
+	if cfg.Notification.WebhookPreviousSecret != "" {
+		prevSecretStr = "[CONFIGURED]"
+	}
+	fmt.Printf("Previous Secret:   %s\n", prevSecretStr)
 	fmt.Printf("Timeout:           %ds\n", cfg.Notification.TimeoutSeconds)
 	fmt.Printf("Max Retries:       %d\n", cfg.Notification.MaxRetries)
 	fmt.Printf("Min Severity:      %s\n", cfg.Notification.MinSeverity)
@@ -486,45 +496,132 @@ func runNotificationRetry(args []string) int {
 
 func runNotificationTest(args []string) int {
 	var (
-		overrideURL string
-		asJSON      bool
-		role        string
-		clientID    string
-		tenantID    string
-		accountID   string
+		overrideURL      string
+		overrideProvider   string
+		overrideSecret     string
+		overridePrevSecret string
+		requireSigning     bool
+		allowInsecure      bool
+		allowLoopback    bool
+		asJSON           bool
+		role             string
+		clientID         string
+		tenantID         string
+		accountID        string
 	)
 
 	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--url":
+		arg := args[i]
+		if arg == "--url" {
 			if i+1 < len(args) {
 				overrideURL = args[i+1]
 				i++
 			}
-		case "--json":
-			asJSON = true
-		case "--role":
+			continue
+		}
+		if strings.HasPrefix(arg, "--url=") {
+			overrideURL = strings.TrimPrefix(arg, "--url=")
+			continue
+		}
+		if arg == "--provider" {
+			if i+1 < len(args) {
+				overrideProvider = args[i+1]
+				i++
+			}
+			continue
+		}
+		if strings.HasPrefix(arg, "--provider=") {
+			overrideProvider = strings.TrimPrefix(arg, "--provider=")
+			continue
+		}
+		if arg == "--secret" {
+			if i+1 < len(args) {
+				overrideSecret = args[i+1]
+				i++
+			}
+			continue
+		}
+		if strings.HasPrefix(arg, "--secret=") {
+			overrideSecret = strings.TrimPrefix(arg, "--secret=")
+			continue
+		}
+		if arg == "--previous-secret" || arg == "--notify-previous-secret" {
+			if i+1 < len(args) {
+				overridePrevSecret = args[i+1]
+				i++
+			}
+			continue
+		}
+		if strings.HasPrefix(arg, "--previous-secret=") {
+			overridePrevSecret = strings.TrimPrefix(arg, "--previous-secret=")
+			continue
+		}
+		if strings.HasPrefix(arg, "--notify-previous-secret=") {
+			overridePrevSecret = strings.TrimPrefix(arg, "--notify-previous-secret=")
+			continue
+		}
+		if arg == "--require-signing" || arg == "--notify-require-signing" {
+			requireSigning = true
+			continue
+		}
+		if arg == "--role" {
 			if i+1 < len(args) {
 				role = args[i+1]
 				i++
 			}
-		case "--client":
+			continue
+		}
+		if strings.HasPrefix(arg, "--role=") {
+			role = strings.TrimPrefix(arg, "--role=")
+			continue
+		}
+		if arg == "--client" {
 			if i+1 < len(args) {
 				clientID = args[i+1]
 				i++
 			}
-		case "--tenant":
+			continue
+		}
+		if strings.HasPrefix(arg, "--client=") {
+			clientID = strings.TrimPrefix(arg, "--client=")
+			continue
+		}
+		if arg == "--tenant" {
 			if i+1 < len(args) {
 				tenantID = args[i+1]
 				i++
 			}
-		case "--account":
+			continue
+		}
+		if strings.HasPrefix(arg, "--tenant=") {
+			tenantID = strings.TrimPrefix(arg, "--tenant=")
+			continue
+		}
+		if arg == "--account" {
 			if i+1 < len(args) {
 				accountID = args[i+1]
 				i++
 			}
-		case "--help", "-h", "help":
-			fmt.Println("Usage: felix notification test [--url <endpoint>] [--json]")
+			continue
+		}
+		if strings.HasPrefix(arg, "--account=") {
+			accountID = strings.TrimPrefix(arg, "--account=")
+			continue
+		}
+		if arg == "--json" {
+			asJSON = true
+			continue
+		}
+		if arg == "--insecure" {
+			allowInsecure = true
+			continue
+		}
+		if arg == "--allow-loopback" {
+			allowLoopback = true
+			continue
+		}
+		if arg == "--help" || arg == "-h" || arg == "help" {
+			fmt.Println("Usage: felix notification test [--url <endpoint>] [--provider <type>] [--json]")
 			return 0
 		}
 	}
@@ -550,18 +647,38 @@ func runNotificationTest(args []string) int {
 		return 2
 	}
 
-	webhookCfg := notify.WebhookConfig{
-		URL:               targetURL,
-		Secret:            cfg.Notification.WebhookSecret,
-		Timeout:           time.Duration(cfg.Notification.TimeoutSeconds) * time.Second,
-		AllowInsecureHTTP: cfg.Notification.AllowInsecureHTTP,
-		AllowPrivateIPs:   cfg.Notification.AllowPrivateIPs,
-		AllowLoopback:     cfg.Notification.AllowLoopback,
+	providerType := cfg.Notification.Provider
+	if overrideProvider != "" {
+		providerType = overrideProvider
+	}
+	if providerType == "" {
+		providerType = "webhook"
+	}
+	secret := resolveNotifySecret(overrideSecret, cfg.Notification.WebhookSecret)
+	prevSecret := resolvePreviousSecret(overridePrevSecret, cfg.Notification.WebhookPreviousSecret)
+	signingRequired := requireSigning || cfg.Notification.RequireSigning
+
+	insecureAllowed := cfg.Notification.AllowInsecureHTTP || allowInsecure
+	loopbackAllowed := cfg.Notification.AllowLoopback || allowLoopback
+	if strings.HasPrefix(targetURL, "http://127.0.0.1") || strings.HasPrefix(targetURL, "http://localhost") {
+		insecureAllowed = true
+		loopbackAllowed = true
 	}
 
-	provider, err := notify.NewWebhookProvider(webhookCfg)
+	webhookCfg := notify.WebhookConfig{
+		URL:               targetURL,
+		Secret:            secret,
+		PreviousSecret:    prevSecret,
+		RequireSigning:    signingRequired,
+		Timeout:           time.Duration(cfg.Notification.TimeoutSeconds) * time.Second,
+		AllowInsecureHTTP: insecureAllowed,
+		AllowPrivateIPs:   cfg.Notification.AllowPrivateIPs,
+		AllowLoopback:     loopbackAllowed,
+	}
+
+	provider, err := notify.NewProvider(webhookCfg, providerType)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[-] Webhook configuration validation failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "[-] Notification provider configuration failed: %v\n", err)
 		return 2
 	}
 
@@ -676,13 +793,15 @@ func runNotificationDispatch(args []string) int {
 	webhookCfg := notify.WebhookConfig{
 		URL:               cfg.Notification.WebhookURL,
 		Secret:            cfg.Notification.WebhookSecret,
+		PreviousSecret:    cfg.Notification.WebhookPreviousSecret,
+		RequireSigning:    cfg.Notification.RequireSigning,
 		Timeout:           time.Duration(cfg.Notification.TimeoutSeconds) * time.Second,
 		AllowInsecureHTTP: cfg.Notification.AllowInsecureHTTP,
 		AllowPrivateIPs:   cfg.Notification.AllowPrivateIPs,
 		AllowLoopback:     cfg.Notification.AllowLoopback,
 	}
 
-	provider, err := notify.NewWebhookProvider(webhookCfg)
+	provider, err := notify.NewProvider(webhookCfg, cfg.Notification.Provider)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[-] Provider configuration error: %v\n", err)
 		return 2

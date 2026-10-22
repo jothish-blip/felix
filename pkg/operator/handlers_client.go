@@ -26,16 +26,28 @@ func (s *Server) handleListClients(w http.ResponseWriter, r *http.Request) {
 		s.respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to list clients: %v", err))
 		return
 	}
-	if clients == nil {
-		clients = []assessment.Client{}
+	authCtx := s.getAuthContext(r)
+	var filtered []assessment.Client
+	for _, c := range clients {
+		if authCtx.Authorizes(c.ID, "", "") {
+			filtered = append(filtered, c)
+		}
+	}
+	if filtered == nil {
+		filtered = []assessment.Client{}
 	}
 	s.respondJSON(w, http.StatusOK, map[string]any{
-		"clients": clients,
-		"count":   len(clients),
+		"clients": filtered,
+		"count":   len(filtered),
 	})
 }
 
 func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.requireRole(w, r, RoleAdmin)
+	if !ok {
+		return
+	}
+
 	var req createClientRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.respondError(w, http.StatusBadRequest, "invalid request payload")
@@ -66,8 +78,13 @@ func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	opID := s.cfg.OperatorID
+	if sess != nil && sess.OperatorID != "" {
+		opID = sess.OperatorID
+	}
+
 	_ = s.store.RecordAuditEvent(&assessment.AuditEvent{
-		OperatorID:  s.cfg.OperatorID,
+		OperatorID:  opID,
 		ActionType:  "CLIENT_CREATED",
 		EntityType:  "CLIENT",
 		EntityID:    c.ID,
@@ -81,6 +98,12 @@ func (s *Server) handleGetClient(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
 		s.respondError(w, http.StatusBadRequest, "missing client id")
+		return
+	}
+
+	authCtx := s.getAuthContext(r)
+	if !authCtx.Authorizes(id, "", "") {
+		s.respondError(w, http.StatusNotFound, "client not found")
 		return
 	}
 
@@ -103,6 +126,11 @@ func (s *Server) handleGetClient(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleArchiveClient(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.requireRole(w, r, RoleAdmin)
+	if !ok {
+		return
+	}
+
 	id := r.PathValue("id")
 	if id == "" {
 		s.respondError(w, http.StatusBadRequest, "missing client id")
@@ -114,8 +142,13 @@ func (s *Server) handleArchiveClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	opID := s.cfg.OperatorID
+	if sess != nil && sess.OperatorID != "" {
+		opID = sess.OperatorID
+	}
+
 	_ = s.store.RecordAuditEvent(&assessment.AuditEvent{
-		OperatorID:  s.cfg.OperatorID,
+		OperatorID:  opID,
 		ActionType:  "CLIENT_ARCHIVED",
 		EntityType:  "CLIENT",
 		EntityID:    id,

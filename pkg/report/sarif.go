@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -94,6 +95,12 @@ type SARIFLocation struct {
 // SARIFPhysicalLocation references an endpoint URI or target artifact.
 type SARIFPhysicalLocation struct {
 	ArtifactLocation SARIFArtifactLocation `json:"artifactLocation"`
+	Region           *SARIFRegion          `json:"region,omitempty"`
+}
+
+// SARIFRegion describes an optional text region in an artifact without fabricating fake line numbers.
+type SARIFRegion struct {
+	StartLine int `json:"startLine,omitempty"`
 }
 
 // SARIFArtifactLocation identifies the target artifact or URI.
@@ -143,6 +150,10 @@ func cleanArtifactURI(raw string) string {
 		}
 	}
 
+	// In RFC 3986, square brackets are only allowed in IPv6 host addresses.
+	// Redacted placeholders [REDACTED] in userinfo or paths violate uri-reference syntax unless escaped.
+	s = strings.ReplaceAll(s, "[REDACTED]", "%5BREDACTED%5D")
+
 	// Escape unencoded spaces so the output strictly conforms to RFC 3986 format: uri-reference
 	return strings.ReplaceAll(s, " ", "%20")
 }
@@ -151,20 +162,30 @@ func cleanArtifactURI(raw string) string {
 func BuildSARIFLog(rep Report) SARIFLog {
 	sanitized := SanitizeReport(rep)
 
-	// Deduplicate findings by fingerprint/identity while preserving original casing and metadata
+	// Deduplicate findings by fingerprint/identity while preserving tenant boundaries,
+	// avoiding collapsing distinct findings with empty/ambiguous fingerprints,
+	// and preserving original casing and metadata.
 	cleanFindings := make([]Finding, 0, len(sanitized.Findings))
-	seenFingerprints := make(map[string]bool)
+	seenKeys := make(map[string]bool)
 	for _, f := range sanitized.Findings {
+		tenantID, accountID := extractBoundaries(f)
 		key := strings.TrimSpace(f.Fingerprint)
-		if key == "" {
-			key = strings.TrimSpace(f.ID)
-		}
-		if key != "" {
-			if seenFingerprints[key] {
-				continue
+		if key == "" || strings.HasPrefix(key, "ambiguous:") {
+			// Do not collapse unrelated findings that lack a unique fingerprint.
+			// Form an unambiguous key based on ID, category, endpoint, method, and boundaries.
+			idPart := strings.TrimSpace(f.ID)
+			if idPart == "" {
+				idPart = strings.TrimSpace(f.Title)
 			}
-			seenFingerprints[key] = true
+			key = fmt.Sprintf("unfp:%s|%s|%s|%s|%s|%s", idPart, f.Category, f.Endpoint, f.Method, tenantID, accountID)
+		} else {
+			key = fmt.Sprintf("%s|%s|%s", key, tenantID, accountID)
 		}
+
+		if seenKeys[key] {
+			continue
+		}
+		seenKeys[key] = true
 		cleanFindings = append(cleanFindings, f)
 	}
 
@@ -221,10 +242,16 @@ func BuildSARIFLog(rep Report) SARIFLog {
 					Level: SeverityToSARIFLevel(f.Severity),
 				},
 				Help: helpMsg,
-				Properties: map[string]any{
-					"category": ruleID,
-					"source":   f.Source,
-				},
+				Properties: func() map[string]any {
+					rp := map[string]any{
+						"category": ruleID,
+						"source":   f.Source,
+					}
+					if f.Framework != "" && !strings.EqualFold(f.Framework, "generic") {
+						rp["framework"] = f.Framework
+					}
+					return rp
+				}(),
 			}
 		}
 	}
@@ -272,18 +299,37 @@ func BuildSARIFLog(rep Report) SARIFLog {
 			if f.Method != "" && !strings.HasPrefix(strings.ToUpper(rawLoc), f.Method+" ") {
 				fqn = f.Method + " " + rawLoc
 			}
+			kind := "endpoint"
+			lowerCat := strings.ToLower(f.Category)
+			lowerSrc := strings.ToLower(f.Source)
+			if f.Source == SourceAPK || f.Source == SourceMobile || strings.Contains(lowerCat, "android") || strings.Contains(lowerCat, "apk") {
+				kind = "component"
+			} else if lowerSrc == "cloud" || strings.Contains(lowerCat, "cloud") || strings.Contains(lowerCat, "database") || strings.Contains(lowerCat, "storage") {
+				kind = "cloud_resource"
+			} else if lowerSrc == "secrets" || strings.Contains(lowerCat, "secret") {
+				kind = "secret"
+			}
+			var region *SARIFRegion
+			if f.EvidenceDetails.Details != nil {
+				if lStr := f.EvidenceDetails.Details["source_line"]; lStr != "" {
+					if l, err := strconv.Atoi(lStr); err == nil && l > 0 {
+						region = &SARIFRegion{StartLine: l}
+					}
+				}
+			}
 			locations = append(locations, SARIFLocation{
 				LogicalLocations: []SARIFLogicalLocation{
 					{
 						Name:               rawLoc,
 						FullyQualifiedName: fqn,
-						Kind:               "endpoint",
+						Kind:               kind,
 					},
 				},
 				PhysicalLocation: &SARIFPhysicalLocation{
 					ArtifactLocation: SARIFArtifactLocation{
 						URI: cleanedURI,
 					},
+					Region: region,
 				},
 			})
 		}
@@ -301,6 +347,12 @@ func BuildSARIFLog(rep Report) SARIFLog {
 			"verification_status": string(f.Verification.Status),
 			"verification_result": f.Verification.Result,
 		}
+		if f.Framework != "" && !strings.EqualFold(f.Framework, "generic") {
+			props["framework"] = f.Framework
+		}
+		if f.FrameworkVersion != "" && !strings.EqualFold(f.FrameworkVersion, "generic") {
+			props["framework_version"] = f.FrameworkVersion
+		}
 		if f.Verification.PolicyID != "" {
 			props["verification_policy_id"] = f.Verification.PolicyID
 		}
@@ -317,6 +369,17 @@ func BuildSARIFLog(rep Report) SARIFLog {
 			props["provenance"] = f.Provenance
 		} else if f.EvidenceDetails.Provenance != nil {
 			props["provenance"] = f.EvidenceDetails.Provenance
+		}
+
+		if strings.TrimSpace(f.Remediation) != "" {
+			props["remediation"] = strings.TrimSpace(f.Remediation)
+		}
+		if f.EvidenceDetails.Details != nil {
+			for _, k := range []string{"technology", "provider", "resource_scope", "resource_id", "service_type", "package_name", "component_name", "permission", "min_sdk", "target_sdk"} {
+				if val, ok := f.EvidenceDetails.Details[k]; ok && val != "" {
+					props[k] = val
+				}
+			}
 		}
 
 		var fingerprints map[string]string

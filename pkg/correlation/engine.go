@@ -2,6 +2,8 @@ package correlation
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
@@ -258,21 +260,21 @@ func (e *Engine) constructPath(nodeIDs []string, nodes []NormalizedFinding, edge
 	}
 
 	path := AttackPath{
-		ID:                fmt.Sprintf("PATH-%s-%s", ruleCode, shortHash(strings.Join(nodeIDs, "->"))),
-		Title:             title,
-		NodeIDs:           nodeIDs,
-		Nodes:             nodes,
-		Edges:             edges,
-		EntryPoint:        firstEP,
-		TargetAsset:       last.Host,
-		PrimaryWeakness:   first.Title,
-		TerminalImpact:    terminalImpact,
-		Status:            status,
-		Confidence:        conf,
-		Assumptions:       assumptions,
-		MissingEvidence:   missingEvidence,
-		SyntheticFixture:  isSynth,
-		CreatedAt:         time.Now().UTC(),
+		ID:               fmt.Sprintf("PATH-%s-%s", ruleCode, shortHash(strings.Join(nodeIDs, "->"))),
+		Title:            title,
+		NodeIDs:          nodeIDs,
+		Nodes:            nodes,
+		Edges:            edges,
+		EntryPoint:       firstEP,
+		TargetAsset:      last.Host,
+		PrimaryWeakness:  first.Title,
+		TerminalImpact:   terminalImpact,
+		Status:           status,
+		Confidence:       conf,
+		Assumptions:      assumptions,
+		MissingEvidence:  missingEvidence,
+		SyntheticFixture: isSynth,
+		CreatedAt:        time.Now().UTC(),
 	}
 
 	// Combined Risk Calculation
@@ -464,7 +466,7 @@ func (e *Engine) compileSummary(
 	return &Summary{
 		TotalFindings:            len(findings),
 		EvaluatedFindings:        len(findings),
-		ExcludedFindings:        0,
+		ExcludedFindings:         0,
 		CandidateRelationships:   len(relationships),
 		ConfirmedRelationships:   confirmedRels,
 		CandidatePaths:           candidateCount,
@@ -485,10 +487,6 @@ func (e *Engine) compileSummary(
 }
 
 func shortHash(s string) string {
-	var hash uint32 = 2166136261
-	for i := 0; i < len(s); i++ {
-		hash ^= uint32(s[i])
-		hash *= 16777619
-	}
-	return fmt.Sprintf("%08x", hash)
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:8])
 }

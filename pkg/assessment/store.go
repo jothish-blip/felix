@@ -260,6 +260,11 @@ type Store interface {
 	GetNotificationStats(auth TenantAuthContext) (*notify.SubsystemStats, error)
 	ReconcileExecutionNotifications(auth TenantAuthContext, lookback time.Duration) (int, error)
 
+	// Assessment History & Deltas (Phase 10.8)
+	ListAssessmentHistory(clientID string, assessmentID string, auth TenantAuthContext, limit, offset int) ([]AssessmentHistoryItem, int, error)
+	CompareAssessments(baselineAssessmentID, currentAssessmentID string, auth TenantAuthContext) (*AssessmentComparisonResult, error)
+	CompareAssessmentsWithExecutions(baselineAssessmentID, baselineExecID, currentAssessmentID, currentExecID string, auth TenantAuthContext) (*AssessmentComparisonResult, error)
+
 	// Close database
 	Close() error
 }

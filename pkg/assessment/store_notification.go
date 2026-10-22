@@ -560,7 +560,8 @@ func (s *SQLiteStore) MarkNotificationFailed(id, workerID string, errStr string,
 		if workerID != "" {
 			query = `
 				UPDATE notification_outbox
-				SET delivery_status = 'PENDING', leased_by = NULL, lease_expires_at = NULL,
+				SET delivery_status = CASE WHEN attempt_count + 1 >= max_attempts THEN 'FAILED' ELSE 'PENDING' END,
+				    leased_by = NULL, lease_expires_at = NULL,
 				    attempt_count = attempt_count + 1, next_retry_at = ?, last_error = ?, updated_at = ?
 				WHERE id = ? AND leased_by = ? AND (lease_expires_at IS NULL OR lease_expires_at >= ?) AND delivery_status = 'PENDING';
 			`
@@ -568,7 +569,8 @@ func (s *SQLiteStore) MarkNotificationFailed(id, workerID string, errStr string,
 		} else {
 			query = `
 				UPDATE notification_outbox
-				SET delivery_status = 'PENDING', leased_by = NULL, lease_expires_at = NULL,
+				SET delivery_status = CASE WHEN attempt_count + 1 >= max_attempts THEN 'FAILED' ELSE 'PENDING' END,
+				    leased_by = NULL, lease_expires_at = NULL,
 				    attempt_count = attempt_count + 1, next_retry_at = ?, last_error = ?, updated_at = ?
 				WHERE id = ?;
 			`
@@ -683,7 +685,7 @@ func (s *SQLiteStore) GetNotificationStats(auth TenantAuthContext) (*notify.Subs
 	for rows.Next() {
 		var status string
 		var count int
-		var minCreated, maxUpdated sql.NullTime
+		var minCreated, maxUpdated sql.NullString
 
 		if err := rows.Scan(&status, &count, &minCreated, &maxUpdated); err != nil {
 			return nil, err
@@ -693,21 +695,27 @@ func (s *SQLiteStore) GetNotificationStats(auth TenantAuthContext) (*notify.Subs
 		switch status {
 		case "PENDING":
 			stats.PendingCount = count
-			if minCreated.Valid {
-				t := minCreated.Time.UTC()
-				stats.OldestPendingAt = &t
+			if minCreated.Valid && minCreated.String != "" {
+				if t, err := time.Parse(time.RFC3339, minCreated.String); err == nil {
+					tUTC := t.UTC()
+					stats.OldestPendingAt = &tUTC
+				}
 			}
 		case "DELIVERED":
 			stats.DeliveredCount = count
-			if maxUpdated.Valid {
-				t := maxUpdated.Time.UTC()
-				stats.LastDeliveredAt = &t
+			if maxUpdated.Valid && maxUpdated.String != "" {
+				if t, err := time.Parse(time.RFC3339, maxUpdated.String); err == nil {
+					tUTC := t.UTC()
+					stats.LastDeliveredAt = &tUTC
+				}
 			}
 		case "FAILED":
 			stats.FailedCount = count
-			if maxUpdated.Valid {
-				t := maxUpdated.Time.UTC()
-				stats.LastFailedAt = &t
+			if maxUpdated.Valid && maxUpdated.String != "" {
+				if t, err := time.Parse(time.RFC3339, maxUpdated.String); err == nil {
+					tUTC := t.UTC()
+					stats.LastFailedAt = &tUTC
+				}
 			}
 		}
 	}

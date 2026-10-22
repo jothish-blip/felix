@@ -115,6 +115,8 @@ func ParseAndAnalyzeManifest(ctx context.Context, data []byte, ws *Workspace, li
 
 	// Rule 5: Backup Configuration
 	findings = append(findings, analyzeBackup(doc)...)
+	findings = append(findings, analyzeRequestedPermissions(doc)...)
+	findings = append(findings, analyzeSDKPosture(doc)...)
 
 	// Document limitations
 	if doc.TargetSDK > 0 {
@@ -950,6 +952,119 @@ func analyzeBackup(doc *ManifestDocument) []report.Finding {
 }
 
 // ----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
+// RULE 6: Requested Permissions & Dangerous Permissions
+// ----------------------------------------------------------------------------
+
+func analyzeRequestedPermissions(doc *ManifestDocument) []report.Finding {
+	if doc == nil || len(doc.UsesPermissions) == 0 {
+		return nil
+	}
+
+	var findings []report.Finding
+	dangerousPerms := map[string]string{
+		"android.permission.RECORD_AUDIO":               "Microphone audio recording",
+		"android.permission.CAMERA":                     "Camera hardware capture",
+		"android.permission.READ_CONTACTS":              "Private user contact data",
+		"android.permission.WRITE_CONTACTS":             "Private user contact modification",
+		"android.permission.ACCESS_FINE_LOCATION":       "Precise GPS location tracking",
+		"android.permission.ACCESS_COARSE_LOCATION":     "Network/cellular location tracking",
+		"android.permission.ACCESS_BACKGROUND_LOCATION": "Continuous background location tracking",
+		"android.permission.READ_SMS":                   "Private SMS text messages",
+		"android.permission.SEND_SMS":                   "Direct SMS message dispatch",
+		"android.permission.RECEIVE_SMS":                "Incoming SMS message interception",
+		"android.permission.READ_CALL_LOG":              "Telephone call history",
+		"android.permission.WRITE_CALL_LOG":             "Telephone call history modification",
+		"android.permission.READ_EXTERNAL_STORAGE":      "Shared external device storage",
+		"android.permission.WRITE_EXTERNAL_STORAGE":     "Shared external device storage",
+		"android.permission.SYSTEM_ALERT_WINDOW":        "System window overlay (draw over apps)",
+		"android.permission.REQUEST_INSTALL_PACKAGES":   "Third-party package installation",
+	}
+
+	for _, perm := range doc.UsesPermissions {
+		cleanPerm := strings.TrimSpace(perm)
+		if reason, ok := dangerousPerms[cleanPerm]; ok {
+			sev := report.SeverityInfo
+			if strings.Contains(cleanPerm, "SMS") || cleanPerm == "android.permission.SYSTEM_ALERT_WINDOW" || cleanPerm == "android.permission.REQUEST_INSTALL_PACKAGES" {
+				sev = report.SeverityLow
+			}
+
+			findings = append(findings, buildFinding(
+				"APK-MAN-DANGEROUS-PERMISSION",
+				"android-dangerous-permission",
+				fmt.Sprintf("Dangerous Permission Declared: %s", cleanPerm),
+				sev,
+				report.ConfidenceHigh,
+				doc.PackageName,
+				cleanPerm,
+				fmt.Sprintf("Application declares the permission %s (%s) in AndroidManifest.xml. Declaring a permission is a platform capability request, not an active vulnerability; verify that the permission is strictly necessary and handled securely at runtime.", cleanPerm, reason),
+				fmt.Sprintf("uses-permission=%s", cleanPerm),
+				"Audit requested permissions according to the principle of least privilege. Request dangerous permissions at runtime only when needed, and remove unused permissions.",
+				map[string]string{
+					"permission": cleanPerm,
+					"category":   reason,
+					"risk_type":  "capability_declaration",
+				},
+				report.FindingStatusConfirmed,
+			))
+		}
+	}
+
+	return findings
+}
+
+// ----------------------------------------------------------------------------
+// RULE 7: Minimum & Target SDK Posture
+// ----------------------------------------------------------------------------
+
+func analyzeSDKPosture(doc *ManifestDocument) []report.Finding {
+	if doc == nil {
+		return nil
+	}
+
+	var findings []report.Finding
+
+	if doc.MinSDK > 0 && doc.MinSDK < 24 {
+		findings = append(findings, buildFinding(
+			"APK-MAN-MIN-SDK-LOW",
+			"android-sdk",
+			fmt.Sprintf("Low Minimum SDK Version: %d", doc.MinSDK),
+			report.SeverityLow,
+			report.ConfidenceHigh,
+			doc.PackageName,
+			"AndroidManifest.xml",
+			fmt.Sprintf("Application defines minSdkVersion=%d (Android < 7.0 Nougat). Legacy Android releases lack modern system security enhancements, default network security configurations, and granular runtime permissions.", doc.MinSDK),
+			fmt.Sprintf("minSdkVersion=%d", doc.MinSDK),
+			"Increase minSdkVersion to at least 24 (Android 7.0) or higher to enforce platform-level security guarantees.",
+			map[string]string{
+				"min_sdk": fmt.Sprintf("%d", doc.MinSDK),
+			},
+			report.FindingStatusConfirmed,
+		))
+	}
+
+	if doc.TargetSDK > 0 && doc.TargetSDK < 31 {
+		findings = append(findings, buildFinding(
+			"APK-MAN-TARGET-SDK-OUTDATED",
+			"android-sdk",
+			fmt.Sprintf("Outdated Target SDK Version: %d", doc.TargetSDK),
+			report.SeverityMedium,
+			report.ConfidenceHigh,
+			doc.PackageName,
+			"AndroidManifest.xml",
+			fmt.Sprintf("Application defines targetSdkVersion=%d (Android < 12). Applications targeting legacy API levels do not benefit from modern component export protections, notification permission requirements, and background execution limits.", doc.TargetSDK),
+			fmt.Sprintf("targetSdkVersion=%d", doc.TargetSDK),
+			"Update targetSdkVersion to at least 33 (Android 13) or 34 in build.gradle to benefit from modern Android security controls.",
+			map[string]string{
+				"target_sdk": fmt.Sprintf("%d", doc.TargetSDK),
+			},
+			report.FindingStatusConfirmed,
+		))
+	}
+
+	return findings
+}
+
 // Finding Builder Helper
 // ----------------------------------------------------------------------------
 
@@ -976,6 +1091,15 @@ func buildFinding(
 
 	id := fmt.Sprintf("apk-man-%s-%s", strings.ToLower(ruleID), hashHex)
 
+	verStatus := report.VerificationDetected
+	verRationale := "Static analysis of AndroidManifest.xml artifact"
+	if severity == report.SeverityInfo || category == "android-dangerous-permission" {
+		verStatus = report.VerificationObserved
+		if category == "android-dangerous-permission" {
+			verRationale = "Permission request is an authorized platform capability, not a confirmed exploitable vulnerability."
+		}
+	}
+
 	return report.Finding{
 		ID:                    id,
 		RuleID:                ruleID,
@@ -996,6 +1120,11 @@ func buildFinding(
 			Location:        endpoint,
 			DetectionMethod: "static_manifest_analysis",
 			Details:         details,
+		},
+		Verification: report.VerificationRecord{
+			Status:    verStatus,
+			Result:    observation,
+			Rationale: verRationale,
 		},
 		Remediation: remediation,
 		RemediationAdvice: &report.RemediationAdvice{

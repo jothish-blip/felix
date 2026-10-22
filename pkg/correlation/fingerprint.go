@@ -723,6 +723,25 @@ func NormalizeLifecycleStatus(s string) FindingLifecycleStatus {
 	}
 }
 
+// P10.8 Canonical Lifecycle & Severity Classifications
+const (
+	ClassificationNew               = "new"
+	ClassificationResolved          = "resolved"
+	ClassificationPersistent        = "persistent"
+	ClassificationSeverityIncreased = "severity_increased"
+	ClassificationSeverityDecreased = "severity_decreased"
+	ClassificationChanged           = "changed"
+	ClassificationUnchanged         = "unchanged"
+	ClassificationUnknown           = "unknown"
+)
+
+// P10.8 Severity Deltas
+const (
+	SeverityDeltaIncreased = "severity_increased"
+	SeverityDeltaDecreased = "severity_decreased"
+	SeverityDeltaUnchanged = "unchanged"
+)
+
 // FindingComparisonItem details the comparison of a specific finding across assessments.
 type FindingComparisonItem struct {
 	Fingerprint      string                 `json:"fingerprint"`
@@ -730,6 +749,10 @@ type FindingComparisonItem struct {
 	RegressionReason string                 `json:"regression_reason,omitempty"`
 	ChangeReason     string                 `json:"change_reason,omitempty"`
 	LifecycleStatus  FindingLifecycleStatus `json:"lifecycle_status"`
+	CanonicalDelta   string                 `json:"canonical_delta,omitempty"`
+	SeverityDelta    string                 `json:"severity_delta,omitempty"`
+	AttributeChanges []string               `json:"attribute_changes,omitempty"`
+	IdentityBasis    string                 `json:"identity_basis,omitempty"`
 	Title            string                 `json:"title"`
 	Severity         string                 `json:"severity"`
 	Category         string                 `json:"category"`
@@ -794,25 +817,29 @@ func DefaultComparisonOptions() ComparisonOptions {
 
 // AssessmentComparison records the complete diff between a baseline and current assessment.
 type AssessmentComparison struct {
-	BaselineExecutionID string                  `json:"baseline_execution_id,omitempty"`
-	CurrentExecutionID  string                  `json:"current_execution_id,omitempty"`
-	BaselineSnapshotID  string                  `json:"baseline_snapshot_id,omitempty"`
-	CurrentSnapshotID   string                  `json:"current_snapshot_id,omitempty"`
-	ComparisonStatus    string                  `json:"comparison_status"` // "COMPLETE" or "PARTIAL"
-	ComparisonReason    string                  `json:"comparison_reason,omitempty"`
-	BaselineCount       int                     `json:"baseline_count"`
-	CurrentCount        int                     `json:"current_count"`
-	NewCount            int                     `json:"new_count"`
-	ActiveCount         int                     `json:"active_count"` // backwards compat
-	PersistentCount     int                     `json:"persistent_count"`
-	ChangedCount        int                     `json:"changed_count"`
-	RecurringCount      int                     `json:"recurring_count"` // backwards compat
-	ResolvedCount       int                     `json:"resolved_count"`
-	RegressedCount      int                     `json:"regressed_count"`
-	UnassessedCount     int                     `json:"unassessed_count"` // backwards compat
-	UnverifiedCount     int                     `json:"unverified_count"`
-	NetRiskScoreDelta   int                     `json:"net_risk_score_delta"`
-	Items               []FindingComparisonItem `json:"items"`
+	BaselineExecutionID    string                  `json:"baseline_execution_id,omitempty"`
+	CurrentExecutionID     string                  `json:"current_execution_id,omitempty"`
+	BaselineSnapshotID     string                  `json:"baseline_snapshot_id,omitempty"`
+	CurrentSnapshotID      string                  `json:"current_snapshot_id,omitempty"`
+	ComparisonStatus       string                  `json:"comparison_status"` // "COMPLETE" or "PARTIAL"
+	ComparisonReason       string                  `json:"comparison_reason,omitempty"`
+	BaselineCount          int                     `json:"baseline_count"`
+	CurrentCount           int                     `json:"current_count"`
+	NewCount               int                     `json:"new_count"`
+	ActiveCount            int                     `json:"active_count"` // backwards compat
+	PersistentCount        int                     `json:"persistent_count"`
+	ChangedCount           int                     `json:"changed_count"`
+	RecurringCount         int                     `json:"recurring_count"` // backwards compat
+	ResolvedCount          int                     `json:"resolved_count"`
+	RegressedCount         int                     `json:"regressed_count"`
+	UnassessedCount        int                     `json:"unassessed_count"` // backwards compat
+	UnverifiedCount        int                     `json:"unverified_count"`
+	SeverityIncreasedCount int                     `json:"severity_increased_count"`
+	SeverityDecreasedCount int                     `json:"severity_decreased_count"`
+	UnchangedCount         int                     `json:"unchanged_count"`
+	UnknownCount           int                     `json:"unknown_count"`
+	NetRiskScoreDelta      int                     `json:"net_risk_score_delta"`
+	Items                  []FindingComparisonItem `json:"items"`
 }
 
 // CompareFindings evaluates findings from two assessment runs by fingerprint using default completed options.
@@ -1020,6 +1047,10 @@ func CompareFindingsWithOptions(baseline, current []report.Finding, opts Compari
 	regressedCount := 0
 	unassessedCount := 0
 	unverifiedCount := 0
+	severityIncreasedCount := 0
+	severityDecreasedCount := 0
+	unchangedCount := 0
+	unknownCount := 0
 	netScoreDelta := 0
 
 	// 1. Evaluate current findings (NEW, PERSISTENT, CHANGED, or REGRESSED)
@@ -1031,8 +1062,17 @@ func CompareFindingsWithOptions(baseline, current []report.Finding, opts Compari
 		}
 
 		base, exists := baselineMap[fp]
+		matchedViaTracking := false
 		if !exists {
 			base, exists = matchedBaseByCurrentFP[fp]
+			if exists {
+				matchedViaTracking = true
+			}
+		}
+
+		idBasis := "CANONICAL_FINGERPRINT"
+		if matchedViaTracking {
+			idBasis = "EXPLICIT_TRACKING_ID"
 		}
 
 		if exists {
@@ -1068,15 +1108,41 @@ func CompareFindingsWithOptions(baseline, current []report.Finding, opts Compari
 				targetFootprintNote = fmt.Sprintf("; target footprint shifted: [%s] -> [%s]", strings.Join(baseTargets, ", "), strings.Join(curTargets, ", "))
 			}
 
+			curSevRank := report.SeverityRank(cur.Severity)
+			baseSevRank := report.SeverityRank(base.Severity)
+
+			var itemSeverityDelta string
+			if curSevRank > baseSevRank {
+				itemSeverityDelta = SeverityDeltaIncreased
+			} else if curSevRank < baseSevRank {
+				itemSeverityDelta = SeverityDeltaDecreased
+			} else {
+				itemSeverityDelta = SeverityDeltaUnchanged
+			}
+
+			var attributeChanges []string
+			if base.Title != cur.Title {
+				attributeChanges = append(attributeChanges, "title")
+			}
+			if curConfRank != baseConfRank || !strings.EqualFold(cur.Confidence, base.Confidence) {
+				attributeChanges = append(attributeChanges, "confidence")
+			}
+			if cur.Status != base.Status || cur.Verification.Status != base.Verification.Status {
+				attributeChanges = append(attributeChanges, "status")
+			}
+			if cur.Endpoint != base.Endpoint || (cur.Method != "" && base.Method != "" && !strings.EqualFold(cur.Method, base.Method)) {
+				attributeChanges = append(attributeChanges, "endpoint")
+			}
+			if hasMaterialEvidenceChange(base, cur) {
+				attributeChanges = append(attributeChanges, "evidence")
+			}
+
 			// Precedence rules for delta classification:
 			// 1. REGRESSED (REAPPEARED): Baseline was previously resolved and is detected again.
-			// 2. REGRESSED (SEVERITY_WORSENED): Severity rank increased.
-			// 3. CHANGED (SEVERITY_DECREASED): Severity rank decreased.
-			// 4. CHANGED (CONFIDENCE_CHANGED): Confidence rank changed.
-			// 5. CHANGED (STATUS_CHANGED): Status or verification status changed.
-			// 6. CHANGED (ENDPOINT_CHANGED): Endpoint or method changed.
-			// 7. CHANGED (EVIDENCE_CHANGED): Material evidence or remediation changed.
-			// 8. PERSISTENT: Characteristics substantially unchanged.
+			// 2. REGRESSED (SEVERITY_WORSENED / severity_increased): Severity rank increased.
+			// 3. CHANGED (SEVERITY_DECREASED / severity_decreased): Severity rank decreased.
+			// 4. CHANGED: Non-severity attributes modified while severity unchanged.
+			// 5. UNCHANGED: Characteristics materially identical.
 
 			isBaseResolved := base.LifecycleStatus == string(LifecycleResolved)
 			if !isBaseResolved && base.EvidenceDetails.Details != nil {
@@ -1086,11 +1152,9 @@ func CompareFindingsWithOptions(baseline, current []report.Finding, opts Compari
 				isBaseResolved = true
 			}
 
-			curSevRank := report.SeverityRank(cur.Severity)
-			baseSevRank := report.SeverityRank(base.Severity)
-
 			var itemClassification DeltaClassification
 			var itemStatus FindingLifecycleStatus
+			var itemCanonicalDelta string
 			var itemRegressionReason string
 			var itemChangeReason string
 			var itemExplanation string
@@ -1099,61 +1163,59 @@ func CompareFindingsWithOptions(baseline, current []report.Finding, opts Compari
 				regressedCount++
 				itemClassification = DeltaRegressed
 				itemStatus = LifecycleRegressed
+				itemCanonicalDelta = ClassificationNew
 				itemRegressionReason = RegressionReappeared
 				itemExplanation = fmt.Sprintf("Vulnerability REGRESSED: previously resolved finding detected again (Fingerprint: %s%s).", fp[:16], targetFootprintNote)
 			} else if curSevRank > baseSevRank {
 				regressedCount++
+				severityIncreasedCount++
 				itemClassification = DeltaRegressed
 				itemStatus = LifecycleRegressed
+				itemCanonicalDelta = ClassificationSeverityIncreased
 				itemRegressionReason = RegressionSeverityWorsened
 				itemExplanation = fmt.Sprintf("Vulnerability REGRESSED: severity worsened from %s to %s (Fingerprint: %s%s).", base.Severity, cur.Severity, fp[:16], targetFootprintNote)
 			} else if curSevRank < baseSevRank {
 				changedCount++
 				activeCount++
 				recurringCount++
+				severityDecreasedCount++
 				itemClassification = DeltaChanged
 				itemStatus = LifecycleActive
+				itemCanonicalDelta = ClassificationSeverityDecreased
 				itemChangeReason = ChangeSeverityDecreased
 				itemExplanation = fmt.Sprintf("Vulnerability CHANGED: severity decreased from %s to %s (Fingerprint: %s%s).", base.Severity, cur.Severity, fp[:16], targetFootprintNote)
-			} else if curConfRank != baseConfRank || !strings.EqualFold(cur.Confidence, base.Confidence) {
+			} else if len(attributeChanges) > 0 {
 				changedCount++
 				activeCount++
 				recurringCount++
 				itemClassification = DeltaChanged
 				itemStatus = LifecycleActive
-				itemChangeReason = ChangeConfidenceChanged
-				itemExplanation = fmt.Sprintf("Vulnerability CHANGED: confidence changed from %s to %s (Fingerprint: %s%s).", base.Confidence, cur.Confidence, fp[:16], targetFootprintNote)
-			} else if cur.Status != base.Status || cur.Verification.Status != base.Verification.Status {
-				changedCount++
-				activeCount++
-				recurringCount++
-				itemClassification = DeltaChanged
-				itemStatus = LifecycleActive
-				itemChangeReason = ChangeStatusChanged
-				itemExplanation = fmt.Sprintf("Vulnerability CHANGED: status changed (%s) (Fingerprint: %s%s).", statusChange, fp[:16], targetFootprintNote)
-			} else if cur.Endpoint != base.Endpoint || (cur.Method != "" && base.Method != "" && !strings.EqualFold(cur.Method, base.Method)) {
-				changedCount++
-				activeCount++
-				recurringCount++
-				itemClassification = DeltaChanged
-				itemStatus = LifecycleActive
-				itemChangeReason = ChangeEndpointChanged
-				itemExplanation = fmt.Sprintf("Vulnerability CHANGED: endpoint/method changed from %s %s to %s %s (Fingerprint: %s%s).", base.Method, base.Endpoint, cur.Method, cur.Endpoint, fp[:16], targetFootprintNote)
-			} else if hasMaterialEvidenceChange(base, cur) {
-				changedCount++
-				activeCount++
-				recurringCount++
-				itemClassification = DeltaChanged
-				itemStatus = LifecycleActive
-				itemChangeReason = ChangeEvidenceChanged
-				itemExplanation = fmt.Sprintf("Vulnerability CHANGED: material evidence or remediation updated (Fingerprint: %s%s).", fp[:16], targetFootprintNote)
+				itemCanonicalDelta = ClassificationChanged
+				if containsString(attributeChanges, "title") {
+					itemChangeReason = "TITLE_CHANGED"
+					itemExplanation = fmt.Sprintf("Vulnerability CHANGED: title updated from %q to %q (Fingerprint: %s%s).", base.Title, cur.Title, fp[:16], targetFootprintNote)
+				} else if containsString(attributeChanges, "confidence") {
+					itemChangeReason = ChangeConfidenceChanged
+					itemExplanation = fmt.Sprintf("Vulnerability CHANGED: confidence changed from %s to %s (Fingerprint: %s%s).", base.Confidence, cur.Confidence, fp[:16], targetFootprintNote)
+				} else if containsString(attributeChanges, "status") {
+					itemChangeReason = ChangeStatusChanged
+					itemExplanation = fmt.Sprintf("Vulnerability CHANGED: status changed (%s) (Fingerprint: %s%s).", statusChange, fp[:16], targetFootprintNote)
+				} else if containsString(attributeChanges, "endpoint") {
+					itemChangeReason = ChangeEndpointChanged
+					itemExplanation = fmt.Sprintf("Vulnerability CHANGED: endpoint/method changed from %s %s to %s %s (Fingerprint: %s%s).", base.Method, base.Endpoint, cur.Method, cur.Endpoint, fp[:16], targetFootprintNote)
+				} else {
+					itemChangeReason = ChangeEvidenceChanged
+					itemExplanation = fmt.Sprintf("Vulnerability CHANGED: material evidence or remediation updated (Fingerprint: %s%s).", fp[:16], targetFootprintNote)
+				}
 			} else {
 				persistentCount++
 				activeCount++
 				recurringCount++
+				unchangedCount++
 				itemClassification = DeltaPersistent
 				itemStatus = LifecycleActive
-				itemExplanation = fmt.Sprintf("Active vulnerability persistent across assessments (Fingerprint: %s%s).", fp[:16], targetFootprintNote)
+				itemCanonicalDelta = ClassificationUnchanged
+				itemExplanation = fmt.Sprintf("Active vulnerability persistent and unchanged across assessments (Fingerprint: %s%s).", fp[:16], targetFootprintNote)
 			}
 
 			items = append(items, FindingComparisonItem{
@@ -1162,6 +1224,10 @@ func CompareFindingsWithOptions(baseline, current []report.Finding, opts Compari
 				RegressionReason: itemRegressionReason,
 				ChangeReason:     itemChangeReason,
 				LifecycleStatus:  itemStatus,
+				CanonicalDelta:   itemCanonicalDelta,
+				SeverityDelta:    itemSeverityDelta,
+				AttributeChanges: attributeChanges,
+				IdentityBasis:    idBasis,
 				Title:            cur.Title,
 				Severity:         cur.Severity,
 				Category:         cur.Category,
@@ -1192,7 +1258,9 @@ func CompareFindingsWithOptions(baseline, current []report.Finding, opts Compari
 					Fingerprint:      fp,
 					Classification:   DeltaRegressed,
 					LifecycleStatus:  LifecycleRegressed,
+					CanonicalDelta:   ClassificationNew,
 					RegressionReason: RegressionReappeared,
+					IdentityBasis:    idBasis,
 					Title:            cur.Title,
 					Severity:         cur.Severity,
 					Category:         cur.Category,
@@ -1208,6 +1276,8 @@ func CompareFindingsWithOptions(baseline, current []report.Finding, opts Compari
 					Fingerprint:     fp,
 					Classification:  DeltaNew,
 					LifecycleStatus: LifecycleNew,
+					CanonicalDelta:  ClassificationNew,
+					IdentityBasis:   idBasis,
 					Title:           cur.Title,
 					Severity:        cur.Severity,
 					Category:        cur.Category,
@@ -1238,10 +1308,13 @@ func CompareFindingsWithOptions(baseline, current []report.Finding, opts Compari
 			if !opts.CurrentCompleted || opts.Inconclusive {
 				unassessedCount++
 				unverifiedCount++
+				unknownCount++
 				items = append(items, FindingComparisonItem{
 					Fingerprint:     fp,
 					Classification:  DeltaUnverified,
 					LifecycleStatus: LifecycleUnassessed,
+					CanonicalDelta:  ClassificationUnknown,
+					IdentityBasis:   "CANONICAL_FINGERPRINT",
 					Title:           base.Title,
 					Severity:        base.Severity,
 					Category:        base.Category,
@@ -1258,6 +1331,7 @@ func CompareFindingsWithOptions(baseline, current []report.Finding, opts Compari
 			if len(opts.ScopedTargets) > 0 && !isTargetInScope(base, opts.ScopedTargets) {
 				unassessedCount++
 				unverifiedCount++
+				unknownCount++
 				unscoped := findUnscopedTarget(base, opts.ScopedTargets)
 				if unscoped == "" {
 					unscoped = base.Target
@@ -1266,6 +1340,8 @@ func CompareFindingsWithOptions(baseline, current []report.Finding, opts Compari
 					Fingerprint:     fp,
 					Classification:  DeltaUnverified,
 					LifecycleStatus: LifecycleUnassessed,
+					CanonicalDelta:  ClassificationUnknown,
+					IdentityBasis:   "CANONICAL_FINGERPRINT",
 					Title:           base.Title,
 					Severity:        base.Severity,
 					Category:        base.Category,
@@ -1292,10 +1368,13 @@ func CompareFindingsWithOptions(baseline, current []report.Finding, opts Compari
 				if hasFailed {
 					unassessedCount++
 					unverifiedCount++
+					unknownCount++
 					items = append(items, FindingComparisonItem{
 						Fingerprint:     fp,
 						Classification:  DeltaUnverified,
 						LifecycleStatus: LifecycleUnassessed,
+						CanonicalDelta:  ClassificationUnknown,
+						IdentityBasis:   "CANONICAL_FINGERPRINT",
 						Title:           base.Title,
 						Severity:        base.Severity,
 						Category:        base.Category,
@@ -1321,10 +1400,13 @@ func CompareFindingsWithOptions(baseline, current []report.Finding, opts Compari
 				if hasSkipped {
 					unassessedCount++
 					unverifiedCount++
+					unknownCount++
 					items = append(items, FindingComparisonItem{
 						Fingerprint:     fp,
 						Classification:  DeltaUnverified,
 						LifecycleStatus: LifecycleUnassessed,
+						CanonicalDelta:  ClassificationUnknown,
+						IdentityBasis:   "CANONICAL_FINGERPRINT",
 						Title:           base.Title,
 						Severity:        base.Severity,
 						Category:        base.Category,
@@ -1351,10 +1433,13 @@ func CompareFindingsWithOptions(baseline, current []report.Finding, opts Compari
 				if !allAssessed {
 					unassessedCount++
 					unverifiedCount++
+					unknownCount++
 					items = append(items, FindingComparisonItem{
 						Fingerprint:     fp,
 						Classification:  DeltaUnverified,
 						LifecycleStatus: LifecycleUnassessed,
+						CanonicalDelta:  ClassificationUnknown,
+						IdentityBasis:   "CANONICAL_FINGERPRINT",
 						Title:           base.Title,
 						Severity:        base.Severity,
 						Category:        base.Category,
@@ -1380,10 +1465,13 @@ func CompareFindingsWithOptions(baseline, current []report.Finding, opts Compari
 				if hasFailedCat {
 					unassessedCount++
 					unverifiedCount++
+					unknownCount++
 					items = append(items, FindingComparisonItem{
 						Fingerprint:     fp,
 						Classification:  DeltaUnverified,
 						LifecycleStatus: LifecycleUnassessed,
+						CanonicalDelta:  ClassificationUnknown,
+						IdentityBasis:   "CANONICAL_FINGERPRINT",
 						Title:           base.Title,
 						Severity:        base.Severity,
 						Category:        base.Category,
@@ -1407,10 +1495,13 @@ func CompareFindingsWithOptions(baseline, current []report.Finding, opts Compari
 				if hasSkippedCat {
 					unassessedCount++
 					unverifiedCount++
+					unknownCount++
 					items = append(items, FindingComparisonItem{
 						Fingerprint:     fp,
 						Classification:  DeltaUnverified,
 						LifecycleStatus: LifecycleUnassessed,
+						CanonicalDelta:  ClassificationUnknown,
+						IdentityBasis:   "CANONICAL_FINGERPRINT",
 						Title:           base.Title,
 						Severity:        base.Severity,
 						Category:        base.Category,
@@ -1427,10 +1518,13 @@ func CompareFindingsWithOptions(baseline, current []report.Finding, opts Compari
 			if len(opts.ScopedCategories) > 0 && !isCategoryInScope(base.Category, opts.ScopedCategories) {
 				unassessedCount++
 				unverifiedCount++
+				unknownCount++
 				items = append(items, FindingComparisonItem{
 					Fingerprint:     fp,
 					Classification:  DeltaUnverified,
 					LifecycleStatus: LifecycleUnassessed,
+					CanonicalDelta:  ClassificationUnknown,
+					IdentityBasis:   "CANONICAL_FINGERPRINT",
 					Title:           base.Title,
 					Severity:        base.Severity,
 					Category:        base.Category,
@@ -1450,6 +1544,8 @@ func CompareFindingsWithOptions(baseline, current []report.Finding, opts Compari
 				Fingerprint:     fp,
 				Classification:  DeltaResolved,
 				LifecycleStatus: LifecycleResolved,
+				CanonicalDelta:  ClassificationResolved,
+				IdentityBasis:   "CANONICAL_FINGERPRINT",
 				Title:           base.Title,
 				Severity:        base.Severity,
 				Category:        base.Category,
@@ -1485,22 +1581,35 @@ func CompareFindingsWithOptions(baseline, current []report.Finding, opts Compari
 	}
 
 	return AssessmentComparison{
-		ComparisonStatus:  comparisonStatus,
-		ComparisonReason:  comparisonReason,
-		BaselineCount:     len(baseline),
-		CurrentCount:      len(current),
-		NewCount:          newCount,
-		ActiveCount:       activeCount,
-		PersistentCount:   persistentCount,
-		ChangedCount:      changedCount,
-		RecurringCount:    recurringCount,
-		ResolvedCount:     resolvedCount,
-		RegressedCount:    regressedCount,
-		UnassessedCount:   unassessedCount,
-		UnverifiedCount:   unverifiedCount,
-		NetRiskScoreDelta: netScoreDelta,
-		Items:             items,
+		ComparisonStatus:       comparisonStatus,
+		ComparisonReason:       comparisonReason,
+		BaselineCount:          len(baseline),
+		CurrentCount:           len(current),
+		NewCount:               newCount,
+		ActiveCount:            activeCount,
+		PersistentCount:        persistentCount,
+		ChangedCount:           changedCount,
+		RecurringCount:         recurringCount,
+		ResolvedCount:          resolvedCount,
+		RegressedCount:         regressedCount,
+		UnassessedCount:        unassessedCount,
+		UnverifiedCount:        unverifiedCount,
+		SeverityIncreasedCount: severityIncreasedCount,
+		SeverityDecreasedCount: severityDecreasedCount,
+		UnchangedCount:         unchangedCount,
+		UnknownCount:           unknownCount,
+		NetRiskScoreDelta:      netScoreDelta,
+		Items:                  items,
 	}
+}
+
+func containsString(slice []string, s string) bool {
+	for _, item := range slice {
+		if item == s {
+			return true
+		}
+	}
+	return false
 }
 
 // extractFindingTargets extracts all targets associated with a finding, including its primary Target,

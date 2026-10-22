@@ -55,7 +55,15 @@ func runScan(args []string) int {
 		allowLoopback  = cfgStore.AllowLoopback
 		insecure       = cfgStore.InsecureSkipVerify
 		activeVerif    = cfgStore.ActiveVerification
-		targets        []string
+		notifyEnabled  = cfgStore.Notification.Enabled
+		notifyExplicit bool
+		webhookFlagURL string
+		notifyProvider       string
+		notifySecret         string
+		notifyPreviousSecret string
+		notifyRequireSigning bool
+		notifyMinSev         string
+		targets              []string
 	)
 
 	// Custom argument parser ensuring flag validation, clean order independence, and target extraction
@@ -342,6 +350,101 @@ func runScan(args []string) int {
 		}
 		if arg == "--active=false" || arg == "--active-verification=false" || arg == "--no-active" {
 			activeVerif = false
+			continue
+		}
+
+		// --notify
+		if arg == "--notify" || arg == "--notify=true" {
+			notifyEnabled = true
+			notifyExplicit = true
+			continue
+		}
+		if arg == "--no-notify" || arg == "--notify=false" {
+			notifyEnabled = false
+			notifyExplicit = true
+			continue
+		}
+
+		// --webhook
+		if arg == "--webhook" {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				fmt.Fprintf(os.Stderr, "[-] error: --webhook requires a URL argument\n")
+				return 2
+			}
+			i++
+			webhookFlagURL = args[i]
+			notifyEnabled = true
+			continue
+		}
+		if strings.HasPrefix(arg, "--webhook=") {
+			webhookFlagURL = strings.TrimPrefix(arg, "--webhook=")
+			notifyEnabled = true
+			continue
+		}
+
+		// --notify-provider
+		if arg == "--notify-provider" {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				fmt.Fprintf(os.Stderr, "[-] error: --notify-provider requires a provider type argument (webhook, slack, discord, teams)\n")
+				return 2
+			}
+			i++
+			notifyProvider = args[i]
+			continue
+		}
+		if strings.HasPrefix(arg, "--notify-provider=") {
+			notifyProvider = strings.TrimPrefix(arg, "--notify-provider=")
+			continue
+		}
+
+		// --notify-secret
+		if arg == "--notify-secret" {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				fmt.Fprintf(os.Stderr, "[-] error: --notify-secret requires an HMAC secret argument\n")
+				return 2
+			}
+			i++
+			notifySecret = args[i]
+			continue
+		}
+		if strings.HasPrefix(arg, "--notify-secret=") {
+			notifySecret = strings.TrimPrefix(arg, "--notify-secret=")
+			continue
+		}
+
+		// --notify-min-severity
+		if arg == "--notify-min-severity" {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				fmt.Fprintf(os.Stderr, "[-] error: --notify-min-severity requires a severity level (CRITICAL, HIGH, MEDIUM, LOW, INFO)\n")
+				return 2
+			}
+			i++
+			notifyMinSev = args[i]
+			continue
+		}
+		if strings.HasPrefix(arg, "--notify-min-severity=") {
+			notifyMinSev = strings.TrimPrefix(arg, "--notify-min-severity=")
+			continue
+		}
+
+		// --notify-previous-secret
+		if arg == "--notify-previous-secret" {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				fmt.Fprintf(os.Stderr, "[-] error: --notify-previous-secret requires a secret argument\n")
+				return 2
+			}
+			i++
+			notifyPreviousSecret = args[i]
+			continue
+		}
+		if strings.HasPrefix(arg, "--notify-previous-secret=") {
+			notifyPreviousSecret = strings.TrimPrefix(arg, "--notify-previous-secret=")
+			continue
+		}
+
+		// --notify-require-signing / --require-signing
+		if arg == "--notify-require-signing" || arg == "--require-signing" {
+			notifyRequireSigning = true
 			continue
 		}
 
@@ -964,40 +1067,53 @@ func runScan(args []string) int {
 			fmt.Fprintf(os.Stderr, "[-] Assessment status: FAILED (Target(s) could not be reached).\n")
 		}
 
-		if outStr != "" || jsonPath != "" || htmlStr != "" || sarifPath != "" {
-			duration := time.Since(startTime)
-			rep := report.BuildMultiTargetReport(targets, nil)
-			rep.Duration = duration.Round(time.Millisecond).String()
-			rep.DurationMs = duration.Milliseconds()
-			rep.CompletionStatus = assessmentState
-			rep.RiskScore = 0
-			rep.RiskLevel = "UNAVAILABLE"
-			rep.RiskScoreAvailable = false
-			rep.Summary.ScoreAvailable = false
-			reqCount := int(rateLimitedTransport.TotalRequests())
-			rep.RequestCount = reqCount
-			if rep.Metadata == nil {
-				rep.Metadata = make(map[string]any)
-			}
-			rep.Metadata["crawled_assets_count"] = 0
-			rep.Metadata["transport_requests_count"] = reqCount
-			rep.Metadata["wire_requests_count"] = reqCount
-			rep.Metadata["peak_concurrency"] = rateLimitedTransport.PeakConcurrency()
-			report.RecalculateReportRisk(&rep)
-
-			if outStr != "" {
-				_ = report.WriteJSON(rep, outStr)
-			}
-			if jsonPath != "" {
-				_ = report.WriteJSON(rep, jsonPath)
-			}
-			if htmlStr != "" {
-				_ = report.WriteHTML(rep, htmlStr)
-			}
-			if sarifPath != "" {
-				_ = report.WriteSARIF(rep, sarifPath)
-			}
+		duration := time.Since(startTime)
+		rep := report.BuildMultiTargetReport(targets, nil)
+		rep.Duration = duration.Round(time.Millisecond).String()
+		rep.DurationMs = duration.Milliseconds()
+		rep.CompletionStatus = assessmentState
+		rep.RiskScore = 0
+		rep.RiskLevel = "UNAVAILABLE"
+		rep.RiskScoreAvailable = false
+		rep.Summary.ScoreAvailable = false
+		reqCount := int(rateLimitedTransport.TotalRequests())
+		rep.RequestCount = reqCount
+		if rep.Metadata == nil {
+			rep.Metadata = make(map[string]any)
 		}
+		rep.Metadata["crawled_assets_count"] = 0
+		rep.Metadata["transport_requests_count"] = reqCount
+		rep.Metadata["wire_requests_count"] = reqCount
+		rep.Metadata["peak_concurrency"] = rateLimitedTransport.PeakConcurrency()
+		report.RecalculateReportRisk(&rep)
+
+		if outStr != "" {
+			_ = report.WriteJSON(rep, outStr)
+		}
+		if jsonPath != "" {
+			_ = report.WriteJSON(rep, jsonPath)
+		}
+		if htmlStr != "" {
+			_ = report.WriteHTML(rep, htmlStr)
+		}
+		if sarifPath != "" {
+			_ = report.WriteSARIF(rep, sarifPath)
+		}
+
+		dispatchReportNotification(rep, cfgStore, scanNotifyOptions{
+			enabled:        notifyEnabled,
+			explicit:       notifyExplicit,
+			webhookURL:     webhookFlagURL,
+			provider:       notifyProvider,
+			secret:         notifySecret,
+			previousSecret: notifyPreviousSecret,
+			requireSigning: notifyRequireSigning,
+			minSeverity:    notifyMinSev,
+			allowPrivate:   allowPrivate,
+			allowLoopback:  allowLoopback,
+			insecure:       insecure,
+			quiet:          quiet,
+		})
 		return 2
 	} else if blockedCount > 0 || failedCount > 0 {
 		assessmentState = "PARTIAL"
@@ -1153,6 +1269,21 @@ func runScan(args []string) int {
 		}
 	}
 
+	dispatchReportNotification(rep, cfgStore, scanNotifyOptions{
+		enabled:        notifyEnabled,
+		explicit:       notifyExplicit,
+		webhookURL:     webhookFlagURL,
+		provider:       notifyProvider,
+		secret:         notifySecret,
+		previousSecret: notifyPreviousSecret,
+		requireSigning: notifyRequireSigning,
+		minSeverity:    notifyMinSev,
+		allowPrivate:   allowPrivate,
+		allowLoopback:  allowLoopback,
+		insecure:       insecure,
+		quiet:          quiet,
+	})
+
 	if pol != nil {
 		hasViolation := policyDecision != nil && !policyDecision.Passed
 		cls := clierror.ClassifyAssessment(rep.CompletionStatus, nil, hasViolation, policyErr, exportErrs...)
@@ -1190,6 +1321,13 @@ func printScanHelp() {
 	fmt.Println("  --allow-loopback            Allow connections to loopback addresses (127.0.0.0/8, ::1)")
 	fmt.Println("  --insecure                  Skip TLS certificate verification (default: false)")
 	fmt.Println("  --active                    Enable active vulnerability verification (default: false)")
+	fmt.Println("  --notify                    Send completion notification upon assessment termination")
+	fmt.Println("  --webhook <url>             Destination HTTPS webhook URL for notification dispatch")
+	fmt.Println("  --notify-provider <type>    Notification transport provider (webhook, slack, discord, teams)")
+	fmt.Println("  --notify-secret <secret>    HMAC-SHA256 signature secret (supports env:VAR_NAME to avoid process exposure)")
+	fmt.Println("  --notify-previous-secret <secret> Previous HMAC secret for key rotation (supports env:VAR_NAME)")
+	fmt.Println("  --notify-require-signing    Fail closed if webhook notifications cannot be cryptographically signed")
+	fmt.Println("  --notify-min-severity <sev> Minimum finding severity threshold to trigger alert")
 }
 
 func parseTimeout(s string) (time.Duration, error) {

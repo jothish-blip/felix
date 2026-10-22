@@ -2,6 +2,7 @@ package report
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"net/url"
@@ -285,6 +286,8 @@ func buildCommercialFinding(
 		RiskContribution:    riskContrib,
 		Category:            f.Category,
 		Source:              f.Source,
+		Framework:           f.Framework,
+		FrameworkVersion:    f.FrameworkVersion,
 		Status:              NormalizeFindingStatus(f.Status),
 		AnalysisMethod:      NormalizeAnalysisMethod(f.AnalysisMethod),
 		SyntheticFixture:    synthetic,
@@ -700,6 +703,7 @@ func buildCommercialObservation(f Finding, synthetic bool) CommercialObservation
 
 func buildAttackSurface(rep Report) CommercialAttackSurface {
 	assetMap := make(map[string]*CommercialAttackSurfaceAsset)
+	idMap := make(map[string]string) // assetID -> URL for collision-free uniqueness
 	byType := make(map[string]int)
 
 	// Ingest from target list
@@ -709,6 +713,12 @@ func buildAttackSurface(rep Report) CommercialAttackSurface {
 			continue
 		}
 		id := "AST-" + shortHash(cleanT)
+		if origURL, collision := idMap[id]; collision && origURL != cleanT {
+			fullH := sha256.Sum256([]byte(cleanT))
+			id = fmt.Sprintf("AST-%s", hex.EncodeToString(fullH[:12]))
+		}
+		idMap[id] = cleanT
+
 		assetMap[cleanT] = &CommercialAttackSurfaceAsset{
 			AssetID:               id,
 			URL:                   cleanT,
@@ -720,12 +730,37 @@ func buildAttackSurface(rep Report) CommercialAttackSurface {
 		}
 	}
 
+	// Ingest from mobile scope if present
+	if rep.HasMobileScope() {
+		pkgName := rep.MobilePackageName()
+		if pkgName != "" && pkgName != "Not specified" {
+			if _, exists := assetMap[pkgName]; !exists {
+				id := "AST-" + shortHash(pkgName)
+				if origURL, collision := idMap[id]; collision && origURL != pkgName {
+					fullH := sha256.Sum256([]byte(pkgName))
+					id = fmt.Sprintf("AST-%s", hex.EncodeToString(fullH[:12]))
+				}
+				idMap[id] = pkgName
+				assetMap[pkgName] = &CommercialAttackSurfaceAsset{
+					AssetID:               id,
+					URL:                   pkgName,
+					AssetType:             "MOBILE_APPLICATION",
+					DiscoverySource:       "apk_intake",
+					AssessmentState:       "ASSESSED",
+					AuthenticationContext: "Android Application Package Sandbox",
+					ExposureInfo:          fmt.Sprintf("Android APK (SHA-256: %s)", rep.MobileSHA256()),
+				}
+			}
+		}
+	}
+
 	// Ingest from findings
 	for _, f := range rep.Findings {
 		rawURL := f.Endpoint
 		if rawURL == "" {
 			rawURL = f.Target
 		}
+		rawURL = strings.TrimSpace(rawURL)
 		if rawURL == "" {
 			continue
 		}
@@ -733,9 +768,15 @@ func buildAttackSurface(rep Report) CommercialAttackSurface {
 		existing, exists := assetMap[rawURL]
 		if !exists {
 			id := "AST-" + shortHash(rawURL)
+			if origURL, collision := idMap[id]; collision && origURL != rawURL {
+				fullH := sha256.Sum256([]byte(rawURL))
+				id = fmt.Sprintf("AST-%s", hex.EncodeToString(fullH[:12]))
+			}
+			idMap[id] = rawURL
+
 			assetType := classifyAssetType(rawURL)
 			assessmentState := "ASSESSED"
-			if f.Verification.Status == VerificationObserved {
+			if f.Verification.Status == VerificationObserved || f.AnalysisMethod == AnalysisMethodStatic {
 				assessmentState = "DISCOVERED_ONLY"
 			}
 
@@ -750,6 +791,11 @@ func buildAttackSurface(rep Report) CommercialAttackSurface {
 				HTTPStatus:            f.EvidenceDetails.HTTPStatus,
 			}
 			assetMap[rawURL] = existing
+		} else {
+			// Upgrade state if an active finding tests an existing discovered asset
+			if existing.AssessmentState == "DISCOVERED_ONLY" && (f.AnalysisMethod == AnalysisMethodActive || f.Verification.Status == VerificationVerified || f.Status == FindingStatusConfirmed) {
+				existing.AssessmentState = "ASSESSED"
+			}
 		}
 
 		existing.AssociatedFindingIDs = append(existing.AssociatedFindingIDs, f.ID)
@@ -805,25 +851,53 @@ func buildAttackSurface(rep Report) CommercialAttackSurface {
 }
 
 func classifyAssetType(rawURL string) string {
+	lowerURL := strings.ToLower(rawURL)
+	if strings.HasSuffix(lowerURL, ".apk") || strings.HasPrefix(lowerURL, "apk://") || strings.HasPrefix(lowerURL, "package:") || strings.HasPrefix(lowerURL, "android:") {
+		return "MOBILE_APPLICATION"
+	}
+
+	isCloud := strings.HasPrefix(lowerURL, "s3://") ||
+		strings.HasPrefix(lowerURL, "mongodb://") ||
+		strings.HasPrefix(lowerURL, "mongodb+srv://") ||
+		strings.HasPrefix(lowerURL, "redis://") ||
+		strings.HasPrefix(lowerURL, "rediss://") ||
+		strings.HasPrefix(lowerURL, "postgres://") ||
+		strings.HasPrefix(lowerURL, "postgresql://") ||
+		strings.HasPrefix(lowerURL, "mysql://") ||
+		strings.Contains(lowerURL, "supabase.co") ||
+		strings.Contains(lowerURL, ".amazonaws.com") ||
+		strings.Contains(lowerURL, "firebaseio.com") ||
+		strings.Contains(lowerURL, "firebasedatabase.app") ||
+		strings.Contains(lowerURL, "firestore.googleapis.com") ||
+		strings.Contains(lowerURL, "storage.googleapis.com") ||
+		strings.Contains(lowerURL, "blob.core.windows.net") ||
+		strings.Contains(lowerURL, ":9200") ||
+		strings.Contains(lowerURL, ":9000") ||
+		strings.Contains(lowerURL, ":8081") ||
+		strings.Contains(lowerURL, ":27017") ||
+		strings.Contains(lowerURL, ":6379") ||
+		strings.Contains(lowerURL, ":5432") ||
+		strings.Contains(lowerURL, ":3306")
+
+	if isCloud {
+		return "CLOUD_RESOURCE"
+	}
+
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Host == "" {
-		if strings.HasPrefix(rawURL, "s3://") || strings.Contains(rawURL, ".amazonaws.com") ||
-			strings.Contains(rawURL, "supabase.co") || strings.Contains(rawURL, "firebaseio.com") {
-			return "CLOUD_RESOURCE"
-		}
 		return "WEB_ROUTE"
 	}
 
 	path := strings.ToLower(u.Path)
 	switch {
-	case strings.Contains(rawURL, "supabase.co") || strings.Contains(rawURL, ".amazonaws.com") ||
-		strings.Contains(rawURL, "storage.googleapis.com") || strings.Contains(rawURL, "blob.core.windows.net"):
-		return "CLOUD_RESOURCE"
 	case strings.Contains(path, "/auth") || strings.Contains(path, "/login") ||
 		strings.Contains(path, "/token") || strings.Contains(path, "/oauth") || strings.Contains(path, "/session"):
 		return "AUTH_ENTRYPOINT"
 	case strings.HasPrefix(path, "/api") || strings.Contains(path, "/v1/") ||
-		strings.Contains(path, "/v2/") || strings.Contains(path, "/graphql"):
+		strings.Contains(path, "/v2/") || strings.Contains(path, "/graphql") ||
+		strings.Contains(path, "/actuator") || strings.Contains(path, "/debug/") ||
+		strings.Contains(path, "/telescope") || strings.Contains(path, "/openapi") ||
+		strings.Contains(path, "/docs") || strings.Contains(path, "/redoc") || strings.Contains(path, "/swagger"):
 		return "API_ENDPOINT"
 	case strings.HasSuffix(path, ".js") || strings.HasSuffix(path, ".map") ||
 		strings.HasSuffix(path, ".css") || strings.HasSuffix(path, ".json"):
@@ -881,6 +955,9 @@ func buildAssessmentScope(
 			cloudResources = append(cloudResources, a.URL)
 		}
 	}
+	for _, s := range rep.CloudServicesAssessed() {
+		cloudResources = append(cloudResources, s)
+	}
 
 	provenance := "LIVE"
 	if hasSynthetic {
@@ -891,11 +968,20 @@ func buildAssessmentScope(
 	completedChecks := rep.Summary.VerifiedCount + rep.Summary.DetectedCount + rep.Summary.NotExposedCount
 	inconclusiveChecks := rep.Summary.InconclusiveCount
 
+	assessedCount := rep.Summary.AttemptedCount
+	if assessedCount == 0 {
+		for _, a := range attackSurface.Assets {
+			if a.AssessmentState == "ASSESSED" {
+				assessedCount++
+			}
+		}
+	}
+
 	return CommercialAssessmentScope{
 		InScopeDomains:           domains,
 		InScopeURLs:              urls,
 		DiscoveredEndpointsCount: attackSurface.TotalAssets,
-		AssessedEndpointsCount:   rep.Summary.AttemptedCount,
+		AssessedEndpointsCount:   assessedCount,
 		FrontendAssetsCount:      attackSurface.FrontendAssetsCount,
 		APIEndpointsCount:        attackSurface.APIEndpointsCount,
 		WebRoutesCount:           attackSurface.WebRoutesCount,
@@ -989,13 +1075,11 @@ func buildRiskOverview(
 		modelDesc += fmt.Sprintf(" %s.", breakdown.AnchorRationale)
 	}
 
-	status := rep.CompletionStatus
+	status := strings.ToUpper(strings.TrimSpace(rep.CompletionStatus))
 	isAvailable := rep.RiskScoreAvailable
-	if status == "BLOCKED" || status == "FAILED" {
+	if status == "BLOCKED" || status == "FAILED" || status == "CANCELLED" || status == "INTERRUPTED" || status == "SKIPPED" {
 		isAvailable = false
-	} else if status != "" {
-		isAvailable = true
-	} else if rep.RiskLevel == "UNAVAILABLE" {
+	} else if rep.RiskLevel == "UNAVAILABLE" || !rep.RiskScoreAvailable {
 		isAvailable = false
 	} else {
 		isAvailable = true
@@ -1107,6 +1191,17 @@ func buildExecutiveSummary(
 	if count, ok := attackSurface.AssetsByType["CLOUD_RESOURCE"]; ok && count > 0 {
 		highlights = append(highlights, fmt.Sprintf("%d cloud backend or storage resources cataloged.", count))
 	}
+	if frameworks := rep.DetectedFrameworks(); len(frameworks) > 0 {
+		var fwNames []string
+		for _, fw := range frameworks {
+			if fw.Version != "" {
+				fwNames = append(fwNames, fmt.Sprintf("%s (v%s)", fw.Name, fw.Version))
+			} else {
+				fwNames = append(fwNames, fw.Name)
+			}
+		}
+		highlights = append(highlights, fmt.Sprintf("Backend technologies identified: %s.", strings.Join(fwNames, ", ")))
+	}
 
 	var keyConcerns []string
 	for _, vf := range verified {
@@ -1146,7 +1241,11 @@ func buildExecutiveSummary(
 	} else if status == "FAILED" {
 		posture = "Assessment FAILED due to network reachability or transport errors. Felix could not connect to target endpoints. Security posture could not be evaluated."
 	} else if len(verified) == 0 && len(detected) == 0 {
-		posture = "No security findings were identified within the evaluated scope. Important note: The absence of verified findings does not guarantee that the target is completely secure against unassessed attack classes, authenticated privilege boundaries, or internal network vulnerabilities."
+		if rep.HasMobileScope() {
+			posture = "No security findings were identified during static APK analysis within the evaluated ruleset. Important note: The absence of verified findings from static analysis does not guarantee that the application is completely secure against unassessed vulnerability classes, dynamic runtime weaknesses, or backend service flaws."
+		} else {
+			posture = "No security findings were identified within the evaluated scope. Important note: The absence of verified findings does not guarantee that the target is completely secure against unassessed attack classes, authenticated privilege boundaries, or internal network vulnerabilities."
+		}
 	} else if len(verified) == 0 {
 		posture = fmt.Sprintf("Felix recorded %d detected findings, %d observations, and %d defended checks, but zero findings reached empirical verification. The overall risk score is %d/100 (%s). Unverified detections remain hypotheses pending manual engineering review.",
 			rep.Summary.DetectedCount, rep.Summary.ObservedCount, rep.Summary.NotExposedCount, riskScore, riskLevel)
@@ -1155,12 +1254,17 @@ func buildExecutiveSummary(
 			rep.Summary.VerifiedCount, rep.Summary.DetectedCount, rep.Summary.ObservedCount, rep.Summary.NotExposedCount, riskScore, riskLevel)
 	}
 
+	scopeSummary := fmt.Sprintf("Authorized web security evaluation of %s spanning %d targets.", target, len(rep.Targets))
+	if rep.HasMobileScope() {
+		scopeSummary = fmt.Sprintf("Static security analysis of Android application %s (SHA-256: %s).", rep.MobilePackageName(), rep.MobileSHA256())
+	}
+
 	return CommercialExecutiveSummary{
 		AssessmentID:            rep.ReportID(),
 		Target:                  target,
 		Targets:                 rep.Targets,
 		Timestamp:               rep.Timestamp,
-		ScopeSummary:            fmt.Sprintf("Authorized web security evaluation of %s spanning %d targets.", target, len(rep.Targets)),
+		ScopeSummary:            scopeSummary,
 		CompletionStatus:        status,
 		AssetsDiscoveredCount:   attackSurface.TotalAssets,
 		FrontendAssetsCount:     attackSurface.FrontendAssetsCount,

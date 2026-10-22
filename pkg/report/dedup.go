@@ -696,10 +696,10 @@ func mergeDuplicateLegacy(existing *Finding, norm Finding) {
 	}
 
 	// Merge Framework classification fields
-	if existing.Framework == "" && norm.Framework != "" {
+	if (existing.Framework == "" || existing.Framework == "generic") && norm.Framework != "" && norm.Framework != "generic" {
 		existing.Framework = norm.Framework
 	}
-	if existing.FrameworkVersion == "" && norm.FrameworkVersion != "" {
+	if (existing.FrameworkVersion == "" || existing.FrameworkVersion == "generic") && norm.FrameworkVersion != "" && norm.FrameworkVersion != "generic" {
 		existing.FrameworkVersion = norm.FrameworkVersion
 	}
 	if existing.ClassificationOutcome == "" || (norm.ClassificationOutcome == OutcomeConfirmed && existing.ClassificationOutcome != OutcomeConfirmed) {

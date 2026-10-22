@@ -29,31 +29,38 @@ type ChangeSummary struct {
 
 // ChangeClassificationCounts details the count of findings by delta classification.
 type ChangeClassificationCounts struct {
-	TotalBaseline   int `json:"total_baseline"`
-	TotalComparison int `json:"total_comparison"`
-	New             int `json:"new"`
-	Resolved        int `json:"resolved"`
-	Persistent      int `json:"persistent"`
-	Regressed       int `json:"regressed"`
-	Changed         int `json:"changed"`
-	Unverified      int `json:"unverified"`
+	TotalBaseline     int `json:"total_baseline"`
+	TotalComparison   int `json:"total_comparison"`
+	New               int `json:"new"`
+	Resolved          int `json:"resolved"`
+	Persistent        int `json:"persistent"`
+	Regressed         int `json:"regressed"`
+	Changed           int `json:"changed"`
+	Unverified        int `json:"unverified"`
+	SeverityIncreased int `json:"severity_increased"`
+	SeverityDecreased int `json:"severity_decreased"`
+	Unchanged         int `json:"unchanged"`
+	Unknown           int `json:"unknown"`
 }
 
 // ChangeFindingItem captures essential finding identity, classification, and change context.
 type ChangeFindingItem struct {
-	FindingID      string `json:"finding_id,omitempty"`
-	OriginalID     string `json:"original_id,omitempty"`
-	Fingerprint    string `json:"fingerprint"`
-	Title          string `json:"title"`
-	Severity       string `json:"severity"`
-	Category       string `json:"category"`
-	TargetURL      string `json:"target_url"`
-	Endpoint       string `json:"endpoint"`
-	HTTPMethod     string `json:"http_method"`
-	Classification string `json:"classification"` // NEW, RESOLVED, PERSISTENT, REGRESSED, CHANGED, UNVERIFIED
-	Reason         string `json:"reason,omitempty"`         // Regression or change reason
-	SeverityChange string `json:"severity_change,omitempty"` // e.g. "MEDIUM -> HIGH"
-	Explanation    string `json:"explanation"`
+	FindingID        string   `json:"finding_id,omitempty"`
+	OriginalID       string   `json:"original_id,omitempty"`
+	Fingerprint      string   `json:"fingerprint"`
+	Title            string   `json:"title"`
+	Severity         string   `json:"severity"`
+	Category         string   `json:"category"`
+	TargetURL        string   `json:"target_url"`
+	Endpoint         string   `json:"endpoint"`
+	HTTPMethod       string   `json:"http_method"`
+	Classification   string   `json:"classification"` // NEW, RESOLVED, PERSISTENT, REGRESSED, CHANGED, UNVERIFIED
+	CanonicalDelta   string   `json:"canonical_delta,omitempty"`
+	SeverityDelta    string   `json:"severity_delta,omitempty"`
+	AttributeChanges []string `json:"attribute_changes,omitempty"`
+	Reason           string   `json:"reason,omitempty"`         // Regression or change reason
+	SeverityChange   string   `json:"severity_change,omitempty"` // e.g. "MEDIUM -> HIGH"
+	Explanation      string   `json:"explanation"`
 }
 
 // FormatText generates a clean, readable terminal text summary.

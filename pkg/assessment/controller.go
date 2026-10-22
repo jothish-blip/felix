@@ -1059,8 +1059,29 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 		}
 	}
 
-	// 12. Generate Unified Report
+	// 12. Finalize Status
+	finalStatus := StatusCompleted
+	if len(failedTargets) > 0 {
+		if len(assessedTargets) == 0 {
+			finalStatus = StatusFailed
+			execRecord.ErrorMessage = "All targets failed during crawl"
+		} else {
+			finalStatus = StatusCompletedWithErrors
+			execRecord.ErrorMessage = fmt.Sprintf("%d of %d target(s) encountered crawl failures", len(failedTargets), len(runnableTargets))
+		}
+	}
+	execRecord.Status = finalStatus
+	execRecord.FindingCount = len(allAssessmentFindings)
+
+	// 13. Generate Unified Report
 	rep := report.BuildMultiTargetReport(runnableTargets, allReportFindings)
+	rep.CompletionStatus = string(finalStatus)
+	if finalStatus == StatusFailed {
+		rep.RiskScore = 0
+		rep.RiskLevel = "UNAVAILABLE"
+		rep.RiskScoreAvailable = false
+		rep.Summary.ScoreAvailable = false
+	}
 	if verSummary != nil {
 		if vMap, err := json.Marshal(verSummary); err == nil {
 			var m map[string]any
@@ -1086,7 +1107,16 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 	rep.Metadata["execution_id"] = execID
 	rep.Metadata["client_id"] = asm.ClientID
 
-	// 11. Report File Export
+	// Reconcile and validate report integrity before export
+	if valErr := report.ValidateReportIntegrity(rep); valErr != nil {
+		opts.ProgressFunc(fmt.Sprintf("[-] Critical: Generated report failed integrity validation: %v", valErr))
+		return &ExecutionResult{
+			Execution: execRecord,
+			Error:     valErr,
+		}, valErr
+	}
+
+	// 14. Report File Export
 	var htmlPath, jsonPath, sarifPath string
 	managedReportsDir, _ := getReportsDir(asm.Ref)
 
@@ -1193,20 +1223,6 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 			})
 		}
 	}
-
-	// 12. Finalize Status
-	finalStatus := StatusCompleted
-	if len(failedTargets) > 0 {
-		if len(assessedTargets) == 0 {
-			finalStatus = StatusFailed
-			execRecord.ErrorMessage = "All targets failed during crawl"
-		} else {
-			finalStatus = StatusCompletedWithErrors
-			execRecord.ErrorMessage = fmt.Sprintf("%d of %d target(s) encountered crawl failures", len(failedTargets), len(runnableTargets))
-		}
-	}
-	execRecord.Status = finalStatus
-	execRecord.FindingCount = len(allAssessmentFindings)
 
 	// 13. Create Durable Historical Assessment Snapshot (Phase 6.5 & 6.7)
 	isComplete := finalStatus != StatusFailed
@@ -1576,15 +1592,28 @@ func (c *Controller) emitAssessmentNotifications(
 			exec.TenantID, exec.AccountID, asm.ID, asm.Ref, exec.ID,
 			string(exec.Status), exec.FindingCount, duration, exec.ErrorMessage, now,
 		)
-		if notify.MeetsSeverityThreshold(notif.Severity, cfg.Notification.MinSeverity) {
-			if err := c.store.EnqueueNotification(notif); err == nil {
-				enqueuedAny = true
-			}
+		if err := c.store.EnqueueNotification(notif); err == nil {
+			enqueuedAny = true
 		}
 	}
 
 	// 2. Delta & Change Summary notifications (for completed runs)
 	if exec.Status == StatusCompleted || exec.Status == StatusCompletedWithErrors {
+		// Critical finding alerts
+		if findings, fErr := c.store.GetFindings(asm.ID, exec.ID); fErr == nil {
+			for _, f := range findings {
+				if strings.ToUpper(f.Severity) == notify.SeverityCritical {
+					critNotif := notify.BuildCriticalFindingNotification(
+						exec.TenantID, exec.AccountID, asm.ID, asm.Ref, exec.ID,
+						ToReportFinding(f), now,
+					)
+					if err := c.store.EnqueueNotification(critNotif); err == nil {
+						enqueuedAny = true
+					}
+				}
+			}
+		}
+
 		authCtx := TenantAuthContext{
 			TenantID:  exec.TenantID,
 			AccountID: exec.AccountID,
@@ -1634,11 +1663,14 @@ func (c *Controller) emitAssessmentNotifications(
 			webhookCfg := notify.WebhookConfig{
 				URL:               cfg.Notification.WebhookURL,
 				Secret:            cfg.Notification.WebhookSecret,
+				PreviousSecret:    cfg.Notification.WebhookPreviousSecret,
+				RequireSigning:    cfg.Notification.RequireSigning,
 				Timeout:           time.Duration(cfg.Notification.TimeoutSeconds) * time.Second,
 				AllowInsecureHTTP: cfg.Notification.AllowInsecureHTTP,
 				AllowPrivateIPs:   cfg.Notification.AllowPrivateIPs,
+				AllowLoopback:     cfg.Notification.AllowLoopback,
 			}
-			provider, pErr := notify.NewWebhookProvider(webhookCfg)
+			provider, pErr := notify.NewProvider(webhookCfg, cfg.Notification.Provider)
 			if pErr != nil {
 				return
 			}

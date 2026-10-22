@@ -24,6 +24,7 @@
       <button class="nav-tab" data-tab="assessments">Assessments</button>
       <button class="nav-tab" data-tab="reviews">Finding Reviews</button>
       <button class="nav-tab" data-tab="reports">Reports & Delivery</button>
+      <button class="nav-tab" data-tab="history">History & Deltas</button>
       <button class="nav-tab" data-tab="audit">Audit Trail</button>
     </nav>
     <div class="operator-meta">
@@ -169,6 +170,7 @@
           <div class="detail-actions">
             <button class="btn btn-sm btn-secondary" id="btn-asm-add-target">+ Add Target</button>
             <button class="btn btn-sm btn-secondary" id="btn-asm-authorize">📝 Authorize</button>
+            <button class="btn btn-sm btn-secondary" id="btn-asm-history" onclick="viewAssessmentHistory()">📊 History & Deltas</button>
             <button class="btn btn-sm btn-primary" id="btn-asm-scan">▶ Run Scan</button>
             <button class="btn btn-sm btn-ghost" onclick="closeAssessmentDetail()">Close &times;</button>
           </div>
@@ -362,6 +364,122 @@
             </thead>
             <tbody id="audit-table-body">
               <tr><td colspan="6" class="text-center">Loading audit log...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+      <!-- TAB: HISTORY & DELTAS (Phase 10.8) -->
+    <section id="tab-history" class="tab-pane">
+      <div class="view-header">
+        <div>
+          <h2>Assessment History & Posture Deltas</h2>
+          <p class="subtitle">Track security posture evolution, baseline eligibility, and accurate finding lifecycle changes between assessments.</p>
+        </div>
+        <div class="actions" style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+          <select id="history-asm-selector" class="form-select" style="min-width:220px;">
+            <option value="">Select Assessment...</option>
+          </select>
+          <select id="history-baseline-selector" class="form-select" style="min-width:220px;">
+            <option value="">Auto-Select Eligible Baseline</option>
+          </select>
+          <button class="btn btn-primary" id="btn-run-compare">Compare Posture</button>
+        </div>
+      </div>
+
+      <!-- Comparison Warning / Info Banner -->
+      <div id="history-warning-banner" class="info-alert hidden" style="margin-bottom:1.5rem;"></div>
+
+      <!-- Delta Summary Metrics Cards -->
+      <div id="history-summary-grid" class="stat-grid hidden" style="margin-bottom:1.5rem;">
+        <div class="stat-card">
+          <div class="stat-value text-danger" id="delta-count-new">0</div>
+          <div class="stat-label">New Findings</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value text-success" id="delta-count-resolved">0</div>
+          <div class="stat-label">Resolved Findings</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="delta-count-persistent">0</div>
+          <div class="stat-label">Persistent Findings</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value text-warning" id="delta-count-increased">0</div>
+          <div class="stat-label">Severity Increased</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value text-info" id="delta-count-decreased">0</div>
+          <div class="stat-label">Severity Decreased</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="delta-count-changed">0</div>
+          <div class="stat-label">Changed Attributes</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value text-muted" id="delta-count-unchanged">0</div>
+          <div class="stat-label">Unchanged</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value text-muted" id="delta-count-unknown">0</div>
+          <div class="stat-label">Unknown / Unverified</div>
+        </div>
+      </div>
+
+      <!-- Posture Explanation Narrative Card -->
+      <div id="history-narrative-card" class="card hidden" style="margin-bottom:1.5rem;">
+        <div class="card-header">
+          <h4 id="history-headline">Executive Security Posture Statement</h4>
+        </div>
+        <div class="card-body">
+          <ul id="history-narrative-list" style="margin:0; padding-left:1.25rem; font-size:0.9rem; color:var(--text-muted);"></ul>
+        </div>
+      </div>
+
+      <!-- Finding Deltas Table -->
+      <div id="history-deltas-card" class="card hidden" style="margin-bottom:1.5rem;">
+        <div class="card-header">
+          <h4>Finding Delta Breakdown</h4>
+        </div>
+        <div class="card-body table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Finding Title</th>
+                <th>Lifecycle Status</th>
+                <th>Severity Delta</th>
+                <th>Target / Endpoint</th>
+                <th>Change Details & Identity Basis</th>
+              </tr>
+            </thead>
+            <tbody id="history-deltas-table-body">
+              <tr><td colspan="5" class="text-center text-muted">No comparison run yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Assessment History Runs Table -->
+      <div class="card">
+        <div class="card-header">
+          <h4>Chronological Assessment Runs</h4>
+        </div>
+        <div class="card-body table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Reference</th>
+                <th>Assessment Name</th>
+                <th>Status</th>
+                <th>Created</th>
+                <th>Targets</th>
+                <th>Findings</th>
+                <th>Baseline Eligibility</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="history-table-body">
+              <tr><td colspan="8" class="text-center text-muted">Select an assessment to view history.</td></tr>
             </tbody>
           </table>
         </div>

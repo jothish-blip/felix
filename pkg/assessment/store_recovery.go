@@ -390,11 +390,14 @@ func (s *SQLiteStore) FinalizeAbandonedExecution(execID, recoveryWorkerID string
 					webhookCfg := notify.WebhookConfig{
 						URL:               cfg.Notification.WebhookURL,
 						Secret:            cfg.Notification.WebhookSecret,
+						PreviousSecret:    cfg.Notification.WebhookPreviousSecret,
+						RequireSigning:    cfg.Notification.RequireSigning,
 						Timeout:           time.Duration(cfg.Notification.TimeoutSeconds) * time.Second,
 						AllowInsecureHTTP: cfg.Notification.AllowInsecureHTTP,
 						AllowPrivateIPs:   cfg.Notification.AllowPrivateIPs,
+						AllowLoopback:     cfg.Notification.AllowLoopback,
 					}
-					if provider, pErr := notify.NewWebhookProvider(webhookCfg); pErr == nil {
+					if provider, pErr := notify.NewProvider(webhookCfg, cfg.Notification.Provider); pErr == nil {
 						dispatcher := notify.NewOutboxDispatcher(s, provider, notify.DispatcherConfig{Concurrency: cfg.Notification.Concurrency})
 						dispatchCtx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.Notification.TimeoutSeconds*3)*time.Second)
 						defer cancel()

@@ -682,3 +682,57 @@ func TestMobileReport_OfflineSelfContained(t *testing.T) {
 		}
 	}
 }
+
+// 15. Canonical Report Conversion Test (ToReport)
+func TestMobileReport_ToReport(t *testing.T) {
+	manifest := newTestManifestResult()
+	artifact := newTestArtifactResult()
+	inventory := newTestInventory()
+	data := BuildMobileReportData("testapp.apk", &IntakeResult{
+		SHA256:                 "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+		FileSize:               1234567,
+		TotalDecompressedBytes: 3456789,
+		EntryCount:             150,
+		DexCount:               2,
+		DexFiles:               []string{"classes.dex", "classes2.dex"},
+	}, manifest, artifact, inventory, nil)
+
+	rep := data.ToReport()
+
+	if rep.Target != "com.example.secureapp" {
+		t.Errorf("expected Target 'com.example.secureapp', got %s", rep.Target)
+	}
+	if len(rep.Findings) == 0 {
+		t.Errorf("expected findings in canonical report, got 0")
+	}
+	for _, f := range rep.Findings {
+		if f.Source != report.SourceAPK {
+			t.Errorf("expected finding source 'apk', got %s", f.Source)
+		}
+		if f.EvidenceDetails.Details == nil {
+			t.Errorf("expected Details map on finding")
+		} else {
+			if f.EvidenceDetails.Details["package_name"] != "com.example.secureapp" {
+				t.Errorf("expected package_name in details")
+			}
+			if f.EvidenceDetails.Details["apk_sha256"] != "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" {
+				t.Errorf("expected apk_sha256 in details")
+			}
+		}
+	}
+
+	if rep.Metadata == nil || rep.Metadata["mobile_metadata"] == nil {
+		t.Fatalf("expected mobile_metadata in rep.Metadata")
+	}
+	meta := rep.Metadata["mobile_metadata"].(map[string]any)
+	if meta["package_name"] != "com.example.secureapp" {
+		t.Errorf("expected package_name in mobile_metadata")
+	}
+	if meta["apk_sha256"] != "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" {
+		t.Errorf("expected apk_sha256 in mobile_metadata")
+	}
+
+	if rep.CommercialReport == nil {
+		t.Errorf("expected CommercialReport to be generated")
+	}
+}

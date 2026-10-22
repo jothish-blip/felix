@@ -199,6 +199,8 @@ type CommercialFinding struct {
 	// Metadata
 	Category            string                       `json:"category"`
 	Source              string                       `json:"source"`
+	Framework           string                       `json:"framework,omitempty"`
+	FrameworkVersion    string                       `json:"framework_version,omitempty"`
 	Status              FindingStatus                `json:"status,omitempty"`
 	AnalysisMethod      AnalysisMethod               `json:"analysis_method,omitempty"`
 	SyntheticFixture    bool                         `json:"synthetic_fixture,omitempty"`

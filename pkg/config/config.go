@@ -39,19 +39,22 @@ type UpdateConfig struct {
 
 // NotificationConfig holds settings for assessment alerting and webhook dispatching.
 type NotificationConfig struct {
-	Enabled           bool     `json:"enabled"`                      // Master switch for notification generation
-	Provider          string   `json:"provider"`                     // Notification provider (default "webhook")
-	WebhookURL        string   `json:"webhook_url"`                  // Destination HTTPS webhook URL
-	WebhookSecret     string   `json:"webhook_secret,omitempty"`     // Optional HMAC-SHA256 signature secret
-	TimeoutSeconds    int      `json:"timeout_seconds"`              // Request timeout in seconds (1..300)
-	MaxRetries        int      `json:"max_retries"`                  // Maximum retry attempts for transient delivery failures (0..10)
-	MinSeverity       string   `json:"min_severity"`                 // Minimum severity threshold (CRITICAL, HIGH, MEDIUM, LOW, INFO)
-	NotifyOnLifecycle []string `json:"notify_on_lifecycle"`          // Lifecycle events to alert on (completed, failed, interrupted, etc.)
-	NotifyOnDeltas    []string `json:"notify_on_deltas"`             // Security delta classifications to alert on (new, regressed, changed, resolved)
-	AllowInsecureHTTP bool     `json:"allow_insecure_http"`          // Allow unencrypted HTTP webhooks (default false)
-	AllowPrivateIPs   bool     `json:"allow_private_ips"`            // Allow webhooks to private/internal IPs (default false)
-	AllowLoopback     bool     `json:"allow_loopback"`               // Allow webhooks to loopback/127.0.0.1 (default false)
-	Concurrency       int      `json:"concurrency"`                  // Concurrency for background outbox workers (1..50)
+	Enabled                   bool     `json:"enabled"`                                // Master switch for notification generation
+	Provider                  string   `json:"provider"`                               // Notification provider (default "webhook")
+	WebhookURL                string   `json:"webhook_url"`                            // Destination HTTPS webhook URL
+	WebhookSecret             string   `json:"webhook_secret,omitempty"`               // Optional HMAC-SHA256 signature secret
+	WebhookPreviousSecret     string   `json:"webhook_previous_secret,omitempty"`       // Optional previous HMAC secret for key rotation
+	RequireSigning            bool     `json:"require_signing"`                         // Fail closed if webhook deliveries cannot be signed
+	SignatureToleranceSeconds int      `json:"signature_tolerance_seconds,omitempty"`   // Timestamp tolerance window for replay defense (1..3600)
+	TimeoutSeconds            int      `json:"timeout_seconds"`                        // Request timeout in seconds (1..300)
+	MaxRetries                int      `json:"max_retries"`                            // Maximum retry attempts for transient delivery failures (0..10)
+	MinSeverity               string   `json:"min_severity"`                           // Minimum severity threshold (CRITICAL, HIGH, MEDIUM, LOW, INFO)
+	NotifyOnLifecycle         []string `json:"notify_on_lifecycle"`                    // Lifecycle events to alert on (completed, failed, interrupted, etc.)
+	NotifyOnDeltas            []string `json:"notify_on_deltas"`                       // Security delta classifications to alert on (new, regressed, changed, resolved)
+	AllowInsecureHTTP         bool     `json:"allow_insecure_http"`                    // Allow unencrypted HTTP webhooks (default false)
+	AllowPrivateIPs           bool     `json:"allow_private_ips"`                      // Allow webhooks to private/internal IPs (default false)
+	AllowLoopback             bool     `json:"allow_loopback"`                         // Allow webhooks to loopback/127.0.0.1 (default false)
+	Concurrency               int      `json:"concurrency"`                            // Concurrency for background outbox workers (1..50)
 }
 
 // Config holds operational settings for Felix CLI and scanning pipelines.
@@ -118,19 +121,22 @@ func Default() Config {
 			AutoInstall: false,
 		},
 		Notification: NotificationConfig{
-			Enabled:           false,
-			Provider:          "webhook",
-			WebhookURL:        "",
-			WebhookSecret:     "",
-			TimeoutSeconds:    10,
-			MaxRetries:        3,
-			MinSeverity:       "LOW",
-			NotifyOnLifecycle: []string{"completed", "completed_with_errors", "failed", "interrupted"},
-			NotifyOnDeltas:    []string{"new", "regressed", "changed"},
-			AllowInsecureHTTP: false,
-			AllowPrivateIPs:   false,
-			AllowLoopback:     false,
-			Concurrency:       5,
+			Enabled:                   false,
+			Provider:                  "webhook",
+			WebhookURL:                "",
+			WebhookSecret:             "",
+			WebhookPreviousSecret:     "",
+			RequireSigning:            false,
+			SignatureToleranceSeconds: 300,
+			TimeoutSeconds:            10,
+			MaxRetries:                3,
+			MinSeverity:               "LOW",
+			NotifyOnLifecycle:         []string{"completed", "completed_with_errors", "failed", "interrupted"},
+			NotifyOnDeltas:            []string{"new", "regressed", "changed"},
+			AllowInsecureHTTP:         false,
+			AllowPrivateIPs:           false,
+			AllowLoopback:             false,
+			Concurrency:               5,
 		},
 	}
 }
@@ -199,8 +205,11 @@ func (c Config) Validate() error {
 	// Notification validation
 	if c.Notification.Enabled {
 		prov := strings.ToLower(strings.TrimSpace(c.Notification.Provider))
-		if prov != "webhook" {
-			return fmt.Errorf("invalid notification provider %q: currently supported: webhook", secrets.RedactText(c.Notification.Provider))
+		switch prov {
+		case "webhook", "slack", "discord", "teams":
+			// supported
+		default:
+			return fmt.Errorf("invalid notification provider %q: currently supported: webhook, slack, discord, teams", secrets.RedactText(c.Notification.Provider))
 		}
 		rawURL := strings.TrimSpace(c.Notification.WebhookURL)
 		if rawURL == "" {
@@ -219,6 +228,12 @@ func (c Config) Validate() error {
 			} else {
 				return fmt.Errorf("unsupported webhook_url scheme %q: must be https (or http if allow_insecure_http is set)", scheme)
 			}
+		}
+		if c.Notification.RequireSigning && strings.TrimSpace(c.Notification.WebhookSecret) == "" {
+			return fmt.Errorf("notification require_signing is true, but webhook_secret is empty")
+		}
+		if c.Notification.SignatureToleranceSeconds < 0 || c.Notification.SignatureToleranceSeconds > 3600 {
+			return fmt.Errorf("notification signature_tolerance_seconds must be between 1 and 3600 (got %d)", c.Notification.SignatureToleranceSeconds)
 		}
 		if c.Notification.TimeoutSeconds <= 0 || c.Notification.TimeoutSeconds > 300 {
 			return fmt.Errorf("notification timeout_seconds must be between 1 and 300 (got %d)", c.Notification.TimeoutSeconds)
@@ -464,6 +479,30 @@ func applyEnv(cfg *Config) error {
 	// 20. FELIX_NOTIFY_WEBHOOK_SECRET
 	if v, ok := os.LookupEnv("FELIX_NOTIFY_WEBHOOK_SECRET"); ok {
 		cfg.Notification.WebhookSecret = strings.TrimSpace(v)
+	}
+
+	// 20a. FELIX_NOTIFY_PREVIOUS_SECRET
+	if v, ok := os.LookupEnv("FELIX_NOTIFY_PREVIOUS_SECRET"); ok {
+		cfg.Notification.WebhookPreviousSecret = strings.TrimSpace(v)
+	}
+
+	// 20b. FELIX_NOTIFY_REQUIRE_SIGNING
+	if v, ok := os.LookupEnv("FELIX_NOTIFY_REQUIRE_SIGNING"); ok {
+		b, err := strconv.ParseBool(strings.TrimSpace(v))
+		if err != nil {
+			return fmt.Errorf("invalid FELIX_NOTIFY_REQUIRE_SIGNING %q: must be true or false", secrets.RedactText(v))
+		}
+		cfg.Notification.RequireSigning = b
+	}
+
+	// 20c. FELIX_NOTIFY_SIG_TOLERANCE
+	if v, ok := os.LookupEnv("FELIX_NOTIFY_SIG_TOLERANCE"); ok {
+		v = strings.TrimSpace(v)
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 || n > 3600 {
+			return fmt.Errorf("invalid FELIX_NOTIFY_SIG_TOLERANCE %q: must be an integer between 1 and 3600 seconds", secrets.RedactText(v))
+		}
+		cfg.Notification.SignatureToleranceSeconds = n
 	}
 
 	// 21. FELIX_NOTIFY_TIMEOUT

@@ -192,6 +192,10 @@ func NormalizeSource(src string) string {
 		return SourceAPI
 	case SourceCorrelated:
 		return SourceCorrelated
+	case SourceAPK, "manifest_analysis", "artifact_intelligence", "artifact_analysis", "apk_analysis":
+		return SourceAPK
+	case SourceMobile, "mobile_assessment":
+		return SourceMobile
 	default:
 		return SourceAPI
 	}
@@ -247,6 +251,11 @@ func DefaultDetectionMethod(source, category string) string {
 		return "static_pattern_signature"
 	case src == SourceCrawler:
 		return "asset_ingestion"
+	case src == SourceAPK || src == SourceMobile:
+		if strings.Contains(cat, "manifest") || strings.Contains(cat, "exported") || strings.Contains(cat, "debuggable") || strings.Contains(cat, "backup") {
+			return "static_manifest_analysis"
+		}
+		return "static_apk_analysis"
 	case strings.HasPrefix(cat, "missing-") || cat == "cors-wildcard":
 		return "header_inspection"
 	default:
@@ -540,17 +549,62 @@ func RemediationFor(category, title string) string {
 		return "Verify whether the token contains sensitive claims or signing keys. If sensitive or long-lived, invalidate existing sessions, rotate the signing secret, and shorten token lifetimes."
 
 	// Cloud & BaaS
-	case cat == "supabase-unauthorized-access":
+	case strings.Contains(cat, "supabase-unauthorized") || (strings.Contains(cat, "unauthorized-data-exposure") && strings.Contains(cat, "supabase")):
 		return "Enable Row Level Security (RLS) on all exposed tables and define explicit policies (`CREATE POLICY`) to prevent unauthorized public read/write access."
 
 	case cat == "supabase-anon-key":
 		return "The anon key is intended for client usage; verify that Row Level Security (RLS) is strictly enforced on all tables accessible via the Supabase REST/PostgREST API."
 
-	case cat == "firebase-open-database":
+	case strings.Contains(cat, "firebase-open") || strings.Contains(cat, "firebase-rtdb") || strings.Contains(cat, "firebase_rtdb"):
 		return "Update Firebase Realtime Database Security Rules to restrict unauthorized access (e.g. set `.read: false` or require authentication `auth != null`)."
 
-	case cat == "s3-public-listing", cat == "gcs-public-listing":
-		return "Enable 'Block Public Access' on the storage bucket and adjust Bucket Policy/IAM permissions to disallow anonymous `s3:ListBucket` or `storage.objects.list`."
+	case strings.Contains(cat, "firestore"):
+		return "Configure Cloud Firestore Security Rules (firestore.rules) to enforce authentication and granular authorization (e.g. `allow read, write: if request.auth != null;`). Restrict public access to database collections."
+
+	case strings.Contains(cat, "s3-public") || strings.Contains(cat, "aws-s3") || strings.Contains(cat, "aws_s3"):
+		return "Enable 'Block Public Access' on the S3 bucket and adjust Bucket Policy/IAM permissions to disallow anonymous `s3:ListBucket` or `s3:GetObject` access."
+
+	case strings.Contains(cat, "gcs-public") || strings.Contains(cat, "gcp-storage") || strings.Contains(cat, "gcp_storage"):
+		return "Enable uniform bucket-level access on the Google Cloud Storage bucket and ensure public principals (allUsers, allAuthenticatedUsers) are removed from IAM permissions."
+
+	case strings.Contains(cat, "azure-blob") || strings.Contains(cat, "azure_blob"):
+		return "Disable public blob access on the Azure storage account ('Allow Blob public access' = false). Enforce Azure AD (Entra ID) authentication or use least-privilege Shared Access Signatures (SAS)."
+
+	case strings.Contains(cat, "minio"):
+		return "Configure MinIO access policies to disallow anonymous public operations (`mc anonymous set none`). Enforce TLS encryption and manage access using IAM policies."
+
+	case strings.Contains(cat, "elasticsearch"):
+		return "Enable Elasticsearch security features (xpack.security.enabled: true). Require authentication, enable TLS/HTTPS, and restrict network access so cluster API ports (9200) are not exposed to untrusted networks."
+
+	case strings.Contains(cat, "mongodb"):
+		return "Enable authentication on MongoDB (security.authorization: enabled). Bind the service to private network interfaces (bindIp) or a VPC, and avoid exposing port 27017 to public networks."
+
+	case strings.Contains(cat, "redis"):
+		return "Configure Redis authentication (requirepass or ACL users), disable dangerous administrative commands (FLUSHALL, CONFIG), and bind Redis strictly to localhost or private network interfaces."
+
+	case strings.Contains(cat, "postgresql") || strings.Contains(cat, "postgres"):
+		return "Restrict PostgreSQL pg_hba.conf host access rules to require strong authentication (scram-sha-256), enforce SSL/TLS, and bind PostgreSQL to private network interfaces."
+
+	case strings.Contains(cat, "mysql"):
+		return "Require strong authentication for all MySQL accounts, disable remote root access, enforce SSL/TLS, and bind MySQL strictly to authorized internal network interfaces."
+
+	case strings.Contains(cat, "mongo-express") || strings.Contains(cat, "mongo_express"):
+		return "Disable Mongo Express in production environments or place it behind strict administrative authentication and a private VPN/bastion. Do not expose administrative database interfaces publicly."
+
+	case strings.Contains(cat, "postgrest"):
+		return "Configure PostgREST db-anon-role with minimal read privileges, enforce database Row Level Security (RLS) on all exposed tables, and require JWT authentication for sensitive operations."
+
+	case strings.Contains(cat, "hasura"):
+		return "Configure HASURA_GRAPHQL_ADMIN_SECRET, disable unauthorized role access, disable public schema introspection in production, and enforce granular role-based permissions on all GraphQL models."
+
+	case strings.Contains(cat, "prisma"):
+		return "Ensure Prisma endpoints and API wrappers enforce authentication and input validation. Restrict database access through application authorization middleware."
+
+	case strings.Contains(cat, "connection-indicator") || strings.Contains(cat, "connection indicator"):
+		return "Remove embedded connection strings and database credentials from client assets and public repositories immediately. Rotate all exposed database passwords and utilize environment variables or a secrets manager."
+
+	case strings.Contains(cat, "write-access") || strings.Contains(cat, "unauthenticated-data-access"):
+		return "Immediately restrict unauthorized access by enabling authentication and network firewall rules on the affected data service. Review audit logs for unauthorized data access or modification."
 
 	// Modern API & Endpoints
 	case cat == "graphql-introspection":
@@ -651,6 +705,28 @@ func RemediationFor(category, title string) string {
 
 	case cat == "source-map-exposure":
 		return "Remove `.map` files from public production deployments or restrict source map access to authenticated internal debugging tools."
+
+	// Mobile & Android APK Security
+	case strings.Contains(cat, "exported-component"), strings.Contains(cat, "exported-provider"):
+		return "Set android:exported=\"false\" in AndroidManifest.xml for components not explicitly intended for external IPC. If external access is required, enforce signature-level or custom permission checks."
+
+	case strings.Contains(cat, "debuggable"):
+		return "Set android:debuggable=\"false\" in AndroidManifest.xml for all release build variants. Ensure Gradle release build type specifies debuggable false."
+
+	case strings.Contains(cat, "backup"):
+		return "Set android:allowBackup=\"false\" in <application> or define a strict <data-extraction-rules> XML policy excluding sensitive private databases and preferences."
+
+	case strings.Contains(cat, "cleartext"), strings.Contains(cat, "netsec"):
+		return "Enforce HTTPS by setting android:usesCleartextTraffic=\"false\" and configure a res/xml/network_security_config.xml policy disallowing cleartext traffic."
+
+	case strings.Contains(cat, "deeplink"):
+		return "Ensure deep link intent filters specify strict host and path validation. Configure autoVerify=\"true\" and host verified Digital Asset Links (.well-known/assetlinks.json) on destination domains."
+
+	case strings.Contains(cat, "dangerous-permission"), strings.Contains(cat, "permission"):
+		return "Audit requested permissions according to the principle of least privilege. Request dangerous permissions at runtime only when needed, and remove unused permissions."
+
+	case strings.Contains(cat, "sdk"):
+		return "Update minSdkVersion and targetSdkVersion in build.gradle to modern supported Android API levels (minSdkVersion >= 24, targetSdkVersion >= 33) to benefit from platform security controls."
 
 	default:
 		return "Review the observed endpoint and asset configurations, adhere to principle of least privilege, and restrict unauthorized access."

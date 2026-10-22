@@ -61,6 +61,9 @@ func GenerateCuratedCommercialReport(
 	if err != nil {
 		return nil, fmt.Errorf("failed to load assessment: %w", err)
 	}
+	if asm == nil {
+		return nil, fmt.Errorf("assessment not found: %s", assessmentID)
+	}
 
 	// 2. Fetch Findings
 	rawFindings, err := store.GetFindings(asm.ID, opts.ExecutionID)
@@ -131,6 +134,13 @@ func GenerateCuratedCommercialReport(
 
 	// 6. Build MultiTargetReport strictly using APPROVED findings
 	rep := report.BuildMultiTargetReport(targetsList, approvedFindings)
+	rep.CompletionStatus = string(asm.Status)
+	if asm.Status == StatusFailed || asm.Status == StatusCancelled || asm.Status == StatusInterrupted || asm.Status == StatusSkipped {
+		rep.RiskScore = 0
+		rep.RiskLevel = "UNAVAILABLE"
+		rep.RiskScoreAvailable = false
+		rep.Summary.ScoreAvailable = false
+	}
 	if rep.Metadata == nil {
 		rep.Metadata = make(map[string]any)
 	}
@@ -140,6 +150,13 @@ func GenerateCuratedCommercialReport(
 	rep.Metadata["is_draft"] = isDraft
 	rep.Metadata["pending_review_count"] = pendingCount
 	rep.Metadata["rejected_review_count"] = rejectedCount
+	rep.Metadata["total_persisted_count"] = len(rawFindings)
+	rep.Metadata["approved_count"] = len(approvedFindings)
+
+	// Reconcile and validate report integrity before export
+	if valErr := report.ValidateReportIntegrity(rep); valErr != nil {
+		return nil, fmt.Errorf("curated report failed integrity validation: %w", valErr)
+	}
 
 	// Attach attack paths and stories if present
 	paths, _ := store.GetAttackPaths(asm.ID, opts.ExecutionID, "", "")
@@ -213,6 +230,8 @@ func GenerateCuratedCommercialReport(
 			"[DRAFT REPORT] Contains %d approved findings; %d findings remain pending review; %d rejected.",
 			len(approvedFindings), pendingCount, rejectedCount,
 		)
+	} else if cr.ExecutiveSummary.CompletionStatus == "" || cr.ExecutiveSummary.CompletionStatus == "COMPLETED" {
+		cr.ExecutiveSummary.CompletionStatus = string(asm.Status)
 	}
 
 	// 8. Determine file paths & export
@@ -223,15 +242,18 @@ func GenerateCuratedCommercialReport(
 	// Resolve execution ID to ensure foreign key constraint in assessment_reports is satisfied
 	reportExecID := opts.ExecutionID
 	if reportExecID == "" {
-		execs, _ := store.ListExecutions(asm.ID)
+		execs, err := store.ListExecutions(asm.ID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list executions: %w", err)
+		}
 		if len(execs) > 0 {
 			reportExecID = execs[len(execs)-1].ID
-		} else {
+		} else if opts.AllowDraft {
 			nowTime := time.Now().UTC()
 			curExec := &AssessmentExecution{
 				ID:           "exec-curated-" + uuid.New().String(),
 				AssessmentID: asm.ID,
-				Status:       StatusCompleted,
+				Status:       asm.Status,
 				StartedAt:    nowTime,
 				CompletedAt:  &nowTime,
 				ConfigSnapshot: ScanConfigSnapshot{
@@ -241,6 +263,8 @@ func GenerateCuratedCommercialReport(
 			}
 			_ = store.CreateExecution(curExec)
 			reportExecID = curExec.ID
+		} else {
+			return nil, fmt.Errorf("%w: assessment %s has never been executed", ErrUnexecutedAssessment, asm.ID)
 		}
 	}
 

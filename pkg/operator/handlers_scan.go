@@ -17,15 +17,14 @@ type startScanRequest struct {
 }
 
 func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if id == "" {
-		s.respondError(w, http.StatusBadRequest, "missing assessment id")
+	sess, ok := s.requireRole(w, r, RoleAdmin, RoleOperator)
+	if !ok {
 		return
 	}
 
-	asm, err := s.store.GetAssessment(id)
-	if err != nil {
-		s.respondError(w, http.StatusNotFound, fmt.Sprintf("assessment not found: %v", err))
+	id := r.PathValue("id")
+	asm, ok := s.requireAssessment(w, r, id)
+	if !ok {
 		return
 	}
 
@@ -47,8 +46,13 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 		Verbose:     req.Verbose,
 	}
 
+	opID := s.cfg.OperatorID
+	if sess != nil && sess.OperatorID != "" {
+		opID = sess.OperatorID
+	}
+
 	// Trigger background scan via JobManager
-	jobStatus, err := s.jobManager.StartAssessmentScan(context.Background(), asm.ID, s.cfg.OperatorID, execOpts)
+	jobStatus, err := s.jobManager.StartAssessmentScan(context.Background(), asm.ID, opID, execOpts)
 	if err != nil {
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "already active") || strings.Contains(errMsg, "unable to acquire scan lease") {
@@ -73,8 +77,7 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetScanStatus(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if id == "" {
-		s.respondError(w, http.StatusBadRequest, "missing assessment id")
+	if _, ok := s.requireAssessment(w, r, id); !ok {
 		return
 	}
 
@@ -106,13 +109,22 @@ func (s *Server) handleGetScanStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCancelScan(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if id == "" {
-		s.respondError(w, http.StatusBadRequest, "missing assessment id")
+	sess, ok := s.requireRole(w, r, RoleAdmin, RoleOperator)
+	if !ok {
 		return
 	}
 
-	if err := s.jobManager.CancelAssessmentScan(id, s.cfg.OperatorID); err != nil {
+	id := r.PathValue("id")
+	if _, ok := s.requireAssessment(w, r, id); !ok {
+		return
+	}
+
+	opID := s.cfg.OperatorID
+	if sess != nil && sess.OperatorID != "" {
+		opID = sess.OperatorID
+	}
+
+	if err := s.jobManager.CancelAssessmentScan(id, opID); err != nil {
 		s.respondError(w, http.StatusBadRequest, fmt.Sprintf("failed to cancel scan: %v", err))
 		return
 	}

@@ -7,15 +7,19 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"felix/pkg/apk"
 	"felix/pkg/assessment"
+	"felix/pkg/config"
+	"felix/pkg/report"
 )
 
 // runAPK executes the "felix apk" subcommand for APK intake, structural validation, and isolation.
 func runAPK(args []string) int {
+	cfgStore, _ := config.LoadWithEnv("")
 	var (
 		extract          bool
 		keepWorkspace    bool
@@ -42,8 +46,20 @@ func runAPK(args []string) int {
 		overallDeadline  time.Duration
 		generateReport   bool
 		reportPath       string
+		jsonFilePath     string
+		sarifOutput      bool
+		sarifPath        string
+		exportPath       string
 		apkPath          string
 		limits           = apk.DefaultLimits()
+		notifyEnabled    = cfgStore.Notification.Enabled
+		notifyExplicit   bool
+		webhookFlagURL   string
+		notifyProvider       string
+		notifySecret         string
+		notifyPreviousSecret string
+		notifyRequireSigning bool
+		notifyMinSev         string
 	)
 
 	// Custom argument parser matching Felix CLI conventions
@@ -95,7 +111,42 @@ func runAPK(args []string) int {
 			continue
 		}
 		if arg == "--json" {
-			jsonOutput = true
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") && !strings.HasSuffix(strings.ToLower(args[i+1]), ".apk") {
+				i++
+				jsonFilePath = args[i]
+			} else {
+				jsonOutput = true
+			}
+			continue
+		}
+		if strings.HasPrefix(arg, "--json=") {
+			jsonFilePath = strings.TrimPrefix(arg, "--json=")
+			continue
+		}
+		if arg == "--sarif" {
+			sarifOutput = true
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") && !strings.HasSuffix(strings.ToLower(args[i+1]), ".apk") {
+				i++
+				sarifPath = args[i]
+			}
+			continue
+		}
+		if strings.HasPrefix(arg, "--sarif=") {
+			sarifOutput = true
+			sarifPath = strings.TrimPrefix(arg, "--sarif=")
+			continue
+		}
+		if arg == "--export" {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				fmt.Fprintf(os.Stderr, "[-] error: --export requires a file path argument\n")
+				return 2
+			}
+			i++
+			exportPath = args[i]
+			continue
+		}
+		if strings.HasPrefix(arg, "--export=") {
+			exportPath = strings.TrimPrefix(arg, "--export=")
 			continue
 		}
 		if arg == "--quiet" || arg == "-q" || arg == "--silent" || arg == "-s" {
@@ -316,6 +367,101 @@ func runAPK(args []string) int {
 			continue
 		}
 
+		// --notify
+		if arg == "--notify" || arg == "--notify=true" {
+			notifyEnabled = true
+			notifyExplicit = true
+			continue
+		}
+		if arg == "--no-notify" || arg == "--notify=false" {
+			notifyEnabled = false
+			notifyExplicit = true
+			continue
+		}
+
+		// --webhook
+		if arg == "--webhook" {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				fmt.Fprintf(os.Stderr, "[-] error: --webhook requires a URL argument\n")
+				return 2
+			}
+			i++
+			webhookFlagURL = args[i]
+			notifyEnabled = true
+			continue
+		}
+		if strings.HasPrefix(arg, "--webhook=") {
+			webhookFlagURL = strings.TrimPrefix(arg, "--webhook=")
+			notifyEnabled = true
+			continue
+		}
+
+		// --notify-provider
+		if arg == "--notify-provider" {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				fmt.Fprintf(os.Stderr, "[-] error: --notify-provider requires a provider type argument (webhook, slack, discord, teams)\n")
+				return 2
+			}
+			i++
+			notifyProvider = args[i]
+			continue
+		}
+		if strings.HasPrefix(arg, "--notify-provider=") {
+			notifyProvider = strings.TrimPrefix(arg, "--notify-provider=")
+			continue
+		}
+
+		// --notify-secret
+		if arg == "--notify-secret" {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				fmt.Fprintf(os.Stderr, "[-] error: --notify-secret requires an HMAC secret argument\n")
+				return 2
+			}
+			i++
+			notifySecret = args[i]
+			continue
+		}
+		if strings.HasPrefix(arg, "--notify-secret=") {
+			notifySecret = strings.TrimPrefix(arg, "--notify-secret=")
+			continue
+		}
+
+		// --notify-min-severity
+		if arg == "--notify-min-severity" {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				fmt.Fprintf(os.Stderr, "[-] error: --notify-min-severity requires a severity level (CRITICAL, HIGH, MEDIUM, LOW, INFO)\n")
+				return 2
+			}
+			i++
+			notifyMinSev = args[i]
+			continue
+		}
+		if strings.HasPrefix(arg, "--notify-min-severity=") {
+			notifyMinSev = strings.TrimPrefix(arg, "--notify-min-severity=")
+			continue
+		}
+
+		// --notify-previous-secret
+		if arg == "--notify-previous-secret" {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				fmt.Fprintf(os.Stderr, "[-] error: --notify-previous-secret requires a secret argument\n")
+				return 2
+			}
+			i++
+			notifyPreviousSecret = args[i]
+			continue
+		}
+		if strings.HasPrefix(arg, "--notify-previous-secret=") {
+			notifyPreviousSecret = strings.TrimPrefix(arg, "--notify-previous-secret=")
+			continue
+		}
+
+		// --notify-require-signing / --require-signing
+		if arg == "--notify-require-signing" || arg == "--require-signing" {
+			notifyRequireSigning = true
+			continue
+		}
+
 		// Positional argument: apkPath
 		if !strings.HasPrefix(arg, "-") {
 			if apkPath == "" {
@@ -341,7 +487,7 @@ func runAPK(args []string) int {
 	if generateReport && reportPath == "" {
 		reportPath = apk.DefaultMobileAuditReportName
 	}
-	if generateReport && !analyzeManifest && !analyzeArtifacts && !buildInventory && !assessBackend {
+	if (generateReport || sarifOutput || jsonFilePath != "" || exportPath != "") && !analyzeManifest && !analyzeArtifacts && !buildInventory && !assessBackend {
 		analyzeManifest = true
 		analyzeArtifacts = true
 		buildInventory = true
@@ -521,14 +667,25 @@ func runAPK(args []string) int {
 		if handoffReport != nil {
 			outObj["backend_handoff"] = handoffReport
 		}
-		if generateReport {
-			reportData := apk.BuildMobileReportData(apkPath, res, manifestRes, artifactRes, inventoryRes, handoffReport)
-			if err := apk.WriteMobileAuditReport(reportData, reportPath, apkPath); err != nil {
-				fmt.Fprintf(os.Stderr, "[-] Failed generating mobile audit report: %v\n", err)
-				return 2
-			}
-			outObj["report_file"] = reportPath
+		if err := writeAPKReports(apkPath, reportPath, generateReport, jsonFilePath, sarifOutput, sarifPath, exportPath, res, manifestRes, artifactRes, inventoryRes, handoffReport, outObj, quiet); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] %v\n", err)
+			return 2
 		}
+		mobileRep := apk.BuildMobileReportData(apkPath, res, manifestRes, artifactRes, inventoryRes, handoffReport).ToReport()
+		dispatchReportNotification(mobileRep, cfgStore, scanNotifyOptions{
+			enabled:        notifyEnabled,
+			explicit:       notifyExplicit,
+			webhookURL:     webhookFlagURL,
+			provider:       notifyProvider,
+			secret:         notifySecret,
+			previousSecret: notifyPreviousSecret,
+			requireSigning: notifyRequireSigning,
+			minSeverity:    notifyMinSev,
+			allowPrivate:   allowLoopback || cfgStore.AllowPrivateIPs,
+			allowLoopback:  allowLoopback || cfgStore.AllowLoopback,
+			insecure:       cfgStore.InsecureSkipVerify,
+			quiet:          quiet,
+		})
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		_ = enc.Encode(outObj)
@@ -720,20 +877,128 @@ func runAPK(args []string) int {
 		}
 	}
 
+	if err := writeAPKReports(apkPath, reportPath, generateReport, jsonFilePath, sarifOutput, sarifPath, exportPath, res, manifestRes, artifactRes, inventoryRes, handoffReport, nil, quiet); err != nil {
+		fmt.Fprintf(os.Stderr, "[-] %v\n", err)
+		return 2
+	}
+
+	mobileRep := apk.BuildMobileReportData(apkPath, res, manifestRes, artifactRes, inventoryRes, handoffReport).ToReport()
+	dispatchReportNotification(mobileRep, cfgStore, scanNotifyOptions{
+		enabled:        notifyEnabled,
+		explicit:       notifyExplicit,
+		webhookURL:     webhookFlagURL,
+		provider:       notifyProvider,
+		secret:         notifySecret,
+		previousSecret: notifyPreviousSecret,
+		requireSigning: notifyRequireSigning,
+		minSeverity:    notifyMinSev,
+		allowPrivate:   allowLoopback || cfgStore.AllowPrivateIPs,
+		allowLoopback:  allowLoopback || cfgStore.AllowLoopback,
+		insecure:       cfgStore.InsecureSkipVerify,
+		quiet:          quiet,
+	})
+
+	return 0
+}
+
+func writeAPKReports(
+	apkPath string,
+	reportPath string,
+	generateReport bool,
+	jsonFilePath string,
+	sarifOutput bool,
+	sarifPath string,
+	exportPath string,
+	res *apk.IntakeResult,
+	manifestRes *apk.ManifestAnalysisResult,
+	artifactRes *apk.ArtifactAnalysisResult,
+	inventoryRes *apk.BackendInventory,
+	handoffReport *apk.HandoffReport,
+	outObj map[string]interface{},
+	quiet bool,
+) error {
+	if !generateReport && jsonFilePath == "" && !sarifOutput && exportPath == "" {
+		return nil
+	}
+
+	reportData := apk.BuildMobileReportData(apkPath, res, manifestRes, artifactRes, inventoryRes, handoffReport)
+	canonicalReport := reportData.ToReport()
+
 	if generateReport {
-		reportData := apk.BuildMobileReportData(apkPath, res, manifestRes, artifactRes, inventoryRes, handoffReport)
 		if err := apk.WriteMobileAuditReport(reportData, reportPath, apkPath); err != nil {
-			fmt.Fprintf(os.Stderr, "[-] Failed generating mobile audit report: %v\n", err)
-			return 2
+			return fmt.Errorf("failed generating mobile audit report: %w", err)
 		}
-		if !quiet {
+		if outObj != nil {
+			outObj["report_file"] = reportPath
+		}
+		if !quiet && outObj == nil {
 			fmt.Println("===========================================================")
 			fmt.Printf("  Mobile Audit Report:     %s\n", reportPath)
 			fmt.Println("===========================================================")
 		}
 	}
 
-	return 0
+	if jsonFilePath != "" {
+		if err := report.WriteJSON(canonicalReport, jsonFilePath); err != nil {
+			return fmt.Errorf("failed writing JSON report: %w", err)
+		}
+		if outObj != nil {
+			outObj["json_report_file"] = jsonFilePath
+		}
+		if !quiet && outObj == nil {
+			fmt.Println("===========================================================")
+			fmt.Printf("  JSON Report:             %s\n", jsonFilePath)
+			fmt.Println("===========================================================")
+		}
+	}
+
+	if sarifOutput {
+		targetSarif := sarifPath
+		if targetSarif == "" {
+			targetSarif = "report.sarif"
+		}
+		if err := report.WriteSARIF(canonicalReport, targetSarif); err != nil {
+			return fmt.Errorf("failed writing SARIF report: %w", err)
+		}
+		if outObj != nil {
+			outObj["sarif_report_file"] = targetSarif
+		}
+		if !quiet && outObj == nil {
+			fmt.Println("===========================================================")
+			fmt.Printf("  SARIF Report (2.1.0):    %s\n", targetSarif)
+			fmt.Println("===========================================================")
+		}
+	}
+
+	if exportPath != "" {
+		ext := strings.ToLower(filepath.Ext(exportPath))
+		var exportErr error
+		switch ext {
+		case ".sarif":
+			exportErr = report.WriteSARIF(canonicalReport, exportPath)
+		case ".html", ".htm":
+			if strings.Contains(strings.ToLower(exportPath), "commercial") && canonicalReport.CommercialReport != nil {
+				exportErr = report.WriteCommercialHTML(*canonicalReport.CommercialReport, exportPath)
+			} else {
+				exportErr = report.WriteHTML(canonicalReport, exportPath)
+			}
+		default:
+			exportErr = report.WriteJSON(canonicalReport, exportPath)
+		}
+		if exportErr != nil {
+			return fmt.Errorf("failed exporting report: %w", exportErr)
+		}
+		if outObj != nil {
+			outObj["export_file"] = exportPath
+		}
+		if !quiet && outObj == nil {
+			fmt.Println("===========================================================")
+			fmt.Printf("  Exported Report:         %s\n", exportPath)
+			fmt.Println("===========================================================")
+		}
+	}
+
+	return nil
 }
 
 func printAPKHelp() {
@@ -770,5 +1035,12 @@ func printAPKHelp() {
 	fmt.Println("  --quiet, -q                   Suppress banner and verbose operational output")
 	fmt.Println("  --max-compressed-size <n>     Maximum allowed input APK file size in bytes (default: 200MB)")
 	fmt.Println("  --max-entries <n>             Maximum allowed archive entries (default: 20000)")
+	fmt.Println("  --notify                      Send completion notification upon assessment termination")
+	fmt.Println("  --webhook <url>             Destination HTTPS webhook URL for notification dispatch")
+	fmt.Println("  --notify-provider <type>    Notification transport provider (webhook, slack, discord, teams)")
+	fmt.Println("  --notify-secret <secret>      HMAC-SHA256 signature secret (supports env:VAR_NAME to avoid process exposure)")
+	fmt.Println("  --notify-previous-secret <secret> Previous HMAC secret for key rotation (supports env:VAR_NAME)")
+	fmt.Println("  --notify-require-signing      Fail closed if webhook notifications cannot be cryptographically signed")
+	fmt.Println("  --notify-min-severity <sev> Minimum finding severity threshold to trigger alert")
 	fmt.Println("  --help, -h                    Show this help message")
 }

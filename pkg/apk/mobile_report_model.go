@@ -46,6 +46,7 @@ type MobileReportData struct {
 	ArchiveEntryCount     int
 
 	// Security Findings & Severity Breakdown
+	RawFindings    []report.Finding
 	Findings       []ReportFinding
 	TotalFindings  int
 	CriticalCount  int
@@ -339,6 +340,51 @@ func BuildMobileReportData(
 	})
 
 	data.Findings = allFindings
+
+	var rawFindings []report.Finding
+	if manifestRes != nil {
+		rawFindings = append(rawFindings, manifestRes.Findings...)
+	}
+	if artifactRes != nil {
+		rawFindings = append(rawFindings, artifactRes.Findings...)
+	}
+	if handoffRes != nil {
+		for _, f := range handoffRes.Findings {
+			rawFindings = append(rawFindings, report.Finding{
+				ID:          f.Fingerprint,
+				RuleID:      "API-AUDIT-" + string(f.Category),
+				Title:       f.Description,
+				Severity:    string(f.Severity),
+				Confidence:  string(f.Confidence),
+				Target:      f.Endpoint,
+				Endpoint:    f.Endpoint,
+				Description: f.Description,
+				Evidence:    f.Evidence,
+				Remediation: "Review endpoint authorization, restrict public introspection, and enforce role-based access control.",
+				Source:      report.SourceAPK,
+				Status:      report.FindingStatusConfirmed,
+			})
+		}
+		for _, r := range handoffRes.Results {
+			for _, f := range r.APIFindings {
+				rawFindings = append(rawFindings, report.Finding{
+					ID:          f.Fingerprint,
+					RuleID:      "API-AUDIT-" + string(f.Category),
+					Title:       f.Description,
+					Severity:    string(f.Severity),
+					Confidence:  string(f.Confidence),
+					Target:      f.Endpoint,
+					Endpoint:    f.Endpoint,
+					Description: f.Description,
+					Evidence:    f.Evidence,
+					Remediation: "Review endpoint authorization, restrict public introspection, and enforce role-based access control.",
+					Source:      report.SourceAPK,
+					Status:      report.FindingStatusConfirmed,
+				})
+			}
+		}
+	}
+	data.RawFindings = report.DeduplicateFindings(rawFindings)
 	data.TotalFindings = len(allFindings)
 
 	// Tally severity counts exactly matching the displayed findings
@@ -966,4 +1012,182 @@ func SanitizeURLRedactingSensitiveQuery(rawURL string) string {
 	}
 	parsed.RawQuery = q.Encode()
 	return parsed.String()
+}
+
+// ToReport converts MobileReportData into a canonical FELIX report.Report.
+func (data *MobileReportData) ToReport() report.Report {
+	if data == nil {
+		return report.Report{}
+	}
+
+	target := data.PackageName
+	if target == "" || target == "Not available" {
+		target = data.APKFileName
+	}
+	if target == "" {
+		target = "unknown-apk"
+	}
+
+	targets := make([]string, 0, 2)
+	if data.PackageName != "" && data.PackageName != "Not available" {
+		targets = append(targets, data.PackageName)
+	}
+	if data.APKFileName != "" && data.APKFileName != "Not available" && data.APKFileName != data.PackageName {
+		targets = append(targets, data.APKFileName)
+	}
+	if len(targets) == 0 {
+		targets = append(targets, target)
+	}
+
+	status := "COMPLETED"
+	if data.Status == "FAILED" || data.Status == "BLOCKED" || data.Status == "PARTIAL" {
+		status = data.Status
+	}
+
+	var canonicalFindings []report.Finding
+	if len(data.RawFindings) > 0 {
+		for _, rf := range data.RawFindings {
+			f := rf
+			if f.Source == "" || f.Source == "manifest_analysis" || f.Source == "artifact_intelligence" || f.Source == "api" {
+				f.Source = report.SourceAPK
+			}
+			if f.Target == "" {
+				f.Target = target
+			}
+			if f.EvidenceDetails.Details == nil {
+				f.EvidenceDetails.Details = make(map[string]string)
+			}
+			if data.PackageName != "" && data.PackageName != "Not available" {
+				f.EvidenceDetails.Details["package_name"] = data.PackageName
+			}
+			if data.APKSHA256 != "" && data.APKSHA256 != "Not available" {
+				f.EvidenceDetails.Details["apk_sha256"] = data.APKSHA256
+			}
+			if data.VersionName != "" && data.VersionName != "Not available" {
+				f.EvidenceDetails.Details["version_name"] = data.VersionName
+			}
+			if data.VersionCode != "" && data.VersionCode != "Not available" {
+				f.EvidenceDetails.Details["version_code"] = data.VersionCode
+			}
+			if f.Endpoint != "" {
+				f.EvidenceDetails.Details["component_name"] = f.Endpoint
+			}
+			if f.Score == 0 {
+				f.Score = report.SeverityRank(f.Severity) * 20
+			}
+			if f.ClassificationOutcome == "" {
+				f.ClassificationOutcome = report.OutcomeConfirmed
+			}
+			if f.Status == "" {
+				f.Status = report.FindingStatusConfirmed
+			}
+			canonicalFindings = append(canonicalFindings, f)
+		}
+	} else if len(data.Findings) > 0 {
+		for _, rf := range data.Findings {
+			sev := rf.Severity
+			if sev == "" {
+				sev = report.SeverityInfo
+			}
+			conf := rf.Confidence
+			if conf == "" {
+				conf = report.ConfidenceHigh
+			}
+			statusEnum := report.FindingStatusConfirmed
+			if rf.Status != "" {
+				statusEnum = report.FindingStatus(rf.Status)
+			}
+
+			details := map[string]string{
+				"category": rf.Category,
+			}
+			if data.PackageName != "" && data.PackageName != "Not available" {
+				details["package_name"] = data.PackageName
+			}
+			if data.APKSHA256 != "" && data.APKSHA256 != "Not available" {
+				details["apk_sha256"] = data.APKSHA256
+			}
+			if data.VersionName != "" && data.VersionName != "Not available" {
+				details["version_name"] = data.VersionName
+			}
+			if data.VersionCode != "" && data.VersionCode != "Not available" {
+				details["version_code"] = data.VersionCode
+			}
+			if rf.AffectedTarget != "" {
+				details["component_name"] = rf.AffectedTarget
+			}
+
+			cf := report.Finding{
+				ID:                    rf.ID,
+				RuleID:                rf.RuleID,
+				Status:                statusEnum,
+				ClassificationOutcome: report.OutcomeConfirmed,
+				AnalysisMethod:        report.AnalysisMethodStatic,
+				Category:              rf.Category,
+				Title:                 rf.Title,
+				Severity:              sev,
+				Confidence:            conf,
+				Target:                target,
+				Endpoint:              rf.AffectedTarget,
+				Method:                "STATIC_ANALYSIS",
+				Description:           rf.Description,
+				Evidence:              rf.Evidence,
+				EvidenceDetails: report.EvidenceDetails{
+					Observation:     rf.Evidence,
+					Location:        rf.AffectedTarget,
+					DetectionMethod: "static_apk_analysis",
+					Details:         details,
+				},
+				Remediation: rf.Remediation,
+				RemediationAdvice: &report.RemediationAdvice{
+					Summary: rf.Remediation,
+				},
+				Source:      report.SourceAPK,
+				Fingerprint: rf.Fingerprint,
+				Score:       report.SeverityRank(sev) * 20,
+				Timestamp:   time.Now().UTC(),
+			}
+			canonicalFindings = append(canonicalFindings, cf)
+		}
+	}
+
+	mobileMeta := map[string]any{
+		"apk_file_name":         data.APKFileName,
+		"apk_sha256":            data.APKSHA256,
+		"apk_file_size":         data.APKFileSize,
+		"package_name":          data.PackageName,
+		"version_name":          data.VersionName,
+		"version_code":          data.VersionCode,
+		"min_sdk":               data.MinSDK,
+		"target_sdk":            data.TargetSDK,
+		"compile_sdk":           data.CompileSDK,
+		"dex_count":             data.DexCount,
+		"multidex":              data.Multidex,
+		"intake_status":         data.IntakeStatus,
+		"manifest_status":       data.ManifestStatus,
+		"assessment_status":     data.AssessmentStatus,
+		"assessment_scope_mode": data.AssessmentScopeMode,
+		"total_endpoints":       data.TotalEndpoints,
+		"total_hosts":           data.TotalHosts,
+		"analysis_mode":         data.AnalysisMode,
+		"limitations":           data.Limitations,
+	}
+
+	rep := report.Report{
+		Version:          "1.0.0",
+		Target:           target,
+		Targets:          targets,
+		Timestamp:        time.Now().UTC().Format(time.RFC3339),
+		CompletionStatus: status,
+		Findings:         report.DeduplicateFindings(canonicalFindings),
+		Metadata: map[string]any{
+			"mobile_metadata": mobileMeta,
+		},
+	}
+
+	report.RecalculateReportRisk(&rep)
+	cr := report.BuildCommercialReport(rep, report.WithCompletionStatus(rep.CompletionStatus))
+	rep.CommercialReport = &cr
+
+	return rep
 }

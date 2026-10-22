@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"felix/pkg/clierror"
@@ -28,6 +29,7 @@ func runReport(args []string) int {
 		htmlPath   string
 		jsonPath   string
 		sarifPath  string
+		exportPath string
 		policyPath string
 		verbose    bool
 		silent     bool
@@ -37,6 +39,7 @@ func runReport(args []string) int {
 	fs.StringVar(&htmlPath, "html", "", "Export report to HTML file")
 	fs.StringVar(&jsonPath, "json", "", "Export report to JSON file")
 	fs.StringVar(&sarifPath, "sarif", "", "Export report to SARIF 2.1.0 file")
+	fs.StringVar(&exportPath, "export", "", "Export report to specified path (.html, .json, or .sarif)")
 	fs.StringVar(&policyPath, "policy", "", "Path to security threshold policy file for evaluation")
 	fs.BoolVar(&verbose, "v", false, "Verbose terminal output")
 	fs.BoolVar(&verbose, "verbose", false, "Verbose terminal output")
@@ -62,7 +65,7 @@ func runReport(args []string) int {
 			if !strings.Contains(arg, "=") && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
 				flagName := strings.TrimLeft(arg, "-")
 				switch flagName {
-				case "html", "json", "sarif", "policy":
+				case "html", "json", "sarif", "policy", "export":
 					i++
 					flagArgs = append(flagArgs, args[i])
 				}
@@ -107,6 +110,11 @@ func runReport(args []string) int {
 		return 2
 	}
 
+	if err := report.ValidateReportIntegrity(rep); err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Error: scan result integrity check failed: %v\n", err)
+		return 2
+	}
+
 	// Resolve policy path: explicit CLI flag takes precedence over config
 	var pol *policy.ThresholdPolicy
 	cfgStore, _ := config.LoadWithEnv("")
@@ -130,21 +138,45 @@ func runReport(args []string) int {
 	var exported []string
 	var exportErrs []error
 	if htmlPath != "" {
-		if err := report.WriteHTML(rep, htmlPath); err != nil {
-			fmt.Fprintf(os.Stderr, "[-] Failed to write HTML report to %s: %v\n", htmlPath, err)
-			exportErrs = append(exportErrs, err)
+		if commercial {
+			cr := report.BuildCommercialReport(rep)
+			if err := report.WriteCommercialHTML(cr, htmlPath); err != nil {
+				fmt.Fprintf(os.Stderr, "[-] Failed to write Commercial HTML report to %s: %v\n", htmlPath, err)
+				exportErrs = append(exportErrs, err)
+			} else {
+				exported = append(exported, fmt.Sprintf("  Commercial HTML: %s", htmlPath))
+			}
 		} else {
-			exported = append(exported, fmt.Sprintf("  HTML: %s", htmlPath))
+			if err := report.WriteHTML(rep, htmlPath); err != nil {
+				fmt.Fprintf(os.Stderr, "[-] Failed to write HTML report to %s: %v\n", htmlPath, err)
+				exportErrs = append(exportErrs, err)
+			} else {
+				exported = append(exported, fmt.Sprintf("  HTML: %s", htmlPath))
+			}
 		}
 	}
 
 	// Export JSON if requested
 	if jsonPath != "" {
-		if err := report.WriteJSON(rep, jsonPath); err != nil {
-			fmt.Fprintf(os.Stderr, "[-] Failed to write JSON report to %s: %v\n", jsonPath, err)
-			exportErrs = append(exportErrs, err)
+		if commercial {
+			cr := report.BuildCommercialReport(rep)
+			crBytes, err := report.GenerateCommercialJSON(cr)
+			if err == nil {
+				err = os.WriteFile(jsonPath, crBytes, 0644)
+			}
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[-] Failed to write Commercial JSON report to %s: %v\n", jsonPath, err)
+				exportErrs = append(exportErrs, err)
+			} else {
+				exported = append(exported, fmt.Sprintf("  Commercial JSON: %s", jsonPath))
+			}
 		} else {
-			exported = append(exported, fmt.Sprintf("  JSON: %s", jsonPath))
+			if err := report.WriteJSON(rep, jsonPath); err != nil {
+				fmt.Fprintf(os.Stderr, "[-] Failed to write JSON report to %s: %v\n", jsonPath, err)
+				exportErrs = append(exportErrs, err)
+			} else {
+				exported = append(exported, fmt.Sprintf("  JSON: %s", jsonPath))
+			}
 		}
 	}
 
@@ -155,6 +187,58 @@ func runReport(args []string) int {
 			exportErrs = append(exportErrs, err)
 		} else {
 			exported = append(exported, fmt.Sprintf("  SARIF 2.1.0: %s", sarifPath))
+		}
+	}
+
+	// Export via canonical --export flag (format inferred by extension: .html, .sarif, or .json)
+	if exportPath != "" {
+		ext := strings.ToLower(filepath.Ext(exportPath))
+		switch ext {
+		case ".sarif":
+			if err := report.WriteSARIF(rep, exportPath); err != nil {
+				fmt.Fprintf(os.Stderr, "[-] Failed to write SARIF report to %s: %v\n", exportPath, err)
+				exportErrs = append(exportErrs, err)
+			} else {
+				exported = append(exported, fmt.Sprintf("  SARIF 2.1.0: %s", exportPath))
+			}
+		case ".html", ".htm":
+			if commercial {
+				cr := report.BuildCommercialReport(rep)
+				if err := report.WriteCommercialHTML(cr, exportPath); err != nil {
+					fmt.Fprintf(os.Stderr, "[-] Failed to write Commercial HTML report to %s: %v\n", exportPath, err)
+					exportErrs = append(exportErrs, err)
+				} else {
+					exported = append(exported, fmt.Sprintf("  Commercial HTML: %s", exportPath))
+				}
+			} else {
+				if err := report.WriteHTML(rep, exportPath); err != nil {
+					fmt.Fprintf(os.Stderr, "[-] Failed to write HTML report to %s: %v\n", exportPath, err)
+					exportErrs = append(exportErrs, err)
+				} else {
+					exported = append(exported, fmt.Sprintf("  HTML: %s", exportPath))
+				}
+			}
+		default:
+			if commercial {
+				cr := report.BuildCommercialReport(rep)
+				crBytes, err := report.GenerateCommercialJSON(cr)
+				if err == nil {
+					err = os.WriteFile(exportPath, crBytes, 0644)
+				}
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "[-] Failed to write Commercial JSON report to %s: %v\n", exportPath, err)
+					exportErrs = append(exportErrs, err)
+				} else {
+					exported = append(exported, fmt.Sprintf("  Commercial JSON: %s", exportPath))
+				}
+			} else {
+				if err := report.WriteJSON(rep, exportPath); err != nil {
+					fmt.Fprintf(os.Stderr, "[-] Failed to write JSON report to %s: %v\n", exportPath, err)
+					exportErrs = append(exportErrs, err)
+				} else {
+					exported = append(exported, fmt.Sprintf("  JSON: %s", exportPath))
+				}
+			}
 		}
 	}
 
@@ -223,6 +307,7 @@ func printReportHelp() {
 	fmt.Println("  --html <path>         Export report to HTML file")
 	fmt.Println("  --json <path>         Export report to JSON file")
 	fmt.Println("  --sarif <path>        Export report to SARIF 2.1.0 file")
+	fmt.Println("  --export <path>       Export report to path by extension (.html, .json, .sarif)")
 	fmt.Println("  --policy <path>       Evaluate security threshold policy against report")
 	fmt.Println("  --commercial          Render Commercial Report 2.0 specification")
 	fmt.Println("  -v, --verbose         Verbose terminal output")
@@ -346,6 +431,44 @@ func printReportSummary(rep report.Report, verbose bool) {
 		fmt.Printf("  Inconclusive:%d\n", rep.Summary.InconclusiveCount)
 	}
 	fmt.Println()
+
+	if rep.ChangeSummary != nil {
+		fmt.Println("Security Posture Delta & Assessment History:")
+		baseRef := rep.ChangeSummary.BaselineExecutionID
+		if baseRef == "" {
+			baseRef = "[Initial Baseline]"
+		}
+		fmt.Printf("  Baseline:    %s\n", baseRef)
+		fmt.Printf("  Status:      %s\n", rep.ChangeSummary.ComparisonStatus)
+		fmt.Printf("  Deltas:      +%d New, -%d Resolved, %d Persistent\n",
+			rep.ChangeSummary.Counts.New,
+			rep.ChangeSummary.Counts.Resolved,
+			rep.ChangeSummary.Counts.Persistent,
+		)
+		if rep.ChangeSummary.Counts.SeverityIncreased > 0 || rep.ChangeSummary.Counts.SeverityDecreased > 0 {
+			fmt.Printf("  Severity:    ▲ %d Increased, ▼ %d Decreased\n",
+				rep.ChangeSummary.Counts.SeverityIncreased,
+				rep.ChangeSummary.Counts.SeverityDecreased,
+			)
+		}
+		if rep.ChangeSummary.Counts.Unknown > 0 {
+			fmt.Printf("  Unverified:  ? %d\n", rep.ChangeSummary.Counts.Unknown)
+		}
+		fmt.Println()
+	}
+
+	if frameworks := rep.DetectedFrameworks(); len(frameworks) > 0 {
+		fmt.Printf("Backend Frameworks & Runtimes (%d):\n", len(frameworks))
+		fmt.Println("────────────────────────────────────────")
+		for _, fw := range frameworks {
+			verStr := ""
+			if fw.Version != "" {
+				verStr = " v" + fw.Version
+			}
+			fmt.Printf("  • %s%s: %d findings [%s]\n", fw.Name, verStr, fw.TotalFindings, fw.Status)
+		}
+		fmt.Println()
+	}
 
 	if len(rep.SecurityStories) > 0 {
 		fmt.Printf("Correlated Security Stories (%d):\n", len(rep.SecurityStories))

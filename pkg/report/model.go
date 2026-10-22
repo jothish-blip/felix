@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -142,6 +143,8 @@ const (
 	SourceCloud      = "cloud"
 	SourceAPI        = "api"
 	SourceCorrelated = "correlated"
+	SourceAPK        = "apk"
+	SourceMobile     = "mobile"
 )
 
 // VerificationStatus defines the empirical verification level of a finding.
@@ -362,6 +365,745 @@ type Report struct {
 	Metadata            map[string]any      `json:"metadata,omitempty"`
 }
 
+// CloudServiceScopeItem represents an evaluated cloud or database service and its finding status.
+type CloudServiceScopeItem struct {
+	Name          string `json:"name"`
+	HasFindings   bool   `json:"has_findings"`
+	FindingsCount int    `json:"findings_count"`
+	StatusText    string `json:"status_text"`
+}
+
+// HasCloudFindings returns true if the report contains findings originating from cloud or database detectors.
+func (r Report) HasCloudFindings() bool {
+	for _, f := range r.Findings {
+		if isCloudFinding(f) {
+			return true
+		}
+	}
+	return false
+}
+
+// HasCloudScope returns true if there is any cloud/database activity recorded in scope or findings.
+func (r Report) HasCloudScope() bool {
+	return r.HasCloudFindings() ||
+		len(r.CloudServicesAssessed()) > 0 ||
+		len(r.CloudServicesDiscovered()) > 0 ||
+		len(r.CloudServicesSkipped()) > 0
+}
+
+func extractMetadataStringSlice(m map[string]any, keys ...string) []string {
+	if m == nil {
+		return nil
+	}
+	for _, k := range keys {
+		raw, exists := m[k]
+		if !exists || raw == nil {
+			continue
+		}
+		var res []string
+		switch v := raw.(type) {
+		case []string:
+			res = append(res, v...)
+		case []any:
+			for _, item := range v {
+				if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+					res = append(res, strings.TrimSpace(s))
+				}
+			}
+		case string:
+			for _, p := range strings.Split(v, ",") {
+				if s := strings.TrimSpace(p); s != "" {
+					res = append(res, s)
+				}
+			}
+		}
+		if len(res) > 0 {
+			seen := make(map[string]bool)
+			var unique []string
+			for _, s := range res {
+				norm := strings.ToUpper(strings.TrimSpace(s))
+				if !seen[norm] {
+					seen[norm] = true
+					unique = append(unique, norm)
+				}
+			}
+			sort.Strings(unique)
+			return unique
+		}
+	}
+	return nil
+}
+
+func isCloudFinding(f Finding) bool {
+	if f.Source == SourceCloud {
+		return true
+	}
+	cat := strings.ToLower(f.Category)
+	if strings.Contains(cat, "cloud") ||
+		strings.Contains(cat, "database") ||
+		strings.Contains(cat, "storage") ||
+		strings.Contains(cat, "unauthenticated data access") ||
+		strings.Contains(cat, "connection indicator") {
+		return true
+	}
+	if f.EvidenceDetails.Details != nil {
+		tech := f.EvidenceDetails.Details["technology"]
+		prov := f.EvidenceDetails.Details["provider"]
+		if tech != "" || prov != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func extractFindingService(f Finding) string {
+	tech := ""
+	if f.EvidenceDetails.Details != nil {
+		tech = f.EvidenceDetails.Details["technology"]
+		if tech == "" {
+			tech = f.EvidenceDetails.Details["provider"]
+		}
+	}
+	if tech == "" && f.Source == SourceCloud {
+		tech = f.Category
+	}
+	if tech != "" {
+		return strings.ToUpper(strings.TrimSpace(tech))
+	}
+	return ""
+}
+
+func isFindingActivelyAssessed(f Finding) bool {
+	if f.AnalysisMethod == AnalysisMethodActive {
+		return true
+	}
+	if f.Verification.AnalysisMethod == AnalysisMethodActive {
+		return true
+	}
+	if f.Verification.Status == VerificationVerified {
+		return true
+	}
+	if f.Status == FindingStatusConfirmed {
+		return true
+	}
+	if f.EvidenceDetails.DetectionMethod == "active_probe" || f.EvidenceDetails.DetectionMethod == "empirical_verification" {
+		return true
+	}
+	if f.AnalysisMethod == AnalysisMethodStatic ||
+		f.Verification.Status == VerificationObserved ||
+		f.Verification.Status == VerificationNotVerified ||
+		f.Status == FindingStatusNotTested {
+		return false
+	}
+	return f.Source == SourceCloud
+}
+
+// CloudServicesAssessed returns a sorted, deduplicated slice of cloud and database technologies/services actively assessed.
+// When authoritative assessment metadata is available (e.g. metadata["assessed_services"]), it is preferred.
+func (r Report) CloudServicesAssessed() []string {
+	if meta := extractMetadataStringSlice(r.Metadata, "assessed_services", "cloud_services_assessed"); len(meta) > 0 {
+		return meta
+	}
+
+	seen := make(map[string]bool)
+	var list []string
+	for _, f := range r.Findings {
+		if !isCloudFinding(f) || !isFindingActivelyAssessed(f) {
+			continue
+		}
+		name := extractFindingService(f)
+		if name != "" && !seen[name] {
+			seen[name] = true
+			list = append(list, name)
+		}
+	}
+	sort.Strings(list)
+	return list
+}
+
+// CloudServicesDiscovered returns cloud/database services discovered (e.g. passive indicators, unverified references)
+// but not actively verified or assessed.
+func (r Report) CloudServicesDiscovered() []string {
+	if meta := extractMetadataStringSlice(r.Metadata, "discovered_services", "cloud_services_discovered"); len(meta) > 0 {
+		return meta
+	}
+
+	assessedSet := make(map[string]bool)
+	for _, a := range r.CloudServicesAssessed() {
+		assessedSet[a] = true
+	}
+
+	seen := make(map[string]bool)
+	var list []string
+	for _, f := range r.Findings {
+		if !isCloudFinding(f) || isFindingActivelyAssessed(f) {
+			continue
+		}
+		name := extractFindingService(f)
+		if name != "" && !assessedSet[name] && !seen[name] {
+			seen[name] = true
+			list = append(list, name)
+		}
+	}
+	sort.Strings(list)
+	return list
+}
+
+// CloudServicesSkipped returns cloud/database services that were skipped, out of scope, or disabled.
+func (r Report) CloudServicesSkipped() []string {
+	if meta := extractMetadataStringSlice(r.Metadata, "skipped_services", "cloud_services_skipped"); len(meta) > 0 {
+		return meta
+	}
+
+	seen := make(map[string]bool)
+	var list []string
+	for _, f := range r.Findings {
+		if !isCloudFinding(f) {
+			continue
+		}
+		if f.EvidenceDetails.DetectionStatus == "out_of_scope" || f.Verification.DetectionStatus == "out_of_scope" || f.Status == FindingStatusNotTested {
+			name := extractFindingService(f)
+			if name != "" && !seen[name] {
+				seen[name] = true
+				list = append(list, name)
+			}
+		}
+	}
+	sort.Strings(list)
+	return list
+}
+
+// CloudServicesWithFindings returns cloud/database technologies that have identified security findings.
+func (r Report) CloudServicesWithFindings() []string {
+	seen := make(map[string]bool)
+	var list []string
+	for _, f := range r.Findings {
+		if !isCloudFinding(f) || f.Status == FindingStatusNotTested {
+			continue
+		}
+		name := extractFindingService(f)
+		if name != "" && !seen[name] {
+			seen[name] = true
+			list = append(list, name)
+		}
+	}
+	sort.Strings(list)
+	return list
+}
+
+// CloudAssessedServicesDetails returns structured scope items for each assessed service,
+// indicating whether vulnerabilities were found and distinguishing 0-finding clean services.
+func (r Report) CloudAssessedServicesDetails() []CloudServiceScopeItem {
+	assessed := r.CloudServicesAssessed()
+	findingsByService := make(map[string]int)
+	for _, f := range r.Findings {
+		if !isCloudFinding(f) || f.Status == FindingStatusNotTested {
+			continue
+		}
+		name := extractFindingService(f)
+		if name != "" {
+			findingsByService[name]++
+		}
+	}
+
+	var items []CloudServiceScopeItem
+	for _, s := range assessed {
+		count := findingsByService[s]
+		statusText := "0 Findings (Clean within evaluated scope)"
+		if count > 0 {
+			statusText = fmt.Sprintf("%d Finding(s) Detected", count)
+		}
+		items = append(items, CloudServiceScopeItem{
+			Name:          s,
+			HasFindings:   count > 0,
+			FindingsCount: count,
+			StatusText:    statusText,
+		})
+	}
+	return items
+}
+
+// HasMobileFindings returns true if the report contains findings originating from Android APK detectors.
+func (r Report) HasMobileFindings() bool {
+	for _, f := range r.Findings {
+		if isMobileFinding(f) {
+			return true
+		}
+	}
+	return false
+}
+
+// HasMobileScope returns true if there is any mobile/APK activity recorded in scope or findings.
+func (r Report) HasMobileScope() bool {
+	return r.HasMobileFindings() ||
+		r.Metadata["mobile_metadata"] != nil ||
+		r.Metadata["apk_metadata"] != nil ||
+		r.Metadata["apk_sha256"] != nil ||
+		r.Metadata["package_name"] != nil
+}
+
+func isMobileFinding(f Finding) bool {
+	src := strings.ToLower(f.Source)
+	if src == SourceAPK || src == SourceMobile {
+		return true
+	}
+	cat := strings.ToLower(f.Category)
+	if strings.Contains(cat, "android") || strings.Contains(cat, "apk") {
+		return true
+	}
+	rule := strings.ToUpper(f.RuleID)
+	if strings.HasPrefix(rule, "APK-") {
+		return true
+	}
+	if f.EvidenceDetails.Details != nil {
+		if f.EvidenceDetails.Details["package_name"] != "" ||
+			f.EvidenceDetails.Details["component_name"] != "" ||
+			f.EvidenceDetails.Details["apk_sha256"] != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func (r Report) getMobileMeta() map[string]any {
+	if r.Metadata == nil {
+		return nil
+	}
+	if m, ok := r.Metadata["mobile_metadata"].(map[string]any); ok {
+		return m
+	}
+	if m, ok := r.Metadata["apk_metadata"].(map[string]any); ok {
+		return m
+	}
+	return nil
+}
+
+func (r Report) MobilePackageName() string {
+	if m := r.getMobileMeta(); m != nil {
+		if pkg, ok := m["package_name"].(string); ok && pkg != "" {
+			return pkg
+		}
+	}
+	if pkg, ok := r.Metadata["package_name"].(string); ok && pkg != "" {
+		return pkg
+	}
+	for _, f := range r.Findings {
+		if f.EvidenceDetails.Details != nil {
+			if pkg := f.EvidenceDetails.Details["package_name"]; pkg != "" {
+				return pkg
+			}
+		}
+		if isMobileFinding(f) && f.Target != "" && !strings.Contains(f.Target, "/") && strings.Contains(f.Target, ".") {
+			return f.Target
+		}
+	}
+	if strings.Contains(r.Target, ".") && !strings.Contains(r.Target, "/") {
+		return r.Target
+	}
+	return "Not specified"
+}
+
+func (r Report) MobileVersion() string {
+	if m := r.getMobileMeta(); m != nil {
+		name, _ := m["version_name"].(string)
+		code, _ := m["version_code"].(string)
+		if name != "" && code != "" {
+			return fmt.Sprintf("%s (build %s)", name, code)
+		}
+		if name != "" {
+			return name
+		}
+	}
+	return "Not available"
+}
+
+func (r Report) MobileSHA256() string {
+	if m := r.getMobileMeta(); m != nil {
+		if sha, ok := m["apk_sha256"].(string); ok && sha != "" {
+			return sha
+		}
+	}
+	if sha, ok := r.Metadata["apk_sha256"].(string); ok && sha != "" {
+		return sha
+	}
+	for _, f := range r.Findings {
+		if f.EvidenceDetails.Details != nil {
+			if sha := f.EvidenceDetails.Details["apk_sha256"]; sha != "" {
+				return sha
+			}
+		}
+	}
+	return "Not available"
+}
+
+func (r Report) MobileAssessmentStatus() string {
+	if m := r.getMobileMeta(); m != nil {
+		if st, ok := m["status"].(string); ok && st != "" {
+			return st
+		}
+	}
+	if r.CompletionStatus != "" {
+		return r.CompletionStatus
+	}
+	return "COMPLETED"
+}
+
+func (r Report) MobileAnalysisMode() string {
+	if m := r.getMobileMeta(); m != nil {
+		if mode, ok := m["analysis_mode"].(string); ok && mode != "" {
+			return mode
+		}
+	}
+	return "Static Analysis (Offline)"
+}
+
+func (r Report) MobileSDKInfo() string {
+	if m := r.getMobileMeta(); m != nil {
+		minSDK, _ := m["min_sdk"].(string)
+		targetSDK, _ := m["target_sdk"].(string)
+		if minSDK != "" && targetSDK != "" {
+			return fmt.Sprintf("Min: %s | Target: %s", minSDK, targetSDK)
+		}
+		if targetSDK != "" {
+			return fmt.Sprintf("Target: %s", targetSDK)
+		}
+	}
+	return "Standard Android API"
+}
+
+func (r Report) MobileComponentSummary() string {
+	compSet := make(map[string]bool)
+	for _, f := range r.Findings {
+		if !isMobileFinding(f) {
+			continue
+		}
+		if f.EvidenceDetails.Details != nil {
+			if comp := f.EvidenceDetails.Details["component_name"]; comp != "" {
+				compSet[comp] = true
+			} else if comp := f.EvidenceDetails.Details["resolved_name"]; comp != "" {
+				compSet[comp] = true
+			}
+		}
+		if f.Endpoint != "" && !strings.HasPrefix(f.Endpoint, "http") && strings.Contains(f.Endpoint, ".") {
+			compSet[f.Endpoint] = true
+		}
+	}
+	if len(compSet) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d distinct Android component(s) evaluated", len(compSet))
+}
+
+func (r Report) MobileLimitations() []string {
+	if m := r.getMobileMeta(); m != nil {
+		if raw, ok := m["limitations"]; ok {
+			switch v := raw.(type) {
+			case []string:
+				return v
+			case []any:
+				var res []string
+				for _, item := range v {
+					if s, ok := item.(string); ok && s != "" {
+						res = append(res, s)
+					}
+				}
+				return res
+			}
+		}
+	}
+	return nil
+}
+
+// FrameworkSummary represents the assessment summary for an identified backend framework or runtime.
+type FrameworkSummary struct {
+	Name             string   `json:"name"`
+	Version          string   `json:"version,omitempty"`
+	Category         string   `json:"category,omitempty"` // e.g. "BACKEND_FRAMEWORK", "RUNTIME"
+	TotalFindings    int      `json:"total_findings"`
+	VerifiedCount    int      `json:"verified_count"`
+	DetectedCount    int      `json:"detected_count"`
+	ObservationCount int      `json:"observation_count"`
+	ProtectedCount   int      `json:"protected_count"`
+	Status           string   `json:"status"` // "VERIFIED_VULNERABILITY", "CONFIGURATION_EXPOSURE", "OBSERVED_SURFACE", "PROTECTED", "NO_VULNERABILITIES_OBSERVED"
+	StatusText       string   `json:"status_text"`
+	Endpoints        []string `json:"endpoints,omitempty"`
+}
+
+// CanonicalFrameworkName maps any framework alias or sub-technology to its canonical framework name.
+func CanonicalFrameworkName(fw string) string {
+	clean := strings.TrimSpace(fw)
+	lower := strings.ToLower(clean)
+	switch {
+	case strings.Contains(lower, "spring"):
+		return "Spring Boot"
+	case strings.Contains(lower, "django"):
+		return "Django"
+	case strings.Contains(lower, "fastapi"):
+		return "FastAPI"
+	case strings.Contains(lower, "laravel") || strings.Contains(lower, "ignition") || strings.Contains(lower, "telescope"):
+		return "Laravel"
+	case strings.Contains(lower, "node") || lower == "express" || lower == "nestjs" || lower == "koa":
+		return "Node.js"
+	case lower == "go" || lower == "golang" || lower == "fiber" || lower == "echo" || lower == "gin":
+		return "Go"
+	default:
+		return clean
+	}
+}
+
+// isFrameworkFinding returns true if finding originates from a backend framework detector or assessment module.
+func isFrameworkFinding(f Finding) bool {
+	fw := strings.TrimSpace(f.Framework)
+	if fw != "" && !strings.EqualFold(fw, "generic") {
+		return true
+	}
+	cat := strings.ToLower(f.Category)
+	if strings.Contains(cat, "actuator") ||
+		strings.Contains(cat, "django") ||
+		strings.Contains(cat, "fastapi") ||
+		strings.Contains(cat, "laravel") ||
+		strings.Contains(cat, "ignition") ||
+		strings.Contains(cat, "telescope") ||
+		strings.Contains(cat, "node") ||
+		strings.Contains(cat, "go-") ||
+		strings.Contains(cat, "golang") ||
+		strings.Contains(cat, "pprof") ||
+		strings.Contains(cat, "vars-exposure") {
+		return true
+	}
+	rule := strings.ToUpper(f.RuleID)
+	if strings.HasPrefix(rule, "API-ACTUATOR") ||
+		strings.HasPrefix(rule, "API-DJANGO") ||
+		strings.HasPrefix(rule, "API-FASTAPI") ||
+		strings.HasPrefix(rule, "API-LARAVEL") ||
+		strings.HasPrefix(rule, "API-NODE") ||
+		strings.HasPrefix(rule, "API-GO") {
+		return true
+	}
+	if f.EvidenceDetails.Details != nil {
+		if dfw := f.EvidenceDetails.Details["framework"]; dfw != "" && !strings.EqualFold(dfw, "generic") {
+			return true
+		}
+	}
+	return false
+}
+
+// extractFindingFramework identifies the framework name and version associated with a finding.
+func extractFindingFramework(f Finding) (string, string) {
+	fw := strings.TrimSpace(f.Framework)
+	ver := strings.TrimSpace(f.FrameworkVersion)
+	if fw == "" || strings.EqualFold(fw, "generic") {
+		fw, ver = api.DetectFramework(f.Category, f.EvidenceDetails.Details)
+	}
+	if ver == "" && f.EvidenceDetails.Details != nil {
+		if v, ok := f.EvidenceDetails.Details["framework_version"]; ok && v != "" {
+			ver = strings.TrimSpace(v)
+		} else if v, ok := f.EvidenceDetails.Details["version"]; ok && v != "" {
+			ver = strings.TrimSpace(v)
+		}
+	}
+	canon := CanonicalFrameworkName(fw)
+	if canon == "" || strings.EqualFold(canon, "generic") {
+		canon = "generic"
+	}
+	return canon, ver
+}
+
+// HasFrameworkFindings returns true if the report contains findings originating from backend framework detectors.
+func (r Report) HasFrameworkFindings() bool {
+	for _, f := range r.Findings {
+		if isFrameworkFinding(f) {
+			return true
+		}
+	}
+	return false
+}
+
+// HasFrameworkScope returns true if there is any framework activity recorded in scope, metadata, or findings.
+func (r Report) HasFrameworkScope() bool {
+	if r.HasFrameworkFindings() {
+		return true
+	}
+	if len(r.DetectedFrameworks()) > 0 {
+		return true
+	}
+	if r.Metadata != nil {
+		if r.Metadata["framework_metadata"] != nil ||
+			r.Metadata["frameworks"] != nil ||
+			r.Metadata["backend_frameworks"] != nil ||
+			r.Metadata["frameworks_assessed"] != nil ||
+			r.Metadata["discovered_technologies"] != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// FrameworkFindingCount returns the total number of findings matching a specified framework name or family.
+func (r Report) FrameworkFindingCount(fw string) int {
+	clean := strings.TrimSpace(fw)
+	if clean == "" {
+		return 0
+	}
+	canon := CanonicalFrameworkName(clean)
+	count := 0
+	for _, f := range r.Findings {
+		if !isFrameworkFinding(f) {
+			continue
+		}
+		fCanon, _ := extractFindingFramework(f)
+		if strings.EqualFold(f.Framework, clean) || strings.EqualFold(fCanon, canon) || strings.EqualFold(fCanon, clean) {
+			count++
+		}
+	}
+	return count
+}
+
+// DetectedFrameworks returns a sorted, deduplicated slice of FrameworkSummary for all backend frameworks in the report.
+func (r Report) DetectedFrameworks() []FrameworkSummary {
+	type fwAgg struct {
+		name      string
+		version   string
+		findings  []Finding
+		endpoints map[string]struct{}
+	}
+	groups := make(map[string]*fwAgg)
+
+	// 1. Ingest from findings
+	for _, f := range r.Findings {
+		if !isFrameworkFinding(f) {
+			continue
+		}
+		name, ver := extractFindingFramework(f)
+		if name == "" || strings.EqualFold(name, "generic") {
+			continue
+		}
+		agg, ok := groups[name]
+		if !ok {
+			agg = &fwAgg{
+				name:      name,
+				version:   ver,
+				endpoints: make(map[string]struct{}),
+			}
+			groups[name] = agg
+		}
+		if agg.version == "" && ver != "" {
+			agg.version = ver
+		}
+		agg.findings = append(agg.findings, f)
+		loc := f.Endpoint
+		if loc == "" {
+			loc = f.Target
+		}
+		loc = strings.TrimSpace(loc)
+		if loc != "" {
+			agg.endpoints[loc] = struct{}{}
+		}
+	}
+
+	// 2. Ingest from metadata (assessed or discovered frameworks with 0 findings)
+	metaFWs := extractMetadataStringSlice(r.Metadata, "frameworks_assessed", "backend_frameworks_assessed", "frameworks", "backend_frameworks", "discovered_technologies")
+	for _, m := range metaFWs {
+		canon := CanonicalFrameworkName(m)
+		if canon == "" || strings.EqualFold(canon, "generic") {
+			continue
+		}
+		if _, ok := groups[canon]; !ok {
+			groups[canon] = &fwAgg{
+				name:      canon,
+				endpoints: make(map[string]struct{}),
+			}
+		}
+	}
+
+	if len(groups) == 0 {
+		return nil
+	}
+
+	var results []FrameworkSummary
+	for name, agg := range groups {
+		verifiedCount := 0
+		detectedCount := 0
+		observationCount := 0
+		protectedCount := 0
+
+		for _, f := range agg.findings {
+			sev := NormalizeSeverity(f.Severity)
+			verStatus := NormalizeVerificationStatus(f.Verification.Status)
+
+			isProtected := verStatus == VerificationNotExposed ||
+				f.EvidenceDetails.HTTPStatus == 401 ||
+				f.EvidenceDetails.HTTPStatus == 403 ||
+				strings.Contains(strings.ToLower(f.Category), "restricted") ||
+				strings.Contains(strings.ToLower(f.Category), "protected")
+
+			if isProtected {
+				protectedCount++
+				continue
+			}
+
+			if (verStatus == VerificationVerified || f.Status == FindingStatusConfirmed) &&
+				(sev == SeverityCritical || sev == SeverityHigh) {
+				verifiedCount++
+			} else if sev == SeverityMedium || sev == SeverityLow || verStatus == VerificationDetected {
+				detectedCount++
+			} else {
+				observationCount++
+			}
+		}
+
+		total := len(agg.findings)
+		status := "NO_VULNERABILITIES_OBSERVED"
+		statusText := "Clean (0 Findings Detected in Evaluated Scope)"
+
+		if verifiedCount > 0 {
+			status = "VERIFIED_VULNERABILITY"
+			statusText = fmt.Sprintf("%d Confirmed Vulnerabilit(ies)", verifiedCount)
+		} else if detectedCount > 0 {
+			status = "CONFIGURATION_EXPOSURE"
+			statusText = fmt.Sprintf("%d Configuration Exposure(s)", detectedCount)
+		} else if protectedCount > 0 && observationCount == 0 && total > 0 {
+			status = "PROTECTED"
+			statusText = "Protected / Access Controlled (No Unauthenticated Exposure)"
+		} else if observationCount > 0 || total > 0 {
+			status = "OBSERVED_SURFACE"
+			statusText = fmt.Sprintf("%d Informational Observation(s) / Route Discovered", observationCount)
+		}
+
+		category := "BACKEND_FRAMEWORK"
+		if name == "Go" || name == "Node.js" {
+			category = "RUNTIME"
+		}
+
+		var eps []string
+		for ep := range agg.endpoints {
+			eps = append(eps, ep)
+		}
+		sort.Strings(eps)
+
+		results = append(results, FrameworkSummary{
+			Name:             name,
+			Version:          agg.version,
+			Category:         category,
+			TotalFindings:    total,
+			VerifiedCount:    verifiedCount,
+			DetectedCount:    detectedCount,
+			ObservationCount: observationCount,
+			ProtectedCount:   protectedCount,
+			Status:           status,
+			StatusText:       statusText,
+			Endpoints:        eps,
+		})
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Name < results[j].Name
+	})
+
+	return results
+}
+
+
 // FromSecretFinding converts an Engine 2 secret finding to the unified model.
 func FromSecretFinding(target string, f secrets.SecretFinding) Finding {
 	endpoint := f.FileOrigin
@@ -414,8 +1156,12 @@ func FromSecretFinding(target string, f secrets.SecretFinding) Finding {
 	}
 
 	ruleID := fmt.Sprintf("SEC-%s", strings.ToUpper(strings.ReplaceAll(string(f.Type), "_", "-")))
+	fSeed := f.Fingerprint
+	if fSeed == "" {
+		fSeed = fmt.Sprintf("%s|%s|%s|%d", f.Type, endpoint, f.Redacted, f.LineNumber)
+	}
 	finding := Finding{
-		ID:              fmt.Sprintf("SEC-%s", shortHash(f.Fingerprint)),
+		ID:              fmt.Sprintf("SEC-%s", shortHash(fSeed)),
 		RuleID:          ruleID,
 		Status:          FindingStatusSuspected,
 		AnalysisMethod:  AnalysisMethodStatic,
@@ -464,17 +1210,50 @@ func FromCloudFinding(target string, f cloud.CloudFinding) Finding {
 	verResult := f.Description
 	negEvidence := ""
 	httpStatus := 200
+	fStatus := FindingStatusSuspected
 
 	catLower := strings.ToLower(NormalizeCategory(f.Category))
 	switch {
 	case strings.Contains(catLower, "connection-indicator") || strings.Contains(catLower, "connection indicator") ||
-		f.Details["analysis_method"] == "STATIC_ANALYSIS" || f.Details["indicator_type"] != "":
+		(f.Details["analysis_method"] == "STATIC_ANALYSIS" && f.Details["indicator_type"] != ""):
 		detMethod = "static_analysis"
 		detStatus = "INDICATOR_DETECTED"
 		verStatus = VerificationNotVerified
 		verResult = "Static connection indicator detected; service connectivity and access not verified."
 		negEvidence = "Static analysis only. Zero active network connections or DNS queries were made. Service reachability, credential validity, and resource exposure remain unverified."
 		httpStatus = 0
+		fStatus = FindingStatusSuspected
+
+	case strings.Contains(catLower, "out-of-scope") || strings.Contains(catLower, "out of scope") || f.Details["scope_status"] == "OUT_OF_SCOPE":
+		detMethod = "passive_discovery"
+		detStatus = "SKIPPED_SCOPE"
+		verStatus = VerificationNotVerified
+		verResult = "Discovered service reference is outside authorized assessment scope; active probing skipped."
+		negEvidence = "Out-of-scope target; active probing skipped."
+		httpStatus = 0
+		fStatus = FindingStatusNotTested
+
+	case strings.Contains(catLower, "unverified") || f.Details["access_status"] == "VERIFICATION_SKIPPED":
+		detMethod = "passive_discovery"
+		detStatus = "SKIPPED_ACTIVE"
+		verStatus = VerificationNotVerified
+		verResult = "Discovered service reference in client assets; active probing skipped (active verification disabled)."
+		negEvidence = "Active verification disabled; zero active probes performed."
+		httpStatus = 0
+		fStatus = FindingStatusNotTested
+
+	case strings.Contains(catLower, "service-discovery") || strings.Contains(catLower, "service discovery") ||
+		f.Details["detection_method"] == "PASSIVE_ANALYSIS" || (f.Details["analysis_method"] == "STATIC_ANALYSIS" && f.Details["access_status"] == ""):
+		detMethod = "passive_analysis"
+		detStatus = "DETECTED"
+		verStatus = VerificationObserved
+		verResult = f.Description
+		if verResult == "" {
+			verResult = fmt.Sprintf("Service reference %s identified in client assets.", f.Provider)
+		}
+		negEvidence = "Passive analysis only. Zero active network probes were performed against the service."
+		httpStatus = 0
+		fStatus = FindingStatusSuspected
 
 	case strings.Contains(catLower, "privileged"):
 		detMethod = "static_analysis"
@@ -483,6 +1262,7 @@ func FromCloudFinding(target string, f cloud.CloudFinding) Finding {
 		verResult = "Privileged token detected in client asset; live administrative API calls were not executed."
 		negEvidence = "Privileged credentials were strictly NOT used to probe live cloud infrastructure."
 		httpStatus = 0
+		fStatus = FindingStatusSuspected
 
 	case strings.Contains(catLower, "client-configuration") || strings.Contains(catLower, "anon-key") ||
 		strings.Contains(catLower, "anon_key") || catLower == "anon":
@@ -491,6 +1271,7 @@ func FromCloudFinding(target string, f cloud.CloudFinding) Finding {
 		verStatus = VerificationObserved
 		verResult = "Observed standard publishable client-side key; access permissions governed by Row Level Security."
 		negEvidence = "No privileged credential exposure or unauthorized data access demonstrated."
+		fStatus = FindingStatusConfirmed
 
 	case strings.Contains(catLower, "endpoint-discovered") || strings.Contains(catLower, "provider-discovered") ||
 		strings.Contains(catLower, "cloud-provider"):
@@ -500,14 +1281,57 @@ func FromCloudFinding(target string, f cloud.CloudFinding) Finding {
 		verResult = "Cloud infrastructure component identified in client assets."
 		negEvidence = "Reference only; no unauthorized data access demonstrated."
 		httpStatus = 0
+		fStatus = FindingStatusConfirmed
 
-	case strings.Contains(catLower, "access-denied") || strings.Contains(catLower, "rls-enforced") ||
-		strings.Contains(catLower, "401") || strings.Contains(catLower, "403"):
+	case strings.Contains(catLower, "access-restricted") || strings.Contains(catLower, "access restricted") ||
+		strings.Contains(catLower, "access-denied") || strings.Contains(catLower, "access denied") ||
+		strings.Contains(catLower, "rls-enforced") || strings.Contains(catLower, "401") || strings.Contains(catLower, "403") ||
+		f.Details["access_status"] == "AUTH_CHALLENGED" || f.Details["access_status"] == "READ_DENIED" ||
+		f.HTTPStatus == 401 || f.HTTPStatus == 403:
 		detMethod = "active_probe"
 		detStatus = "OBSERVED"
 		verStatus = VerificationNotExposed
 		verResult = "Probe confirmed authorization boundary: access denied by Row Level Security (RLS) / API authentication (HTTP 401/403)."
 		negEvidence = "HTTP 401/403 response received; no unauthorized data exposure demonstrated."
+		httpStatus = 401
+		fStatus = FindingStatusInconclusive
+
+	case strings.Contains(catLower, "write-access") || strings.Contains(catLower, "write access") || f.Details["access_status"] == "WRITE_VERIFIED":
+		detMethod = "active_probe"
+		detStatus = "DETECTED"
+		verStatus = VerificationVerified
+		verResult = "Probe confirmed write access capability on the target resource."
+		httpStatus = 200
+		fStatus = FindingStatusConfirmed
+
+	case strings.Contains(catLower, "metadata-exposure") || strings.Contains(catLower, "metadata exposure"):
+		detMethod = "active_probe"
+		detStatus = "OBSERVED"
+		verStatus = VerificationVerified
+		verResult = "Unauthenticated probe revealed cluster or system metadata."
+		httpStatus = 200
+		fStatus = FindingStatusConfirmed
+
+	case strings.Contains(catLower, "unauthenticated-data-access") || strings.Contains(catLower, "unauthenticated data access") ||
+		strings.Contains(catLower, "unauthorized-data-exposure") || strings.Contains(catLower, "unauthorized data exposure") ||
+		strings.Contains(catLower, "database-access") || strings.Contains(catLower, "database access") ||
+		f.Details["access_status"] == "UNAUTHENTICATED_ACCESS":
+		detMethod = "active_probe"
+		detStatus = "DETECTED"
+		verStatus = VerificationVerified
+		verResult = "Unauthenticated access probe returned live database/service records."
+		httpStatus = 200
+		fStatus = FindingStatusConfirmed
+
+	case strings.Contains(catLower, "bucket-listing") || strings.Contains(catLower, "bucket listing") ||
+		strings.Contains(catLower, "public-storage") || strings.Contains(catLower, "public storage"):
+		detMethod = "active_probe"
+		detStatus = "DETECTED"
+		verStatus = VerificationVerified
+		verResult = "Anonymous GET request returned storage bucket contents listing."
+		negEvidence = "Bucket contents were not downloaded."
+		httpStatus = 200
+		fStatus = FindingStatusConfirmed
 
 	case strings.Contains(catLower, "public-endpoint") || strings.Contains(catLower, "normal-response"):
 		detMethod = "active_probe"
@@ -515,25 +1339,16 @@ func FromCloudFinding(target string, f cloud.CloudFinding) Finding {
 		verStatus = VerificationVerified
 		verResult = "HTTP 200 OK returned non-sensitive or public data; no unauthorized data exposure demonstrated."
 		negEvidence = "No unauthorized sensitive database records observed."
+		httpStatus = 200
+		fStatus = FindingStatusConfirmed
 
-	case strings.Contains(catLower, "unauthorized-data-exposure") || strings.Contains(catLower, "unauthorized data exposure"):
-		detMethod = "active_probe"
-		detStatus = "DETECTED"
-		verStatus = VerificationVerified
-		verResult = "Unauthenticated GET request returned live database records with HTTP 200 OK."
-
-	case strings.Contains(catLower, "database-access") || strings.Contains(catLower, "database access"):
-		detMethod = "active_probe"
-		detStatus = "DETECTED"
-		verStatus = VerificationVerified
-		verResult = "Unauthenticated GET request to database endpoint returned live data with HTTP 200 OK."
-
-	case strings.Contains(catLower, "bucket-listing") || strings.Contains(catLower, "bucket listing"):
-		detMethod = "active_probe"
-		detStatus = "DETECTED"
-		verStatus = VerificationVerified
-		verResult = "Anonymous GET request returned XML ListBucketResult with bucket contents."
-		negEvidence = "Bucket contents were not downloaded."
+	default:
+		if f.HTTPStatus > 0 {
+			httpStatus = f.HTTPStatus
+		}
+		if verStatus == VerificationVerified || verStatus == VerificationObserved {
+			fStatus = FindingStatusConfirmed
+		}
 	}
 
 	if f.HTTPStatus > 0 {
@@ -565,6 +1380,9 @@ func FromCloudFinding(target string, f cloud.CloudFinding) Finding {
 	if detMethod == "active_probe" {
 		aMethod = AnalysisMethodActive
 	}
+	if m := f.Details["analysis_method"]; m != "" {
+		aMethod = NormalizeAnalysisMethod(AnalysisMethod(m))
+	}
 
 	ver := VerificationRecord{
 		Status:          verStatus,
@@ -574,15 +1392,13 @@ func FromCloudFinding(target string, f cloud.CloudFinding) Finding {
 	}
 
 	ruleID := fmt.Sprintf("CLD-%s-%s", strings.ToUpper(string(f.Provider)), strings.ToUpper(strings.ReplaceAll(f.Category, "_", "-")))
-	fStatus := FindingStatusSuspected
-	if verStatus == VerificationVerified || verStatus == VerificationObserved {
-		fStatus = FindingStatusConfirmed
-	} else if verStatus == VerificationNotExposed {
-		fStatus = FindingStatusInconclusive
+	cldSeed := f.Fingerprint
+	if cldSeed == "" {
+		cldSeed = fmt.Sprintf("%s|%s|%s|%s", f.Provider, f.Category, target, f.Endpoint)
 	}
 
 	finding := Finding{
-		ID:              fmt.Sprintf("CLD-%s", shortHash(f.Fingerprint)),
+		ID:              fmt.Sprintf("CLD-%s", shortHash(cldSeed)),
 		RuleID:          ruleID,
 		Status:          fStatus,
 		AnalysisMethod:  aMethod,
@@ -1004,8 +1820,13 @@ func FromAPIFinding(target string, f api.APIFinding) Finding {
 		fStatus = FindingStatusInconclusive
 	}
 
+	apiSeed := f.Fingerprint
+	if apiSeed == "" {
+		apiSeed = fmt.Sprintf("%s|%s|%s|%s", ruleID, target, f.Endpoint, f.Method)
+	}
+
 	finding := Finding{
-		ID:                    fmt.Sprintf("API-%s", shortHash(f.Fingerprint)),
+		ID:                    fmt.Sprintf("API-%s", shortHash(apiSeed)),
 		RuleID:                ruleID,
 		Status:                fStatus,
 		ClassificationOutcome: f.ClassificationOutcome,
@@ -1165,13 +1986,23 @@ func FromCrawlerDiscovery(target string, a crawler.Asset) Finding {
 
 func shortHash(s string) string {
 	clean := strings.TrimSpace(s)
-	if len(clean) >= 8 {
-		return clean[:8]
+	if len(clean) == 0 {
+		h := sha256.Sum256([]byte(""))
+		return hex.EncodeToString(h[:8]) // 16 hex characters, fully deterministic
 	}
-	if len(clean) > 0 {
-		return clean
+	isHex := true
+	for i := 0; i < len(clean); i++ {
+		c := clean[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			isHex = false
+			break
+		}
 	}
-	return fmt.Sprintf("%x", time.Now().UnixNano())[:8]
+	if isHex && len(clean) >= 32 {
+		return strings.ToLower(clean[:16])
+	}
+	h := sha256.Sum256([]byte(clean))
+	return hex.EncodeToString(h[:8]) // 16 hex characters (64 bits of entropy)
 }
 
 // AddAffectedAsset appends a unique asset ID to AffectedAssetIDs and sets PrimaryAssetID if empty.
@@ -1390,6 +2221,8 @@ func DefaultEvidenceType(sourceEngine string) string {
 		return "cloud_resource"
 	case SourceAPI:
 		return "http_response"
+	case SourceAPK, SourceMobile:
+		return "apk_artifact"
 	case "auth":
 		return "token_artifact"
 	case "verification":
@@ -1410,6 +2243,8 @@ func DefaultCollectionMethod(sourceEngine string) string {
 		return "active_probe"
 	case SourceAPI:
 		return "active_probe"
+	case SourceAPK, SourceMobile:
+		return "static_apk_analysis"
 	case "auth":
 		return "static_jwt_header_analysis"
 	case "verification":

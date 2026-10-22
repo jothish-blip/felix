@@ -34,7 +34,19 @@ type authorizeRequest struct {
 }
 
 func (s *Server) handleListAssessments(w http.ResponseWriter, r *http.Request) {
+	authCtx := s.getAuthContext(r)
 	clientID := r.URL.Query().Get("client_id")
+
+	if !authCtx.IsAdmin() {
+		if clientID != "" && !authCtx.Authorizes(clientID, "", "") {
+			s.respondError(w, http.StatusForbidden, "forbidden: cannot list assessments for other clients")
+			return
+		}
+		if clientID == "" {
+			clientID = authCtx.ClientID
+		}
+	}
+
 	asms, err := s.store.ListAssessments(clientID)
 	if err != nil {
 		s.respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to list assessments: %v", err))
@@ -44,13 +56,21 @@ func (s *Server) handleListAssessments(w http.ResponseWriter, r *http.Request) {
 		asms = []assessment.Assessment{}
 	}
 
+	// Filter assessments by caller's authorization boundary
+	var authorizedAsms []assessment.Assessment
+	for _, a := range asms {
+		if authCtx.Authorizes(a.ClientID, "", "") {
+			authorizedAsms = append(authorizedAsms, a)
+		}
+	}
+
 	// Attach target count and findings summary to each assessment
 	type asmSummaryItem struct {
 		assessment.Assessment
 		TargetCount int `json:"target_count"`
 	}
-	items := make([]asmSummaryItem, len(asms))
-	for i, a := range asms {
+	items := make([]asmSummaryItem, len(authorizedAsms))
+	for i, a := range authorizedAsms {
 		targets, _ := s.store.GetTargets(a.ID)
 		items[i] = asmSummaryItem{
 			Assessment:  a,
@@ -65,6 +85,11 @@ func (s *Server) handleListAssessments(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCreateAssessment(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.requireRole(w, r, RoleAdmin, RoleOperator)
+	if !ok {
+		return
+	}
+
 	var req createAssessmentRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.respondError(w, http.StatusBadRequest, "invalid request payload")
@@ -79,6 +104,12 @@ func (s *Server) handleCreateAssessment(w http.ResponseWriter, r *http.Request) 
 	}
 	if req.Name == "" {
 		s.respondError(w, http.StatusBadRequest, "assessment name is required")
+		return
+	}
+
+	authCtx := s.getAuthContext(r)
+	if !authCtx.Authorizes(req.ClientID, "", "") {
+		s.respondError(w, http.StatusForbidden, "forbidden: cannot create assessment for other client")
 		return
 	}
 
@@ -116,9 +147,14 @@ func (s *Server) handleCreateAssessment(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	opID := s.cfg.OperatorID
+	if sess != nil && sess.OperatorID != "" {
+		opID = sess.OperatorID
+	}
+
 	_ = s.store.RecordAuditEvent(&assessment.AuditEvent{
 		AssessmentID: asm.ID,
-		OperatorID:   s.cfg.OperatorID,
+		OperatorID:   opID,
 		ActionType:   "ASSESSMENT_CREATED",
 		EntityType:   "ASSESSMENT",
 		EntityID:     asm.ID,
@@ -130,14 +166,8 @@ func (s *Server) handleCreateAssessment(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) handleGetAssessment(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if id == "" {
-		s.respondError(w, http.StatusBadRequest, "missing assessment id")
-		return
-	}
-
-	asm, err := s.store.GetAssessment(id)
-	if err != nil {
-		s.respondError(w, http.StatusNotFound, fmt.Sprintf("assessment not found: %v", err))
+	asm, ok := s.requireAssessment(w, r, id)
+	if !ok {
 		return
 	}
 
@@ -197,15 +227,14 @@ func (s *Server) handleGetAssessment(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAddTarget(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if id == "" {
-		s.respondError(w, http.StatusBadRequest, "missing assessment id")
+	sess, ok := s.requireRole(w, r, RoleAdmin, RoleOperator)
+	if !ok {
 		return
 	}
 
-	asm, err := s.store.GetAssessment(id)
-	if err != nil {
-		s.respondError(w, http.StatusNotFound, fmt.Sprintf("assessment not found: %v", err))
+	id := r.PathValue("id")
+	asm, ok := s.requireAssessment(w, r, id)
+	if !ok {
 		return
 	}
 
@@ -241,9 +270,14 @@ func (s *Server) handleAddTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	opID := s.cfg.OperatorID
+	if sess != nil && sess.OperatorID != "" {
+		opID = sess.OperatorID
+	}
+
 	_ = s.store.RecordAuditEvent(&assessment.AuditEvent{
 		AssessmentID: asm.ID,
-		OperatorID:   s.cfg.OperatorID,
+		OperatorID:   opID,
 		ActionType:   "TARGET_ADDED",
 		EntityType:   "TARGET",
 		EntityID:     t.ID,
@@ -254,15 +288,14 @@ func (s *Server) handleAddTarget(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if id == "" {
-		s.respondError(w, http.StatusBadRequest, "missing assessment id")
+	sess, ok := s.requireRole(w, r, RoleAdmin, RoleOperator)
+	if !ok {
 		return
 	}
 
-	asm, err := s.store.GetAssessment(id)
-	if err != nil {
-		s.respondError(w, http.StatusNotFound, fmt.Sprintf("assessment not found: %v", err))
+	id := r.PathValue("id")
+	asm, ok := s.requireAssessment(w, r, id)
+	if !ok {
 		return
 	}
 
@@ -316,9 +349,14 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		_ = s.store.UpdateAssessmentStatus(asm.ID, assessment.StatusReady)
 	}
 
+	opID := s.cfg.OperatorID
+	if sess != nil && sess.OperatorID != "" {
+		opID = sess.OperatorID
+	}
+
 	_ = s.store.RecordAuditEvent(&assessment.AuditEvent{
 		AssessmentID: asm.ID,
-		OperatorID:   s.cfg.OperatorID,
+		OperatorID:   opID,
 		ActionType:   "AUTHORIZATION_GRANTED",
 		EntityType:   "AUTHORIZATION",
 		EntityID:     authRec.ID,

@@ -27,14 +27,18 @@ const (
 
 // WebhookConfig contains settings for the Webhook notification provider.
 type WebhookConfig struct {
-	URL               string
-	Secret            string // HMAC-SHA256 secret key for request signature verification
-	Timeout           time.Duration
-	AllowInsecureHTTP bool
-	AllowPrivateIPs   bool
-	AllowLoopback     bool
-	MaxPayloadBytes   int
-	HTTPClient        *http.Client // Optional custom client (used in tests)
+	URL                string
+	Secret             string        // HMAC-SHA256 secret key for request signature verification
+	PreviousSecret     string        // Optional previous HMAC secret during key rotation window
+	RequireSigning     bool          // If true, deliveries MUST be signed; fails closed if secret is empty
+	SignatureVersion   string        // Signature version (default "v1", supports "legacy" or "sha256")
+	SignatureTolerance time.Duration // Timestamp tolerance window (default 300s)
+	Timeout            time.Duration
+	AllowInsecureHTTP  bool
+	AllowPrivateIPs    bool
+	AllowLoopback      bool
+	MaxPayloadBytes    int
+	HTTPClient         *http.Client // Optional custom client (used in tests)
 }
 
 // WebhookProvider implements NotificationProvider via HTTP POST.
@@ -53,85 +57,104 @@ func NewWebhookProvider(cfg WebhookConfig) (*WebhookProvider, error) {
 	}
 
 	p := &WebhookProvider{
-		cfg: cfg,
+		cfg:    cfg,
+		client: newHardenedHTTPClient(cfg),
 	}
 
 	if err := p.ValidateConfig(); err != nil {
 		return nil, err
 	}
 
+	return p, nil
+}
+
+// newHardenedHTTPClient constructs a hardened HTTP client with connection-time DNS verification
+// to eliminate SSRF, DNS rebinding, and TOCTOU vulnerabilities across all notification providers.
+func newHardenedHTTPClient(cfg WebhookConfig) *http.Client {
 	if cfg.HTTPClient != nil {
-		p.client = cfg.HTTPClient
-	} else {
-		ssrfCfg := SSRFConfig{
-			AllowInsecureHTTP: cfg.AllowInsecureHTTP,
-			AllowPrivateIPs:   cfg.AllowPrivateIPs,
-			AllowLoopback:     cfg.AllowLoopback,
-			MaxRedirects:      3,
-			ResolveTimeout:    cfg.Timeout,
-		}
-
-		// Hardened HTTP transport with connection-time DNS verification
-		// to eliminate DNS rebinding and TOCTOU security gaps.
-		transport := &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				host, port, err := net.SplitHostPort(addr)
-				if err != nil {
-					return nil, err
-				}
-
-				// Resolve target host
-				resolver := &net.Resolver{}
-				ips, err := resolver.LookupIP(ctx, "ip", host)
-				if err != nil {
-					return nil, fmt.Errorf("failed to resolve %s: %w", secrets.RedactText(host), err)
-				}
-				if len(ips) == 0 {
-					return nil, fmt.Errorf("no IP addresses resolved for %s", secrets.RedactText(host))
-				}
-
-				// Check each resolved IP address right before socket connection.
-				// Fail-closed security rule: ALL resolved IPs must be permitted.
-				// If a dual-homed host or DNS rebinding attempt resolves to any prohibited IP, reject!
-				for _, ip := range ips {
-					if vErr := ValidateIP(ip, cfg.AllowPrivateIPs, cfg.AllowLoopback); vErr != nil {
-						return nil, fmt.Errorf("%w: destination %s resolved to prohibited IP %s: %v", ErrSSRFDestinationBlocked, secrets.RedactText(host), ip.String(), vErr)
-					}
-				}
-				safeIP := ips[0]
-
-				dialer := &net.Dialer{
-					Timeout:   cfg.Timeout,
-					KeepAlive: 30 * time.Second,
-				}
-				// Dial the verified safe IP; TLS handshake will still use SNI from req.URL.Hostname()
-				return dialer.DialContext(ctx, network, net.JoinHostPort(safeIP.String(), port))
-			},
-			ForceAttemptHTTP2:     true,
-			MaxIdleConns:          100,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
-		}
-
-		p.client = &http.Client{
-			Transport: transport,
-			Timeout:   cfg.Timeout,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if len(via) >= ssrfCfg.MaxRedirects {
-					return ErrTooManyRedirects
-				}
-				// Verify destination URL on each redirect hop
-				if _, err := ValidateEndpoint(req.URL.String(), ssrfCfg); err != nil {
-					return fmt.Errorf("%w: %v", ErrRedirectToUnsafeTarget, err)
-				}
-				return nil
-			},
-		}
+		return cfg.HTTPClient
 	}
 
-	return p, nil
+	ssrfCfg := SSRFConfig{
+		AllowInsecureHTTP: cfg.AllowInsecureHTTP,
+		AllowPrivateIPs:   cfg.AllowPrivateIPs,
+		AllowLoopback:     cfg.AllowLoopback,
+		MaxRedirects:      3,
+		ResolveTimeout:    cfg.Timeout,
+	}
+
+	// Hardened HTTP transport with connection-time DNS verification
+	// to eliminate DNS rebinding and TOCTOU security gaps.
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, port, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, err
+			}
+
+			// Resolve target host
+			var ips []net.IP
+			if ipLit := net.ParseIP(host); ipLit != nil {
+				ips = []net.IP{ipLit}
+			} else {
+				resolver := &net.Resolver{}
+				var lErr error
+				ips, lErr = resolver.LookupIP(ctx, "ip", host)
+				if lErr != nil {
+					return nil, fmt.Errorf("failed to resolve %s: %w", secrets.RedactText(host), lErr)
+				}
+			}
+			if len(ips) == 0 {
+				return nil, fmt.Errorf("no IP addresses resolved for %s", secrets.RedactText(host))
+			}
+
+			// Check each resolved IP address right before socket connection.
+			// Fail-closed security rule: ALL resolved IPs must be permitted.
+			// If a dual-homed host or DNS rebinding attempt resolves to any prohibited IP, reject!
+			for _, ip := range ips {
+				if vErr := ValidateIP(ip, cfg.AllowPrivateIPs, cfg.AllowLoopback); vErr != nil {
+					return nil, fmt.Errorf("%w: destination %s resolved to prohibited IP %s: %v", ErrSSRFDestinationBlocked, secrets.RedactText(host), ip.String(), vErr)
+				}
+			}
+			safeIP := ips[0]
+
+			dialer := &net.Dialer{
+				Timeout:   cfg.Timeout,
+				KeepAlive: 30 * time.Second,
+			}
+			// Dial the verified safe IP; TLS handshake will still use SNI from req.URL.Hostname()
+			return dialer.DialContext(ctx, network, net.JoinHostPort(safeIP.String(), port))
+		},
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+
+	return &http.Client{
+		Transport: transport,
+		Timeout:   cfg.Timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= ssrfCfg.MaxRedirects {
+				return ErrTooManyRedirects
+			}
+			// Verify destination URL on each redirect hop
+			if _, err := ValidateEndpoint(req.URL.String(), ssrfCfg); err != nil {
+				return fmt.Errorf("%w: %v", ErrRedirectToUnsafeTarget, err)
+			}
+			// Security hardening: strip sensitive headers on cross-origin redirects
+			if len(via) > 0 && !strings.EqualFold(req.URL.Host, via[0].URL.Host) {
+				req.Header.Del(HeaderFelixSignature)
+				req.Header.Del(HeaderFelixTimestamp)
+				req.Header.Del(HeaderFelixDelivery)
+				req.Header.Del("Authorization")
+				req.Header.Del("Cookie")
+			}
+			return nil
+		},
+	}
 }
 
 // Name returns "webhook".
@@ -139,8 +162,12 @@ func (p *WebhookProvider) Name() string {
 	return "webhook"
 }
 
-// ValidateConfig checks URL validity, protocol schemes, and SSRF rules.
+// ValidateConfig checks URL validity, protocol schemes, SSRF rules, and mandatory signing keys.
 func (p *WebhookProvider) ValidateConfig() error {
+	if p.cfg.RequireSigning && strings.TrimSpace(p.cfg.Secret) == "" {
+		return fmt.Errorf("invalid webhook configuration: %w", ErrSigningKeyRequired)
+	}
+
 	trimmed := strings.TrimSpace(p.cfg.URL)
 	if trimmed == "" {
 		return errors.New("webhook URL cannot be empty")
@@ -166,6 +193,15 @@ func (p *WebhookProvider) ValidateConfig() error {
 func (p *WebhookProvider) Send(ctx context.Context, notif *Notification) (*DeliveryReceipt, error) {
 	if notif == nil {
 		return nil, &DeliveryError{Permanent: true, Message: "notification is nil"}
+	}
+
+	// 1. Mandatory signing enforcement: fail closed if signing required but no key configured
+	if p.cfg.RequireSigning && strings.TrimSpace(p.cfg.Secret) == "" {
+		return nil, &DeliveryError{
+			Permanent: true,
+			Message:   "signing is required by configuration, but no webhook secret is configured",
+			Err:       ErrSigningKeyRequired,
+		}
 	}
 
 	payload := notif.ToWebhookPayload()
@@ -195,19 +231,31 @@ func (p *WebhookProvider) Send(ctx context.Context, notif *Notification) (*Deliv
 		return nil, &DeliveryError{Permanent: true, Message: fmt.Sprintf("failed to create request: %v", secrets.RedactText(err.Error())), Err: err}
 	}
 
-	nowStr := time.Now().UTC().Format(time.RFC3339)
+	nowUnix := time.Now().UTC().Unix()
+	timestampStr := fmt.Sprintf("%d", nowUnix)
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	req.Header.Set("User-Agent", DefaultWebhookUserAgent)
 	req.Header.Set("X-Felix-Event", notif.EventType)
 	req.Header.Set("X-Felix-Delivery", notif.ID) // Stable delivery ID across retries
-	req.Header.Set("X-Felix-Timestamp", nowStr)
+	req.Header.Set("X-Felix-Timestamp", timestampStr)
 
 	// HMAC-SHA256 signature if secret is provided
-	if p.cfg.Secret != "" {
-		mac := hmac.New(sha256.New, []byte(p.cfg.Secret))
-		mac.Write(bodyBytes)
-		sigHex := hex.EncodeToString(mac.Sum(nil))
-		req.Header.Set("X-Felix-Signature", fmt.Sprintf("sha256=%s", sigHex))
+	if strings.TrimSpace(p.cfg.Secret) != "" {
+		if strings.EqualFold(p.cfg.SignatureVersion, "sha256") || strings.EqualFold(p.cfg.SignatureVersion, "legacy") {
+			legacySig := ComputeWebhookSignature(p.cfg.Secret, bodyBytes)
+			req.Header.Set("X-Felix-Signature", fmt.Sprintf("sha256=%s", legacySig))
+		} else {
+			sigV1 := ComputeSignatureV1(p.cfg.Secret, timestampStr, bodyBytes)
+			var sigParts []string
+			sigParts = append(sigParts, fmt.Sprintf("v1=%s", sigV1))
+
+			// Key rotation support: also append signature for previous secret if configured
+			if strings.TrimSpace(p.cfg.PreviousSecret) != "" {
+				sigPrev := ComputeSignatureV1(p.cfg.PreviousSecret, timestampStr, bodyBytes)
+				sigParts = append(sigParts, fmt.Sprintf("v1=%s", sigPrev))
+			}
+			req.Header.Set("X-Felix-Signature", strings.Join(sigParts, ","))
+		}
 	}
 
 	resp, err := p.client.Do(req)

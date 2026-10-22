@@ -21,6 +21,9 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/v1/assessments/{id}", s.handleGetAssessment)
 	s.mux.HandleFunc("POST /api/v1/assessments/{id}/targets", s.handleAddTarget)
 	s.mux.HandleFunc("POST /api/v1/assessments/{id}/authorize", s.handleAuthorize)
+	s.mux.HandleFunc("GET /api/v1/assessments/{id}/history", s.handleGetAssessmentHistory)
+	s.mux.HandleFunc("GET /api/v1/assessments/{id}/compare", s.handleCompareAssessments)
+	s.mux.HandleFunc("GET /api/v1/compare", s.handleDirectCompare)
 
 	// Scans
 	s.mux.HandleFunc("POST /api/v1/assessments/{id}/scan", s.handleStartScan)
@@ -32,12 +35,15 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/v1/assessments/{id}/findings/{findingId}", s.handleGetFinding)
 	s.mux.HandleFunc("POST /api/v1/assessments/{id}/findings/{findingId}/review", s.handleReviewFinding)
 
-	// Commercial Reports
+	// Commercial Reports & Reconciliation (Phase 10.9)
 	s.mux.HandleFunc("POST /api/v1/assessments/{id}/reports/generate", s.handleGenerateReport)
 	s.mux.HandleFunc("GET /api/v1/assessments/{id}/reports", s.handleListReports)
 	s.mux.HandleFunc("GET /api/v1/assessments/{id}/reports/{reportId}", s.handleGetReport)
 	s.mux.HandleFunc("GET /api/v1/assessments/{id}/reports/{reportId}/html", s.handleDownloadReportHTML)
 	s.mux.HandleFunc("GET /api/v1/assessments/{id}/reports/{reportId}/json", s.handleDownloadReportJSON)
+	s.mux.HandleFunc("POST /api/v1/assessments/{id}/reports/{reportId}/token", s.handleIssueDownloadToken)
+	s.mux.HandleFunc("POST /api/v1/assessments/{id}/reports/{reportId}/download-token", s.handleIssueDownloadToken)
+	s.mux.HandleFunc("GET /api/v1/assessments/{id}/reconcile", s.handleReconcileAssessmentReport)
 
 	// Report Delivery
 	s.mux.HandleFunc("POST /api/v1/assessments/{id}/reports/{reportId}/deliver", s.handleCreateDelivery)

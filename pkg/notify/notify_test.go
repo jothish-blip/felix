@@ -106,8 +106,8 @@ func TestWebhookProviderDelivery(t *testing.T) {
 	if receivedDelivery != n.ID {
 		t.Errorf("expected delivery ID %s, got %s", n.ID, receivedDelivery)
 	}
-	if !strings.HasPrefix(receivedSig, "sha256=") {
-		t.Errorf("expected sha256= prefix in signature, got %s", receivedSig)
+	if !strings.HasPrefix(receivedSig, "v1=") && !strings.HasPrefix(receivedSig, "sha256=") {
+		t.Errorf("expected v1= or sha256= prefix in signature, got %s", receivedSig)
 	}
 }
 

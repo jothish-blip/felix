@@ -25,14 +25,8 @@ type enrichedFindingItem struct {
 
 func (s *Server) handleListFindings(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if id == "" {
-		s.respondError(w, http.StatusBadRequest, "missing assessment id")
-		return
-	}
-
-	asm, err := s.store.GetAssessment(id)
-	if err != nil {
-		s.respondError(w, http.StatusNotFound, fmt.Sprintf("assessment not found: %v", err))
+	asm, ok := s.requireAssessment(w, r, id)
+	if !ok {
 		return
 	}
 
@@ -104,9 +98,8 @@ func (s *Server) handleGetFinding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	asm, err := s.store.GetAssessment(id)
-	if err != nil {
-		s.respondError(w, http.StatusNotFound, fmt.Sprintf("assessment not found: %v", err))
+	asm, ok := s.requireAssessment(w, r, id)
+	if !ok {
 		return
 	}
 
@@ -146,6 +139,11 @@ func (s *Server) handleGetFinding(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleReviewFinding(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.requireRole(w, r, RoleAdmin, RoleOperator)
+	if !ok {
+		return
+	}
+
 	id := r.PathValue("id")
 	findingID := r.PathValue("findingId")
 	if id == "" || findingID == "" {
@@ -153,9 +151,8 @@ func (s *Server) handleReviewFinding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	asm, err := s.store.GetAssessment(id)
-	if err != nil {
-		s.respondError(w, http.StatusNotFound, fmt.Sprintf("assessment not found: %v", err))
+	asm, ok := s.requireAssessment(w, r, id)
+	if !ok {
 		return
 	}
 
@@ -200,12 +197,17 @@ func (s *Server) handleReviewFinding(w http.ResponseWriter, r *http.Request) {
 		targetFindingKey = finding.ID
 	}
 
+	opID := s.cfg.OperatorID
+	if sess != nil && sess.OperatorID != "" {
+		opID = sess.OperatorID
+	}
+
 	review := &assessment.FindingReview{
 		ID:           uuid.New().String(),
 		AssessmentID: asm.ID,
 		FindingID:    targetFindingKey,
 		ReviewStatus: status,
-		ReviewedBy:   s.cfg.OperatorID,
+		ReviewedBy:   opID,
 		ReviewedAt:   now,
 		Notes:        notes,
 		CreatedAt:    now,
@@ -221,11 +223,11 @@ func (s *Server) handleReviewFinding(w http.ResponseWriter, r *http.Request) {
 
 	_ = s.store.RecordAuditEvent(&assessment.AuditEvent{
 		AssessmentID: asm.ID,
-		OperatorID:   s.cfg.OperatorID,
+		OperatorID:   opID,
 		ActionType:   "FINDING_REVIEWED",
 		EntityType:   "FINDING",
 		EntityID:     targetFindingKey,
-		DetailsJSON:  fmt.Sprintf(`{"status":%q,"notes":%q,"reviewed_by":%q}`, status, notes, s.cfg.OperatorID),
+		DetailsJSON:  fmt.Sprintf(`{"status":%q,"notes":%q,"reviewed_by":%q}`, status, notes, opID),
 	})
 
 	s.respondJSON(w, http.StatusOK, review)
