@@ -5,8 +5,10 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -121,5 +123,36 @@ func TestExtractTarGz(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(destDir, "felix")); err != nil {
 		t.Errorf("felix was not extracted: %v", err)
+	}
+}
+
+func TestExtractArchive_EntryCountLimit(t *testing.T) {
+	tmpDir := t.TempDir()
+	zipPath := filepath.Join(tmpDir, "too_many_entries.zip")
+	destDir := filepath.Join(tmpDir, "extracted")
+
+	buf := new(bytes.Buffer)
+	zw := zip.NewWriter(buf)
+
+	// Create MaxArchiveEntries + 1 entries
+	for i := 0; i <= MaxArchiveEntries; i++ {
+		w, err := zw.Create(fmt.Sprintf("file_%d.txt", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.Write([]byte("x"))
+	}
+	zw.Close()
+
+	if err := os.WriteFile(zipPath, buf.Bytes(), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := ExtractArchive(zipPath, destDir)
+	if err == nil {
+		t.Fatal("expected ExtractArchive to fail with entry count limit exceeded, got nil")
+	}
+	if !strings.Contains(err.Error(), "exceeds limit") {
+		t.Fatalf("expected error mentioning exceeds limit, got: %v", err)
 	}
 }

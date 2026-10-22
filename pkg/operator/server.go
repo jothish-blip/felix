@@ -28,6 +28,16 @@ const (
 	RoleViewer   = "viewer"
 )
 
+// IsValidRole reports whether role matches one of the recognized operator roles.
+func IsValidRole(role string) bool {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case RoleAdmin, RoleOperator, RoleViewer:
+		return true
+	default:
+		return false
+	}
+}
+
 // DownloadToken represents a short-lived, narrowly scoped credential for safe browser report downloads.
 type DownloadToken struct {
 	Token        string    `json:"token"`
@@ -108,7 +118,7 @@ func (s *UserSession) IsValid() bool {
 
 // AuthContext returns the assessment.TenantAuthContext corresponding to this session.
 func (s *UserSession) AuthContext() assessment.TenantAuthContext {
-	if s == nil {
+	if s == nil || !IsValidRole(s.Role) {
 		return assessment.TenantAuthContext{}
 	}
 	if strings.EqualFold(s.Role, RoleAdmin) {
@@ -323,7 +333,7 @@ func (s *Server) validateReportPathContainment(reportFilePath string) (string, e
 
 		// Verify containment using filepath.Rel
 		rel, err := filepath.Rel(cleanRoot, resolvedTarget)
-		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		if err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			return resolvedTarget, nil
 		}
 	}
@@ -455,7 +465,7 @@ func (s *Server) requireAssessment(w http.ResponseWriter, r *http.Request, asses
 	}
 	asm, err := s.store.GetAssessment(assessmentID)
 	if err != nil {
-		s.respondError(w, http.StatusNotFound, fmt.Sprintf("assessment not found: %v", err))
+		s.respondError(w, http.StatusNotFound, "assessment not found")
 		return nil, false
 	}
 	authCtx := s.getAuthContext(r)
@@ -699,6 +709,11 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
 		if !sess.IsValid() {
 			s.respondError(w, http.StatusUnauthorized, "unauthorized: expired or revoked operator token")
+			return
+		}
+
+		if !IsValidRole(sess.Role) {
+			s.respondError(w, http.StatusForbidden, fmt.Sprintf("forbidden: role %q lacks sufficient permissions", sess.Role))
 			return
 		}
 

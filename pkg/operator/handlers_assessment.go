@@ -115,7 +115,7 @@ func (s *Server) handleCreateAssessment(w http.ResponseWriter, r *http.Request) 
 
 	// Verify client exists
 	if _, err := s.store.GetClient(req.ClientID); err != nil {
-		s.respondError(w, http.StatusBadRequest, fmt.Sprintf("client not found: %v", err))
+		s.respondError(w, http.StatusBadRequest, "client not found")
 		return
 	}
 

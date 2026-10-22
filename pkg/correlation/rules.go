@@ -31,71 +31,73 @@ func EvaluateRules(findings []NormalizedFinding, cfg Config) []Relationship {
 			}
 			f2 := &findings[j]
 
-			pairKey := fmt.Sprintf("%s->%s", f1.ID, f2.ID)
-			if seenDirectedPairs[pairKey] {
-				continue
+			if len(seenDirectedPairs) > 0 {
+				pairKey := f1.ID + "->" + f2.ID
+				if seenDirectedPairs[pairKey] {
+					continue
+				}
 			}
 
 			if rulesEnabled[RuleCOR01] {
 				if r, ok := evaluateCOR01(f1, f2); ok {
 					rels = append(rels, r)
-					seenDirectedPairs[pairKey] = true
+					seenDirectedPairs[f1.ID+"->"+f2.ID] = true
 					continue
 				}
 			}
 			if rulesEnabled[RuleCOR02] {
 				if r, ok := evaluateCOR02(f1, f2); ok {
 					rels = append(rels, r)
-					seenDirectedPairs[pairKey] = true
+					seenDirectedPairs[f1.ID+"->"+f2.ID] = true
 					continue
 				}
 			}
 			if rulesEnabled[RuleCOR03] {
 				if r, ok := evaluateCOR03(f1, f2); ok {
 					rels = append(rels, r)
-					seenDirectedPairs[pairKey] = true
+					seenDirectedPairs[f1.ID+"->"+f2.ID] = true
 					continue
 				}
 			}
 			if rulesEnabled[RuleCOR04] {
 				if r, ok := evaluateCOR04(f1, f2); ok {
 					rels = append(rels, r)
-					seenDirectedPairs[pairKey] = true
+					seenDirectedPairs[f1.ID+"->"+f2.ID] = true
 					continue
 				}
 			}
 			if rulesEnabled[RuleCOR05] {
 				if r, ok := evaluateCOR05(f1, f2); ok {
 					rels = append(rels, r)
-					seenDirectedPairs[pairKey] = true
+					seenDirectedPairs[f1.ID+"->"+f2.ID] = true
 					continue
 				}
 			}
 			if rulesEnabled[RuleCOR06] {
 				if r, ok := evaluateCOR06(f1, f2); ok {
 					rels = append(rels, r)
-					seenDirectedPairs[pairKey] = true
+					seenDirectedPairs[f1.ID+"->"+f2.ID] = true
 					continue
 				}
 			}
 			if rulesEnabled[RuleCOR07] {
 				if r, ok := evaluateCOR07(f1, f2); ok {
 					rels = append(rels, r)
-					seenDirectedPairs[pairKey] = true
+					seenDirectedPairs[f1.ID+"->"+f2.ID] = true
 					continue
 				}
 			}
 			if rulesEnabled[RuleCOR08] {
 				if r, ok := evaluateCOR08(f1, f2); ok {
 					rels = append(rels, r)
-					seenDirectedPairs[pairKey] = true
+					seenDirectedPairs[f1.ID+"->"+f2.ID] = true
 					continue
 				}
 			}
 			if rulesEnabled[RuleCOR10] {
 				if r, ok := evaluateCOR10(f1, f2); ok {
 					rels = append(rels, r)
-					seenDirectedPairs[pairKey] = true
+					seenDirectedPairs[f1.ID+"->"+f2.ID] = true
 					continue
 				}
 			}
@@ -112,13 +114,11 @@ func EvaluateRules(findings []NormalizedFinding, cfg Config) []Relationship {
 				first, second = fB, fA
 			}
 
-			symKey := fmt.Sprintf("%s<->%s", first.ID, second.ID)
-
 			// COR-09: Common Root Cause
 			if rulesEnabled[RuleCOR09] {
-				cor09Key := "COR09:" + symKey
-				if !seenSymmetricPairs[cor09Key] {
-					if r, ok := evaluateCOR09(first, second); ok {
+				if r, ok := evaluateCOR09(first, second); ok {
+					cor09Key := "COR09:" + first.ID + "<->" + second.ID
+					if !seenSymmetricPairs[cor09Key] {
 						rels = append(rels, r)
 						seenSymmetricPairs[cor09Key] = true
 					}
@@ -131,9 +131,9 @@ func EvaluateRules(findings []NormalizedFinding, cfg Config) []Relationship {
 			// 1. Same Endpoint: Exact canonical endpoint match
 			hasEndpoint := false
 			if rulesEnabled[RuleCORSameEndpoint] {
-				epKey := "SAME_EP:" + symKey
-				if !seenSymmetricPairs[epKey] {
-					if r, ok := evaluateSameEndpoint(first, second); ok {
+				if r, ok := evaluateSameEndpoint(first, second); ok {
+					epKey := "SAME_EP:" + first.ID + "<->" + second.ID
+					if !seenSymmetricPairs[epKey] {
 						rels = append(rels, r)
 						seenSymmetricPairs[epKey] = true
 						hasEndpoint = true
@@ -144,9 +144,9 @@ func EvaluateRules(findings []NormalizedFinding, cfg Config) []Relationship {
 
 			// 2. Same Asset: Same origin/bucket/database/package (skip if already SAME_ENDPOINT)
 			if !hasEndpoint && rulesEnabled[RuleCORSameAsset] {
-				assetKey := "SAME_ASSET:" + symKey
-				if !seenSymmetricPairs[assetKey] {
-					if r, ok := evaluateSameAsset(first, second); ok {
+				if r, ok := evaluateSameAsset(first, second); ok {
+					assetKey := "SAME_ASSET:" + first.ID + "<->" + second.ID
+					if !seenSymmetricPairs[assetKey] {
 						rels = append(rels, r)
 						seenSymmetricPairs[assetKey] = true
 						hasExactRel = true
@@ -156,9 +156,9 @@ func EvaluateRules(findings []NormalizedFinding, cfg Config) []Relationship {
 
 			// 3. Shared Component: Shared backend service, database, or cloud resource
 			if rulesEnabled[RuleCORSharedComp] {
-				compKey := "SHARED_COMP:" + symKey
-				if !seenSymmetricPairs[compKey] {
-					if r, ok := evaluateSharedComponent(first, second); ok {
+				if r, ok := evaluateSharedComponent(first, second); ok {
+					compKey := "SHARED_COMP:" + first.ID + "<->" + second.ID
+					if !seenSymmetricPairs[compKey] {
 						rels = append(rels, r)
 						seenSymmetricPairs[compKey] = true
 						hasExactRel = true
@@ -168,9 +168,9 @@ func EvaluateRules(findings []NormalizedFinding, cfg Config) []Relationship {
 
 			// 4. Related Evidence: Shared parameters or technical indicators
 			if rulesEnabled[RuleCORRelatedEv] {
-				evKey := "RELATED_EV:" + symKey
-				if !seenSymmetricPairs[evKey] {
-					if r, ok := evaluateRelatedEvidence(first, second); ok {
+				if r, ok := evaluateRelatedEvidence(first, second); ok {
+					evKey := "RELATED_EV:" + first.ID + "<->" + second.ID
+					if !seenSymmetricPairs[evKey] {
 						rels = append(rels, r)
 						seenSymmetricPairs[evKey] = true
 						hasExactRel = true
@@ -180,9 +180,9 @@ func EvaluateRules(findings []NormalizedFinding, cfg Config) []Relationship {
 
 			// 5. Possible Relationship: Heuristic infrastructure fallback (only if no exact relationship matched)
 			if !hasExactRel && rulesEnabled[RuleCORPossible] {
-				possKey := "POSSIBLE:" + symKey
-				if !seenSymmetricPairs[possKey] {
-					if r, ok := evaluatePossibleRelationship(first, second); ok {
+				if r, ok := evaluatePossibleRelationship(first, second); ok {
+					possKey := "POSSIBLE:" + first.ID + "<->" + second.ID
+					if !seenSymmetricPairs[possKey] {
 						rels = append(rels, r)
 						seenSymmetricPairs[possKey] = true
 					}

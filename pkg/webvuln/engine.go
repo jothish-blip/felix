@@ -13,6 +13,7 @@ import (
 
 	"felix/pkg/apisec"
 	"felix/pkg/crawler"
+	"felix/pkg/oast"
 	"felix/pkg/report"
 	"github.com/google/uuid"
 )
@@ -55,9 +56,20 @@ func NewEngine(client *http.Client, cfg Config) *Engine {
 
 // scopedClient builds an HTTP client that strictly validates scope and exclusions on every redirect hop.
 func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
+	targetHost := ""
+	if actx != nil {
+		if u, err := url.Parse(actx.BaseURL); err == nil {
+			targetHost = u.Hostname()
+		}
+	}
+	isTargetLoopback := targetHost == "localhost" || targetHost == "127.0.0.1" || targetHost == "::1" || strings.HasPrefix(targetHost, "127.")
+
 	transport := e.client.Transport
 	if transport == nil {
-		transport = http.DefaultTransport
+		transport = crawler.NewSafeTransport(crawler.SafeTransportOptions{
+			Timeout:       e.config.Timeout,
+			AllowLoopback: isTargetLoopback,
+		})
 	}
 	if _, ok := transport.(*crawler.RateLimitedTransport); !ok {
 		transport = crawler.NewRateLimitedTransport(transport, crawler.RateLimitOptions{
@@ -74,11 +86,21 @@ func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
 			}
 
 			nextURL := req.URL.String()
-			if actx.IsExcluded != nil && actx.IsExcluded(nextURL) {
-				return fmt.Errorf("redirect destination %s is excluded by scope rules", nextURL)
+			nextHost := strings.ToLower(req.URL.Hostname())
+			if nextHost == "169.254.169.254" || nextHost == "fd00:ec2::254" || nextHost == "metadata.google.internal" || nextHost == "instance-data" || nextHost == "metadata" {
+				return fmt.Errorf("redirect to cloud metadata endpoint %q blocked", nextURL)
 			}
-			if actx.IsAllowed != nil && !actx.IsAllowed(nextURL) {
-				return fmt.Errorf("redirect destination %s is out of authorized scope", nextURL)
+			if !isTargetLoopback && apisec.IsInternalOrUnsafeAddress(nextURL) {
+				return fmt.Errorf("redirect to internal or unsafe destination %q blocked", nextURL)
+			}
+
+			if actx != nil {
+				if actx.IsExcluded != nil && actx.IsExcluded(nextURL) {
+					return fmt.Errorf("redirect destination %s is excluded by scope rules", nextURL)
+				}
+				if actx.IsAllowed != nil && !actx.IsAllowed(nextURL) {
+					return fmt.Errorf("redirect destination %s is out of authorized scope", nextURL)
+				}
 			}
 			return nil
 		},
@@ -1070,19 +1092,72 @@ func (e *Engine) assessSSRF(ctx context.Context, actx *AssessmentContext, client
 				continue
 			}
 
+			canaryURL := e.config.CanaryCallbackURL
+			var oastProbe *oast.Probe
+			var oastInteraction *oast.Interaction
+
+			if e.config.OASTCorrelator != nil {
+				probe, err := e.config.OASTCorrelator.GenerateProbe(actx.AssessmentID, actx.ExecutionID, actx.BaseURL, ep.Path, p, oast.ProtocolHTTP, 30*time.Second)
+				if err == nil && probe != nil && probe.CallbackURL != "" {
+					oastProbe = probe
+					canaryURL = probe.CallbackURL
+				}
+			}
+
 			// Pre-validation: ensure we never probe private or metadata addresses
-			if e.config.CanaryCallbackURL != "" {
-				if apisec.IsInternalOrUnsafeAddress(e.config.CanaryCallbackURL) {
+			if canaryURL != "" {
+				var safeDestination bool
+				if e.config.OASTCorrelator != nil {
+					safeDestination = (oast.ValidateCanaryDestination(canaryURL, e.config.OASTCorrelator.Config()) == nil)
+				} else {
+					safeDestination = !apisec.IsInternalOrUnsafeAddress(canaryURL)
+				}
+				if !safeDestination {
 					// Failsafe refusal
 					continue
 				}
 
-				canaryProbeURL := buildEndpointURL(actx.BaseURL, ep.Path, map[string]string{p: e.config.CanaryCallbackURL})
+				canaryProbeURL := buildEndpointURL(actx.BaseURL, ep.Path, map[string]string{p: canaryURL})
 				req, _ := http.NewRequestWithContext(ctx, "GET", canaryProbeURL, nil)
 				req.Header.Set("User-Agent", e.config.UserAgent)
 				resp, err := client.Do(req)
 				if err == nil {
 					resp.Body.Close()
+
+					if oastProbe != nil && e.config.OASTCorrelator != nil && e.config.OASTTimeout > 0 {
+						waitCtx, cancel := context.WithTimeout(ctx, e.config.OASTTimeout)
+						oastInteraction, _ = e.config.OASTCorrelator.WaitForInteraction(waitCtx, oastProbe.Token, e.config.OASTTimeout)
+						cancel()
+					}
+
+					if oastInteraction != nil {
+						// Verified OAST callback: promote from candidate to verified!
+						r := Result{
+							ID:                uuid.New().String(),
+							AssessmentID:      actx.AssessmentID,
+							ExecutionID:       actx.ExecutionID,
+							Category:          CategorySSRF,
+							VulnCode:          meta.Code,
+							TestName:          fmt.Sprintf("SSRF Canary Callback Probe (%s)", p),
+							Endpoint:          canaryProbeURL,
+							Method:            "GET",
+							VerificationState: StateVerified,
+							Severity:          report.SeverityHigh,
+							Confidence:        report.ConfidenceHigh,
+							ObservedStatus:    resp.StatusCode,
+							EvidenceSummary:   fmt.Sprintf("Verified SSRF out-of-band callback received from %s (method %s, path %s, interaction token %s)", oastInteraction.ClientIP, oastInteraction.Method, oastInteraction.Path, oastInteraction.Token),
+							CreatedAt:         time.Now().UTC(),
+						}
+						fnd := e.createFinding(actx, r, fmt.Sprintf("Server-Side Request Forgery (SSRF) via Parameter '%s' on %s", p, ep.Path),
+							r.EvidenceSummary, report.SeverityHigh, 85)
+						r.Finding = fnd
+						findings = append(findings, *fnd)
+						cov.Verified++
+						cov.Status = CoverageVerifiedIssueFound
+						results = append(results, r)
+						continue
+					}
+
 					r := Result{
 						ID:                uuid.New().String(),
 						AssessmentID:      actx.AssessmentID,
@@ -1807,7 +1882,7 @@ func (e *Engine) createFinding(
 
 	meta := CategoryMetadata[r.Category]
 
-	return &report.Finding{
+	f := report.Finding{
 		ID:          uuid.New().String(),
 		Title:       title,
 		Category:    fmt.Sprintf("%s / %s", meta.Code, meta.Name),
@@ -1839,6 +1914,8 @@ func (e *Engine) createFinding(
 		Fingerprint: fingerprint,
 		Score:       score,
 	}
+	cleanFinding := report.SanitizeFinding(f)
+	return &cleanFinding
 }
 
 func (e *Engine) compileSummary(results []Result, coverage map[string]CategoryCoverage) *Summary {

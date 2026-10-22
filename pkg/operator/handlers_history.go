@@ -89,7 +89,7 @@ func (s *Server) handleCompareAssessments(w http.ResponseWriter, r *http.Request
 
 	baseAsm, err := s.store.GetAssessment(baselineID)
 	if err != nil {
-		s.respondError(w, http.StatusNotFound, fmt.Sprintf("baseline assessment not found: %v", err))
+		s.respondError(w, http.StatusNotFound, "baseline assessment not found")
 		return
 	}
 

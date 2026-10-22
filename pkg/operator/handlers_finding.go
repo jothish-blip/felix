@@ -72,8 +72,9 @@ func (s *Server) handleListFindings(w http.ResponseWriter, r *http.Request) {
 			pendingCount++
 		}
 
+		cleanF := assessment.SanitizeAssessmentFinding(f)
 		enriched[i] = enrichedFindingItem{
-			AssessmentFinding: f,
+			AssessmentFinding: cleanF,
 			ReviewStatus:      st,
 			Review:            revPtr,
 		}
@@ -131,8 +132,9 @@ func (s *Server) handleGetFinding(w http.ResponseWriter, r *http.Request) {
 		st = review.ReviewStatus
 	}
 
+	cleanFinding := assessment.SanitizeAssessmentFinding(*finding)
 	s.respondJSON(w, http.StatusOK, map[string]any{
-		"finding":       finding,
+		"finding":       cleanFinding,
 		"review_status": st,
 		"review":        review,
 	})

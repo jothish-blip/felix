@@ -109,7 +109,7 @@ func (s *Server) handleGetClient(w http.ResponseWriter, r *http.Request) {
 
 	client, err := s.store.GetClient(id)
 	if err != nil {
-		s.respondError(w, http.StatusNotFound, fmt.Sprintf("client not found: %v", err))
+		s.respondError(w, http.StatusNotFound, "client not found")
 		return
 	}
 

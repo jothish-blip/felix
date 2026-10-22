@@ -989,11 +989,11 @@ func GenerateCommercialHTML(cr CommercialReport) (string, error) {
 	return buf.String(), nil
 }
 
-// WriteCommercialHTML writes the self-contained CommercialReport HTML document to disk.
+// WriteCommercialHTML writes the self-contained CommercialReport HTML document to disk with restricted permissions (0600).
 func WriteCommercialHTML(cr CommercialReport, filePath string) error {
 	content, err := GenerateCommercialHTML(cr)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filePath, []byte(content), 0644)
+	return os.WriteFile(filePath, []byte(content), 0600)
 }

@@ -75,6 +75,9 @@ func getCompiledSchema() (*jsonschema.Schema, error) {
 // 2. JSON syntax/parsing errors (operational)
 // 3. Schema conformance errors (validation failures)
 func ValidateSARIF(data []byte) error {
+	if int64(len(data)) > MaxReportFileSize {
+		return fmt.Errorf("SARIF payload size (%d bytes) exceeds maximum permitted limit (%d bytes)", len(data), MaxReportFileSize)
+	}
 	schema, err := getCompiledSchema()
 	if err != nil {
 		return fmt.Errorf("schema compilation error: %w", err)
@@ -102,6 +105,14 @@ func ValidateSARIFFile(filePath string) error {
 	cleanPath := strings.TrimSpace(filePath)
 	if cleanPath == "" {
 		return fmt.Errorf("file I/O error: path cannot be empty")
+	}
+
+	fi, err := os.Stat(cleanPath)
+	if err != nil {
+		return fmt.Errorf("file I/O error: failed to stat %q: %w", cleanPath, err)
+	}
+	if fi.Size() > MaxReportFileSize {
+		return fmt.Errorf("file I/O error: SARIF file %q size (%d bytes) exceeds maximum permitted limit (%d bytes)", cleanPath, fi.Size(), MaxReportFileSize)
 	}
 
 	data, err := os.ReadFile(cleanPath)

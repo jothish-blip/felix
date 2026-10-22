@@ -132,7 +132,9 @@ func SplitSetCookieHeader(header string) []string {
 			// If next part looks like another cookie "name=value", split here
 			rest := strings.TrimSpace(header[i+1:])
 			if looksLikeCookieStart(rest) {
-				cookies = append(cookies, strings.TrimSpace(current.String()))
+				if trimmed := strings.TrimSpace(current.String()); trimmed != "" {
+					cookies = append(cookies, trimmed)
+				}
 				current.Reset()
 				continue
 			}
@@ -142,7 +144,7 @@ func SplitSetCookieHeader(header string) []string {
 	}
 
 	if current.Len() > 0 {
-		trimmed := strings.TrimSpace(current.String())
+		trimmed := strings.Trim(current.String(), ", ")
 		if trimmed != "" {
 			cookies = append(cookies, trimmed)
 		}

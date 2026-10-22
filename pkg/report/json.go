@@ -2,7 +2,9 @@ package report
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
+	"path/filepath"
 
 	"felix/pkg/secrets"
 )
@@ -147,8 +149,8 @@ func SanitizeReport(rep Report) Report {
 		cleanP := p
 		cleanP.Title = SanitizeEvidence(p.Title)
 		cleanP.RiskRationale = SanitizeEvidence(p.RiskRationale)
-		cleanP.EntryPoint = SanitizeEvidence(p.EntryPoint)
-		cleanP.TargetAsset = SanitizeEvidence(p.TargetAsset)
+		cleanP.EntryPoint = secrets.SanitizeURL(p.EntryPoint)
+		cleanP.TargetAsset = secrets.SanitizeURL(p.TargetAsset)
 		cleanP.PrimaryWeakness = SanitizeEvidence(p.PrimaryWeakness)
 		cleanP.TerminalImpact = SanitizeEvidence(p.TerminalImpact)
 		cleanP.Remediation = SanitizeEvidence(p.Remediation)
@@ -174,6 +176,9 @@ func SanitizeReport(rep Report) Report {
 	rep.TopPriorities = cleanPriorities
 	rep.SecurityStories = cleanStories
 	rep.AttackPaths = cleanPaths
+	if len(rep.Metadata) > 0 {
+		rep.Metadata = secrets.RedactMap(rep.Metadata)
+	}
 	return rep
 }
 
@@ -187,17 +192,23 @@ func GenerateJSON(rep Report) ([]byte, error) {
 	return json.MarshalIndent(sanitized, "", "  ")
 }
 
-// WriteJSON writes the sanitized JSON report to disk.
+// WriteJSON writes the sanitized JSON report to disk with restricted permissions (0600).
 func WriteJSON(rep Report, filePath string) error {
 	data, err := GenerateJSON(rep)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filePath, data, 0644)
+	return os.WriteFile(filePath, data, 0600)
 }
+
+// MaxReportFileSize defines the maximum permitted size (100 MB) for reading and parsing JSON, SARIF, and Commercial reports.
+const MaxReportFileSize int64 = 100 * 1024 * 1024
 
 // ParseReport deserializes a JSON scan result into a Report struct and ensures all findings are sanitized.
 func ParseReport(data []byte) (Report, error) {
+	if int64(len(data)) > MaxReportFileSize {
+		return Report{}, fmt.Errorf("report payload size (%d bytes) exceeds maximum permitted limit (%d bytes)", len(data), MaxReportFileSize)
+	}
 	var rep Report
 	if err := json.Unmarshal(data, &rep); err != nil {
 		return rep, err
@@ -207,7 +218,15 @@ func ParseReport(data []byte) (Report, error) {
 
 // LoadReport reads and deserializes a saved scan result JSON file from disk without network access.
 func LoadReport(filePath string) (Report, error) {
-	data, err := os.ReadFile(filePath)
+	cleanPath := filepath.Clean(filePath)
+	fi, err := os.Stat(cleanPath)
+	if err != nil {
+		return Report{}, err
+	}
+	if fi.Size() > MaxReportFileSize {
+		return Report{}, fmt.Errorf("report file %q size (%d bytes) exceeds maximum permitted limit (%d bytes)", filePath, fi.Size(), MaxReportFileSize)
+	}
+	data, err := os.ReadFile(cleanPath)
 	if err != nil {
 		return Report{}, err
 	}

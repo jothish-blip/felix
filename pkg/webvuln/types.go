@@ -3,6 +3,7 @@ package webvuln
 import (
 	"time"
 
+	"felix/pkg/oast"
 	"felix/pkg/report"
 	"felix/pkg/secrets"
 )
@@ -227,7 +228,9 @@ type TargetEndpoint struct {
 type Config struct {
 	Timeout              time.Duration `json:"timeout"`
 	Concurrency          int           `json:"concurrency"`
-	CanaryCallbackURL    string        `json:"canary_callback_url,omitempty"`
+	CanaryCallbackURL    string           `json:"canary_callback_url,omitempty"`
+	OASTCorrelator       *oast.Correlator `json:"-"`
+	OASTTimeout          time.Duration    `json:"oast_timeout,omitempty"`
 	AllowActiveSmuggling bool          `json:"allow_active_smuggling"`
 	AllowSyntheticProbes bool          `json:"allow_synthetic_probes"`
 	MaxBodyReadBytes     int64         `json:"max_body_read_bytes"`

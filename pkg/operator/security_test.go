@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -948,5 +949,248 @@ func TestSecurity_CompleteRouteAndRoleCoverage(t *testing.T) {
 		if rec.Code != http.StatusNotFound && rec.Code != http.StatusForbidden {
 			t.Errorf("[Cross-Tenant %s %s] expected 404/403, got %d", tc.method, tc.path, rec.Code)
 		}
+	}
+}
+
+// TestSecurity_InvalidOrUnknownRoleDenied verifies default-deny access for unknown or invalid roles.
+func TestSecurity_InvalidOrUnknownRoleDenied(t *testing.T) {
+	srv, _, cleanup := setupTestServer(t)
+	defer cleanup()
+	handler := srv.buildMiddlewareChain(srv.mux)
+
+	invalidRoles := []string{"guest", "attacker", "unknown", "", "   ", "audit", "superadmin"}
+	for _, role := range invalidRoles {
+		token := "tok-invalid-" + strings.ReplaceAll(role, " ", "_")
+		sess := &UserSession{
+			Token:      token,
+			OperatorID: "op-test",
+			Role:       role,
+			ClientID:   "client-1",
+		}
+		_ = srv.RegisterSession(sess)
+
+		// 1. AuthContext must fail closed (zero authorized scope)
+		authCtx := sess.AuthContext()
+		if authCtx.IsAdmin() {
+			t.Errorf("role %q auth context unexpectedly reports IsAdmin() = true", role)
+		}
+		if authCtx.Authorizes("client-1", "", "") {
+			t.Errorf("role %q auth context unexpectedly authorized client-1", role)
+		}
+
+		// 2. Request through API must be rejected with 403 Forbidden
+		rec := doRequest(handler, "GET", "/api/v1/assessments", nil, token, "")
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("role %q got status %d, expected 403 Forbidden", role, rec.Code)
+		}
+	}
+
+	// Recognized valid roles must pass role validation
+	validRoles := []string{RoleAdmin, RoleOperator, RoleViewer, "ADMIN", "Operator", "VIEWER"}
+	for _, role := range validRoles {
+		if !IsValidRole(role) {
+			t.Errorf("expected role %q to be recognized as valid", role)
+		}
+	}
+}
+
+// TestSecurity_IssueDownloadTokenRoleEnforcement verifies download token generation requires valid roles.
+func TestSecurity_IssueDownloadTokenRoleEnforcement(t *testing.T) {
+	srv, store, cleanup := setupTestServer(t)
+	defer cleanup()
+	handler := srv.buildMiddlewareChain(srv.mux)
+
+	client := &assessment.Client{ID: "client-dlt-1", Name: "DLT Test Client", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	_ = store.CreateClient(client)
+
+	asm := &assessment.Assessment{ID: "asm-dlt-1", ClientID: client.ID, Name: "DLT Asm", Status: assessment.StatusCompleted, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	_ = store.CreateAssessment(asm)
+
+	exec := &assessment.AssessmentExecution{
+		ID:           "exec-dlt-1",
+		AssessmentID: asm.ID,
+		Status:       assessment.StatusCompleted,
+		StartedAt:    time.Now().UTC(),
+	}
+	_ = store.CreateExecution(exec)
+
+	reportsRoot := t.TempDir()
+	srv.AddAllowedReportsRoot(reportsRoot)
+	repFile := filepath.Join(reportsRoot, "rep-dlt-1.html")
+	_ = os.WriteFile(repFile, []byte("<html>report</html>"), 0600)
+	rep := &assessment.ReportRecord{
+		ID:           "rep-dlt-1",
+		AssessmentID: asm.ID,
+		ExecutionID:  exec.ID,
+		Format:       "HTML",
+		FilePath:     repFile,
+		CreatedAt:    time.Now().UTC(),
+	}
+	if err := store.SaveReport(rep); err != nil {
+		t.Fatalf("failed to save report record: %v", err)
+	}
+
+	// Valid roles can issue download tokens
+	for _, role := range []string{RoleAdmin, RoleOperator, RoleViewer} {
+		token := "tok-valid-" + role
+		_ = srv.RegisterSession(&UserSession{
+			Token:      token,
+			OperatorID: "op-" + role,
+			Role:       role,
+			ClientID:   client.ID,
+		})
+
+		rec := doRequest(handler, "POST", "/api/v1/assessments/"+asm.ID+"/reports/"+rep.ID+"/token", nil, token, "http://127.0.0.1:8383")
+		if rec.Code != http.StatusOK {
+			t.Errorf("role %s failed to issue download token, got status %d", role, rec.Code)
+		}
+	}
+
+	// Invalid role receives 403 Forbidden
+	invalidToken := "tok-invalid-role-dlt"
+	_ = srv.RegisterSession(&UserSession{
+		Token:      invalidToken,
+		OperatorID: "op-invalid",
+		Role:       "contractor",
+		ClientID:   client.ID,
+	})
+	rec := doRequest(handler, "POST", "/api/v1/assessments/"+asm.ID+"/reports/"+rep.ID+"/token", nil, invalidToken, "http://127.0.0.1:8383")
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("invalid role received status %d, expected 403 Forbidden", rec.Code)
+	}
+}
+
+// TestSecurity_ReportDownloadPathErrorSanitization verifies that file read errors do not leak internal filesystem paths.
+func TestSecurity_ReportDownloadPathErrorSanitization(t *testing.T) {
+	srv, store, cleanup := setupTestServer(t)
+	defer cleanup()
+	handler := srv.buildMiddlewareChain(srv.mux)
+
+	client := &assessment.Client{ID: "client-leak-test", Name: "Leak Test", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	_ = store.CreateClient(client)
+
+	asm := &assessment.Assessment{ID: "asm-leak-test", ClientID: client.ID, Name: "Leak Asm", Status: assessment.StatusCompleted, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	_ = store.CreateAssessment(asm)
+
+	exec := &assessment.AssessmentExecution{
+		ID:           "exec-leak-test",
+		AssessmentID: asm.ID,
+		Status:       assessment.StatusCompleted,
+		StartedAt:    time.Now().UTC(),
+	}
+	_ = store.CreateExecution(exec)
+
+	reportsRoot := t.TempDir()
+	srv.AddAllowedReportsRoot(reportsRoot)
+
+	// File deliberately does not exist on disk, but is located inside authorized reports directory
+	missingPath := filepath.Join(reportsRoot, "secret_internal_report.html")
+	rep := &assessment.ReportRecord{
+		ID:           "rep-missing-file",
+		AssessmentID: asm.ID,
+		ExecutionID:  exec.ID,
+		Format:       "HTML",
+		FilePath:     missingPath,
+		CreatedAt:    time.Now().UTC(),
+	}
+	if err := store.SaveReport(rep); err != nil {
+		t.Fatalf("failed to save missing path report record: %v", err)
+	}
+
+	rec := doRequest(handler, "GET", "/api/v1/assessments/"+asm.ID+"/reports/"+rep.ID+"/html", nil, srv.Token(), "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for missing report file, got %d", rec.Code)
+	}
+
+	body := rec.Body.String()
+	// Must not leak the missingPath or internal directory names
+	if strings.Contains(body, "subdir_never_created") || strings.Contains(body, "secret_internal_report") || strings.Contains(body, "C:\\") || strings.Contains(body, "/Users/") {
+		t.Fatalf("response leaked internal filesystem path in error message: %s", body)
+	}
+
+	var jsonErr map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &jsonErr); err != nil {
+		t.Fatalf("response is not valid JSON: %s", body)
+	}
+	if jsonErr["error"] != "report file could not be read" {
+		t.Errorf("error message = %q, want exactly 'report file could not be read'", jsonErr["error"])
+	}
+}
+
+// TestSecurity_ReportFilePermissions verifies that exported reports have restricted 0600 permissions.
+func TestSecurity_ReportFilePermissions(t *testing.T) {
+	tempDir := t.TempDir()
+
+	sampleFindings := []report.Finding{
+		{
+			ID:          "FND-001",
+			Title:       "Sensitive finding",
+			Severity:    "HIGH",
+			Category:    "sqli",
+			Target:      "https://target.local",
+			Endpoint:    "/api/query",
+			Description: "Confidential security vulnerability",
+		},
+	}
+	rep := report.Report{
+		Target:           "https://target.local",
+		CompletionStatus: "COMPLETED",
+		Findings:         sampleFindings,
+		Summary:          report.Summarize(sampleFindings),
+	}
+	cr := report.BuildCommercialReport(rep)
+
+	htmlPath := filepath.Join(tempDir, "report.html")
+	jsonPath := filepath.Join(tempDir, "report.json")
+	sarifPath := filepath.Join(tempDir, "report.sarif")
+	commHTMLPath := filepath.Join(tempDir, "comm_report.html")
+	commJSONPath := filepath.Join(tempDir, "comm_report.json")
+
+	if err := report.WriteHTML(rep, htmlPath); err != nil {
+		t.Fatalf("WriteHTML failed: %v", err)
+	}
+	if err := report.WriteJSON(rep, jsonPath); err != nil {
+		t.Fatalf("WriteJSON failed: %v", err)
+	}
+	if err := report.WriteSARIF(rep, sarifPath); err != nil {
+		t.Fatalf("WriteSARIF failed: %v", err)
+	}
+	if err := report.WriteCommercialHTML(cr, commHTMLPath); err != nil {
+		t.Fatalf("WriteCommercialHTML failed: %v", err)
+	}
+	if err := report.WriteCommercialJSON(cr, commJSONPath); err != nil {
+		t.Fatalf("WriteCommercialJSON failed: %v", err)
+	}
+
+	files := []string{htmlPath, jsonPath, sarifPath, commHTMLPath, commJSONPath}
+	for _, f := range files {
+		info, err := os.Stat(f)
+		if err != nil {
+			t.Fatalf("os.Stat(%s) failed: %v", f, err)
+		}
+		// On POSIX systems, verify strictly owner read/write (0600)
+		if runtime.GOOS != "windows" {
+			perm := info.Mode().Perm()
+			if perm != 0600 {
+				t.Errorf("file %s has permissions %04o, want 0600", f, perm)
+			}
+		} else {
+			// On Windows, verify file was created successfully and is non-empty
+			if info.Size() == 0 {
+				t.Errorf("file %s is unexpectedly empty", f)
+			}
+		}
+	}
+}
+
+// TestSecurity_ValidateReportPathContainmentRootEdgeCase verifies that targeting the reports directory root itself is rejected.
+func TestSecurity_ValidateReportPathContainmentRootEdgeCase(t *testing.T) {
+	srv, _, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	// Containment must reject targeting the directory root itself
+	_, err := srv.validateReportPathContainment(srv.cfg.ReportsRoot)
+	if err == nil {
+		t.Errorf("expected containment validation to reject report root directory itself, but it passed")
 	}
 }

@@ -157,6 +157,9 @@ func (n *Notification) ToWebhookPayload() WebhookPayload {
 	if strings.TrimSpace(n.PayloadJSON) != "" && n.PayloadJSON != "{}" {
 		_ = json.Unmarshal([]byte(n.PayloadJSON), &meta)
 	}
+	if len(meta) > 0 {
+		meta = secrets.RedactMap(meta)
+	}
 
 	return WebhookPayload{
 		NotificationID:      n.ID,

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"felix/pkg/report"
+	"felix/pkg/secrets"
 	"github.com/google/uuid"
 )
 
@@ -126,10 +127,10 @@ func GenerateCuratedCommercialReport(
 	// 5. Targets list
 	var targetsList []string
 	for _, t := range asm.Targets {
-		targetsList = append(targetsList, t.TargetURL)
+		targetsList = append(targetsList, secrets.SanitizeURL(t.TargetURL))
 	}
 	if len(targetsList) == 0 {
-		targetsList = []string{asm.Name}
+		targetsList = []string{secrets.SanitizeURL(asm.Name)}
 	}
 
 	// 6. Build MultiTargetReport strictly using APPROVED findings

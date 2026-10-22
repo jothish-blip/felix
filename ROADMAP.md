@@ -37,5 +37,16 @@
 
 ## Subsequent Phases
 
-- **Phase 11 — High-Concurrency Stress Testing, Resource Hardening & Memory Profiling** — **PLANNED**
-- **Phase 12 — Multi-Platform Packaging, Distribution Channels & Automated Release Signing** — **PLANNED**
+**Phase 11 — Hardening, Performance and Advanced Verification — DONE**
+
+- 11.1 — Fuzzing: DONE
+- 11.2 — Regression fixtures: DONE
+- 11.3 — Performance: DONE
+- 11.4 — Resource limits: DONE
+- 11.5 — Cancellation and recovery: DONE
+- 11.6 — Controlled OAST/canary testing: DONE
+- 11.7 — Evidence review and redaction: DONE
+- 11.8 — Database integrity: DONE
+- 11.9 — Access controls: DONE
+
+**Phase 12 — Multi-Platform Packaging, Distribution Channels & Automated Release Signing — PLANNED**

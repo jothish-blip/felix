@@ -287,6 +287,30 @@ func DefaultDBPath() (string, error) {
 	return filepath.Join(dir, "assessments.db"), nil
 }
 
+// formatDSN ensures that SQLite connection pragmas (foreign keys, busy timeout, WAL, synchronous)
+// are embedded directly into the DSN string so that every connection in the connection pool
+// automatically inherits them upon instantiation.
+func formatDSN(dbPath string) string {
+	if dbPath == "" {
+		return ""
+	}
+	if strings.Contains(dbPath, "_pragma=") {
+		return dbPath
+	}
+
+	var pragmas string
+	if dbPath == ":memory:" || strings.HasPrefix(dbPath, "file::memory:") {
+		pragmas = "_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)"
+	} else {
+		pragmas = "_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
+	}
+
+	if strings.Contains(dbPath, "?") {
+		return fmt.Sprintf("%s&%s", dbPath, pragmas)
+	}
+	return fmt.Sprintf("%s?%s", dbPath, pragmas)
+}
+
 // NewSQLiteStore opens or creates an SQLite database at the specified path.
 // If dbPath is empty, DefaultDBPath() is used.
 func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
@@ -298,8 +322,9 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 		dbPath = p
 	}
 
+	dsn := formatDSN(dbPath)
 	// Open SQLite with modernc.org/sqlite
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database at %s: %w", dbPath, err)
 	}
@@ -313,8 +338,10 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 	}
 	for _, pragma := range pragmas {
 		if _, err := db.Exec(pragma); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("failed to execute %s: %w", pragma, err)
+			if dbPath != ":memory:" && !strings.Contains(dbPath, ":memory:") {
+				db.Close()
+				return nil, fmt.Errorf("failed to execute %s: %w", pragma, err)
+			}
 		}
 	}
 
@@ -342,14 +369,21 @@ func (s *SQLiteStore) migrate() error {
 		return fmt.Errorf("failed to create schema_migrations table: %w", err)
 	}
 
-	var currentVersion int
-	row := s.db.QueryRow("SELECT COALESCE(MAX(version), 0) FROM schema_migrations")
-	if err := row.Scan(&currentVersion); err != nil {
-		return fmt.Errorf("failed to read schema version: %w", err)
+	applied := make(map[int]bool)
+	rows, err := s.db.Query("SELECT version FROM schema_migrations")
+	if err != nil {
+		return fmt.Errorf("failed to read schema migrations: %w", err)
 	}
+	for rows.Next() {
+		var v int
+		if err := rows.Scan(&v); err == nil {
+			applied[v] = true
+		}
+	}
+	_ = rows.Close()
 
 	// Migration 1: Initial assessment core schema
-	if currentVersion < 1 {
+	if !applied[1] {
 		tx, err := s.db.Begin()
 		if err != nil {
 			return err
@@ -357,7 +391,7 @@ func (s *SQLiteStore) migrate() error {
 		defer tx.Rollback()
 
 		schemaV1 := `
-		CREATE TABLE clients (
+		CREATE TABLE IF NOT EXISTS clients (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
 			organization TEXT,
@@ -369,7 +403,7 @@ func (s *SQLiteStore) migrate() error {
 			archived INTEGER NOT NULL DEFAULT 0
 		);
 
-		CREATE TABLE assessments (
+		CREATE TABLE IF NOT EXISTS assessments (
 			id TEXT PRIMARY KEY,
 			ref TEXT UNIQUE NOT NULL,
 			client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE RESTRICT,
@@ -386,10 +420,10 @@ func (s *SQLiteStore) migrate() error {
 			finding_count INTEGER NOT NULL DEFAULT 0
 		);
 
-		CREATE INDEX idx_assessments_client_id ON assessments(client_id);
-		CREATE INDEX idx_assessments_status ON assessments(status);
+		CREATE INDEX IF NOT EXISTS idx_assessments_client_id ON assessments(client_id);
+		CREATE INDEX IF NOT EXISTS idx_assessments_status ON assessments(status);
 
-		CREATE TABLE assessment_targets (
+		CREATE TABLE IF NOT EXISTS assessment_targets (
 			id TEXT PRIMARY KEY,
 			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
 			target_url TEXT NOT NULL,
@@ -399,9 +433,9 @@ func (s *SQLiteStore) migrate() error {
 			created_at TIMESTAMP NOT NULL
 		);
 
-		CREATE INDEX idx_targets_assessment_id ON assessment_targets(assessment_id);
+		CREATE INDEX IF NOT EXISTS idx_targets_assessment_id ON assessment_targets(assessment_id);
 
-		CREATE TABLE authorizations (
+		CREATE TABLE IF NOT EXISTS authorizations (
 			id TEXT PRIMARY KEY,
 			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
 			authorizing_party TEXT NOT NULL,
@@ -416,9 +450,9 @@ func (s *SQLiteStore) migrate() error {
 			updated_at TIMESTAMP NOT NULL
 		);
 
-		CREATE INDEX idx_authorizations_assessment_id ON authorizations(assessment_id);
+		CREATE INDEX IF NOT EXISTS idx_authorizations_assessment_id ON authorizations(assessment_id);
 
-		CREATE TABLE scope_rules (
+		CREATE TABLE IF NOT EXISTS scope_rules (
 			id TEXT PRIMARY KEY,
 			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
 			rule_type TEXT NOT NULL,
@@ -426,7 +460,7 @@ func (s *SQLiteStore) migrate() error {
 			created_at TIMESTAMP NOT NULL
 		);
 
-		CREATE TABLE exclusions (
+		CREATE TABLE IF NOT EXISTS exclusions (
 			id TEXT PRIMARY KEY,
 			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
 			exclusion_type TEXT NOT NULL,
@@ -435,7 +469,7 @@ func (s *SQLiteStore) migrate() error {
 			created_at TIMESTAMP NOT NULL
 		);
 
-		CREATE TABLE assessment_executions (
+		CREATE TABLE IF NOT EXISTS assessment_executions (
 			id TEXT PRIMARY KEY,
 			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
 			status TEXT NOT NULL,
@@ -447,9 +481,9 @@ func (s *SQLiteStore) migrate() error {
 			config_snapshot TEXT NOT NULL
 		);
 
-		CREATE INDEX idx_executions_assessment_id ON assessment_executions(assessment_id);
+		CREATE INDEX IF NOT EXISTS idx_executions_assessment_id ON assessment_executions(assessment_id);
 
-		CREATE TABLE assessment_findings (
+		CREATE TABLE IF NOT EXISTS assessment_findings (
 			id TEXT PRIMARY KEY,
 			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
 			execution_id TEXT NOT NULL REFERENCES assessment_executions(id) ON DELETE CASCADE,
@@ -471,11 +505,11 @@ func (s *SQLiteStore) migrate() error {
 			created_at TIMESTAMP NOT NULL
 		);
 
-		CREATE INDEX idx_findings_assessment_id ON assessment_findings(assessment_id);
-		CREATE INDEX idx_findings_execution_id ON assessment_findings(execution_id);
-		CREATE INDEX idx_findings_severity ON assessment_findings(severity);
+		CREATE INDEX IF NOT EXISTS idx_findings_assessment_id ON assessment_findings(assessment_id);
+		CREATE INDEX IF NOT EXISTS idx_findings_execution_id ON assessment_findings(execution_id);
+		CREATE INDEX IF NOT EXISTS idx_findings_severity ON assessment_findings(severity);
 
-		CREATE TABLE assessment_reports (
+		CREATE TABLE IF NOT EXISTS assessment_reports (
 			id TEXT PRIMARY KEY,
 			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
 			execution_id TEXT NOT NULL REFERENCES assessment_executions(id) ON DELETE CASCADE,
@@ -486,9 +520,9 @@ func (s *SQLiteStore) migrate() error {
 			created_at TIMESTAMP NOT NULL
 		);
 
-		CREATE INDEX idx_reports_assessment_id ON assessment_reports(assessment_id);
+		CREATE INDEX IF NOT EXISTS idx_reports_assessment_id ON assessment_reports(assessment_id);
 
-		INSERT INTO schema_migrations (version, applied_at) VALUES (1, CURRENT_TIMESTAMP);
+		INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (1, CURRENT_TIMESTAMP);
 		`
 
 		if _, err := tx.Exec(schemaV1); err != nil {
@@ -498,94 +532,11 @@ func (s *SQLiteStore) migrate() error {
 		if err := tx.Commit(); err != nil {
 			return err
 		}
-	}
-
-	// Migration 18: Finding Lifecycle Management (Phase 6.6)
-	if currentVersion < 18 {
-		tx, err := s.db.Begin()
-		if err != nil {
-			return err
-		}
-		defer tx.Rollback()
-
-		schemaV18 := `
-		CREATE TABLE IF NOT EXISTS finding_lifecycles (
-			id TEXT PRIMARY KEY,
-			tenant_id TEXT NOT NULL,
-			account_id TEXT NOT NULL,
-			client_id TEXT NOT NULL,
-			fingerprint TEXT NOT NULL,
-			fingerprint_version TEXT NOT NULL DEFAULT 'v1',
-			current_state TEXT NOT NULL,
-			previous_state TEXT,
-			target_id TEXT,
-			target_url TEXT NOT NULL,
-			title TEXT NOT NULL,
-			category TEXT NOT NULL,
-			severity TEXT NOT NULL,
-			score INTEGER NOT NULL DEFAULT 0,
-			last_assessment_id TEXT NOT NULL,
-			last_execution_id TEXT NOT NULL,
-			last_snapshot_id TEXT,
-			first_observed_at TIMESTAMP NOT NULL,
-			last_observed_at TIMESTAMP NOT NULL,
-			resolved_at TIMESTAMP,
-			regression_count INTEGER NOT NULL DEFAULT 0,
-			metadata_json TEXT NOT NULL DEFAULT '{}',
-			created_at TIMESTAMP NOT NULL,
-			updated_at TIMESTAMP NOT NULL,
-			UNIQUE(tenant_id, account_id, fingerprint)
-		);
-
-		CREATE INDEX IF NOT EXISTS idx_lifecycle_tenant_acc ON finding_lifecycles(tenant_id, account_id);
-		CREATE INDEX IF NOT EXISTS idx_lifecycle_client_id ON finding_lifecycles(client_id);
-		CREATE INDEX IF NOT EXISTS idx_lifecycle_fingerprint ON finding_lifecycles(fingerprint);
-		CREATE INDEX IF NOT EXISTS idx_lifecycle_state ON finding_lifecycles(current_state);
-		CREATE INDEX IF NOT EXISTS idx_lifecycle_last_exec ON finding_lifecycles(last_execution_id);
-
-		CREATE TABLE IF NOT EXISTS finding_lifecycle_events (
-			id TEXT PRIMARY KEY,
-			tenant_id TEXT NOT NULL,
-			account_id TEXT NOT NULL,
-			client_id TEXT NOT NULL,
-			assessment_id TEXT NOT NULL,
-			execution_id TEXT NOT NULL,
-			snapshot_id TEXT,
-			finding_id TEXT NOT NULL,
-			fingerprint TEXT NOT NULL,
-			fingerprint_version TEXT NOT NULL DEFAULT 'v1',
-			target_id TEXT,
-			target_url TEXT NOT NULL,
-			previous_state TEXT NOT NULL,
-			current_state TEXT NOT NULL,
-			transition_reason TEXT NOT NULL,
-			qualifying_assessment INTEGER NOT NULL DEFAULT 1,
-			historical_finding_id TEXT,
-			historical_evidence_id TEXT,
-			metadata_json TEXT NOT NULL DEFAULT '{}',
-			created_at TIMESTAMP NOT NULL
-		);
-
-		CREATE INDEX IF NOT EXISTS idx_lifecycle_events_tenant_acc ON finding_lifecycle_events(tenant_id, account_id);
-		CREATE INDEX IF NOT EXISTS idx_lifecycle_events_fp ON finding_lifecycle_events(fingerprint);
-		CREATE INDEX IF NOT EXISTS idx_lifecycle_events_exec ON finding_lifecycle_events(execution_id);
-		CREATE INDEX IF NOT EXISTS idx_lifecycle_events_snap ON finding_lifecycle_events(snapshot_id);
-		CREATE INDEX IF NOT EXISTS idx_lifecycle_events_created ON finding_lifecycle_events(created_at);
-
-		INSERT INTO schema_migrations (version, applied_at) VALUES (18, CURRENT_TIMESTAMP);
-		`
-
-		if _, err := tx.Exec(schemaV18); err != nil {
-			return fmt.Errorf("migration v18 failed: %w", err)
-		}
-
-		if err := tx.Commit(); err != nil {
-			return err
-		}
+		applied[1] = true
 	}
 
 	// Migration 2: Unified attack-surface inventory (assets & relations)
-	if currentVersion < 2 {
+	if !applied[2] {
 		tx, err := s.db.Begin()
 		if err != nil {
 			return err
@@ -649,7 +600,7 @@ func (s *SQLiteStore) migrate() error {
 	}
 
 	// Migration 3: Dedicated Authentication Intelligence subsystem (surfaces, cookies, tokens)
-	if currentVersion < 3 {
+	if !applied[3] {
 		tx, err := s.db.Begin()
 		if err != nil {
 			return err
@@ -739,7 +690,7 @@ func (s *SQLiteStore) migrate() error {
 	}
 
 	// Migration 4: Authorization & Access Control Intelligence (Stage 4)
-	if currentVersion < 4 {
+	if !applied[4] {
 		tx, err := s.db.Begin()
 		if err != nil {
 			return err
@@ -801,7 +752,7 @@ func (s *SQLiteStore) migrate() error {
 	}
 
 	// Migration 5: API Security Engine (Stage 5)
-	if currentVersion < 5 {
+	if !applied[5] {
 		tx, err := s.db.Begin()
 		if err != nil {
 			return err
@@ -861,7 +812,7 @@ func (s *SQLiteStore) migrate() error {
 	}
 
 	// Migration 6: Web Vulnerability Engine (Stage 6)
-	if currentVersion < 6 {
+	if !applied[6] {
 		tx, err := s.db.Begin()
 		if err != nil {
 			return err
@@ -922,7 +873,7 @@ func (s *SQLiteStore) migrate() error {
 	}
 
 	// Migration 7: Session & Identity Security Engine (Stage 7)
-	if currentVersion < 7 {
+	if !applied[7] {
 		tx, err := s.db.Begin()
 		if err != nil {
 			return err
@@ -989,7 +940,7 @@ func (s *SQLiteStore) migrate() error {
 	}
 
 	// Migration 8: Real Cloud Security Engine (Stage 8)
-	if currentVersion < 8 {
+	if !applied[8] {
 		tx, err := s.db.Begin()
 		if err != nil {
 			return err
@@ -1057,7 +1008,7 @@ func (s *SQLiteStore) migrate() error {
 	}
 
 	// Migration 9: Business Logic Security Engine (Stage 9)
-	if currentVersion < 9 {
+	if !applied[9] {
 		tx, err := s.db.Begin()
 		if err != nil {
 			return err
@@ -1129,7 +1080,7 @@ func (s *SQLiteStore) migrate() error {
 	}
 
 	// Migration 10: Correlation & Attack Path Engine (Stage 10)
-	if currentVersion < 10 {
+	if !applied[10] {
 		tx, err := s.db.Begin()
 		if err != nil {
 			return err
@@ -1195,7 +1146,7 @@ func (s *SQLiteStore) migrate() error {
 	}
 
 	// Migration 11: Verification Engine 2.0 (Stage 11)
-	if currentVersion < 11 {
+	if !applied[11] {
 		tx, err := s.db.Begin()
 		if err != nil {
 			return err
@@ -1268,7 +1219,7 @@ func (s *SQLiteStore) migrate() error {
 	}
 
 	// Migration 12: Stage 13 Operator Engine (Finding Reviews, Report Delivery, Audit Events, Scan Leases)
-	if currentVersion < 12 {
+	if !applied[12] {
 		tx, err := s.db.Begin()
 		if err != nil {
 			return err
@@ -1356,7 +1307,7 @@ func (s *SQLiteStore) migrate() error {
 	}
 
 	// Migration 13: BOLA / IDOR Verification Engine (Phase 5.3)
-	if currentVersion < 13 {
+	if !applied[13] {
 		tx, err := s.db.Begin()
 		if err != nil {
 			return err
@@ -1422,10 +1373,11 @@ func (s *SQLiteStore) migrate() error {
 		if err := tx.Commit(); err != nil {
 			return err
 		}
+		applied[13] = true
 	}
 
 	// Migration 14: BFLA / Broken Function Level Authorization Engine (Phase 5.4)
-	if currentVersion < 14 {
+	if !applied[14] {
 		tx, err := s.db.Begin()
 		if err != nil {
 			return err
@@ -1491,10 +1443,11 @@ func (s *SQLiteStore) migrate() error {
 		if err := tx.Commit(); err != nil {
 			return err
 		}
+		applied[14] = true
 	}
 
 	// Migration 15: BOPLA / Broken Object Property Level Authorization Engine (Phase 5.5)
-	if currentVersion < 15 {
+	if !applied[15] {
 		tx, err := s.db.Begin()
 		if err != nil {
 			return err
@@ -1562,10 +1515,11 @@ func (s *SQLiteStore) migrate() error {
 		if err := tx.Commit(); err != nil {
 			return err
 		}
+		applied[15] = true
 	}
 
 	// Migration 16: Workflow Integrity Assessment Engine (Phase 5.6)
-	if currentVersion < 16 {
+	if !applied[16] {
 		tx, err := s.db.Begin()
 		if err != nil {
 			return err
@@ -1636,10 +1590,11 @@ func (s *SQLiteStore) migrate() error {
 		if err := tx.Commit(); err != nil {
 			return err
 		}
+		applied[16] = true
 	}
 
 	// Migration 17: Assessment History & Persistent Snapshots (Phase 6.5)
-	if currentVersion < 17 {
+	if !applied[17] {
 		tx, err := s.db.Begin()
 		if err != nil {
 			return err
@@ -1731,10 +1686,96 @@ func (s *SQLiteStore) migrate() error {
 		if err := tx.Commit(); err != nil {
 			return err
 		}
+		applied[17] = true
+	}
+
+	// Migration 18: Finding Lifecycle Management (Phase 6.6)
+	if !applied[18] {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		schemaV18 := `
+		CREATE TABLE IF NOT EXISTS finding_lifecycles (
+			id TEXT PRIMARY KEY,
+			tenant_id TEXT NOT NULL,
+			account_id TEXT NOT NULL,
+			client_id TEXT NOT NULL,
+			fingerprint TEXT NOT NULL,
+			fingerprint_version TEXT NOT NULL DEFAULT 'v1',
+			current_state TEXT NOT NULL,
+			previous_state TEXT,
+			target_id TEXT,
+			target_url TEXT NOT NULL,
+			title TEXT NOT NULL,
+			category TEXT NOT NULL,
+			severity TEXT NOT NULL,
+			score INTEGER NOT NULL DEFAULT 0,
+			last_assessment_id TEXT NOT NULL,
+			last_execution_id TEXT NOT NULL,
+			last_snapshot_id TEXT,
+			first_observed_at TIMESTAMP NOT NULL,
+			last_observed_at TIMESTAMP NOT NULL,
+			resolved_at TIMESTAMP,
+			regression_count INTEGER NOT NULL DEFAULT 0,
+			metadata_json TEXT NOT NULL DEFAULT '{}',
+			created_at TIMESTAMP NOT NULL,
+			updated_at TIMESTAMP NOT NULL,
+			UNIQUE(tenant_id, account_id, fingerprint)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_lifecycle_tenant_acc ON finding_lifecycles(tenant_id, account_id);
+		CREATE INDEX IF NOT EXISTS idx_lifecycle_client_id ON finding_lifecycles(client_id);
+		CREATE INDEX IF NOT EXISTS idx_lifecycle_fingerprint ON finding_lifecycles(fingerprint);
+		CREATE INDEX IF NOT EXISTS idx_lifecycle_state ON finding_lifecycles(current_state);
+		CREATE INDEX IF NOT EXISTS idx_lifecycle_last_exec ON finding_lifecycles(last_execution_id);
+
+		CREATE TABLE IF NOT EXISTS finding_lifecycle_events (
+			id TEXT PRIMARY KEY,
+			tenant_id TEXT NOT NULL,
+			account_id TEXT NOT NULL,
+			client_id TEXT NOT NULL,
+			assessment_id TEXT NOT NULL,
+			execution_id TEXT NOT NULL,
+			snapshot_id TEXT,
+			finding_id TEXT NOT NULL,
+			fingerprint TEXT NOT NULL,
+			fingerprint_version TEXT NOT NULL DEFAULT 'v1',
+			target_id TEXT,
+			target_url TEXT NOT NULL,
+			previous_state TEXT NOT NULL,
+			current_state TEXT NOT NULL,
+			transition_reason TEXT NOT NULL,
+			qualifying_assessment INTEGER NOT NULL DEFAULT 1,
+			historical_finding_id TEXT,
+			historical_evidence_id TEXT,
+			metadata_json TEXT NOT NULL DEFAULT '{}',
+			created_at TIMESTAMP NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_lifecycle_events_tenant_acc ON finding_lifecycle_events(tenant_id, account_id);
+		CREATE INDEX IF NOT EXISTS idx_lifecycle_events_fp ON finding_lifecycle_events(fingerprint);
+		CREATE INDEX IF NOT EXISTS idx_lifecycle_events_exec ON finding_lifecycle_events(execution_id);
+		CREATE INDEX IF NOT EXISTS idx_lifecycle_events_snap ON finding_lifecycle_events(snapshot_id);
+		CREATE INDEX IF NOT EXISTS idx_lifecycle_events_created ON finding_lifecycle_events(created_at);
+
+		INSERT INTO schema_migrations (version, applied_at) VALUES (18, CURRENT_TIMESTAMP);
+		`
+
+		if _, err := tx.Exec(schemaV18); err != nil {
+			return fmt.Errorf("migration v18 failed: %w", err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		applied[18] = true
 	}
 
 	// Migration 19: Scheduling & Recurring Assessment Execution (Phase 7.1)
-	if currentVersion < 19 {
+	if !applied[19] {
 		tx, err := s.db.Begin()
 		if err != nil {
 			return err
@@ -1803,10 +1844,11 @@ func (s *SQLiteStore) migrate() error {
 		if err := tx.Commit(); err != nil {
 			return err
 		}
+		applied[19] = true
 	}
 
 	// Migration 20: Persistent Assessment Execution History (Phase 7.2)
-	if currentVersion < 20 {
+	if !applied[20] {
 		tx, err := s.db.Begin()
 		if err != nil {
 			return err
@@ -1873,10 +1915,11 @@ func (s *SQLiteStore) migrate() error {
 		if err := tx.Commit(); err != nil {
 			return err
 		}
+		applied[20] = true
 	}
 
 	// Migration 21: Assessment Recovery & Ownership Tracking (Phase 7.4)
-	if currentVersion < 21 {
+	if !applied[21] {
 		tx, err := s.db.Begin()
 		if err != nil {
 			return err
@@ -1916,10 +1959,11 @@ func (s *SQLiteStore) migrate() error {
 		if err := tx.Commit(); err != nil {
 			return err
 		}
+		applied[21] = true
 	}
 
 	// Migration 22: Duplicate Prevention, Idempotency & Overlap Protection (Phase 7.5)
-	if currentVersion < 22 {
+	if !applied[22] {
 		tx, err := s.db.Begin()
 		if err != nil {
 			return err
@@ -2119,10 +2163,11 @@ func (s *SQLiteStore) migrate() error {
 		if err := tx.Commit(); err != nil {
 			return err
 		}
+		applied[22] = true
 	}
 
 	// Migration 23: Durable Alerting & Notification Outbox (Phase 7.7)
-	if currentVersion < 23 {
+	if !applied[23] {
 		tx, err := s.db.Begin()
 		if err != nil {
 			return err
@@ -2181,6 +2226,68 @@ func (s *SQLiteStore) migrate() error {
 		if err := tx.Commit(); err != nil {
 			return err
 		}
+		applied[23] = true
+	}
+
+	// Migration 24: Database Integrity & Performance Indexes (Phase 11.8)
+	if !applied[24] {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		var reportsTableExists int
+		_ = tx.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='assessment_reports'`).Scan(&reportsTableExists)
+		if reportsTableExists > 0 {
+			// Disambiguate any duplicate (execution_id, format) entries if present
+			_, _ = tx.Exec(`
+				UPDATE assessment_reports
+				SET format = format || '-dup-' || substr(id, 1, 8)
+				WHERE (execution_id, format) IN (
+					SELECT execution_id, format
+					FROM assessment_reports
+					GROUP BY execution_id, format
+					HAVING COUNT(*) > 1
+				)
+				AND id NOT IN (
+					SELECT MIN(id)
+					FROM assessment_reports
+					GROUP BY execution_id, format
+				);
+			`)
+
+			_, err = tx.Exec(`
+				CREATE UNIQUE INDEX IF NOT EXISTS idx_reports_exec_format
+				ON assessment_reports(execution_id, format);
+				CREATE INDEX IF NOT EXISTS idx_reports_exec_id
+				ON assessment_reports(execution_id);
+			`)
+			if err != nil {
+				return fmt.Errorf("migration v24 failed creating report indexes: %w", err)
+			}
+		}
+
+		var findingsTableExists int
+		_ = tx.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='assessment_findings'`).Scan(&findingsTableExists)
+		if findingsTableExists > 0 {
+			_, err = tx.Exec(`
+				CREATE INDEX IF NOT EXISTS idx_findings_target_id
+				ON assessment_findings(target_id);
+			`)
+			if err != nil {
+				return fmt.Errorf("migration v24 failed creating findings target_id index: %w", err)
+			}
+		}
+
+		if _, err := tx.Exec(`INSERT INTO schema_migrations (version, applied_at) VALUES (24, CURRENT_TIMESTAMP);`); err != nil {
+			return fmt.Errorf("migration v24 recording failed: %w", err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		applied[24] = true
 	}
 
 	return nil
@@ -2318,11 +2425,65 @@ func (s *SQLiteStore) CreateAssessment(a *Assessment) error {
 		a.ScopeMode = "same-origin"
 	}
 
-	_, err := s.db.Exec(`
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec(`
 		INSERT INTO assessments (id, ref, client_id, name, description, assessment_type, status, created_at, updated_at, started_at, completed_at, scope_mode, config_snapshot_json, finding_count)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, a.ID, a.Ref, a.ClientID, a.Name, a.Description, a.AssessmentType, a.Status, a.CreatedAt, a.UpdatedAt, a.StartedAt, a.CompletedAt, a.ScopeMode, a.ConfigSnapshotJSON, a.FindingCount)
-	return err
+	if err != nil {
+		return err
+	}
+
+	for i := range a.Targets {
+		t := &a.Targets[i]
+		if t.AssessmentID == "" {
+			t.AssessmentID = a.ID
+		}
+		if t.CreatedAt.IsZero() {
+			t.CreatedAt = now
+		}
+		if t.ScopeStatus == "" {
+			t.ScopeStatus = "APPROVED"
+		}
+		if t.TargetType == "" {
+			t.TargetType = TargetWebsite
+		}
+		_, err = tx.Exec(`
+			INSERT INTO assessment_targets (id, assessment_id, target_url, target_type, scope_status, label, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
+		`, t.ID, t.AssessmentID, t.TargetURL, t.TargetType, t.ScopeStatus, t.Label, t.CreatedAt)
+		if err != nil {
+			return fmt.Errorf("failed to insert target %s: %w", t.ID, err)
+		}
+	}
+
+	if a.Authorization != nil {
+		auth := a.Authorization
+		if auth.AssessmentID == "" {
+			auth.AssessmentID = a.ID
+		}
+		if auth.CreatedAt.IsZero() {
+			auth.CreatedAt = now
+		}
+		auth.UpdatedAt = now
+		if auth.Status == "" {
+			auth.Status = "PENDING"
+		}
+		_, err = tx.Exec(`
+			INSERT INTO authorizations (id, assessment_id, authorizing_party, authorization_method, date_received, valid_from, valid_until, scope_doc_ref, internal_notes, status, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, auth.ID, auth.AssessmentID, auth.AuthorizingParty, auth.AuthorizationMethod, auth.DateReceived, auth.ValidFrom, auth.ValidUntil, auth.ScopeDocRef, auth.InternalNotes, auth.Status, auth.CreatedAt, auth.UpdatedAt)
+		if err != nil {
+			return fmt.Errorf("failed to insert authorization: %w", err)
+		}
+	}
+
+	return tx.Commit()
 }
 
 func (s *SQLiteStore) GetAssessment(idOrRef string) (*Assessment, error) {
@@ -2693,32 +2854,45 @@ func (s *SQLiteStore) SaveFindings(findings []AssessmentFinding) error {
 	}
 	defer tx.Rollback()
 
-	// Immutability check: cannot overwrite findings of an already completed snapshot or terminal execution
-	for _, f := range findings {
-		if f.ExecutionID != "" {
+	// Resolve assessment IDs and check immutability / terminal states
+	var execTableExists int
+	_ = tx.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='assessment_executions'`).Scan(&execTableExists)
+
+	checkedExecs := make(map[string]bool)
+	uniqueAssessmentIDs := make(map[string]bool)
+	for i := range findings {
+		findings[i].AssessmentID = s.resolveAssessmentID(findings[i].AssessmentID)
+		if findings[i].AssessmentID != "" {
+			uniqueAssessmentIDs[findings[i].AssessmentID] = true
+		}
+		f := &findings[i]
+
+		if f.ExecutionID != "" && !checkedExecs[f.ExecutionID] {
 			var isComplete int
 			err := tx.QueryRow(`SELECT is_complete FROM assessment_snapshots WHERE execution_id = ?`, f.ExecutionID).Scan(&isComplete)
 			if err == nil && isComplete == 1 {
 				return ErrSnapshotImmutable
 			}
-			var execTableExists int
-			_ = tx.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='assessment_executions'`).Scan(&execTableExists)
 			if execTableExists > 0 {
 				var execStatus string
 				err = tx.QueryRow(`SELECT status FROM assessment_executions WHERE id = ?`, f.ExecutionID).Scan(&execStatus)
-				if err == nil && AssessmentStatus(execStatus) == StatusInterrupted {
-					return fmt.Errorf("%w: execution %s was interrupted/recovered", ErrExecutionTerminal, f.ExecutionID)
+				if err == nil && (AssessmentStatus(execStatus) == StatusInterrupted || AssessmentStatus(execStatus) == StatusCancelled) {
+					return fmt.Errorf("%w: execution %s was interrupted/recovered/cancelled", ErrExecutionTerminal, f.ExecutionID)
 				}
 			}
+			checkedExecs[f.ExecutionID] = true
 		}
 		if f.ID != "" {
 			var existingExecID string
 			err := tx.QueryRow(`SELECT execution_id FROM assessment_findings WHERE id = ?`, f.ID).Scan(&existingExecID)
 			if err == nil && existingExecID != "" {
-				var isComplete int
-				err = tx.QueryRow(`SELECT is_complete FROM assessment_snapshots WHERE execution_id = ?`, existingExecID).Scan(&isComplete)
-				if err == nil && isComplete == 1 {
-					return ErrSnapshotImmutable
+				if !checkedExecs[existingExecID] {
+					var isComplete int
+					err = tx.QueryRow(`SELECT is_complete FROM assessment_snapshots WHERE execution_id = ?`, existingExecID).Scan(&isComplete)
+					if err == nil && isComplete == 1 {
+						return ErrSnapshotImmutable
+					}
+					checkedExecs[existingExecID] = true
 				}
 			}
 		}
@@ -2824,15 +2998,34 @@ func (s *SQLiteStore) SaveFindings(findings []AssessmentFinding) error {
 		}
 	}
 
-	// Update finding count on assessment record
-	_, err = tx.Exec(`
-		UPDATE assessments
-		SET finding_count = (SELECT COUNT(*) FROM assessment_findings WHERE assessment_id = ?),
-		    updated_at = ?
-		WHERE id = ?
-	`, findings[0].AssessmentID, time.Now().UTC(), findings[0].AssessmentID)
-	if err != nil {
-		return err
+	// Update finding count on assessment records for all unique assessments in the batch
+	now := time.Now().UTC()
+	for asmID := range uniqueAssessmentIDs {
+		if asmID != "" {
+			_, err = tx.Exec(`
+				UPDATE assessments
+				SET finding_count = (SELECT COUNT(*) FROM assessment_findings WHERE assessment_id = ?),
+				    updated_at = ?
+				WHERE id = ?
+			`, asmID, now, asmID)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	// Update finding count on assessment_executions for all touched executions
+	if execTableExists > 0 {
+		for execID := range checkedExecs {
+			if execID != "" {
+				_, _ = tx.Exec(`
+					UPDATE assessment_executions
+					SET finding_count = (SELECT COUNT(*) FROM assessment_findings WHERE execution_id = ?),
+					    updated_at = ?
+					WHERE id = ?
+				`, execID, now, execID)
+			}
+		}
 	}
 
 	return tx.Commit()
@@ -3879,8 +4072,8 @@ func (s *SQLiteStore) CreateSnapshot(snapshot *AssessmentSnapshot, findings []As
 	if execTableExists > 0 && snapshot.ExecutionID != "" {
 		var execStatus string
 		err := s.db.QueryRow(`SELECT status FROM assessment_executions WHERE id = ?`, snapshot.ExecutionID).Scan(&execStatus)
-		if err == nil && AssessmentStatus(execStatus) == StatusInterrupted && snapshot.Status != StatusInterrupted {
-			return fmt.Errorf("%w: execution %s is already finalized as interrupted", ErrSnapshotImmutable, snapshot.ExecutionID)
+		if err == nil && (AssessmentStatus(execStatus) == StatusInterrupted || AssessmentStatus(execStatus) == StatusCancelled) && snapshot.Status != AssessmentStatus(execStatus) {
+			return fmt.Errorf("%w: execution %s is already finalized as %s", ErrSnapshotImmutable, snapshot.ExecutionID, execStatus)
 		}
 	}
 
@@ -4286,16 +4479,20 @@ func (s *SQLiteStore) CreateSnapshot(snapshot *AssessmentSnapshot, findings []As
 		}
 		defer findStmt.Close()
 
+		checkedExistingExecs := make(map[string]bool)
 		for _, f := range findings {
 			// Immutability check: cannot overwrite any finding that belongs to an already completed snapshot
 			if f.ID != "" {
 				var existingExecID string
 				err := tx.QueryRow(`SELECT execution_id FROM assessment_findings WHERE id = ?`, f.ID).Scan(&existingExecID)
 				if err == nil && existingExecID != "" && existingExecID != snapshot.ExecutionID {
-					var isComplete int
-					err = tx.QueryRow(`SELECT is_complete FROM assessment_snapshots WHERE execution_id = ?`, existingExecID).Scan(&isComplete)
-					if err == nil && isComplete == 1 {
-						return ErrSnapshotImmutable
+					if !checkedExistingExecs[existingExecID] {
+						var isComplete int
+						err = tx.QueryRow(`SELECT is_complete FROM assessment_snapshots WHERE execution_id = ?`, existingExecID).Scan(&isComplete)
+						if err == nil && isComplete == 1 {
+							return ErrSnapshotImmutable
+						}
+						checkedExistingExecs[existingExecID] = true
 					}
 				}
 			}

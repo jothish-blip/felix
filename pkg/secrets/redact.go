@@ -10,17 +10,23 @@ import (
 )
 
 var (
+	// ansiPattern matches all standard ANSI terminal escape sequences (OSC, CSI, character set switches, and 2-byte escape sequences).
+	ansiPattern = regexp.MustCompile(`\x1b\][^\x07\x1b]*(?:\x07|\x1b\\|$)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b\([B0-2]|\x1b[@-Z\\-_]|\x9b[0-?]*[ -/]*[@-~]`)
+
+	// controlCharPattern matches non-printable ASCII control characters (excluding tab \t, newline \n, and carriage return \r).
+	controlCharPattern = regexp.MustCompile(`[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]`)
+
 	// pemPrivateKeyPattern matches complete multiline PEM private key blocks.
 	pemPrivateKeyPattern = regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9_\- ]*(?:PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----.*?-----END [A-Z0-9_\- ]*(?:PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----`)
 
 	// pemTruncatedPattern matches unclosed or truncated PEM private key blocks to prevent raw leakage.
-	pemTruncatedPattern = regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9_\- ]*(?:PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----[A-Za-z0-9+/=_\-\s\r\n]+$`)
+	pemTruncatedPattern = regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9_\- ]*(?:PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----[A-Za-z0-9+/=_\-\s\r\n]+`)
 
 	// jwtPattern matches JSON Web Tokens with standard three-part base64url structure.
 	jwtPattern = regexp.MustCompile(`\bey[A-Za-z0-9_-]{8,}\.ey[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+\b`)
 
-	// bearerTokenPattern matches Authorization Bearer tokens.
-	bearerTokenPattern = regexp.MustCompile(`(?i)\b(Bearer\s+)(?:\[REDACTED\]|[A-Za-z0-9_\-\.~+/]+=*)`)
+	// bearerTokenPattern matches Authorization Bearer tokens, including variations like 'Bearer token: xyz'.
+	bearerTokenPattern = regexp.MustCompile(`(?i)\b(Bearer\s+(?:token\s*(?::\s*)?|:\s*)?)(?:\[REDACTED\]|[A-Za-z0-9_\-\.~+/]+=*)`)
 
 	// Well-known API token and credential formats.
 	stripeKeyPattern    = regexp.MustCompile(`(?:\b|_)(?:sk|rk)_(?:live|test)_[0-9a-zA-Z_]{16,}\b`)
@@ -39,10 +45,10 @@ var (
 
 	// sensitiveAssignPattern matches key-value assignments for sensitive credentials in config, code, headers, JSON, or logs.
 	// Matches: key (=, :, :=, =>) value, with optional quotes around keys and values, unclosed values at EOF, and whitespace variations.
-	sensitiveAssignPattern = regexp.MustCompile(`(?i)(?:["'\x60]|\b)((?:[a-zA-Z0-9_.-]+[\s_-]+)?(?:password|passwd|pass|pwd|secret|secret_key|secretkey|client_secret|clientsecret|client\s+secret|api_key|apikey|api\s+key|api_token|apitoken|api\s+token|access_token|accesstoken|access\s+token|refresh_token|refreshtoken|refresh\s+token|auth_token|authtoken|auth\s+token|private_key|privatekey|private\s+key|credential|credentials|db_password|database_url|aws_secret_access_key|token|auth|key)(?:[\s_-]+(?:leaked|exposed|found|compromised|value))?)(["'\x60]?)\s*(:=|=>|=|:)\s*(?:(")(?:[^"\r\n]*"|[^"\r\n]*$)|(')(?:[^'\r\n]*'|[^'\r\n]*$)|(\x60)(?:[^\x60\r\n]*\x60|[^\x60\r\n]*$)|([^&\s,;'"<>\x60\)\}\]]+))`)
+	sensitiveAssignPattern = regexp.MustCompile(`(?i)(?:["'\x60]|\b)((?:[a-zA-Z0-9_.-]+[\s_-]+)?(?:password|passwd|pass|pwd|secret|secret_key|secretkey|client_secret|clientsecret|client\s+secret|api_key|apikey|api\s+key|api_token|apitoken|api\s+token|access_token|accesstoken|access\s+token|refresh_token|refreshtoken|refresh\s+token|auth_token|authtoken|auth\s+token|private_key|privatekey|private\s+key|credential|credentials|db_password|database_url|aws_secret_access_key|token|auth|key|csrf|xsrf)(?:[\s_-]+(?:leaked|exposed|found|compromised|value))?)(["'\x60]?)\s*(:=|=>|=|:)\s*(?:(")(?:[^"\r\n]*"|[^"\r\n]*$)|(')(?:[^'\r\n]*'|[^'\r\n]*$)|(\x60)(?:[^\x60\r\n]*\x60|[^\x60\r\n]*$)|([^&\s,;'"<>\x60\)\}\]]+))`)
 
 	// cookiePattern matches common session identifiers in Cookie/Set-Cookie headers or log text.
-	cookiePattern = regexp.MustCompile(`(?i)\b(connect\.sid|phpsessid|jsessionid|sessionid|session_id|session|sid|remember_me|remember_token|auth_token)\s*=\s*([^;\s\r\n]+)`)
+	cookiePattern = regexp.MustCompile(`(?i)\b(connect\.sid|phpsessid|jsessionid|sessionid|session_id|session|sid|remember_me|remember_token|auth_token)\s*=\s*([^;&\s\r\n]+)`)
 
 	// HTML password and token form inputs.
 	htmlPasswordPattern1 = regexp.MustCompile(`(?i)(<input[^>]+type=["']?password["']?[^>]*value=["'])([^"']*)(["'])`)
@@ -51,7 +57,7 @@ var (
 	htmlTokenPattern2    = regexp.MustCompile(`(?i)(<input[^>]+value=["'])([^"']*)(["'][^>]*name=["'][^"']*(?:token|secret|key|csrf|xsrf|auth)[^"']*["'])`)
 
 	// querySensitiveFallbackPattern matches credential query parameters in raw text or malformed URLs.
-	querySensitiveFallbackPattern = regexp.MustCompile(`(?i)([?&](?:[a-zA-Z0-9_\-\.]*(?:token|access_token|refresh_token|auth_token|id_token|key|api_key|apikey|secret|secret_key|client_secret|password|passwd|pwd|pass|auth|credential|credentials|session|session_id|sessionid|sid|sig|signature)|ssn|social_security|socialsecurity|pin|cvv|cvc)=)(?:\[REDACTED\]|[^&\s"'<>` + "`" + `]+)`)
+	querySensitiveFallbackPattern = regexp.MustCompile(`(?i)([?&](?:[a-zA-Z0-9_\-\.]*(?:token|access_token|refresh_token|auth_token|id_token|key|api_key|apikey|secret|secret_key|client_secret|password|passwd|pwd|pass|auth|credential|credentials|session|session_id|sessionid|sid|sig|signature|csrf|xsrf)|ssn|social_security|socialsecurity|pin|cvv|cvc)=)(?:\[REDACTED\]|[^&\s"'<>` + "`" + `]+)`)
 
 	// userPassURLPattern matches user:password or :password credentials in raw URL strings, including percent-encoded credentials.
 	userPassURLPattern = regexp.MustCompile(`(?i)([a-zA-Z0-9+.-]+://)([^:/\s?#]*):([^/\s?#]*)@`)
@@ -60,8 +66,26 @@ var (
 	redisTokenURLPattern = regexp.MustCompile(`(?i)(rediss?://)([^:/\s?#@]+)@`)
 
 	// proseCredentialPattern matches credentials expressed in natural log or error phrases ("with password xyz", "using token abc")
-	proseCredentialPattern = regexp.MustCompile(`(?i)\b((?:with|using|having|entered|supplied|provided|is|was)\s+(?:password|passwd|pass|pwd|secret|api[_\s-]?key|token)\s+)(["'\x60]?)([^"'\x60\s,;<>]+)(["'\x60]?)`)
+	proseCredentialPattern = regexp.MustCompile(`(?i)\b((?:with|using|having|entered|supplied|provided|is|was|found|leaked|exposed|compromised|containing|contains|returned)\s+(?:password|passwd|pass|pwd|secret|api[_\s-]?key|token)\s+)(["'\x60]?)([^"'\x60\s,;<>]+)(["'\x60]?)`)
 )
+
+// StripANSI removes all ANSI terminal escape sequences (CSI, OSC, 2-byte escapes)
+// to prevent terminal injection, ANSI log spoofing, and control corruption.
+func StripANSI(input string) string {
+	if input == "" {
+		return ""
+	}
+	return ansiPattern.ReplaceAllString(input, "")
+}
+
+// SanitizeControlCharacters removes non-printable ASCII control characters (bytes < 32 and DEL 0x7f)
+// while explicitly preserving standard whitespace characters: tab (\t), newline (\n), and carriage return (\r).
+func SanitizeControlCharacters(input string) string {
+	if input == "" {
+		return ""
+	}
+	return controlCharPattern.ReplaceAllString(input, "")
+}
 
 // RedactText sanitizes arbitrary text by redacting all recognized credentials, tokens,
 // connection strings, private keys, session cookies, and key-value secret assignments.
@@ -71,8 +95,12 @@ func RedactText(input string) string {
 		return ""
 	}
 
+	// 0. Neutralize ANSI escape sequences and non-printable control characters
+	s := ansiPattern.ReplaceAllString(input, "")
+	s = controlCharPattern.ReplaceAllString(s, "")
+
 	// 1. Redact multiline PEM private key blocks (complete and truncated)
-	s := pemPrivateKeyPattern.ReplaceAllString(input, "[REDACTED_PRIVATE_KEY]")
+	s = pemPrivateKeyPattern.ReplaceAllString(s, "[REDACTED_PRIVATE_KEY]")
 	s = pemTruncatedPattern.ReplaceAllString(s, "[REDACTED_PRIVATE_KEY]")
 
 	// 2. Redact Bearer authorization tokens
@@ -80,9 +108,9 @@ func RedactText(input string) string {
 		if strings.Contains(m, "[REDACTED") {
 			return m
 		}
-		idx := strings.Index(m, " ")
-		if idx != -1 {
-			return m[:idx+1] + "[REDACTED]"
+		sub := bearerTokenPattern.FindStringSubmatch(m)
+		if len(sub) >= 2 {
+			return sub[1] + "[REDACTED]"
 		}
 		return "Bearer [REDACTED]"
 	})
@@ -283,7 +311,10 @@ func SanitizeURL(rawURL string) string {
 		_, hasPassword := u.User.Password()
 		if hasPassword {
 			u.User = url.UserPassword(username, "[REDACTED]")
-		} else if IsSensitiveKey(username) || strings.EqualFold(u.Scheme, "redis") || strings.EqualFold(u.Scheme, "rediss") {
+		} else if IsSensitiveKey(username) || strings.EqualFold(u.Scheme, "redis") || strings.EqualFold(u.Scheme, "rediss") ||
+			githubTokenPattern.MatchString(username) || stripeKeyPattern.MatchString(username) ||
+			slackTokenPattern.MatchString(username) || openaiKeyPattern.MatchString(username) ||
+			jwtPattern.MatchString(username) {
 			// Token passed in username position (e.g. redis://:secret@host or redis://secret@host or http://token@host)
 			u.User = url.User("[REDACTED]")
 		}
@@ -345,6 +376,7 @@ func SanitizeHeaders(headers http.Header) map[string]string {
 
 // RedactCookieHeader redacts sensitive cookie values from a Cookie or Set-Cookie header string
 // while preserving security attributes (Secure, HttpOnly, SameSite, Path, Domain).
+// In multi-cookie headers (e.g. Cookie: a=1; b=2), all non-attribute cookie values are safely redacted.
 func RedactCookieHeader(raw string) string {
 	if raw == "" {
 		return ""
@@ -355,14 +387,26 @@ func RedactCookieHeader(raw string) string {
 	}
 
 	for i := range parts {
-		parts[i] = strings.TrimSpace(parts[i])
-	}
-
-	firstPart := parts[0]
-	eqIdx := strings.Index(firstPart, "=")
-	if eqIdx != -1 {
-		name := firstPart[:eqIdx]
-		parts[0] = fmt.Sprintf("%s=[REDACTED]", name)
+		part := strings.TrimSpace(parts[i])
+		if part == "" {
+			continue
+		}
+		eqIdx := strings.Index(part, "=")
+		if eqIdx != -1 {
+			name := strings.TrimSpace(part[:eqIdx])
+			lowerName := strings.ToLower(name)
+			switch lowerName {
+			case "path", "domain", "expires", "max-age", "samesite":
+				// Standard Set-Cookie directive attribute: preserve intact
+				parts[i] = part
+			default:
+				// Cookie name-value pair: redact value
+				parts[i] = fmt.Sprintf("%s=[REDACTED]", name)
+			}
+		} else {
+			// Boolean flag attributes (Secure, HttpOnly, Partitioned): preserve intact
+			parts[i] = part
+		}
 	}
 
 	return strings.Join(parts, "; ")
@@ -583,6 +627,11 @@ func IsSensitiveHeader(h string) bool {
 	if strings.HasSuffix(lower, "-key") || strings.HasSuffix(lower, "_key") {
 		return true
 	}
+	if strings.HasSuffix(lower, "-sig") || strings.HasSuffix(lower, "_sig") ||
+		strings.HasSuffix(lower, "-signature") || strings.HasSuffix(lower, "_signature") ||
+		strings.Contains(lower, "signature") {
+		return true
+	}
 
 	return false
 }
@@ -636,6 +685,10 @@ func IsSensitiveKey(k string) bool {
 		"cardnumber":    {},
 		"cvv":           {},
 		"cvc":                  {},
+		"csrf":                 {},
+		"csrftoken":            {},
+		"xsrf":                 {},
+		"xsrftoken":            {},
 		"ssn":                  {},
 		"socialsecuritynumber": {},
 		"socialsecurity":       {},
@@ -721,6 +774,12 @@ func IsSensitiveQueryParam(k string) bool {
 		"date_of_birth":          {},
 		"cvv":                    {},
 		"cvc":                    {},
+		"csrf":                   {},
+		"csrftoken":              {},
+		"csrf_token":             {},
+		"xsrf":                   {},
+		"xsrftoken":              {},
+		"xsrf_token":             {},
 		"credit_card":            {},
 		"card_number":            {},
 	}

@@ -576,7 +576,7 @@ func runScan(args []string) int {
 	for _, t := range targets {
 		norm, err := crawler.NormalizeTargetURL(t)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "[-] error: invalid target URL %q: %v\n", t, err)
+			fmt.Fprintf(os.Stderr, "[-] error: invalid target URL %q: %v\n", secrets.SanitizeURL(t), secrets.SanitizeError(err))
 			return 2
 		}
 		normalizedTargets = append(normalizedTargets, norm)
@@ -837,7 +837,7 @@ func runScan(args []string) int {
 		if res.Err != nil {
 			if res.Diagnostic != nil && res.Diagnostic.IsBlocked() {
 				blockedCount++
-				fmt.Fprintf(os.Stderr, "[-] [%s] Target responded, but access was blocked:\n", res.Target)
+				fmt.Fprintf(os.Stderr, "[-] [%s] Target responded, but access was blocked:\n", secrets.SanitizeURL(res.Target))
 				fmt.Fprintf(os.Stderr, "    Reason:     %s\n", res.Diagnostic.SafeSummary)
 				if res.Diagnostic.Server != "" {
 					fmt.Fprintf(os.Stderr, "    Server:     %s\n", res.Diagnostic.Server)
@@ -851,10 +851,10 @@ func runScan(args []string) int {
 				fmt.Fprintf(os.Stderr, "    State:      BLOCKED (Access boundaries respected; probes halted)\n\n")
 			} else if res.Diagnostic != nil {
 				failedCount++
-				fmt.Fprintf(os.Stderr, "[-] [%s] Reachability failure: %s\n\n", res.Target, res.Diagnostic.SafeSummary)
+				fmt.Fprintf(os.Stderr, "[-] [%s] Reachability failure: %s\n\n", secrets.SanitizeURL(res.Target), res.Diagnostic.SafeSummary)
 			} else {
 				failedCount++
-				fmt.Fprintf(os.Stderr, "[-] [%s] Error: %v\n\n", res.Target, res.Err)
+				fmt.Fprintf(os.Stderr, "[-] [%s] Error: %s\n\n", secrets.SanitizeURL(res.Target), secrets.SanitizeError(res.Err))
 			}
 			continue
 		}
@@ -883,7 +883,7 @@ func runScan(args []string) int {
 		}
 
 		if !quiet && !jsonBare {
-			fmt.Printf("Target: %s\n\n", res.Target)
+			fmt.Printf("Target: %s\n\n", secrets.SanitizeURL(res.Target))
 			fmt.Println("ASSET DISCOVERY")
 			fmt.Println("────────────────────────────────────────")
 			fmt.Printf("[+] Assets discovered: %d\n", len(res.Assets))
@@ -914,7 +914,7 @@ func runScan(args []string) int {
 				fmt.Println()
 				fmt.Println("Findings:")
 				for _, f := range secretFindings {
-					fmt.Printf("  %-7s %s\n", f.Severity, f.Title)
+					fmt.Printf("  %-7s %s\n", f.Severity, secrets.RedactText(f.Title))
 					fmt.Printf("          %s:%d\n", f.FileOrigin, f.LineNumber)
 					fmt.Printf("          Value: %s\n", f.Redacted)
 					fmt.Printf("          Confidence: %s\n\n", f.Confidence)
@@ -980,8 +980,8 @@ func runScan(args []string) int {
 			if len(cloudResult.Findings) > 0 {
 				fmt.Println("Findings:")
 				for _, f := range cloudResult.Findings {
-					fmt.Printf("  %-6s %s\n", f.Severity, f.Description)
-					fmt.Printf("         Endpoint: %s\n", f.Endpoint)
+					fmt.Printf("  %-6s %s\n", f.Severity, secrets.RedactText(f.Description))
+					fmt.Printf("         Endpoint: %s\n", secrets.SanitizeURL(f.Endpoint))
 					fmt.Printf("         Confidence: %s\n\n", f.Confidence)
 					totalCloudFindings++
 				}
@@ -1009,8 +1009,8 @@ func runScan(args []string) int {
 			if len(apiResult.Findings) > 0 {
 				fmt.Println("Findings:")
 				for _, f := range apiResult.Findings {
-					fmt.Printf("  %-7s [%s] %s\n", f.Severity, f.Category, f.Description)
-					fmt.Printf("          Endpoint: %s (%s)\n", f.Endpoint, f.Method)
+					fmt.Printf("  %-7s [%s] %s\n", f.Severity, f.Category, secrets.RedactText(f.Description))
+					fmt.Printf("          Endpoint: %s (%s)\n", secrets.SanitizeURL(f.Endpoint), f.Method)
 					if f.Evidence != "" {
 						fmt.Printf("          Evidence: %s\n", api.RedactEvidence(f.Evidence))
 					}
@@ -1045,11 +1045,11 @@ func runScan(args []string) int {
 				label := assetLabel(a.Type)
 				statusSuffix := ""
 				if a.Error != nil {
-					statusSuffix = fmt.Sprintf(" [%v]", a.Error)
+					statusSuffix = fmt.Sprintf(" [%s]", secrets.SanitizeError(a.Error))
 				} else if !a.InScope {
 					statusSuffix = " [external / skipped]"
 				}
-				fmt.Printf("%-8s %s%s\n", label, a.URL, statusSuffix)
+				fmt.Printf("%-8s %s%s\n", label, secrets.SanitizeURL(a.URL), statusSuffix)
 			}
 			fmt.Println()
 		}

@@ -336,6 +336,7 @@ func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
 	}
 
 	// Phase 1: Download discovered assets
+AssetLoop:
 	for _, da := range toDownload {
 		inScope := scope.IsAllowed(da.URL) && (c.config.IsAllowed == nil || c.config.IsAllowed(da.URL)) && (c.config.IsExcluded == nil || !c.config.IsExcluded(da.URL))
 		if !inScope {
@@ -356,7 +357,7 @@ func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
 
 		select {
 		case <-ctx.Done():
-			break
+			break AssetLoop
 		case sem <- struct{}{}:
 			wg.Add(1)
 			go func(item DiscoveredAsset) {
@@ -407,6 +408,7 @@ func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
 	}
 
 	// Download discovered source maps
+SourceMapLoop:
 	for _, smURL := range sourceMapJobs {
 		inScope := scope.IsAllowed(smURL) && (c.config.IsAllowed == nil || c.config.IsAllowed(smURL)) && (c.config.IsExcluded == nil || !c.config.IsExcluded(smURL))
 		if !inScope {
@@ -428,7 +430,7 @@ func (c *Crawler) Crawl(ctx context.Context, rawTarget string) Result {
 
 		select {
 		case <-ctx.Done():
-			break
+			break SourceMapLoop
 		case sem <- struct{}{}:
 			wg.Add(1)
 			go func(targetURL string) {

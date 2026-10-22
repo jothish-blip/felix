@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"felix/pkg/oast"
 	"felix/pkg/report"
 	"felix/pkg/secrets"
 )
@@ -170,6 +171,8 @@ type Config struct {
 	AllowWriteTests    bool
 	SpecPath           string // Optional path to declared API spec/schema
 	CanaryCallbackURL  string // Approved callback destination for SSRF canary verification
+	OASTCorrelator     *oast.Correlator
+	OASTTimeout        time.Duration
 }
 
 // DefaultConfig returns safe default configuration for API security testing.

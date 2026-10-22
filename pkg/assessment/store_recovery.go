@@ -318,7 +318,13 @@ func (s *SQLiteStore) FinalizeAbandonedExecution(execID, recoveryWorkerID string
 
 	cfgJSON, _ := json.Marshal(exec.ConfigSnapshot)
 
-	res, err := s.db.Exec(`
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(`
 		UPDATE assessment_executions
 		SET status = ?, completed_at = ?, duration_ms = ?, finding_count = ?,
 		    snapshot_id = CASE WHEN snapshot_id IS NOT NULL AND snapshot_id != '' THEN snapshot_id ELSE ? END,
@@ -339,7 +345,7 @@ func (s *SQLiteStore) FinalizeAbandonedExecution(execID, recoveryWorkerID string
 		var curStatus string
 		var curWorker sql.NullString
 		var curLeaseExp sql.NullTime
-		_ = s.db.QueryRow(`SELECT status, worker_id, lease_expires_at FROM assessment_executions WHERE id = ?`, exec.ID).Scan(&curStatus, &curWorker, &curLeaseExp)
+		_ = tx.QueryRow(`SELECT status, worker_id, lease_expires_at FROM assessment_executions WHERE id = ?`, exec.ID).Scan(&curStatus, &curWorker, &curLeaseExp)
 		if IsTerminalExecutionStatus(AssessmentStatus(curStatus)) {
 			return &ExecutionRecoveryResult{
 				ExecutionID:       exec.ID,
@@ -364,8 +370,14 @@ func (s *SQLiteStore) FinalizeAbandonedExecution(execID, recoveryWorkerID string
 		}, nil
 	}
 
-	_, _ = s.db.Exec(`UPDATE assessments SET status = ?, updated_at = ? WHERE id = ?`,
-		string(finalStatus), now, exec.AssessmentID)
+	if _, err := tx.Exec(`UPDATE assessments SET status = ?, updated_at = ? WHERE id = ?`,
+		string(finalStatus), now, exec.AssessmentID); err != nil {
+		return nil, fmt.Errorf("failed updating parent assessment status: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed committing execution finalization: %w", err)
+	}
 
 	// Emit recovery interruption notification if configured
 	go func() {

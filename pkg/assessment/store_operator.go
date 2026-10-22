@@ -17,6 +17,7 @@ func (s *SQLiteStore) SaveFindingReview(r *FindingReview) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	r.AssessmentID = s.resolveAssessmentID(r.AssessmentID)
 	if r.ID == "" {
 		r.ID = "rev-" + uuid.New().String()
 	}
@@ -63,6 +64,7 @@ func (s *SQLiteStore) GetFindingReview(assessmentID string, findingID string) (*
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	assessmentID = s.resolveAssessmentID(assessmentID)
 	query := `
 	SELECT id, assessment_id, finding_id, review_status, reviewed_by, reviewed_at, notes, created_at, updated_at
 	FROM finding_reviews
@@ -103,6 +105,7 @@ func (s *SQLiteStore) ListFindingReviews(assessmentID string) ([]FindingReview, 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	assessmentID = s.resolveAssessmentID(assessmentID)
 	query := `
 	SELECT id, assessment_id, finding_id, review_status, reviewed_by, reviewed_at, notes, created_at, updated_at
 	FROM finding_reviews
@@ -155,6 +158,7 @@ func (s *SQLiteStore) CreateReportDelivery(d *ReportDelivery) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	d.AssessmentID = s.resolveAssessmentID(d.AssessmentID)
 	if d.ID == "" {
 		d.ID = "del-" + uuid.New().String()
 	}
@@ -256,6 +260,7 @@ func (s *SQLiteStore) ListReportDeliveries(assessmentID string) ([]ReportDeliver
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	assessmentID = s.resolveAssessmentID(assessmentID)
 	query := `
 	SELECT id, assessment_id, report_id, delivery_status, recipient_name, recipient_email,
 	       delivery_method, tracking_reference, notes, dispatched_at, delivered_at, operator_id,

@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"felix/pkg/secrets"
 )
 
 // DefaultMobileAuditReportName is the canonical file name for the mobile security audit report.
@@ -28,7 +30,7 @@ func GenerateMobileAuditHTML(data *MobileReportData) ([]byte, error) {
 		return nil, WrapError("report", "failed executing mobile audit report template", err)
 	}
 
-	return buf.Bytes(), nil
+	return []byte(secrets.RedactText(buf.String())), nil
 }
 
 // WriteMobileAuditReport safely serializes the HTML report to disk using an atomic write strategy.

@@ -134,5 +134,5 @@ func (cs *ChangeSummary) FormatText() string {
 		}
 	}
 
-	return sb.String()
+	return SanitizeEvidence(sb.String())
 }

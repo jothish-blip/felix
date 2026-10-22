@@ -16,6 +16,7 @@ import (
 	"felix/pkg/correlation"
 	"felix/pkg/provenance"
 	"felix/pkg/report"
+	"felix/pkg/secrets"
 )
 
 // AssessmentStatus represents the lifecycle state of an assessment.
@@ -392,9 +393,108 @@ func GenerateAssessmentRef() string {
 	return fmt.Sprintf("ASM-%d-%04X", now.Year(), binary.BigEndian.Uint16(b))
 }
 
+// SanitizeAssessmentFinding scrubs credentials, tokens, session IDs, and raw sensitive material
+// from all string, URL, verification, remediation, and structured evidence fields in an AssessmentFinding.
+func SanitizeAssessmentFinding(f AssessmentFinding) AssessmentFinding {
+	clean := f
+	clean.TargetURL = secrets.SanitizeURL(f.TargetURL)
+	clean.Endpoint = secrets.SanitizeURL(f.Endpoint)
+	clean.Title = secrets.RedactText(f.Title)
+	clean.Remediation = secrets.RedactText(f.Remediation)
+
+	// EvidenceDetails
+	ev := f.EvidenceDetails
+	ev.Observation = secrets.RedactText(ev.Observation)
+	ev.Location = secrets.SanitizeURL(ev.Location)
+	ev.NegativeEvidence = secrets.RedactText(ev.NegativeEvidence)
+	ev.ExpectedBehavior = secrets.RedactText(ev.ExpectedBehavior)
+	ev.ObservedBehavior = secrets.RedactText(ev.ObservedBehavior)
+	ev.DetectionStatus = secrets.RedactText(ev.DetectionStatus)
+	ev.DetectionMethod = secrets.RedactText(ev.DetectionMethod)
+
+	if len(ev.Details) > 0 {
+		cleanDetails := make(map[string]string, len(ev.Details))
+		for k, v := range ev.Details {
+			if secrets.IsSensitiveKey(k) || secrets.IsSensitiveHeader(k) {
+				cleanDetails[k] = "[REDACTED]"
+			} else {
+				cleanDetails[k] = secrets.RedactText(v)
+			}
+		}
+		ev.Details = cleanDetails
+	}
+	if ev.Provenance != nil {
+		sanProv := report.SanitizeEvidenceProvenance(*ev.Provenance)
+		ev.Provenance = &sanProv
+	}
+	clean.EvidenceDetails = ev
+
+	// VerificationRecord
+	ver := f.VerificationRecord
+	ver.Result = secrets.RedactText(ver.Result)
+	ver.Rationale = secrets.RedactText(ver.Rationale)
+	ver.SafeCurlCommand = secrets.RedactText(ver.SafeCurlCommand)
+	if len(ver.ReproductionSteps) > 0 {
+		cleanSteps := make([]string, len(ver.ReproductionSteps))
+		for i, s := range ver.ReproductionSteps {
+			cleanSteps[i] = secrets.RedactText(s)
+		}
+		ver.ReproductionSteps = cleanSteps
+	}
+	if len(ver.Limitations) > 0 {
+		cleanLimits := make([]string, len(ver.Limitations))
+		for i, l := range ver.Limitations {
+			cleanLimits[i] = secrets.RedactText(l)
+		}
+		ver.Limitations = cleanLimits
+	}
+	clean.VerificationRecord = ver
+
+	// RemediationAdvice
+	if f.RemediationAdvice != nil {
+		adv := *f.RemediationAdvice
+		adv.Summary = secrets.RedactText(adv.Summary)
+		adv.CodeSnippet = secrets.RedactText(adv.CodeSnippet)
+		if len(adv.Steps) > 0 {
+			cleanSteps := make([]string, len(adv.Steps))
+			for i, s := range adv.Steps {
+				cleanSteps[i] = secrets.RedactText(s)
+			}
+			adv.Steps = cleanSteps
+		}
+		if len(adv.References) > 0 {
+			cleanRefs := make([]string, len(adv.References))
+			for i, r := range adv.References {
+				cleanRefs[i] = secrets.RedactText(r)
+			}
+			adv.References = cleanRefs
+		}
+		clean.RemediationAdvice = &adv
+	}
+
+	// Provenance
+	if f.Provenance != nil {
+		sanProv := report.SanitizeEvidenceProvenance(*f.Provenance)
+		clean.Provenance = &sanProv
+	}
+
+	// ScoreExplanation
+	if f.ScoreExplanation != nil {
+		expl := *f.ScoreExplanation
+		expl.Rationale = secrets.RedactText(expl.Rationale)
+		expl.DefendedReason = secrets.RedactText(expl.DefendedReason)
+		clean.ScoreExplanation = &expl
+	}
+
+	return clean
+}
+
 // ToReportFinding maps an AssessmentFinding back to a complete report.Finding,
 // ensuring no status, classification, provenance, remediation advice, or evidence metadata is lost.
+// The resulting finding is guaranteed to be fully sanitized against secret leakage.
 func ToReportFinding(f AssessmentFinding) report.Finding {
+	// Pre-sanitize the assessment finding
+	f = SanitizeAssessmentFinding(f)
 	rf := report.Finding{
 		ID:                f.OriginalFindingID,
 		RuleID:            f.RuleID,
@@ -450,7 +550,7 @@ func ToReportFinding(f AssessmentFinding) report.Finding {
 		expl := report.ExplainFindingScore(rf)
 		rf.ScoreExplanation = &expl
 	}
-	return rf
+	return report.SanitizeFinding(rf)
 }
 
 // CompareAssessmentFindings compares two sets of AssessmentFindings across assessments or runs using default options.
@@ -785,7 +885,7 @@ func BuildAssessmentSnapshot(asm *Assessment, execRecord *AssessmentExecution, t
 	for _, u := range targetURLs {
 		u = strings.TrimSpace(u)
 		if u != "" {
-			scopedTargets = append(scopedTargets, u)
+			scopedTargets = append(scopedTargets, secrets.SanitizeURL(u))
 		}
 	}
 	sort.Strings(scopedTargets)
@@ -834,7 +934,7 @@ func BuildAssessmentSnapshot(asm *Assessment, execRecord *AssessmentExecution, t
 
 	meta := make(map[string]string)
 	if execRecord.ErrorMessage != "" {
-		meta["error_message"] = execRecord.ErrorMessage
+		meta["error_message"] = secrets.RedactText(execRecord.ErrorMessage)
 	}
 	if !isComplete || (execRecord.Status != StatusCompleted && execRecord.Status != StatusCompletedWithErrors) {
 		meta["inconclusive"] = "true"

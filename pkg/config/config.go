@@ -39,43 +39,43 @@ type UpdateConfig struct {
 
 // NotificationConfig holds settings for assessment alerting and webhook dispatching.
 type NotificationConfig struct {
-	Enabled                   bool     `json:"enabled"`                                // Master switch for notification generation
-	Provider                  string   `json:"provider"`                               // Notification provider (default "webhook")
-	WebhookURL                string   `json:"webhook_url"`                            // Destination HTTPS webhook URL
-	WebhookSecret             string   `json:"webhook_secret,omitempty"`               // Optional HMAC-SHA256 signature secret
-	WebhookPreviousSecret     string   `json:"webhook_previous_secret,omitempty"`       // Optional previous HMAC secret for key rotation
-	RequireSigning            bool     `json:"require_signing"`                         // Fail closed if webhook deliveries cannot be signed
-	SignatureToleranceSeconds int      `json:"signature_tolerance_seconds,omitempty"`   // Timestamp tolerance window for replay defense (1..3600)
-	TimeoutSeconds            int      `json:"timeout_seconds"`                        // Request timeout in seconds (1..300)
-	MaxRetries                int      `json:"max_retries"`                            // Maximum retry attempts for transient delivery failures (0..10)
-	MinSeverity               string   `json:"min_severity"`                           // Minimum severity threshold (CRITICAL, HIGH, MEDIUM, LOW, INFO)
-	NotifyOnLifecycle         []string `json:"notify_on_lifecycle"`                    // Lifecycle events to alert on (completed, failed, interrupted, etc.)
-	NotifyOnDeltas            []string `json:"notify_on_deltas"`                       // Security delta classifications to alert on (new, regressed, changed, resolved)
-	AllowInsecureHTTP         bool     `json:"allow_insecure_http"`                    // Allow unencrypted HTTP webhooks (default false)
-	AllowPrivateIPs           bool     `json:"allow_private_ips"`                      // Allow webhooks to private/internal IPs (default false)
-	AllowLoopback             bool     `json:"allow_loopback"`                         // Allow webhooks to loopback/127.0.0.1 (default false)
-	Concurrency               int      `json:"concurrency"`                            // Concurrency for background outbox workers (1..50)
+	Enabled                   bool     `json:"enabled"`                               // Master switch for notification generation
+	Provider                  string   `json:"provider"`                              // Notification provider (default "webhook")
+	WebhookURL                string   `json:"webhook_url"`                           // Destination HTTPS webhook URL
+	WebhookSecret             string   `json:"webhook_secret,omitempty"`              // Optional HMAC-SHA256 signature secret
+	WebhookPreviousSecret     string   `json:"webhook_previous_secret,omitempty"`     // Optional previous HMAC secret for key rotation
+	RequireSigning            bool     `json:"require_signing"`                       // Fail closed if webhook deliveries cannot be signed
+	SignatureToleranceSeconds int      `json:"signature_tolerance_seconds,omitempty"` // Timestamp tolerance window for replay defense (1..3600)
+	TimeoutSeconds            int      `json:"timeout_seconds"`                       // Request timeout in seconds (1..300)
+	MaxRetries                int      `json:"max_retries"`                           // Maximum retry attempts for transient delivery failures (0..10)
+	MinSeverity               string   `json:"min_severity"`                          // Minimum severity threshold (CRITICAL, HIGH, MEDIUM, LOW, INFO)
+	NotifyOnLifecycle         []string `json:"notify_on_lifecycle"`                   // Lifecycle events to alert on (completed, failed, interrupted, etc.)
+	NotifyOnDeltas            []string `json:"notify_on_deltas"`                      // Security delta classifications to alert on (new, regressed, changed, resolved)
+	AllowInsecureHTTP         bool     `json:"allow_insecure_http"`                   // Allow unencrypted HTTP webhooks (default false)
+	AllowPrivateIPs           bool     `json:"allow_private_ips"`                     // Allow webhooks to private/internal IPs (default false)
+	AllowLoopback             bool     `json:"allow_loopback"`                        // Allow webhooks to loopback/127.0.0.1 (default false)
+	Concurrency               int      `json:"concurrency"`                           // Concurrency for background outbox workers (1..50)
 }
 
 // Config holds operational settings for Felix CLI and scanning pipelines.
 type Config struct {
-	Timeout            int                `json:"timeout"`              // Request timeout in seconds (1..3600)
-	Concurrency        int                `json:"concurrency"`          // Concurrent worker threads (1..1000)
-	Scope              string             `json:"scope"`                // same-origin, subdomains, explicit
-	MaxSizeMB          int                `json:"max_size_mb"`          // Max asset size in MB (1..1024)
-	UserAgent          string             `json:"user_agent"`           // User-Agent string
-	MaxAssets          int                `json:"max_assets"`           // Maximum assets discovered/budgeted (1..10000)
-	MaxDepth           int                `json:"max_depth"`            // Maximum crawl depth (1..20)
-	MaxRetries         int                `json:"max_retries"`          // Maximum network retries (0..10)
-	RetryDelayMs       int                `json:"retry_delay_ms"`       // Retry delay in milliseconds (0..5000)
-	MaxRedirects       int                `json:"max_redirects"`        // Maximum HTTP redirects to follow (0..20)
-	InsecureSkipVerify bool               `json:"insecure_skip_verify"` // Skip TLS certificate verification (default false)
-	AllowPrivateIPs    bool               `json:"allow_private_ips"`    // Allow RFC 1918 private subnets (default false)
-	AllowLoopback      bool               `json:"allow_loopback"`       // Allow 127.0.0.0/8 loopback (default false)
-	ActiveVerification bool               `json:"active_verification"`  // Permit active verification probes (default false)
-	PolicyPath         string             `json:"policy_path,omitempty"`// Default path to security threshold policy file
-	Updates            UpdateConfig       `json:"updates"`              // Update configuration
-	Notification       NotificationConfig `json:"notification"`         // Alerting and notification settings
+	Timeout            int                `json:"timeout"`               // Request timeout in seconds (1..3600)
+	Concurrency        int                `json:"concurrency"`           // Concurrent worker threads (1..1000)
+	Scope              string             `json:"scope"`                 // same-origin, subdomains, explicit
+	MaxSizeMB          int                `json:"max_size_mb"`           // Max asset size in MB (1..1024)
+	UserAgent          string             `json:"user_agent"`            // User-Agent string
+	MaxAssets          int                `json:"max_assets"`            // Maximum assets discovered/budgeted (1..10000)
+	MaxDepth           int                `json:"max_depth"`             // Maximum crawl depth (1..20)
+	MaxRetries         int                `json:"max_retries"`           // Maximum network retries (0..10)
+	RetryDelayMs       int                `json:"retry_delay_ms"`        // Retry delay in milliseconds (0..5000)
+	MaxRedirects       int                `json:"max_redirects"`         // Maximum HTTP redirects to follow (0..20)
+	InsecureSkipVerify bool               `json:"insecure_skip_verify"`  // Skip TLS certificate verification (default false)
+	AllowPrivateIPs    bool               `json:"allow_private_ips"`     // Allow RFC 1918 private subnets (default false)
+	AllowLoopback      bool               `json:"allow_loopback"`        // Allow 127.0.0.0/8 loopback (default false)
+	ActiveVerification bool               `json:"active_verification"`   // Permit active verification probes (default false)
+	PolicyPath         string             `json:"policy_path,omitempty"` // Default path to security threshold policy file
+	Updates            UpdateConfig       `json:"updates"`               // Update configuration
+	Notification       NotificationConfig `json:"notification"`          // Alerting and notification settings
 }
 
 // diskConfigWire is used during disk unmarshaling to accurately distinguish explicitly present JSON fields.
@@ -591,6 +591,83 @@ func applyEnv(cfg *Config) error {
 // 2. Configuration file (p, or default Path() if p is empty)
 // 3. Environment variables (FELIX_*)
 // Any invalid value from higher-precedence sources produces an actionable validation error.
+// ParseConfig parses and validates raw JSON configuration bytes, populating defaults for omitted fields.
+// MaxConfigFileSize defines the maximum permitted size (10 MB) for configuration files and payloads.
+const MaxConfigFileSize int64 = 10 * 1024 * 1024
+
+// ParseConfig deserializes configuration JSON bytes into a validated Config struct with defaults.
+func ParseConfig(data []byte) (Config, error) {
+	if int64(len(data)) > MaxConfigFileSize {
+		return Config{}, fmt.Errorf("configuration payload size (%d bytes) exceeds maximum permitted limit (%d bytes)", len(data), MaxConfigFileSize)
+	}
+	cfg := Default()
+	if len(strings.TrimSpace(string(data))) == 0 {
+		return cfg, nil
+	}
+	var diskCfg diskConfigWire
+	if err := json.Unmarshal(data, &diskCfg); err != nil {
+		return cfg, fmt.Errorf("malformed configuration: %w", err)
+	}
+	if diskCfg.Timeout != nil {
+		cfg.Timeout = *diskCfg.Timeout
+	}
+	if diskCfg.Concurrency != nil {
+		cfg.Concurrency = *diskCfg.Concurrency
+	}
+	if diskCfg.Scope != nil {
+		cfg.Scope = strings.ToLower(strings.TrimSpace(*diskCfg.Scope))
+	}
+	if diskCfg.MaxSizeMB != nil {
+		cfg.MaxSizeMB = *diskCfg.MaxSizeMB
+	}
+	if diskCfg.UserAgent != nil {
+		cfg.UserAgent = *diskCfg.UserAgent
+	}
+	if diskCfg.MaxAssets != nil {
+		cfg.MaxAssets = *diskCfg.MaxAssets
+	}
+	if diskCfg.MaxDepth != nil {
+		cfg.MaxDepth = *diskCfg.MaxDepth
+	}
+	if diskCfg.MaxRetries != nil {
+		cfg.MaxRetries = *diskCfg.MaxRetries
+	}
+	if diskCfg.RetryDelayMs != nil {
+		cfg.RetryDelayMs = *diskCfg.RetryDelayMs
+	}
+	if diskCfg.MaxRedirects != nil {
+		cfg.MaxRedirects = *diskCfg.MaxRedirects
+	}
+	if diskCfg.InsecureSkipVerify != nil {
+		cfg.InsecureSkipVerify = *diskCfg.InsecureSkipVerify
+	}
+	if diskCfg.AllowPrivateIPs != nil {
+		cfg.AllowPrivateIPs = *diskCfg.AllowPrivateIPs
+	}
+	if diskCfg.AllowLoopback != nil {
+		cfg.AllowLoopback = *diskCfg.AllowLoopback
+	}
+	if diskCfg.ActiveVerification != nil {
+		cfg.ActiveVerification = *diskCfg.ActiveVerification
+	}
+	if diskCfg.PolicyPath != nil {
+		cfg.PolicyPath = *diskCfg.PolicyPath
+	}
+	if diskCfg.Updates != nil {
+		cfg.Updates.Check = diskCfg.Updates.Check
+		cfg.Updates.AutoInstall = diskCfg.Updates.AutoInstall
+	}
+	if diskCfg.Notification != nil {
+		n := *diskCfg.Notification
+		cfg.Notification = n
+	}
+
+	if err := cfg.Validate(); err != nil {
+		return cfg, fmt.Errorf("configuration validation failed: %w", err)
+	}
+	return cfg, nil
+}
+
 func LoadWithEnv(p string) (Config, error) {
 	cfg := Default()
 	if p == "" {
@@ -601,71 +678,25 @@ func LoadWithEnv(p string) (Config, error) {
 		}
 	}
 
-	data, err := os.ReadFile(p)
-	if err == nil {
-		var diskCfg diskConfigWire
-		if err := json.Unmarshal(data, &diskCfg); err != nil {
-			return cfg, fmt.Errorf("malformed configuration file %q: %w", p, err)
+	fi, statErr := os.Stat(p)
+	if statErr == nil {
+		if fi.Size() > MaxConfigFileSize {
+			return cfg, fmt.Errorf("configuration file %q size (%d bytes) exceeds maximum permitted limit (%d bytes)", p, fi.Size(), MaxConfigFileSize)
 		}
-		if diskCfg.Timeout != nil {
-			cfg.Timeout = *diskCfg.Timeout
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return cfg, fmt.Errorf("failed to read configuration file %q: %w", p, err)
 		}
-		if diskCfg.Concurrency != nil {
-			cfg.Concurrency = *diskCfg.Concurrency
-		}
-		if diskCfg.Scope != nil {
-			cfg.Scope = strings.ToLower(strings.TrimSpace(*diskCfg.Scope))
-		}
-		if diskCfg.MaxSizeMB != nil {
-			cfg.MaxSizeMB = *diskCfg.MaxSizeMB
-		}
-		if diskCfg.UserAgent != nil {
-			cfg.UserAgent = *diskCfg.UserAgent
-		}
-		if diskCfg.MaxAssets != nil {
-			cfg.MaxAssets = *diskCfg.MaxAssets
-		}
-		if diskCfg.MaxDepth != nil {
-			cfg.MaxDepth = *diskCfg.MaxDepth
-		}
-		if diskCfg.MaxRetries != nil {
-			cfg.MaxRetries = *diskCfg.MaxRetries
-		}
-		if diskCfg.RetryDelayMs != nil {
-			cfg.RetryDelayMs = *diskCfg.RetryDelayMs
-		}
-		if diskCfg.MaxRedirects != nil {
-			cfg.MaxRedirects = *diskCfg.MaxRedirects
-		}
-		if diskCfg.InsecureSkipVerify != nil {
-			cfg.InsecureSkipVerify = *diskCfg.InsecureSkipVerify
-		}
-		if diskCfg.AllowPrivateIPs != nil {
-			cfg.AllowPrivateIPs = *diskCfg.AllowPrivateIPs
-		}
-		if diskCfg.AllowLoopback != nil {
-			cfg.AllowLoopback = *diskCfg.AllowLoopback
-		}
-		if diskCfg.ActiveVerification != nil {
-			cfg.ActiveVerification = *diskCfg.ActiveVerification
-		}
-		if diskCfg.PolicyPath != nil {
-			cfg.PolicyPath = *diskCfg.PolicyPath
-		}
-		if diskCfg.Updates != nil {
-			cfg.Updates.Check = diskCfg.Updates.Check
-			cfg.Updates.AutoInstall = diskCfg.Updates.AutoInstall
-		}
-		if diskCfg.Notification != nil {
-			n := *diskCfg.Notification
-			cfg.Notification = n
-		}
-
-		if err := cfg.Validate(); err != nil {
+		c, err := ParseConfig(data)
+		if err != nil {
+			if strings.Contains(err.Error(), "malformed configuration") {
+				return cfg, fmt.Errorf("malformed configuration file %q: %w", p, err)
+			}
 			return cfg, fmt.Errorf("configuration file validation failed: %w", err)
 		}
-	} else if !os.IsNotExist(err) {
-		return cfg, fmt.Errorf("failed to read configuration file %q: %w", p, err)
+		cfg = c
+	} else if !os.IsNotExist(statErr) {
+		return cfg, fmt.Errorf("failed to read configuration file %q: %w", p, statErr)
 	}
 
 	// Merge environment variables

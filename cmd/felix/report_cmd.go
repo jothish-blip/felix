@@ -162,7 +162,7 @@ func runReport(args []string) int {
 			cr := report.BuildCommercialReport(rep)
 			crBytes, err := report.GenerateCommercialJSON(cr)
 			if err == nil {
-				err = os.WriteFile(jsonPath, crBytes, 0644)
+				err = os.WriteFile(jsonPath, crBytes, 0600)
 			}
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "[-] Failed to write Commercial JSON report to %s: %v\n", jsonPath, err)
@@ -223,7 +223,7 @@ func runReport(args []string) int {
 				cr := report.BuildCommercialReport(rep)
 				crBytes, err := report.GenerateCommercialJSON(cr)
 				if err == nil {
-					err = os.WriteFile(exportPath, crBytes, 0644)
+					err = os.WriteFile(exportPath, crBytes, 0600)
 				}
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "[-] Failed to write Commercial JSON report to %s: %v\n", exportPath, err)

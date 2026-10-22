@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -860,5 +861,92 @@ func TestReset(t *testing.T) {
 	}
 	if _, err := os.Stat(p); !os.IsNotExist(err) {
 		t.Fatalf("expected config file to be removed by Reset()")
+	}
+}
+
+func TestParseConfig(t *testing.T) {
+	// 1. Empty bytes return default configuration
+	cfgDefault, err := ParseConfig(nil)
+	if err != nil {
+		t.Fatalf("ParseConfig(nil) failed: %v", err)
+	}
+	if cfgDefault.Timeout != DefaultTimeoutSeconds {
+		t.Errorf("expected default timeout %d, got %d", DefaultTimeoutSeconds, cfgDefault.Timeout)
+	}
+
+	cfgEmpty, err := ParseConfig([]byte("   "))
+	if err != nil {
+		t.Fatalf("ParseConfig(whitespace) failed: %v", err)
+	}
+	if cfgEmpty.Concurrency != DefaultConcurrency {
+		t.Errorf("expected default concurrency %d, got %d", DefaultConcurrency, cfgEmpty.Concurrency)
+	}
+
+	// 2. Custom values override defaults, omitted fields get defaults
+	customJSON := []byte(`{"timeout": 45, "concurrency": 20, "scope": "subdomains"}`)
+	cfgCustom, err := ParseConfig(customJSON)
+	if err != nil {
+		t.Fatalf("ParseConfig(customJSON) failed: %v", err)
+	}
+	if cfgCustom.Timeout != 45 {
+		t.Errorf("expected timeout 45, got %d", cfgCustom.Timeout)
+	}
+	if cfgCustom.Concurrency != 20 {
+		t.Errorf("expected concurrency 20, got %d", cfgCustom.Concurrency)
+	}
+	if cfgCustom.Scope != "subdomains" {
+		t.Errorf("expected scope subdomains, got %s", cfgCustom.Scope)
+	}
+	if cfgCustom.MaxAssets != DefaultMaxAssets {
+		t.Errorf("expected omitted field MaxAssets to have default %d, got %d", DefaultMaxAssets, cfgCustom.MaxAssets)
+	}
+
+	// 3. Malformed JSON returns an error containing "malformed configuration"
+	_, errMalformed := ParseConfig([]byte(`{not valid json`))
+	if errMalformed == nil {
+		t.Fatalf("expected error for malformed JSON, got nil")
+	}
+	if !strings.Contains(errMalformed.Error(), "malformed configuration") {
+		t.Errorf("expected 'malformed configuration' in error, got: %v", errMalformed)
+	}
+
+	// 4. Invalid configuration values fail validation
+	_, errInvalid := ParseConfig([]byte(`{"concurrency": -1}`))
+	if errInvalid == nil {
+		t.Fatalf("expected error for negative concurrency, got nil")
+	}
+	if !strings.Contains(errInvalid.Error(), "configuration validation failed") {
+		t.Errorf("expected 'configuration validation failed' in error, got: %v", errInvalid)
+	}
+}
+
+func TestLoadWithEnv_FileErrorFormatting(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("FELIX_DIR", tempDir)
+
+	badFile := filepath.Join(tempDir, "config.json")
+
+	// Test malformed JSON formatting
+	if err := os.WriteFile(badFile, []byte(`{broken json`), 0600); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	_, err := LoadWithEnv(badFile)
+	if err == nil {
+		t.Fatalf("expected error for malformed file, got nil")
+	}
+	if !strings.HasPrefix(err.Error(), fmt.Sprintf("malformed configuration file %q:", badFile)) {
+		t.Errorf("unexpected error format for malformed file: %v", err)
+	}
+
+	// Test validation failure formatting
+	if err := os.WriteFile(badFile, []byte(`{"concurrency": -10}`), 0600); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	_, err = LoadWithEnv(badFile)
+	if err == nil {
+		t.Fatalf("expected error for invalid config file, got nil")
+	}
+	if !strings.HasPrefix(err.Error(), "configuration file validation failed:") {
+		t.Errorf("unexpected error format for validation failure: %v", err)
 	}
 }

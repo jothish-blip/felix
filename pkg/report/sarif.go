@@ -421,12 +421,12 @@ func BuildSARIFLog(rep Report) SARIFLog {
 	}
 
 	// Determine execution completeness
-	isCompleted := rep.CompletionStatus == "COMPLETED" || (rep.CompletionStatus == "" && rep.RiskLevel != "UNAVAILABLE")
-	if rep.Metadata != nil {
-		if isPartial, ok := rep.Metadata["is_partial"].(bool); ok && isPartial {
+	isCompleted := sanitized.CompletionStatus == "COMPLETED" || (sanitized.CompletionStatus == "" && sanitized.RiskLevel != "UNAVAILABLE")
+	if sanitized.Metadata != nil {
+		if isPartial, ok := sanitized.Metadata["is_partial"].(bool); ok && isPartial {
 			isCompleted = false
 		}
-		if isPartialStr, ok := rep.Metadata["is_partial"].(string); ok && isPartialStr == "true" {
+		if isPartialStr, ok := sanitized.Metadata["is_partial"].(string); ok && isPartialStr == "true" {
 			isCompleted = false
 		}
 	}
@@ -437,17 +437,17 @@ func BuildSARIFLog(rep Report) SARIFLog {
 
 	// Attach run-level properties from assessment report metadata (e.g. policy evaluation)
 	var runProps map[string]any
-	if len(rep.Metadata) > 0 {
-		runProps = make(map[string]any, len(rep.Metadata))
-		for k, v := range rep.Metadata {
+	if len(sanitized.Metadata) > 0 {
+		runProps = make(map[string]any, len(sanitized.Metadata))
+		for k, v := range sanitized.Metadata {
 			runProps[k] = v
 		}
 	} else {
 		runProps = make(map[string]any)
 	}
 	runProps["is_partial"] = !isCompleted
-	if rep.CompletionStatus != "" {
-		runProps["completion_status"] = rep.CompletionStatus
+	if sanitized.CompletionStatus != "" {
+		runProps["completion_status"] = sanitized.CompletionStatus
 	}
 
 	return SARIFLog{
@@ -488,7 +488,7 @@ func WriteSARIF(rep Report, filePath string) error {
 		return fmt.Errorf("generated SARIF failed schema validation: %w", err)
 	}
 
-	return os.WriteFile(filePath, data, 0644)
+	return os.WriteFile(filePath, data, 0600)
 }
 
 // GenerateCommercialSARIF constructs and exports a SARIF log from a CommercialReport.

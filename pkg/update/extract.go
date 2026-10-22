@@ -11,6 +11,15 @@ import (
 	"strings"
 )
 
+const (
+	// MaxArchiveEntries bounds the number of entries extracted from an update archive.
+	MaxArchiveEntries = 10000
+	// MaxArchiveEntrySize bounds the maximum uncompressed size of any single file (500 MB).
+	MaxArchiveEntrySize int64 = 500 * 1024 * 1024
+	// MaxCumulativeExtractSize bounds the total uncompressed size across all files (1 GB).
+	MaxCumulativeExtractSize int64 = 1024 * 1024 * 1024
+)
+
 // ExtractArchive extracts a .zip or .tar.gz archive into destDir with strict ZipSlip protection.
 func ExtractArchive(archivePath, destDir string) error {
 	destDir = filepath.Clean(destDir)
@@ -35,6 +44,11 @@ func extractZip(zipPath, destDir string) error {
 	}
 	defer r.Close()
 
+	if len(r.File) > MaxArchiveEntries {
+		return fmt.Errorf("archive entry count (%d) exceeds limit of %d", len(r.File), MaxArchiveEntries)
+	}
+
+	var cumulativeBytes int64
 	for _, f := range r.File {
 		targetPath, err := sanitizeExtractPath(destDir, f.Name)
 		if err != nil {
@@ -63,11 +77,18 @@ func extractZip(zipPath, destDir string) error {
 			return fmt.Errorf("failed to create file %s: %w", targetPath, err)
 		}
 
-		_, copyErr := io.Copy(outFile, rc)
+		written, copyErr := io.Copy(outFile, io.LimitReader(rc, MaxArchiveEntrySize+1))
 		rc.Close()
 		outFile.Close()
 		if copyErr != nil {
 			return fmt.Errorf("failed writing entry %s: %w", f.Name, copyErr)
+		}
+		if written > MaxArchiveEntrySize {
+			return fmt.Errorf("archive entry %s exceeds maximum allowed uncompressed size of %d bytes", f.Name, MaxArchiveEntrySize)
+		}
+		cumulativeBytes += written
+		if cumulativeBytes > MaxCumulativeExtractSize {
+			return fmt.Errorf("cumulative extracted size exceeds maximum allowed limit of %d bytes", MaxCumulativeExtractSize)
 		}
 	}
 
@@ -89,6 +110,8 @@ func extractTarGz(tarGzPath, destDir string) error {
 
 	tr := tar.NewReader(gzr)
 
+	var entryCount int
+	var cumulativeBytes int64
 	for {
 		header, err := tr.Next()
 		if err == io.EOF {
@@ -96,6 +119,10 @@ func extractTarGz(tarGzPath, destDir string) error {
 		}
 		if err != nil {
 			return fmt.Errorf("failed reading tar entry: %w", err)
+		}
+		entryCount++
+		if entryCount > MaxArchiveEntries {
+			return fmt.Errorf("archive entry count exceeds limit of %d", MaxArchiveEntries)
 		}
 
 		targetPath, err := sanitizeExtractPath(destDir, header.Name)
@@ -118,11 +145,18 @@ func extractTarGz(tarGzPath, destDir string) error {
 				return fmt.Errorf("failed to create file %s: %w", targetPath, err)
 			}
 
-			if _, err := io.Copy(outFile, tr); err != nil {
-				outFile.Close()
-				return fmt.Errorf("failed writing file %s: %w", targetPath, err)
-			}
+			written, copyErr := io.Copy(outFile, io.LimitReader(tr, MaxArchiveEntrySize+1))
 			outFile.Close()
+			if copyErr != nil {
+				return fmt.Errorf("failed writing file %s: %w", targetPath, copyErr)
+			}
+			if written > MaxArchiveEntrySize {
+				return fmt.Errorf("tar entry %s exceeds maximum allowed uncompressed size of %d bytes", header.Name, MaxArchiveEntrySize)
+			}
+			cumulativeBytes += written
+			if cumulativeBytes > MaxCumulativeExtractSize {
+				return fmt.Errorf("cumulative extracted size exceeds maximum allowed limit of %d bytes", MaxCumulativeExtractSize)
+			}
 		default:
 			// Ignore unsupported entry types (symlinks, special devices) for security
 			continue

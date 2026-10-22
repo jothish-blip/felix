@@ -1199,11 +1199,11 @@ func GenerateHTML(rep Report) (string, error) {
 	return buf.String(), nil
 }
 
-// WriteHTML writes the self-contained HTML report to disk.
+// WriteHTML writes the self-contained HTML report to disk with restricted permissions (0600).
 func WriteHTML(rep Report, filePath string) error {
 	content, err := GenerateHTML(rep)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filePath, []byte(content), 0644)
+	return os.WriteFile(filePath, []byte(content), 0600)
 }

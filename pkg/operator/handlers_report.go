@@ -165,7 +165,7 @@ func (s *Server) handleDownloadReportHTML(w http.ResponseWriter, r *http.Request
 
 	content, err := os.ReadFile(containedPath)
 	if err != nil {
-		s.respondError(w, http.StatusNotFound, fmt.Sprintf("report file could not be read: %v", err))
+		s.respondError(w, http.StatusNotFound, "report file could not be read")
 		return
 	}
 
@@ -214,7 +214,7 @@ func (s *Server) handleDownloadReportJSON(w http.ResponseWriter, r *http.Request
 
 	content, err := os.ReadFile(containedPath)
 	if err != nil {
-		s.respondError(w, http.StatusNotFound, fmt.Sprintf("report file could not be read: %v", err))
+		s.respondError(w, http.StatusNotFound, "report file could not be read")
 		return
 	}
 
@@ -229,9 +229,8 @@ func (s *Server) handleDownloadReportJSON(w http.ResponseWriter, r *http.Request
 
 func (s *Server) handleIssueDownloadToken(w http.ResponseWriter, r *http.Request) {
 	// Any authenticated role (admin, operator, viewer) with assessment access can generate a download token
-	sess := s.getSession(r)
-	if sess == nil {
-		s.respondError(w, http.StatusUnauthorized, "unauthorized: missing session")
+	_, ok := s.requireRole(w, r, RoleAdmin, RoleOperator, RoleViewer)
+	if !ok {
 		return
 	}
 
@@ -460,7 +459,7 @@ func (s *Server) handleReconcileAssessmentReport(w http.ResponseWriter, r *http.
 
 	content, err := os.ReadFile(containedPath)
 	if err != nil {
-		s.respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to read report file: %v", err))
+		s.respondError(w, http.StatusInternalServerError, "failed to read report file")
 		return
 	}
 

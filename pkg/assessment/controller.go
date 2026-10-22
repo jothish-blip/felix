@@ -23,6 +23,7 @@ import (
 	"felix/pkg/crawler"
 	"felix/pkg/discovery"
 	"felix/pkg/notify"
+	"felix/pkg/oast"
 	"felix/pkg/provenance"
 	"felix/pkg/report"
 	"felix/pkg/secrets"
@@ -33,8 +34,9 @@ import (
 // Controller orchestrates the lifecycle, authorization validation, scope enforcement,
 // scanning execution, and finding traceability for security assessments.
 type Controller struct {
-	store    Store
-	registry *EngineRegistry
+	store          Store
+	registry       *EngineRegistry
+	oastCorrelator *oast.Correlator
 }
 
 // NewController creates a new Assessment Controller backed by the provided Store.
@@ -43,6 +45,11 @@ func NewController(store Store) *Controller {
 		store:    store,
 		registry: DefaultEngineRegistry(store),
 	}
+}
+
+// SetOASTCorrelator configures the OAST correlator for automated probe lifecycle cleanup.
+func (c *Controller) SetOASTCorrelator(correlator *oast.Correlator) {
+	c.oastCorrelator = correlator
 }
 
 // SetEngineRegistry overrides the engine registry used by the controller.
@@ -193,6 +200,9 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 		return nil, fmt.Errorf("failed to load assessment: %w", err)
 	}
 	assessmentID = asm.ID
+	if c.oastCorrelator != nil {
+		defer c.oastCorrelator.CancelAssessmentProbes(asm.ID)
+	}
 
 	tenantID := asm.ClientID
 	if opts.TenantID != "" {
@@ -715,94 +725,24 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 		}
 	}
 
+	renewalMu.Lock()
+	if leaseLostErr != nil {
+		scanErr = leaseLostErr
+	}
+	renewalMu.Unlock()
+
 	// Preserve partial results on error or cancellation
 	if scanErr != nil || ctx.Err() != nil {
 		if scanErr == nil {
 			scanErr = ctx.Err()
 		}
-		// If lease was lost to a recovery worker, do NOT overwrite DB records!
-		if errors.Is(scanErr, ErrLeaseLost) {
-			return &ExecutionResult{
-				Execution: execRecord,
-				Error:     scanErr,
-			}, scanErr
-		}
-		if errors.Is(scanErr, context.Canceled) {
-			execRecord.Status = StatusCancelled
-			execRecord.ErrorMessage = "Execution was cancelled by operator"
-		} else if errors.Is(scanErr, context.DeadlineExceeded) {
-			execRecord.Status = StatusFailed
-			execRecord.ErrorMessage = "Scan timed out: execution deadline exceeded"
-		} else {
-			execRecord.Status = StatusFailed
-			execRecord.ErrorMessage = secrets.RedactText(fmt.Sprintf("Scan failed: %v", scanErr))
-		}
-		// Save partial findings if any were generated
-		var dedupedPartial []AssessmentFinding
-		if len(allAssessmentFindings) > 0 {
-			dedupedPartial = DeduplicateAssessmentFindings(allAssessmentFindings)
-			execRecord.FindingCount = len(dedupedPartial)
-			_ = c.store.SaveFindings(dedupedPartial)
-		}
-
-		// Finalize provenance for interrupted/failed run
-		var failCat string
-		if errors.Is(scanErr, context.Canceled) || errors.Is(scanErr, context.DeadlineExceeded) {
-			failCat = string(clierror.CategoryIncomplete)
-		} else {
-			failCat = string(clierror.CategoryToolFailure)
-		}
-		if prov != nil {
-			prov.Finalize(provenance.FinalizeOptions{
-				Status:          string(execRecord.Status),
-				FailureCategory: failCat,
-				ExitCode:        clierror.ExitOperational,
-				DurationMs:      duration.Milliseconds(),
-				IsPartial:       true,
-				RecoveryReason:  execRecord.ErrorMessage,
-			})
-			execRecord.Provenance = prov
-			execRecord.ConfigSnapshot.Provenance = prov
-		}
-
-		// Create durable historical snapshot for failed/cancelled/partial execution (Phase 6.5 & 6.7)
-		partialSnap := BuildAssessmentSnapshot(asm, execRecord, runnableTargets, dedupedPartial, false)
-		partialSnap.SetAssessedTargets(assessedTargets)
-		partialSnap.SetFailedTargets(failedTargets)
-		partialSnap.Metadata["is_partial"] = "true"
-		partialSnap.Metadata["inconclusive"] = "true"
-		partialSnap.Metadata["scan_error"] = execRecord.ErrorMessage
-		if prov != nil {
-			if b, err := json.Marshal(prov); err == nil {
-				partialSnap.Metadata["provenance"] = string(b)
-			}
-		}
-		partialEv := ExtractHistoricalEvidence(partialSnap.ID, dedupedPartial)
-		if err := c.store.CreateSnapshot(partialSnap, dedupedPartial, partialEv); err != nil {
-			partialSnap = nil
-		} else {
-			execRecord.SnapshotID = partialSnap.ID
-		}
-		if err := c.store.UpdateExecution(execRecord); err != nil {
-			return &ExecutionResult{
-				Execution:  execRecord,
-				Snapshot:   partialSnap,
-				Provenance: prov,
-				Error:      err,
-			}, err
-		}
-		_ = c.store.UpdateAssessmentStatus(assessmentID, execRecord.Status)
-		c.emitAssessmentNotifications(ctx, asm, execRecord, duration)
-
-		return &ExecutionResult{
-			Execution:  execRecord,
-			Snapshot:   partialSnap,
-			Provenance: prov,
-			Error:      scanErr,
-		}, scanErr
+		return c.finalizeInterruptedOrFailed(ctx, asm, execRecord, scanErr, runnableTargets, allAssessmentFindings, assessedTargets, failedTargets, prov, duration)
 	}
 
 	// 9. Verification Engine 2.0 (Stage 11)
+	if ctx.Err() != nil {
+		return c.finalizeInterruptedOrFailed(ctx, asm, execRecord, ctx.Err(), runnableTargets, allAssessmentFindings, assessedTargets, failedTargets, prov, time.Since(startTime))
+	}
 	var verSummary *verification.VerificationSummary
 	if len(allReportFindings) > 0 {
 		opts.ProgressFunc("[*] Executing Verification Engine 2.0 on candidate findings...")
@@ -1003,6 +943,9 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 	}
 
 	// 11. Correlate Findings into Evidence-Backed Attack Paths (Stage 10)
+	if ctx.Err() != nil {
+		return c.finalizeInterruptedOrFailed(ctx, asm, execRecord, ctx.Err(), runnableTargets, allAssessmentFindings, assessedTargets, failedTargets, prov, time.Since(startTime))
+	}
 	var corrAttackPaths []report.AttackPathSummary
 	var corrStories []report.SecurityStory
 	if len(allReportFindings) > 0 {
@@ -1108,8 +1051,17 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 	rep.Metadata["client_id"] = asm.ClientID
 
 	// Reconcile and validate report integrity before export
+	if ctx.Err() != nil {
+		return c.finalizeInterruptedOrFailed(ctx, asm, execRecord, ctx.Err(), runnableTargets, allAssessmentFindings, assessedTargets, failedTargets, prov, time.Since(startTime))
+	}
 	if valErr := report.ValidateReportIntegrity(rep); valErr != nil {
 		opts.ProgressFunc(fmt.Sprintf("[-] Critical: Generated report failed integrity validation: %v", valErr))
+		execRecord.Status = StatusFailed
+		execRecord.ErrorMessage = fmt.Sprintf("report integrity validation failed: %v", valErr)
+		nowFail := time.Now().UTC()
+		execRecord.CompletedAt = &nowFail
+		_ = c.store.UpdateExecution(execRecord)
+		_ = c.store.UpdateAssessmentStatus(assessmentID, StatusFailed)
 		return &ExecutionResult{
 			Execution: execRecord,
 			Error:     valErr,
@@ -1117,6 +1069,9 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 	}
 
 	// 14. Report File Export
+	if ctx.Err() != nil {
+		return c.finalizeInterruptedOrFailed(ctx, asm, execRecord, ctx.Err(), runnableTargets, allAssessmentFindings, assessedTargets, failedTargets, prov, time.Since(startTime))
+	}
 	var htmlPath, jsonPath, sarifPath string
 	managedReportsDir, _ := getReportsDir(asm.Ref)
 
@@ -1225,6 +1180,9 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 	}
 
 	// 13. Create Durable Historical Assessment Snapshot (Phase 6.5 & 6.7)
+	if ctx.Err() != nil {
+		return c.finalizeInterruptedOrFailed(ctx, asm, execRecord, ctx.Err(), runnableTargets, allAssessmentFindings, assessedTargets, failedTargets, prov, time.Since(startTime))
+	}
 	isComplete := finalStatus != StatusFailed
 	snapRec := BuildAssessmentSnapshot(asm, execRecord, runnableTargets, allAssessmentFindings, isComplete)
 	snapRec.SetAssessedTargets(assessedTargets)
@@ -1318,6 +1276,9 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 		opts.ProgressFunc(fmt.Sprintf("[-] Warning: Failed to persist historical snapshot: %v", err))
 		snapRec = nil
 		snapErr = fmt.Errorf("failed to persist historical snapshot: %w", err)
+		finalStatus = StatusFailed
+		execRecord.Status = StatusFailed
+		execRecord.ErrorMessage = snapErr.Error()
 	} else {
 		execRecord.SnapshotID = snapRec.ID
 		opts.ProgressFunc(fmt.Sprintf("[✓] Historical assessment snapshot recorded: %s (%s)", snapRec.SnapshotRef, snapRec.ID))
@@ -1332,6 +1293,13 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 		}, err
 	}
 	_ = c.store.UpdateAssessmentStatus(assessmentID, finalStatus)
+	if snapErr != nil {
+		return &ExecutionResult{
+			Execution: execRecord,
+			Snapshot:  nil,
+			Error:     snapErr,
+		}, snapErr
+	}
 	c.emitAssessmentNotifications(ctx, asm, execRecord, duration)
 
 	opts.ProgressFunc(fmt.Sprintf("[✓] Assessment %s completed in %s (%d findings, %d requests).",
@@ -1683,4 +1651,101 @@ func (c *Controller) emitAssessmentNotifications(
 			_, _ = dispatcher.DispatchBatch(dispatchCtx, cfg.Notification.Concurrency*2)
 		}()
 	}
+}
+
+func (c *Controller) finalizeInterruptedOrFailed(
+	ctx context.Context,
+	asm *Assessment,
+	execRecord *AssessmentExecution,
+	scanErr error,
+	runnableTargets []string,
+	allAssessmentFindings []AssessmentFinding,
+	assessedTargets, failedTargets []string,
+	prov *provenance.AssessmentProvenance,
+	duration time.Duration,
+) (*ExecutionResult, error) {
+	// If lease was lost to a recovery worker, do NOT overwrite DB records!
+	if errors.Is(scanErr, ErrLeaseLost) {
+		return &ExecutionResult{
+			Execution: execRecord,
+			Error:     scanErr,
+		}, scanErr
+	}
+	if errors.Is(scanErr, context.Canceled) {
+		execRecord.Status = StatusCancelled
+		execRecord.ErrorMessage = "Execution was cancelled by operator"
+	} else if errors.Is(scanErr, context.DeadlineExceeded) {
+		execRecord.Status = StatusFailed
+		execRecord.ErrorMessage = "Scan timed out: execution deadline exceeded"
+	} else {
+		execRecord.Status = StatusFailed
+		execRecord.ErrorMessage = secrets.RedactText(fmt.Sprintf("Scan failed: %v", scanErr))
+	}
+	nowComp := time.Now().UTC()
+	execRecord.CompletedAt = &nowComp
+	execRecord.DurationMs = duration.Milliseconds()
+
+	// Save partial findings if any were generated
+	var dedupedPartial []AssessmentFinding
+	if len(allAssessmentFindings) > 0 {
+		dedupedPartial = DeduplicateAssessmentFindings(allAssessmentFindings)
+		execRecord.FindingCount = len(dedupedPartial)
+		_ = c.store.SaveFindings(dedupedPartial)
+	}
+
+	// Finalize provenance for interrupted/failed run
+	var failCat string
+	if errors.Is(scanErr, context.Canceled) || errors.Is(scanErr, context.DeadlineExceeded) {
+		failCat = string(clierror.CategoryIncomplete)
+	} else {
+		failCat = string(clierror.CategoryToolFailure)
+	}
+	if prov != nil {
+		prov.Finalize(provenance.FinalizeOptions{
+			Status:          string(execRecord.Status),
+			FailureCategory: failCat,
+			ExitCode:        clierror.ExitOperational,
+			DurationMs:      duration.Milliseconds(),
+			IsPartial:       true,
+			RecoveryReason:  execRecord.ErrorMessage,
+		})
+		execRecord.Provenance = prov
+		execRecord.ConfigSnapshot.Provenance = prov
+	}
+
+	// Create durable historical snapshot for failed/cancelled/partial execution (Phase 6.5 & 6.7)
+	partialSnap := BuildAssessmentSnapshot(asm, execRecord, runnableTargets, dedupedPartial, false)
+	partialSnap.SetAssessedTargets(assessedTargets)
+	partialSnap.SetFailedTargets(failedTargets)
+	partialSnap.Metadata["is_partial"] = "true"
+	partialSnap.Metadata["inconclusive"] = "true"
+	partialSnap.Metadata["scan_error"] = execRecord.ErrorMessage
+	if prov != nil {
+		if b, err := json.Marshal(prov); err == nil {
+			partialSnap.Metadata["provenance"] = string(b)
+		}
+	}
+	partialEv := ExtractHistoricalEvidence(partialSnap.ID, dedupedPartial)
+	if err := c.store.CreateSnapshot(partialSnap, dedupedPartial, partialEv); err != nil {
+		partialSnap = nil
+	} else {
+		execRecord.SnapshotID = partialSnap.ID
+	}
+	if err := c.store.UpdateExecution(execRecord); err != nil {
+		return &ExecutionResult{
+			Execution:  execRecord,
+			Snapshot:   partialSnap,
+			Provenance: prov,
+			Error:      err,
+		}, err
+	}
+	_ = c.store.UpdateAssessmentStatus(asm.ID, execRecord.Status)
+	c.emitAssessmentNotifications(ctx, asm, execRecord, duration)
+
+	return &ExecutionResult{
+		Execution:  execRecord,
+		Snapshot:   partialSnap,
+		Provenance: prov,
+		Error:      scanErr,
+	}, scanErr
 }

@@ -17,6 +17,7 @@ import (
 	"felix/pkg/auth"
 	"felix/pkg/authz"
 	"felix/pkg/crawler"
+	"felix/pkg/oast"
 	"felix/pkg/report"
 )
 
@@ -44,9 +45,20 @@ func (e *Engine) ScopedClient(actx *AssessmentContext) *http.Client {
 		base = &http.Client{Timeout: e.cfg.Timeout}
 	}
 	origCheck := base.CheckRedirect
+	targetHost := ""
+	if actx != nil {
+		if u, err := url.Parse(actx.BaseURL); err == nil {
+			targetHost = u.Hostname()
+		}
+	}
+	isTargetLoopback := targetHost == "localhost" || targetHost == "127.0.0.1" || targetHost == "::1" || strings.HasPrefix(targetHost, "127.")
+
 	transport := base.Transport
 	if transport == nil {
-		transport = http.DefaultTransport
+		transport = crawler.NewSafeTransport(crawler.SafeTransportOptions{
+			Timeout:       e.cfg.Timeout,
+			AllowLoopback: isTargetLoopback,
+		})
 	}
 	if _, ok := transport.(*crawler.RateLimitedTransport); !ok {
 		transport = crawler.NewRateLimitedTransport(transport, crawler.RateLimitOptions{})
@@ -77,6 +89,13 @@ func (e *Engine) ScopedClient(actx *AssessmentContext) *http.Client {
 				return fmt.Errorf("redirect with embedded credentials blocked")
 			}
 			nextURL := req.URL.String()
+			nextHost := strings.ToLower(req.URL.Hostname())
+			if nextHost == "169.254.169.254" || nextHost == "fd00:ec2::254" || nextHost == "metadata.google.internal" || nextHost == "instance-data" || nextHost == "metadata" {
+				return fmt.Errorf("redirect to cloud metadata endpoint %q blocked", nextURL)
+			}
+			if !isTargetLoopback && IsInternalOrUnsafeAddress(nextURL) {
+				return fmt.Errorf("redirect to internal or unsafe destination %q blocked", nextURL)
+			}
 			if actx != nil {
 				if actx.IsExcluded != nil && actx.IsExcluded(nextURL) {
 					return fmt.Errorf("redirect to %s blocked: matches exclusion rule", nextURL)
@@ -874,16 +893,34 @@ func (e *Engine) assessAPI7(ctx context.Context, actx *AssessmentContext, client
 	cov.TestsRun = len(ssrfCandidates)
 	if len(ssrfCandidates) > 0 {
 		for _, ep := range ssrfCandidates {
-			// If canary callback URL is provided, test safely
+			// If canary callback URL or OAST correlator is provided, test safely
 			testedCanary := false
-			if e.cfg.CanaryCallbackURL != "" {
-				// Safety guard: Canary must NOT be internal, loopback, private, or unsafe address
-				if !IsInternalOrUnsafeAddress(e.cfg.CanaryCallbackURL) {
+			var oastProbe *oast.Probe
+			var oastInteraction *oast.Interaction
+
+			canaryDestination := e.cfg.CanaryCallbackURL
+			if e.cfg.OASTCorrelator != nil {
+				p, err := e.cfg.OASTCorrelator.GenerateProbe(actx.AssessmentID, actx.ExecutionID, actx.BaseURL, ep.Path, ep.URLParamName, oast.ProtocolHTTP, 30*time.Second)
+				if err == nil && p != nil && p.CallbackURL != "" {
+					oastProbe = p
+					canaryDestination = p.CallbackURL
+				}
+			}
+
+			if canaryDestination != "" {
+				var safeDestination bool
+				if e.cfg.OASTCorrelator != nil {
+					safeDestination = (oast.ValidateCanaryDestination(canaryDestination, e.cfg.OASTCorrelator.Config()) == nil)
+				} else {
+					safeDestination = !IsInternalOrUnsafeAddress(canaryDestination)
+				}
+
+				if safeDestination {
 					testURL := actx.BaseURL + ep.Path
 					if strings.Contains(testURL, "?") {
-						testURL += fmt.Sprintf("&%s=%s", ep.URLParamName, url.QueryEscape(e.cfg.CanaryCallbackURL))
+						testURL += fmt.Sprintf("&%s=%s", ep.URLParamName, url.QueryEscape(canaryDestination))
 					} else {
-						testURL += fmt.Sprintf("?%s=%s", ep.URLParamName, url.QueryEscape(e.cfg.CanaryCallbackURL))
+						testURL += fmt.Sprintf("?%s=%s", ep.URLParamName, url.QueryEscape(canaryDestination))
 					}
 
 					// Verify testURL itself respects scope and exclusion rules before sending probe
@@ -906,11 +943,41 @@ func (e *Engine) assessAPI7(ctx context.Context, actx *AssessmentContext, client
 								resp.Body.Close()
 							}
 						}
+
+						// If OAST correlator is present, wait for verified callback within timeout
+						if oastProbe != nil && e.cfg.OASTCorrelator != nil && e.cfg.OASTTimeout > 0 {
+							waitCtx, cancel := context.WithTimeout(ctx, e.cfg.OASTTimeout)
+							oastInteraction, _ = e.cfg.OASTCorrelator.WaitForInteraction(waitCtx, oastProbe.Token, e.cfg.OASTTimeout)
+							cancel()
+						}
 					}
 				}
 			}
 
-			if testedCanary {
+			if oastInteraction != nil {
+				// Verified OAST callback: promote from candidate to verified!
+				cov.Verified++
+				cov.Status = CoverageVerifiedIssueFound
+				r := Result{
+					ID:                uuid.New().String(),
+					AssessmentID:      actx.AssessmentID,
+					ExecutionID:       actx.ExecutionID,
+					Category:          CategoryAPI7_SSRF,
+					OWASPCode:         "API7:2023",
+					TestName:          "Remote URL Fetching Parameter Analysis",
+					Endpoint:          ep.Path,
+					Method:            ep.Method,
+					VerificationState: StateVerified,
+					Severity:          report.SeverityHigh,
+					Confidence:        report.ConfidenceHigh,
+					EvidenceSummary:   fmt.Sprintf("SSRF verified via out-of-band callback (client IP %s, method %s, path %s, interaction token %s)", oastInteraction.ClientIP, oastInteraction.Method, oastInteraction.Path, oastInteraction.Token),
+					CreatedAt:         time.Now().UTC(),
+				}
+				fnd := e.createFinding(actx, r, fmt.Sprintf("API7:2023 Server-Side Request Forgery (%s %s)", ep.Method, ep.Path), r.EvidenceSummary, report.SeverityHigh, 85)
+				r.Finding = fnd
+				findings = append(findings, *fnd)
+				results = append(results, r)
+			} else if testedCanary {
 				// With canary tested but without confirmed out-of-band callback proof, it's a Candidate
 				r := Result{
 					ID:                uuid.New().String(),
@@ -1291,7 +1358,7 @@ func (e *Engine) createFinding(
 		conf = report.ConfidenceHigh
 	}
 
-	return &report.Finding{
+	f := report.Finding{
 		ID:          uuid.New().String(),
 		Title:       title,
 		Category:    fmt.Sprintf("OWASP %s / %s", r.OWASPCode, OWASPCategoryMetadata[r.Category].Name),
@@ -1323,6 +1390,8 @@ func (e *Engine) createFinding(
 		Fingerprint: fingerprint,
 		Score:       score,
 	}
+	cleanFinding := report.SanitizeFinding(f)
+	return &cleanFinding
 }
 
 func (e *Engine) compileSummary(results []Result, coverage map[string]CategoryCoverage) *Summary {
