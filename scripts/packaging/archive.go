@@ -33,6 +33,11 @@ func createZip(srcDir, zipPath string) error {
 		}
 		header.Name = filepath.ToSlash(rel)
 		header.Method = zip.Deflate
+		if filepath.Base(path) == "felix.exe" || filepath.Base(path) == "felix" || filepath.Ext(path) == "" {
+			header.SetMode(0755)
+		} else {
+			header.SetMode(0644)
+		}
 
 		w, err := zw.CreateHeader(header)
 		if err != nil {
@@ -74,6 +79,11 @@ func createTarGz(srcDir, tarGzPath string) error {
 			return err
 		}
 		header.Name = filepath.ToSlash(rel)
+		if filepath.Base(path) == "felix" || filepath.Ext(path) == "" {
+			header.Mode = 0755
+		} else {
+			header.Mode = 0644
+		}
 		if err := tw.WriteHeader(header); err != nil {
 			return err
 		}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -10,14 +11,19 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/ProtonMail/go-crypto/openpgp"
 )
 
 func main() {
 	version := "2.0.0"
 	linuxAmd64Only := false
+	recomputeManifestOnly := false
 	for _, a := range os.Args[1:] {
 		if a == "--linux-amd64-only" || a == "--linux-only" {
 			linuxAmd64Only = true
+		} else if a == "--recompute-manifest" || a == "--update-manifest" {
+			recomputeManifestOnly = true
 		} else if !strings.HasPrefix(a, "-") && a != "" {
 			version = a
 		}
@@ -30,6 +36,27 @@ func main() {
 	}
 
 	distDir := filepath.Join(repoRoot, "dist")
+	isProductionRelease := os.Getenv("FELIX_REQUIRE_PRODUCTION_SIGNING") == "true" || os.Getenv("GITHUB_ACTIONS") == "true"
+
+	if recomputeManifestOnly {
+		fmt.Println("===========================================================")
+		fmt.Printf(" Recomputing Release Manifests & Signatures v%s\n", version)
+		fmt.Println("===========================================================")
+		signer, err := resolveSigner(repoRoot, isProductionRelease)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Failed to resolve signer: %v\n", err)
+			os.Exit(1)
+		}
+		if err := generateManifestsAndSignatures(repoRoot, distDir, version, signer, isProductionRelease, linuxAmd64Only); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Failed to recompute manifests: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("\n===========================================================")
+		fmt.Printf(" [SUCCESS] Release manifests recomputed and resigned v%s!\n", version)
+		fmt.Println("===========================================================")
+		return
+	}
+
 	if err := os.RemoveAll(distDir); err != nil {
 		fmt.Fprintf(os.Stderr, "[-] Cleaning dist: %v\n", err)
 		os.Exit(1)
@@ -174,13 +201,11 @@ func main() {
 	aptRepoDir := filepath.Join(distDir, "apt")
 	_ = os.MkdirAll(aptRepoDir, 0755)
 
-	keysDir := filepath.Join(repoRoot, "scripts", "packaging", "keys")
-	signer, err := LoadOrCreateGpgSigner(keysDir, "Felix Security Auditor", "Official APT Repository Key", "jothishgandham2@gmail.com")
+	signer, err := resolveSigner(repoRoot, isProductionRelease)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[-] Failed to load/create GPG signing entity: %v\n", err)
+		fmt.Fprintf(os.Stderr, "[-] FATAL: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("[*] Repository GPG Key: %X (RFC 4880 compliant)\n", signer.PrimaryKey.Fingerprint)
 
 	if err := BuildAptRepo(aptRepoDir, debList, signer); err != nil {
 		fmt.Fprintf(os.Stderr, "[-] Failed to build APT repository: %v\n", err)
@@ -188,13 +213,57 @@ func main() {
 	}
 	fmt.Printf("[✓] APT repository generated in: %s\n", aptRepoDir)
 
-	// 4. Compute SHA256SUMS
+	if err := generateManifestsAndSignatures(repoRoot, distDir, version, signer, isProductionRelease, linuxAmd64Only); err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Failed to generate release manifests: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("\n===========================================================")
+	fmt.Printf(" [SUCCESS] Release build v%s complete!\n", version)
+	fmt.Printf(" Artifacts directory: %s\n", distDir)
+	fmt.Println("===========================================================")
+}
+
+func resolveSigner(repoRoot string, isProductionRelease bool) (*openpgp.Entity, error) {
+	keysDir := filepath.Join(repoRoot, "scripts", "packaging", "keys")
+	if isProductionRelease {
+		signer, err := LoadProductionGpgSigner()
+		if err != nil {
+			return nil, fmt.Errorf("FELIX_APT_SIGNING_KEY is required for production release packaging (fail closed): %w", err)
+		}
+		fmt.Printf("[✓] Using protected production GPG signing identity: %X\n", signer.PrimaryKey.Fingerprint)
+		return signer, nil
+	} else if strings.TrimSpace(os.Getenv("FELIX_APT_SIGNING_KEY")) != "" {
+		signer, err := LoadProductionGpgSigner()
+		if err != nil {
+			return nil, err
+		}
+		fmt.Printf("[✓] Using GPG signing identity from FELIX_APT_SIGNING_KEY: %X\n", signer.PrimaryKey.Fingerprint)
+		return signer, nil
+	}
+
+	fmt.Println("[!] SECURITY NOTICE: FELIX_APT_SIGNING_KEY secret is not set in environment.")
+	fmt.Println("    Using repository development fixture key for test repository structure validation.")
+	fmt.Println("    Production release distribution requires a protected external secret.")
+	signer, err := LoadTestFixtureGpgSigner(keysDir, "Felix Security Auditor", "Test Fixture Key", "test-fixture@felix.local")
+	if err != nil {
+		return nil, fmt.Errorf("failed to load test fixture GPG signer: %w", err)
+	}
+	if IsCompromisedKey(signer) {
+		return nil, fmt.Errorf("security violation: loaded signer matches known permanently compromised key fingerprint (%s)", CompromisedAptKeyFingerprint)
+	}
+	fmt.Printf("[*] Repository GPG Key (Fixture): %X (RFC 4880 compliant)\n", signer.PrimaryKey.Fingerprint)
+	return signer, nil
+}
+
+func generateManifestsAndSignatures(repoRoot, distDir, version string, signer *openpgp.Entity, isProductionRelease, linuxAmd64Only bool) error {
+	// Compute SHA256SUMS and generate detached cryptographic signature
 	fmt.Println("\n[*] Computing SHA256 Checksums for Release Manifest...")
 	hashes := make(map[string]string)
 	entries, _ := os.ReadDir(distDir)
 	var sumLines []string
 	for _, entry := range entries {
-		if entry.IsDir() || entry.Name() == "SHA256SUMS" || entry.Name() == "update.json" {
+		if entry.IsDir() || entry.Name() == "SHA256SUMS" || entry.Name() == "SHA256SUMS.asc" || entry.Name() == "update.json" {
 			continue
 		}
 		path := filepath.Join(distDir, entry.Name())
@@ -205,13 +274,36 @@ func main() {
 		hashes[entry.Name()] = h
 		sumLines = append(sumLines, fmt.Sprintf("%s  %s", h, entry.Name()))
 	}
-	_ = os.WriteFile(filepath.Join(distDir, "SHA256SUMS"), []byte(strings.Join(sumLines, "\n")+"\n"), 0644)
+	sumsBytes := []byte(strings.Join(sumLines, "\n") + "\n")
+	if err := os.WriteFile(filepath.Join(distDir, "SHA256SUMS"), sumsBytes, 0644); err != nil {
+		return fmt.Errorf("failed to write SHA256SUMS: %w", err)
+	}
 	fmt.Printf("[✓] SHA256SUMS created with %d artifacts.\n", len(sumLines))
+
+	if signer != nil {
+		var sigBuf bytes.Buffer
+		if err := openpgp.ArmoredDetachSignText(&sigBuf, signer, bytes.NewReader(sumsBytes), nil); err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Failed to cryptographically sign SHA256SUMS: %v\n", err)
+			if isProductionRelease {
+				return fmt.Errorf("signing SHA256SUMS: %w", err)
+			}
+		} else {
+			sigPath := filepath.Join(distDir, "SHA256SUMS.asc")
+			if err := os.WriteFile(sigPath, sigBuf.Bytes(), 0644); err != nil {
+				fmt.Fprintf(os.Stderr, "[-] Failed to write SHA256SUMS.asc: %v\n", err)
+				if isProductionRelease {
+					return fmt.Errorf("writing SHA256SUMS.asc: %w", err)
+				}
+			} else {
+				fmt.Printf("[✓] Cryptographically signed release manifest: %s\n", sigPath)
+			}
+		}
+	}
 
 	linuxAmd64Hash := hashes[fmt.Sprintf("felix_%s_linux_amd64.tar.gz", version)]
 
 	if !linuxAmd64Only {
-		// 5. Generate Homebrew Formula
+		// Generate Homebrew Formula
 		fmt.Println("\n[*] Generating Homebrew Formula (Formula/felix.rb)...")
 		darwinArm64Hash := hashes[fmt.Sprintf("felix_%s_darwin_arm64.tar.gz", version)]
 		darwinAmd64Hash := hashes[fmt.Sprintf("felix_%s_darwin_amd64.tar.gz", version)]
@@ -261,6 +353,21 @@ end
 		_ = os.WriteFile(formulaPath, []byte(brewFormula), 0644)
 		fmt.Printf("[✓] Homebrew formula generated: %s\n", formulaPath)
 
+		// Check if windows was previously marked signed
+		var windowsSigned bool
+		if existingData, err := os.ReadFile(filepath.Join(distDir, "update.json")); err == nil {
+			var existingMap map[string]any
+			if json.Unmarshal(existingData, &existingMap) == nil {
+				if assets, ok := existingMap["assets"].(map[string]any); ok {
+					if win, ok := assets["windows-amd64"].(map[string]any); ok {
+						if s, ok := win["signed"].(bool); ok && s {
+							windowsSigned = true
+						}
+					}
+				}
+			}
+		}
+
 		// Also generate update.json
 		updateJSON := map[string]any{
 			"product": "felix",
@@ -271,7 +378,7 @@ end
 				"windows-amd64": map[string]any{
 					"archive": fmt.Sprintf("felix_%s_windows_amd64.zip", version),
 					"sha256":  hashes[fmt.Sprintf("felix_%s_windows_amd64.zip", version)],
-					"signed":  false,
+					"signed":  windowsSigned,
 				},
 				"linux-amd64": map[string]any{
 					"archive": fmt.Sprintf("felix_%s_linux_amd64.tar.gz", version),
@@ -299,10 +406,7 @@ end
 		_ = os.WriteFile(filepath.Join(distDir, "update.json"), updateData, 0644)
 	}
 
-	fmt.Println("\n===========================================================")
-	fmt.Printf(" [SUCCESS] Release build v%s complete!\n", version)
-	fmt.Printf(" Artifacts directory: %s\n", distDir)
-	fmt.Println("===========================================================")
+	return nil
 }
 
 func sha256File(path string) (string, error) {

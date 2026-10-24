@@ -154,6 +154,7 @@ type CommercialRiskOverview struct {
 	ScoreBreakdown           CommercialScoreBreakdown      `json:"score_breakdown"`
 	SecurityStories          []SecurityStory               `json:"security_stories,omitempty"`
 	AttackPaths              []AttackPathSummary           `json:"attack_paths,omitempty"`
+	RemediationBottlenecks   *BottleneckSummary            `json:"remediation_bottlenecks,omitempty"`
 	RiskConcentrations       []CommercialRiskConcentration `json:"risk_concentrations"`
 	RiskLimitations          []string                      `json:"risk_limitations"`
 }

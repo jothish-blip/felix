@@ -1536,30 +1536,7 @@ func runAssessmentReports(args []string) int {
 			var repPaths []report.AttackPathSummary
 			for _, p := range paths {
 				repStories = append(repStories, p.SecurityStory)
-				var transitions []string
-				for _, e := range p.Edges {
-					transitions = append(transitions, fmt.Sprintf("[%s] %s -> %s: %s",
-						e.ValidationStatus, e.SourceTitle, e.TargetTitle, e.Explanation))
-				}
-				repPaths = append(repPaths, report.AttackPathSummary{
-					ID:                p.ID,
-					Title:             p.Title,
-					Status:            string(p.Status),
-					Confidence:        p.Confidence,
-					CombinedRiskLevel: p.CombinedRiskLevel,
-					CombinedRiskScore: p.CombinedRiskScore,
-					RiskRationale:     p.RiskRationale,
-					EntryPoint:        p.EntryPoint,
-					TargetAsset:       p.TargetAsset,
-					PrimaryWeakness:   p.PrimaryWeakness,
-					TerminalImpact:    p.TerminalImpact,
-					Transitions:       transitions,
-					Assumptions:       p.Assumptions,
-					MissingEvidence:   p.MissingEvidence,
-					Remediation:       p.Remediation,
-					NodeIDs:           p.NodeIDs,
-					SyntheticFixture:  p.SyntheticFixture,
-				})
+				repPaths = append(repPaths, assessment.ConvertAttackPathToSummary(p))
 			}
 			report.AttachSecurityStories(&rep, repStories)
 			report.AttachAttackPaths(&rep, repPaths)
@@ -7912,14 +7889,17 @@ func runAssessmentBusinessLogic(args []string) int {
 
 func runAssessmentCorrelate(args []string) int {
 	var (
-		assessmentRef string
-		executionID   string
-		statusFilter  string
-		riskFilter    string
-		ruleFilter    string
-		runFlag       bool
-		jsonOutput    bool
-		verbose       bool
+		assessmentRef  string
+		executionID    string
+		statusFilter   string
+		riskFilter     string
+		ruleFilter     string
+		reproduceChain string
+		outputPath     string
+		overwrite      bool
+		runFlag        bool
+		jsonOutput     bool
+		verbose        bool
 	)
 
 	for i := 0; i < len(args); i++ {
@@ -7947,6 +7927,18 @@ func runAssessmentCorrelate(args []string) int {
 				ruleFilter = strings.ToUpper(args[i+1])
 				i++
 			}
+		case "--reproduce-chain", "--reproduce":
+			if i+1 < len(args) {
+				reproduceChain = args[i+1]
+				i++
+			}
+		case "--output":
+			if i+1 < len(args) {
+				outputPath = args[i+1]
+				i++
+			}
+		case "--overwrite":
+			overwrite = true
 		case "--json":
 			jsonOutput = true
 		case "--verbose", "-v":
@@ -7959,6 +7951,9 @@ func runAssessmentCorrelate(args []string) int {
 			fmt.Println("  --status <state>   Filter paths by status (VERIFIED, CANDIDATE, INCONCLUSIVE, OBSERVED)")
 			fmt.Println("  --risk <level>     Filter paths by minimum risk level (CRITICAL, HIGH, MEDIUM, LOW)")
 			fmt.Println("  --rule <code>      Filter paths by rule code (COR-01 to COR-10)")
+			fmt.Println("  --reproduce <id>   Export standalone Proof-of-Exploit reproduction script for chain ID")
+			fmt.Println("  --output <file>    Destination output filepath for reproduction script")
+			fmt.Println("  --overwrite        Overwrite existing reproduction script file")
 			fmt.Println("  --json             Output results as formatted JSON")
 			fmt.Println("  --verbose          Display full multi-step node chains and security story explanations")
 			return 0
@@ -8079,30 +8074,7 @@ func runAssessmentCorrelate(args []string) int {
 			var repPaths []report.AttackPathSummary
 			for _, p := range paths {
 				repStories = append(repStories, p.SecurityStory)
-				var transitions []string
-				for _, e := range p.Edges {
-					transitions = append(transitions, fmt.Sprintf("[%s] %s -> %s: %s",
-						e.ValidationStatus, e.SourceTitle, e.TargetTitle, e.Explanation))
-				}
-				repPaths = append(repPaths, report.AttackPathSummary{
-					ID:                p.ID,
-					Title:             p.Title,
-					Status:            string(p.Status),
-					Confidence:        p.Confidence,
-					CombinedRiskLevel: p.CombinedRiskLevel,
-					CombinedRiskScore: p.CombinedRiskScore,
-					RiskRationale:     p.RiskRationale,
-					EntryPoint:        p.EntryPoint,
-					TargetAsset:       p.TargetAsset,
-					PrimaryWeakness:   p.PrimaryWeakness,
-					TerminalImpact:    p.TerminalImpact,
-					Transitions:       transitions,
-					Assumptions:       p.Assumptions,
-					MissingEvidence:   p.MissingEvidence,
-					Remediation:       p.Remediation,
-					NodeIDs:           p.NodeIDs,
-					SyntheticFixture:  p.SyntheticFixture,
-				})
+				repPaths = append(repPaths, assessment.ConvertAttackPathToSummary(p))
 			}
 			if len(repStories) > 0 {
 				report.AttachSecurityStories(&rep, repStories)
@@ -8195,6 +8167,52 @@ func runAssessmentCorrelate(args []string) int {
 			}
 		}
 		paths = filtered
+	}
+
+	// Export Proof-of-Exploit Reproduction Script if requested
+	if reproduceChain != "" {
+		var targetPath *correlation.AttackPath
+		for i := range paths {
+			if strings.EqualFold(paths[i].ID, reproduceChain) {
+				targetPath = &paths[i]
+				break
+			}
+		}
+
+		if targetPath == nil {
+			fmt.Fprintf(os.Stderr, "[-] Error: attack path %q not found in assessment %s\n", reproduceChain, asm.Ref)
+			if len(paths) > 0 {
+				fmt.Fprintln(os.Stderr, "    Available attack path IDs:")
+				for _, p := range paths {
+					fmt.Fprintf(os.Stderr, "      - %s (%s)\n", p.ID, p.Title)
+				}
+			}
+			return 1
+		}
+
+		rawFindings, _ := store.GetFindings(asm.ID, executionID)
+		var reportFindings []report.Finding
+		for _, rf := range rawFindings {
+			reportFindings = append(reportFindings, assessment.ToReportFinding(rf))
+		}
+
+		pathSummary := assessment.ConvertAttackPathToSummary(*targetPath)
+		outScript, err := report.WriteReproductionScript(pathSummary, reportFindings, report.ReproductionOptions{
+			AssessmentRef: asm.Ref,
+			OutputFile:    outputPath,
+			Overwrite:     overwrite,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Error: failed to export reproduction script: %v\n", err)
+			return 1
+		}
+
+		fmt.Printf("[+] Standalone reproduction script exported: %s\n", outScript)
+		fmt.Printf("    Chain ID:     %s\n", targetPath.ID)
+		fmt.Printf("    Title:        %s\n", targetPath.Title)
+		fmt.Printf("    Safety Mode:  Strict Non-Destructive\n")
+		fmt.Printf("    Run:          TARGET_ORIGIN=https://<target> ./%s\n", filepath.Base(outScript))
+		return 0
 	}
 
 	summary, _ := store.GetCorrelationSummary(asm.ID, executionID)
@@ -8328,6 +8346,37 @@ func runAssessmentCorrelate(args []string) int {
 			}
 			_ = w.Flush()
 			fmt.Printf("\nUse --verbose to see full path chains, supporting evidence, and security stories.\n")
+		}
+
+		if summary != nil && summary.BottleneckAnalysis != nil && summary.BottleneckAnalysis.TotalVerifiedChains > 0 {
+			bn := summary.BottleneckAnalysis
+			fmt.Println("\nPRIORITY REMEDIATION BOTTLENECK ANALYSIS:")
+			if bn.SummaryHeadline != "" {
+				fmt.Printf("Headline:                %s\n", bn.SummaryHeadline)
+			}
+			if bn.PrimaryRecommendation != nil {
+				best := bn.PrimaryRecommendation
+				fmt.Printf("Recommended Remediation: %s\n", best.Name)
+				if best.Component != "" {
+					fmt.Printf("Target Component:        %s\n", best.Component)
+				}
+				if best.Endpoint != "" {
+					fmt.Printf("Target Endpoint:         %s\n", best.Endpoint)
+				}
+				fmt.Printf("Chains Disrupted:        %d of %d (%.1f%%)\n", best.DisruptedCount, best.TotalChainsConsidered, best.DisruptionPercentage)
+				fmt.Printf("Residual Chains:         %d\n", best.ResidualCount)
+				fmt.Printf("Actionable Fix:          %s\n", best.ActionableFix)
+				fmt.Printf("Priority Leverage Score: %.1f\n", best.LeverageScore)
+			}
+			if bn.MinimumCut != nil && bn.MinimumCut.CutSize > 0 {
+				fmt.Printf("Minimum Vertex Cut:      %d node(s) (%s) - severs 100%% of paths\n",
+					bn.MinimumCut.CutSize, strings.Join(bn.MinimumCut.CutNodes, ", "))
+			}
+			if len(bn.AnalysisCaveats) > 0 {
+				for _, cav := range bn.AnalysisCaveats {
+					fmt.Printf("Caveat:                  %s\n", cav)
+				}
+			}
 		}
 	} else if summary == nil || (summary.CandidatePaths == 0 && summary.VerifiedPaths == 0 && len(summary.Relationships) == 0) {
 		fmt.Println("\nNo attack paths or correlations recorded.")

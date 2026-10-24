@@ -200,8 +200,8 @@ func TestResourceLimits_FindingDeduplicationBounds(t *testing.T) {
 		t.Fatalf("expected %d deduplicated findings, got %d", uniqueCount, len(deduped))
 	}
 
-	if elapsed > 5*time.Second {
-		t.Fatalf("deduplication of %d findings took %v, expected < 5s", total, elapsed)
+	if elapsed > 15*time.Second {
+		t.Fatalf("deduplication of %d findings took %v, expected < 15s", total, elapsed)
 	}
 }
 

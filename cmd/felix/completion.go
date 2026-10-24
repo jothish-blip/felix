@@ -7,6 +7,11 @@ import (
 )
 
 func runCompletion(args []string) int {
+	if len(args) > 0 && (args[0] == "help" || args[0] == "--help" || args[0] == "-h") {
+		printCompletionHelp()
+		return 0
+	}
+
 	shell := "powershell"
 	if len(args) > 0 {
 		shell = strings.ToLower(args[0])
@@ -133,4 +138,17 @@ complete -c felix -n "__fish_use_subcommand" -a "help" -d "Show help"
 		fmt.Fprintf(os.Stderr, "Unsupported shell %q. Available: powershell, bash, zsh, fish\n", shell)
 		return 2
 	}
+}
+
+func printCompletionHelp() {
+	fmt.Println("Usage:")
+	fmt.Println("  felix completion <shell>")
+	fmt.Println("\nSupported Shells:")
+	fmt.Println("  powershell        Generate PowerShell autocompletion script")
+	fmt.Println("  bash              Generate Bash autocompletion script")
+	fmt.Println("  zsh               Generate Zsh autocompletion script")
+	fmt.Println("  fish              Generate Fish autocompletion script")
+	fmt.Println("\nExamples:")
+	fmt.Println("  felix completion powershell | Out-String | Invoke-Expression")
+	fmt.Println("  source <(felix completion bash)")
 }

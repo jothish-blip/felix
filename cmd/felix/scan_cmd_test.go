@@ -7,8 +7,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -867,5 +869,445 @@ const userEndpoint = "/api/v1/users";
 	}
 	if !foundAsset {
 		t.Errorf("expected referenced asset /assets/app-123.js to be downloaded")
+	}
+}
+
+func TestScanCLI_SpecFlag_HelpText(t *testing.T) {
+	code, out, _ := captureStdoutStderr(func() int {
+		return runScan([]string{"--help"})
+	})
+	if code != 0 {
+		t.Errorf("expected exit code 0, got %d", code)
+	}
+	if !strings.Contains(out, "--spec") {
+		t.Errorf("expected help output to mention --spec")
+	}
+}
+
+func TestScanCLI_SpecFlag_MissingArgument(t *testing.T) {
+	code, _, errOut := captureStdoutStderr(func() int {
+		return runScan([]string{"--spec"})
+	})
+	if code != 2 {
+		t.Errorf("expected exit code 2 for missing --spec argument, got %d", code)
+	}
+	if !strings.Contains(errOut, "--spec requires a file path or URL argument") {
+		t.Errorf("expected error message for missing --spec argument, got %q", errOut)
+	}
+}
+
+func TestScanCLI_SpecFlag_Execution(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, `<html><script src="/app.js"></script></html>`)
+		case "/app.js":
+			w.Header().Set("Content-Type", "application/javascript")
+			fmt.Fprint(w, `
+				axios.get("/api/v1/users");
+				fetch("/api/v1/tenants/42/roles", { method: "POST" });
+			`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	specFile := filepath.Join(tmpDir, "openapi.json")
+	specJSON := `{
+		"openapi": "3.0.0",
+		"info": { "title": "Test App", "version": "1.0.0" },
+		"paths": {
+			"/api/v1/users": {
+				"get": { "operationId": "getUsers" }
+			}
+		}
+	}`
+	if err := os.WriteFile(specFile, []byte(specJSON), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	jsonOut := filepath.Join(tmpDir, "report.json")
+	args := []string{
+		"--allow-loopback",
+		"--spec", specFile,
+		"--json", jsonOut,
+		server.URL,
+	}
+
+	code, _, _ := captureStdoutStderr(func() int {
+		return runScan(args)
+	})
+
+	if code != 0 && code != 1 {
+		t.Fatalf("runScan failed with unexpected operational error %d", code)
+	}
+
+	reportData, err := os.ReadFile(jsonOut)
+	if err != nil {
+		t.Fatalf("failed reading output report.json: %v", err)
+	}
+
+	var rep report.Report
+	if err := json.Unmarshal(reportData, &rep); err != nil {
+		t.Fatalf("failed unmarshaling report.json: %v", err)
+	}
+
+	if rep.Reconciliation == nil {
+		t.Fatalf("expected non-nil Reconciliation in report")
+	}
+	if rep.Reconciliation.TotalDocumentedMatches < 1 {
+		t.Errorf("expected at least 1 documented match, got %d", rep.Reconciliation.TotalDocumentedMatches)
+	}
+	if rep.Reconciliation.TotalUndocumentedCandidates < 1 {
+		t.Errorf("expected at least 1 undocumented candidate, got %d", rep.Reconciliation.TotalUndocumentedCandidates)
+	}
+	if rep.Reconciliation.TotalSensitiveShadowRoutes < 1 {
+		t.Errorf("expected at least 1 sensitive shadow route, got %d", rep.Reconciliation.TotalSensitiveShadowRoutes)
+	}
+}
+
+func TestScan_P14_4_DeclarativeMultiTenantScanProfileEndToEnd(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, `<html><body>Authorized Test Portal</body></html>`)
+		case "/api/v1/documents/doc_alpha_101":
+			auth := r.Header.Get("Authorization")
+			if auth != "Bearer token_beta_secure" {
+				w.WriteHeader(http.StatusUnauthorized)
+				fmt.Fprint(w, `{"error": "invalid token"}`)
+				return
+			}
+			// Simulate BOLA vulnerability: beta accessed alpha's document
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"resource_id": "doc_alpha_101", "owner": "tenant_alpha", "data": "CONFIDENTIAL_ALPHA_DATA"}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	u, _ := url.Parse(server.URL)
+	host := u.Hostname()
+
+	tmpDir := t.TempDir()
+	profileFile := filepath.Join(tmpDir, "felix.target.yml")
+	jsonOut := filepath.Join(tmpDir, "report.json")
+
+	profileYAML := fmt.Sprintf(`version: 1
+target:
+  name: "End-to-End Multi-Tenant Test"
+  base_urls:
+    - "%s"
+  allowed_hosts:
+    - "%s"
+    - "127.0.0.1"
+    - "localhost"
+  allowed_methods:
+    - "GET"
+    - "HEAD"
+
+safety:
+  mode: "non_destructive"
+  allow_cross_tenant_checks: true
+  max_requests: 20
+  requests_per_second: 10
+  timeout_seconds: 5
+
+tenants:
+  - id: "tenant_alpha"
+    identity: "alpha@example.corp"
+    credential_env: "FELIX_TEST_E2E_TOKEN_ALPHA"
+    resource_ids:
+      - "doc_alpha_101"
+  - id: "tenant_beta"
+    identity: "beta@example.corp"
+    credential_env: "FELIX_TEST_E2E_TOKEN_BETA"
+    resource_ids:
+      - "doc_beta_201"
+
+cross_tenant_tests:
+  enabled: true
+  comparisons:
+    - requester_tenant: "tenant_beta"
+      resource_owner_tenant: "tenant_alpha"
+      resource_id: "doc_alpha_101"
+      path: "/api/v1/documents/{id}"
+      expected_marker: "CONFIDENTIAL_ALPHA_DATA"
+`, server.URL, host)
+
+	if err := os.WriteFile(profileFile, []byte(profileYAML), 0600); err != nil {
+		t.Fatalf("failed writing temp profile: %v", err)
+	}
+
+	t.Setenv("FELIX_TEST_E2E_TOKEN_ALPHA", "token_alpha_secure")
+	t.Setenv("FELIX_TEST_E2E_TOKEN_BETA", "token_beta_secure")
+
+	args := []string{
+		"--allow-loopback",
+		"--profile", profileFile,
+		"--cross-tenant",
+		"--json", jsonOut,
+	}
+
+	code, _, _ := captureStdoutStderr(func() int {
+		return runScan(args)
+	})
+
+	if code != 0 && code != 1 {
+		t.Fatalf("runScan failed with unexpected operational error %d", code)
+	}
+
+	reportData, err := os.ReadFile(jsonOut)
+	if err != nil {
+		t.Fatalf("failed reading output report.json: %v", err)
+	}
+
+	var rep report.Report
+	if err := json.Unmarshal(reportData, &rep); err != nil {
+		t.Fatalf("failed unmarshaling report.json: %v", err)
+	}
+
+	if rep.CrossTenantResults == nil {
+		t.Fatalf("expected non-nil CrossTenantResults in report")
+	}
+	if rep.CrossTenantResults.TotalExecuted != 1 {
+		t.Errorf("expected 1 executed comparison, got %d", rep.CrossTenantResults.TotalExecuted)
+	}
+	if rep.CrossTenantResults.TotalCrossTenantAccessObserved != 1 {
+		t.Errorf("expected 1 BOLA observed, got %d", rep.CrossTenantResults.TotalCrossTenantAccessObserved)
+	}
+
+	// Verify that the BOLA finding was added to report findings
+	hasBOLAFinding := false
+	for _, f := range rep.Findings {
+		if strings.Contains(f.Category, "BOLA") {
+			hasBOLAFinding = true
+			break
+		}
+	}
+	if !hasBOLAFinding {
+		t.Errorf("expected BOLA finding in rep.Findings, but none found")
+	}
+}
+
+func TestScanCLI_ProbeAndProbeLive_Equivalence(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			w.Header().Set("Content-Type", "text/html")
+			w.Write([]byte(`<html><head><script src="/static/app.js"></script></head><body><h1>Test</h1></body></html>`))
+		case "/static/app.js":
+			w.Header().Set("Content-Type", "application/javascript")
+			w.Write([]byte(`fetch('/api/v1/orders', {method: 'GET'});`))
+		case "/api/v1/orders":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"orders": [{"id": 1}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	specFile := filepath.Join(tmpDir, "openapi.json")
+	specJSON := `{
+		"openapi": "3.0.0",
+		"info": {"title": "Test API", "version": "1.0.0"},
+		"paths": {
+			"/api/v1/catalog": {
+				"get": {
+					"responses": {"200": {"description": "Catalog list"}}
+				}
+			}
+		}
+	}`
+	if err := os.WriteFile(specFile, []byte(specJSON), 0600); err != nil {
+		t.Fatalf("failed to write spec file: %v", err)
+	}
+
+	outProbe := filepath.Join(tmpDir, "out_probe.json")
+	outProbeLive := filepath.Join(tmpDir, "out_probe_live.json")
+
+	// 1. Run with canonical --probe
+	codeProbe, _, _ := captureStdoutStderr(func() int {
+		return runScan([]string{
+			"--allow-loopback",
+			"--spec", specFile,
+			"--probe",
+			"--json", outProbe,
+			server.URL,
+		})
+	})
+
+	// 2. Run with alias --probe-live
+	codeProbeLive, _, _ := captureStdoutStderr(func() int {
+		return runScan([]string{
+			"--allow-loopback",
+			"--spec", specFile,
+			"--probe-live",
+			"--json", outProbeLive,
+			server.URL,
+		})
+	})
+
+	if codeProbe != codeProbeLive {
+		t.Fatalf("expected identical exit codes: --probe got %d, --probe-live got %d", codeProbe, codeProbeLive)
+	}
+
+	dataProbe, err := os.ReadFile(outProbe)
+	if err != nil {
+		t.Fatalf("failed to read out_probe.json: %v", err)
+	}
+	dataProbeLive, err := os.ReadFile(outProbeLive)
+	if err != nil {
+		t.Fatalf("failed to read out_probe_live.json: %v", err)
+	}
+
+	var repProbe, repProbeLive report.Report
+	if err := json.Unmarshal(dataProbe, &repProbe); err != nil {
+		t.Fatalf("failed unmarshaling out_probe.json: %v", err)
+	}
+	if err := json.Unmarshal(dataProbeLive, &repProbeLive); err != nil {
+		t.Fatalf("failed unmarshaling out_probe_live.json: %v", err)
+	}
+
+	if repProbe.ProberResults == nil || repProbeLive.ProberResults == nil {
+		t.Fatalf("expected ProberResults to be non-nil in both reports")
+	}
+
+	if repProbe.ProberResults.TotalCandidatesEvaluated != repProbeLive.ProberResults.TotalCandidatesEvaluated {
+		t.Errorf("candidate counts differ: probe=%d, probe-live=%d",
+			repProbe.ProberResults.TotalCandidatesEvaluated, repProbeLive.ProberResults.TotalCandidatesEvaluated)
+	}
+	if repProbe.ProberResults.TotalProbesAttempted != repProbeLive.ProberResults.TotalProbesAttempted {
+		t.Errorf("attempted probe counts differ: probe=%d, probe-live=%d",
+			repProbe.ProberResults.TotalProbesAttempted, repProbeLive.ProberResults.TotalProbesAttempted)
+	}
+	if repProbe.ProberResults.TotalReachable != repProbeLive.ProberResults.TotalReachable {
+		t.Errorf("reachable counts differ: probe=%d, probe-live=%d",
+			repProbe.ProberResults.TotalReachable, repProbeLive.ProberResults.TotalReachable)
+	}
+
+	// 3. Verify scope protection: when loopback is disallowed (default), loopback dials are blocked identically
+	outBlockedProbe := filepath.Join(tmpDir, "blocked_probe.json")
+	outBlockedProbeLive := filepath.Join(tmpDir, "blocked_probe_live.json")
+
+	codeBlocked1, _, _ := captureStdoutStderr(func() int {
+		return runScan([]string{
+			"--allow-loopback=false",
+			"--spec", specFile,
+			"--probe",
+			"--json", outBlockedProbe,
+			server.URL,
+		})
+	})
+	codeBlocked2, _, _ := captureStdoutStderr(func() int {
+		return runScan([]string{
+			"--allow-loopback=false",
+			"--spec", specFile,
+			"--probe-live",
+			"--json", outBlockedProbeLive,
+			server.URL,
+		})
+	})
+
+	if codeBlocked1 != codeBlocked2 {
+		t.Errorf("blocked exit codes differ: probe=%d, probe-live=%d", codeBlocked1, codeBlocked2)
+	}
+}
+
+func TestScanCLI_4TierConfigurationPrecedence(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("FELIX_DIR", tempDir)
+
+	// Ensure no environment variables are set for tier 1/2
+	os.Unsetenv("FELIX_CONCURRENCY")
+	os.Unsetenv("FELIX_TIMEOUT")
+	defer func() {
+		os.Unsetenv("FELIX_CONCURRENCY")
+		os.Unsetenv("FELIX_TIMEOUT")
+	}()
+
+	// Tier 1: Defaults
+	cfgDefault, err := config.LoadWithEnv("")
+	if err != nil {
+		t.Fatalf("LoadWithEnv default error: %v", err)
+	}
+	if cfgDefault.Concurrency != config.DefaultConcurrency {
+		t.Fatalf("Tier 1 Default: expected concurrency %d, got %d", config.DefaultConcurrency, cfgDefault.Concurrency)
+	}
+	if cfgDefault.Timeout != config.DefaultTimeoutSeconds {
+		t.Fatalf("Tier 1 Default: expected timeout %d, got %d", config.DefaultTimeoutSeconds, cfgDefault.Timeout)
+	}
+
+	// Tier 2: Config file overrides defaults
+	diskCfg := config.Default()
+	diskCfg.Concurrency = 25
+	diskCfg.Timeout = 25
+	if err := config.Save(diskCfg); err != nil {
+		t.Fatalf("Save config failed: %v", err)
+	}
+	cfgFile, err := config.LoadWithEnv("")
+	if err != nil {
+		t.Fatalf("LoadWithEnv file error: %v", err)
+	}
+	if cfgFile.Concurrency != 25 {
+		t.Fatalf("Tier 2 File: expected concurrency 25, got %d", cfgFile.Concurrency)
+	}
+	if cfgFile.Timeout != 25 {
+		t.Fatalf("Tier 2 File: expected timeout 25, got %d", cfgFile.Timeout)
+	}
+
+	// Tier 3: Environment variables override config file
+	t.Setenv("FELIX_CONCURRENCY", "40")
+	t.Setenv("FELIX_TIMEOUT", "40s")
+	cfgEnv, err := config.LoadWithEnv("")
+	if err != nil {
+		t.Fatalf("LoadWithEnv env error: %v", err)
+	}
+	if cfgEnv.Concurrency != 40 {
+		t.Fatalf("Tier 3 Env: expected concurrency 40, got %d", cfgEnv.Concurrency)
+	}
+	if cfgEnv.Timeout != 40 {
+		t.Fatalf("Tier 3 Env: expected timeout 40, got %d", cfgEnv.Timeout)
+	}
+
+	// Tier 4: Explicit CLI flags override environment variables, config file, and defaults
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte(`<html><body><h1>Precedence Test</h1></body></html>`))
+	}))
+	defer server.Close()
+
+	jsonOut := filepath.Join(tempDir, "precedence_report.json")
+	code, _, _ := captureStdoutStderr(func() int {
+		return runScan([]string{
+			"--allow-loopback",
+			"--concurrency", "55",
+			"--timeout", "55s",
+			"--json", jsonOut,
+			server.URL,
+		})
+	})
+	if code != 0 && code != 1 {
+		t.Fatalf("runScan failed with error code %d", code)
+	}
+
+	// Verify that an invalid CLI flag overrides valid environment setting and fails closed (Exit 2)
+	codeInvalidCLI, _, _ := captureStdoutStderr(func() int {
+		return runScan([]string{
+			"--allow-loopback",
+			"--concurrency", "0",
+			server.URL,
+		})
+	})
+	if codeInvalidCLI != 2 {
+		t.Fatalf("expected CLI flag error exit 2, got %d", codeInvalidCLI)
 	}
 }

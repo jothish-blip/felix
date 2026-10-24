@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -62,12 +63,18 @@ func NewChecker(repo string) *Checker {
 	if repo == "" {
 		repo = DefaultGitHubRepo
 	}
+	allowLoopback := os.Getenv("FELIX_UPDATE_ALLOW_LOCAL") == "true"
 	safeTransport := crawler.NewSafeTransport(crawler.SafeTransportOptions{
-		Timeout: DefaultTimeout,
+		Timeout:       DefaultTimeout,
+		AllowLoopback: allowLoopback,
 	})
+	apiURL := "https://api.github.com"
+	if custom := os.Getenv("FELIX_UPDATE_API_URL"); custom != "" {
+		apiURL = strings.TrimRight(custom, "/")
+	}
 	return &Checker{
 		Repository: repo,
-		APIBaseURL: "https://api.github.com",
+		APIBaseURL: apiURL,
 		HTTPClient: &http.Client{
 			Transport: crawler.NewRateLimitedTransport(safeTransport, crawler.RateLimitOptions{}),
 			Timeout:   DefaultTimeout,

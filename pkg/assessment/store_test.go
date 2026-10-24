@@ -2070,8 +2070,24 @@ func TestStore_CorrelationRunAndPaths(t *testing.T) {
 		Remediation:       "Apply S3 Block Public Access",
 		CreatedAt:         time.Now().UTC(),
 	}
+	path3 := correlation.AttackPath{
+		ID:                "PATH-MULTIHOP-COR-01-abc123def456",
+		Title:             "Multi-Hop Attack Path (2 Hops): Gateway -> Flaw -> DB",
+		EntryPoint:        "https://api.example.com/v1",
+		TargetAsset:       "https://api.example.com",
+		PrimaryWeakness:   "Observed Multi-Hop Sequence",
+		TerminalImpact:    "Potential pivot to database",
+		Status:            correlation.PathEvidenceSupported,
+		Confidence:        report.ConfidenceMedium,
+		CombinedRiskLevel: report.SeverityHigh,
+		CombinedRiskScore: 65,
+		RiskRationale:     "Evidence-supported multi-hop sequence across 3 nodes",
+		NodeIDs:           []string{"F-05", "F-06", "F-07"},
+		Remediation:       "Apply defense in depth",
+		CreatedAt:         time.Now().UTC(),
+	}
 
-	if err := store.SaveAttackPaths(asm.ID, exec.ID, []correlation.AttackPath{path1, path2}); err != nil {
+	if err := store.SaveAttackPaths(asm.ID, exec.ID, []correlation.AttackPath{path1, path2, path3}); err != nil {
 		t.Fatalf("SaveAttackPaths failed: %v", err)
 	}
 
@@ -2080,8 +2096,20 @@ func TestStore_CorrelationRunAndPaths(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetAttackPaths failed: %v", err)
 	}
-	if len(paths) != 2 {
-		t.Fatalf("expected 2 paths, got %d", len(paths))
+	if len(paths) != 3 {
+		t.Fatalf("expected 3 paths, got %d", len(paths))
+	}
+
+	// Filter by PathEvidenceSupported status
+	evSupportedOnly, err := store.GetAttackPaths(asm.ID, exec.ID, string(correlation.PathEvidenceSupported), "")
+	if err != nil {
+		t.Fatalf("GetAttackPaths by status failed: %v", err)
+	}
+	if len(evSupportedOnly) != 1 || evSupportedOnly[0].Status != correlation.PathEvidenceSupported {
+		t.Errorf("expected 1 evidence-supported path, got %d", len(evSupportedOnly))
+	}
+	if len(evSupportedOnly[0].NodeIDs) != 3 {
+		t.Errorf("expected 3 node IDs in multi-hop path, got %v", evSupportedOnly[0].NodeIDs)
 	}
 
 	// Filter by status

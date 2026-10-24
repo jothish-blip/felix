@@ -2,6 +2,8 @@
 # Usage: powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 [-DevSign]
 
 param(
+    [string]$InstallDir = "",
+    [switch]$SkipPathUpdate,
     [switch]$DevSign
 )
 
@@ -11,10 +13,16 @@ Write-Host "===========================================================" -Foregr
 Write-Host " FELIX :: Windows CLI Installation" -ForegroundColor Cyan
 Write-Host "===========================================================" -ForegroundColor Cyan
 
-# 1. Determine local app data target directory
-$installDir = Join-Path $env:LOCALAPPDATA "Felix\bin"
-if (-not (Test-Path $installDir)) {
-    New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+# 1. Determine target directory
+if (-not $InstallDir) {
+    if ($env:FELIX_INSTALL_DIR) {
+        $InstallDir = $env:FELIX_INSTALL_DIR
+    } else {
+        $InstallDir = Join-Path $env:LOCALAPPDATA "Felix\bin"
+    }
+}
+if (-not (Test-Path $InstallDir)) {
+    New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 }
 
 # 2. Locate or build felix.exe
@@ -53,14 +61,18 @@ if ($DevSign) {
 }
 
 # 4. Add to User PATH if not already present
-$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-$paths = $userPath -split ';' | Where-Object { $_ -ne '' }
-if ($paths -notcontains $installDir) {
-    $newPath = ($paths + $installDir) -join ';'
-    [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
-    Write-Host "[+] Registered $installDir in User PATH environment variable." -ForegroundColor Green
+if ($SkipPathUpdate -or $env:FELIX_NO_PATH_UPDATE -eq "true") {
+    Write-Host "[i] Skipping User PATH registration (SkipPathUpdate is set)." -ForegroundColor Gray
 } else {
-    Write-Host "[i] $installDir is already in User PATH." -ForegroundColor Gray
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $paths = $userPath -split ';' | Where-Object { $_ -ne '' }
+    if ($paths -notcontains $installDir) {
+        $newPath = ($paths + $installDir) -join ';'
+        [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+        Write-Host "[+] Registered $installDir in User PATH environment variable." -ForegroundColor Green
+    } else {
+        Write-Host "[i] $installDir is already in User PATH." -ForegroundColor Gray
+    }
 }
 
 # 5. Verify installed binary

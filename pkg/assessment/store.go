@@ -7130,7 +7130,6 @@ func (s *SQLiteStore) GetCorrelationSummary(assessmentID string, executionID str
 	}
 
 	sum := &correlation.Summary{
-		CandidatePaths: len(paths),
 		RuleStats:      make(map[string]correlation.RuleCoverageStat),
 		AffectedAssets: make([]string, 0),
 	}
@@ -7148,11 +7147,13 @@ func (s *SQLiteStore) GetCorrelationSummary(assessmentID string, executionID str
 		case correlation.PathVerified:
 			sum.VerifiedPaths++
 		case correlation.PathCandidate:
-			// candidate paths
+			sum.CandidatePaths++
 		case correlation.PathInconclusive:
 			sum.InconclusivePaths++
 		case correlation.PathObserved:
 			sum.ObservedPaths++
+		case correlation.PathEvidenceSupported:
+			sum.EvidenceSupportedPaths++
 		}
 		if p.CombinedRiskScore > maxScore {
 			maxScore = p.CombinedRiskScore

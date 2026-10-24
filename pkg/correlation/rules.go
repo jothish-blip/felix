@@ -245,6 +245,11 @@ func evaluateCOR01(f1, f2 *NormalizedFinding) (Relationship, bool) {
 		return Relationship{}, false
 	}
 
+	// Boundary conflict prevents cross-boundary reachable exposure
+	if conflict, _, _ := hasBoundaryConflict(f1.EvidenceDetails, f2.EvidenceDetails); conflict {
+		return Relationship{}, false
+	}
+
 	// Do not correlate entrypoint with itself
 	if f1.ID == f2.ID || (f1.Category == f2.Category && samePath) {
 		return Relationship{}, false
@@ -557,7 +562,13 @@ func evaluateCOR08(f1, f2 *NormalizedFinding) (Relationship, bool) {
 	isAppPivot := strings.Contains(f1.NormalizedCategory, "ssrf") ||
 		strings.Contains(f1.NormalizedCategory, "secret") ||
 		strings.Contains(f1.NormalizedCategory, "service-key") ||
-		strings.Contains(f1.NormalizedCategory, "credential")
+		strings.Contains(f1.NormalizedCategory, "credential") ||
+		(f1.IsSensitiveData && (strings.Contains(strings.ToLower(f1.Title), "credential") ||
+			strings.Contains(strings.ToLower(f1.Title), "key") ||
+			strings.Contains(strings.ToLower(f1.Title), "token") ||
+			strings.Contains(strings.ToLower(f1.Title), "secret") ||
+			f1.EvidenceDetails["secret_type"] != "" ||
+			f1.EvidenceDetails["credential"] != ""))
 
 	if !isAppPivot || !f2.IsCloudResource {
 		return Relationship{}, false
@@ -639,35 +650,40 @@ func evaluateCOR09(f1, f2 *NormalizedFinding) (Relationship, bool) {
 	}, true
 }
 
-// hasBoundaryConflict checks whether two findings have conflicting tenant or account isolation boundaries.
+// hasBoundaryConflict checks whether two findings have conflicting tenant, account, or organization isolation boundaries.
 // Returns (hasConflict, boundaryDesc1, boundaryDesc2).
+// Explicit missing identifiers on either side are NEVER treated as proof that boundaries match or conflict.
+// Free-form prose is ignored; only explicit structured boundary metadata keys are evaluated.
 func hasBoundaryConflict(d1, d2 map[string]string) (bool, string, string) {
 	if d1 == nil || d2 == nil {
 		return false, "", ""
 	}
+
+	// 1. Explicit Tenant boundary comparison
 	t1 := strings.TrimSpace(d1["tenant_id"])
 	t2 := strings.TrimSpace(d2["tenant_id"])
 	if t1 != "" && t2 != "" && !strings.EqualFold(t1, t2) {
 		return true, fmt.Sprintf("tenant:%s", t1), fmt.Sprintf("tenant:%s", t2)
 	}
 
+	// 2. Explicit Account boundary comparison
 	a1 := strings.TrimSpace(d1["account_id"])
 	a2 := strings.TrimSpace(d2["account_id"])
 	if a1 != "" && a2 != "" && !strings.EqualFold(a1, a2) {
 		return true, fmt.Sprintf("account:%s", a1), fmt.Sprintf("account:%s", a2)
 	}
 
-	// Cross-key boundary check: one specifies tenant_id, the other specifies account_id
-	if (t1 != "" && a2 != "" && t2 == "" && a1 == "") || (t2 != "" && a1 != "" && t1 == "" && a2 == "") {
-		var desc1, desc2 string
-		if t1 != "" {
-			desc1 = fmt.Sprintf("tenant:%s", t1)
-			desc2 = fmt.Sprintf("account:%s", a2)
-		} else {
-			desc1 = fmt.Sprintf("account:%s", a1)
-			desc2 = fmt.Sprintf("tenant:%s", t2)
-		}
-		return true, desc1, desc2
+	// 3. Explicit Organization boundary comparison
+	o1 := strings.TrimSpace(d1["org_id"])
+	if o1 == "" {
+		o1 = strings.TrimSpace(d1["organization_id"])
+	}
+	o2 := strings.TrimSpace(d2["org_id"])
+	if o2 == "" {
+		o2 = strings.TrimSpace(d2["organization_id"])
+	}
+	if o1 != "" && o2 != "" && !strings.EqualFold(o1, o2) {
+		return true, fmt.Sprintf("org:%s", o1), fmt.Sprintf("org:%s", o2)
 	}
 
 	return false, "", ""
@@ -1065,6 +1081,7 @@ func evaluateCOR10(f1, f2 *NormalizedFinding) (Relationship, bool) {
 	isVulnerableAPI := strings.Contains(f2.NormalizedCategory, "bola") ||
 		strings.Contains(f2.NormalizedCategory, "idor") ||
 		strings.Contains(f2.NormalizedCategory, "xss") ||
+		strings.Contains(f2.NormalizedCategory, "auth") ||
 		f2.IsSensitiveData
 
 	if !isVulnerableAPI {

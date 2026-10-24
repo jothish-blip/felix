@@ -87,7 +87,7 @@ func runAPK(args []string) int {
 			reportPath = strings.TrimPrefix(arg, "--html=")
 			continue
 		}
-		if arg == "--output" || arg == "-o" {
+		if arg == "--output" || arg == "-o" || arg == "--out" {
 			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
 				fmt.Fprintf(os.Stderr, "[-] error: %s requires a file path argument\n", arg)
 				return 2
@@ -99,6 +99,11 @@ func runAPK(args []string) int {
 		}
 		if strings.HasPrefix(arg, "--output=") {
 			reportPath = strings.TrimPrefix(arg, "--output=")
+			generateReport = true
+			continue
+		}
+		if strings.HasPrefix(arg, "--out=") {
+			reportPath = strings.TrimPrefix(arg, "--out=")
 			generateReport = true
 			continue
 		}
@@ -136,9 +141,9 @@ func runAPK(args []string) int {
 			sarifPath = strings.TrimPrefix(arg, "--sarif=")
 			continue
 		}
-		if arg == "--export" {
+		if arg == "--export" || arg == "-e" {
 			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
-				fmt.Fprintf(os.Stderr, "[-] error: --export requires a file path argument\n")
+				fmt.Fprintf(os.Stderr, "[-] error: %s requires a file path argument\n", arg)
 				return 2
 			}
 			i++
@@ -149,8 +154,15 @@ func runAPK(args []string) int {
 			exportPath = strings.TrimPrefix(arg, "--export=")
 			continue
 		}
+		if strings.HasPrefix(arg, "-e=") {
+			exportPath = strings.TrimPrefix(arg, "-e=")
+			continue
+		}
 		if arg == "--quiet" || arg == "-q" || arg == "--silent" || arg == "-s" {
 			quiet = true
+			continue
+		}
+		if arg == "--verbose" || arg == "-v" {
 			continue
 		}
 		if arg == "--analyze" {
@@ -278,9 +290,9 @@ func runAPK(args []string) int {
 			maxPerHost = n
 			continue
 		}
-		if arg == "--rate-limit" {
+		if arg == "--rate-limit" || arg == "-r" || arg == "--rate" {
 			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
-				fmt.Fprintf(os.Stderr, "[-] error: --rate-limit requires a number argument\n")
+				fmt.Fprintf(os.Stderr, "[-] error: %s requires a number argument\n", arg)
 				return 2
 			}
 			i++
@@ -292,9 +304,19 @@ func runAPK(args []string) int {
 			rateLimit = f
 			continue
 		}
-		if arg == "--concurrency" {
+		if strings.HasPrefix(arg, "--rate-limit=") || strings.HasPrefix(arg, "-r=") || strings.HasPrefix(arg, "--rate=") {
+			v := strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(arg, "--rate-limit="), "-r="), "--rate=")
+			f, err := strconv.ParseFloat(v, 64)
+			if err != nil || f <= 0 {
+				fmt.Fprintf(os.Stderr, "[-] error: invalid --rate-limit %q: must be positive\n", v)
+				return 2
+			}
+			rateLimit = f
+			continue
+		}
+		if arg == "--concurrency" || arg == "-c" {
 			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
-				fmt.Fprintf(os.Stderr, "[-] error: --concurrency requires an integer argument\n")
+				fmt.Fprintf(os.Stderr, "[-] error: %s requires an integer argument\n", arg)
 				return 2
 			}
 			i++
@@ -306,15 +328,35 @@ func runAPK(args []string) int {
 			concurrency = n
 			continue
 		}
-		if arg == "--timeout" {
+		if strings.HasPrefix(arg, "--concurrency=") || strings.HasPrefix(arg, "-c=") {
+			v := strings.TrimPrefix(strings.TrimPrefix(arg, "--concurrency="), "-c=")
+			n, err := strconv.Atoi(v)
+			if err != nil || n <= 0 {
+				fmt.Fprintf(os.Stderr, "[-] error: invalid --concurrency %q: must be a positive integer\n", v)
+				return 2
+			}
+			concurrency = n
+			continue
+		}
+		if arg == "--timeout" || arg == "-t" {
 			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
-				fmt.Fprintf(os.Stderr, "[-] error: --timeout requires a duration argument (e.g. 5s, 10s)\n")
+				fmt.Fprintf(os.Stderr, "[-] error: %s requires a duration argument (e.g. 5s, 10s)\n", arg)
 				return 2
 			}
 			i++
 			d, err := time.ParseDuration(args[i])
 			if err != nil || d <= 0 {
 				fmt.Fprintf(os.Stderr, "[-] error: invalid --timeout %q: must be a positive duration\n", args[i])
+				return 2
+			}
+			perReqTimeout = d
+			continue
+		}
+		if strings.HasPrefix(arg, "--timeout=") || strings.HasPrefix(arg, "-t=") {
+			v := strings.TrimPrefix(strings.TrimPrefix(arg, "--timeout="), "-t=")
+			d, err := time.ParseDuration(v)
+			if err != nil || d <= 0 {
+				fmt.Fprintf(os.Stderr, "[-] error: invalid --timeout %q: must be a positive duration\n", v)
 				return 2
 			}
 			perReqTimeout = d
@@ -980,7 +1022,7 @@ func writeAPKReports(
 			if strings.Contains(strings.ToLower(exportPath), "commercial") && canonicalReport.CommercialReport != nil {
 				exportErr = report.WriteCommercialHTML(*canonicalReport.CommercialReport, exportPath)
 			} else {
-				exportErr = report.WriteHTML(canonicalReport, exportPath)
+				exportErr = apk.WriteMobileAuditReport(reportData, exportPath, apkPath)
 			}
 		default:
 			exportErr = report.WriteJSON(canonicalReport, exportPath)

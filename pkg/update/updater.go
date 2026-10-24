@@ -1,39 +1,49 @@
 package update
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/ProtonMail/go-crypto/openpgp"
 )
 
 // UpdateOptions configures the update execution.
 type UpdateOptions struct {
-	TargetVersion string
-	Force         bool
-	DryRun        bool
-	Progress      func(step, details string)
+	TargetVersion          string
+	Force                  bool
+	DryRun                 bool
+	RequireSignature       bool
+	TrustedKeyRing         openpgp.KeyRing
+	ExpectedKeyFingerprint string
+	Progress               func(step, details string)
 }
 
 // UpdateResult summarizes the completed update operation.
 type UpdateResult struct {
-	PreviousVersion string
-	UpdatedVersion  string
-	TargetPlatform  string
-	ExecutablePath  string
-	ArchiveFile     string
-	DownloadedBytes int64
-	RollbackOccurred bool
+	PreviousVersion   string
+	UpdatedVersion    string
+	TargetPlatform    string
+	ExecutablePath    string
+	ArchiveFile       string
+	DownloadedBytes   int64
+	RollbackOccurred  bool
+	SignerFingerprint string
 }
 
 // Updater orchestrates the complete secure update pipeline.
 type Updater struct {
-	Repository string
-	Checker    *Checker
-	Downloader *Downloader
-	CurrentVer string
+	Repository             string
+	Checker                *Checker
+	Downloader             *Downloader
+	CurrentVer             string
+	RequireSignature       bool
+	TrustedKeyRing         openpgp.KeyRing
+	ExpectedKeyFingerprint string
 }
 
 // NewUpdater creates a new Updater configured for the repository and current version.
@@ -98,6 +108,7 @@ func (u *Updater) Update(ctx context.Context, opts UpdateOptions) (*UpdateResult
 
 	var archiveAsset *GitHubAsset
 	var checksumAsset *GitHubAsset
+	var signatureAsset *GitHubAsset
 
 	for i := range checkRes.Assets {
 		asset := &checkRes.Assets[i]
@@ -106,6 +117,9 @@ func (u *Updater) Update(ctx context.Context, opts UpdateOptions) (*UpdateResult
 		}
 		if strings.EqualFold(asset.Name, "SHA256SUMS") {
 			checksumAsset = asset
+		}
+		if strings.EqualFold(asset.Name, "SHA256SUMS.asc") || strings.EqualFold(asset.Name, "SHA256SUMS.sig") {
+			signatureAsset = asset
 		}
 	}
 
@@ -122,9 +136,14 @@ func (u *Updater) Update(ctx context.Context, opts UpdateOptions) (*UpdateResult
 
 	archivePath := filepath.Join(tempDir, expectedArchive)
 
-	// Step 5: Download and verify checksum manifest (fail-closed integrity verification)
+	// Step 5: Download and verify checksum manifest and detached signature
 	if checksumAsset == nil {
 		return nil, fmt.Errorf("cryptographic verification failed: SHA256SUMS manifest missing from release %s assets", targetVersion)
+	}
+
+	requireSig := opts.RequireSignature || u.RequireSignature || os.Getenv("FELIX_UPDATE_REQUIRE_SIGNATURE") == "true"
+	if requireSig && signatureAsset == nil {
+		return nil, fmt.Errorf("cryptographic signature verification failed: detached signature manifest SHA256SUMS.asc is missing from release %s assets", targetVersion)
 	}
 
 	notify("CHECKSUM", "Downloading SHA256SUMS verification manifest...")
@@ -133,12 +152,12 @@ func (u *Updater) Update(ctx context.Context, opts UpdateOptions) (*UpdateResult
 		return nil, fmt.Errorf("failed downloading SHA256SUMS manifest: %w", err)
 	}
 
-	f, err := os.Open(sumsPath)
+	manifestBytes, err := os.ReadFile(sumsPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed reading SHA256SUMS manifest: %w", err)
 	}
-	sumsMap, err := ParseChecksums(f)
-	f.Close()
+
+	sumsMap, err := ParseChecksums(bytes.NewReader(manifestBytes))
 	if err != nil {
 		return nil, fmt.Errorf("failed parsing SHA256SUMS manifest: %w", err)
 	}
@@ -156,6 +175,51 @@ func (u *Updater) Update(ctx context.Context, opts UpdateOptions) (*UpdateResult
 		return nil, fmt.Errorf("cryptographic verification failed: malformed SHA256 digest %q for %q in manifest", expectedSHA256, expectedArchive)
 	}
 
+	var verifiedSigner *openpgp.Entity
+	if signatureAsset != nil {
+		notify("SIGNATURE", fmt.Sprintf("Downloading detached signature %s...", signatureAsset.Name))
+		sigPath := filepath.Join(tempDir, signatureAsset.Name)
+		if _, err := u.Downloader.DownloadFile(ctx, signatureAsset.BrowserDownloadURL, sigPath); err != nil {
+			return nil, fmt.Errorf("failed downloading signature manifest %s: %w", signatureAsset.Name, err)
+		}
+
+		sigBytes, err := os.ReadFile(sigPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed reading signature file: %w", err)
+		}
+
+		keyring := opts.TrustedKeyRing
+		if keyring == nil {
+			keyring = u.TrustedKeyRing
+		}
+		if keyring == nil {
+			if envPath := strings.TrimSpace(os.Getenv("FELIX_UPDATE_KEYRING")); envPath != "" {
+				loaded, err := LoadKeyringFile(envPath)
+				if err != nil {
+					return nil, fmt.Errorf("failed loading trusted keyring from %s (FELIX_UPDATE_KEYRING): %w", envPath, err)
+				}
+				keyring = loaded
+			}
+		}
+		expectedFP := opts.ExpectedKeyFingerprint
+		if expectedFP == "" {
+			expectedFP = u.ExpectedKeyFingerprint
+		}
+		if expectedFP == "" {
+			expectedFP = strings.TrimSpace(os.Getenv("FELIX_UPDATE_EXPECTED_KEY"))
+		}
+
+		if requireSig || keyring != nil || expectedFP != "" {
+			notify("SIGNATURE", "Verifying detached cryptographic signature of SHA256SUMS...")
+			signer, err := VerifyManifestSignature(manifestBytes, sigBytes, keyring, expectedFP)
+			if err != nil {
+				return nil, fmt.Errorf("cryptographic signature verification failed: %w", err)
+			}
+			verifiedSigner = signer
+			notify("SIGNATURE", fmt.Sprintf("Signature verified successfully (Signer: %X)", signer.PrimaryKey.Fingerprint))
+		}
+	}
+
 	// Step 6: Download release archive
 	notify("DOWNLOAD", fmt.Sprintf("Downloading %s (%s)...", expectedArchive, formatBytes(archiveAsset.Size)))
 	computedHash, err := u.Downloader.DownloadFile(ctx, archiveAsset.BrowserDownloadURL, archivePath)
@@ -171,12 +235,17 @@ func (u *Updater) Update(ctx context.Context, opts UpdateOptions) (*UpdateResult
 
 	if opts.DryRun {
 		notify("DRY-RUN", "Verification successful. Dry run complete; no files modified.")
+		var signerFP string
+		if verifiedSigner != nil {
+			signerFP = fmt.Sprintf("%X", verifiedSigner.PrimaryKey.Fingerprint)
+		}
 		return &UpdateResult{
-			PreviousVersion: cleanCurrent,
-			UpdatedVersion:  targetVersion,
-			TargetPlatform:  fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH),
-			ArchiveFile:     expectedArchive,
-			DownloadedBytes: archiveAsset.Size,
+			PreviousVersion:   cleanCurrent,
+			UpdatedVersion:    targetVersion,
+			TargetPlatform:    fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH),
+			ArchiveFile:       expectedArchive,
+			DownloadedBytes:   archiveAsset.Size,
+			SignerFingerprint: signerFP,
 		}, nil
 	}
 
@@ -207,14 +276,20 @@ func (u *Updater) Update(ctx context.Context, opts UpdateOptions) (*UpdateResult
 
 	notify("DONE", fmt.Sprintf("Successfully updated Felix to v%s", targetVersion))
 
+	var signerFP string
+	if verifiedSigner != nil {
+		signerFP = fmt.Sprintf("%X", verifiedSigner.PrimaryKey.Fingerprint)
+	}
+
 	return &UpdateResult{
-		PreviousVersion:  cleanCurrent,
-		UpdatedVersion:   targetVersion,
-		TargetPlatform:   fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH),
-		ExecutablePath:   repRes.TargetExecutable,
-		ArchiveFile:      expectedArchive,
-		DownloadedBytes:  archiveAsset.Size,
-		RollbackOccurred: repRes.RollbackExecuted,
+		PreviousVersion:   cleanCurrent,
+		UpdatedVersion:    targetVersion,
+		TargetPlatform:    fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH),
+		ExecutablePath:    repRes.TargetExecutable,
+		ArchiveFile:       expectedArchive,
+		DownloadedBytes:   archiveAsset.Size,
+		RollbackOccurred:  repRes.RollbackExecuted,
+		SignerFingerprint: signerFP,
 	}, nil
 }
 

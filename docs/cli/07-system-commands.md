@@ -46,11 +46,14 @@ felix update [options]
 - `--version <semver>`: Install a specific release version (e.g. `1.0.1`).
 - `--force`, `-f`: Force download and replacement even if already up to date.
 - `--dry-run`: Download and verify package SHA256 without replacing the current binary.
+- `--keyring <path>`: Path to trusted OpenPGP public keyring file for signature verification.
+- `--expected-key <fp>`: Enforce exact matching signer OpenPGP key fingerprint.
 - `--repo <owner/repo>`: Override update source (default: `jothish-blip/felix`).
 - `--help`, `-h`: Show usage.
 
 ### Safety & Integrity Guarantees:
-- **Cryptographic Hash Verification:** Every update package is checked against the authoritative `SHA256SUMS` manifest before extraction.
+- **Detached OpenPGP Signature Verification:** Downloads and mathematically verifies `SHA256SUMS.asc` against `SHA256SUMS` using trusted local public keys. Unauthenticated manifests or unknown keys fail closed.
+- **Cryptographic Hash Verification:** Every update package is checked against the verified `SHA256SUMS` manifest before extraction.
 - **ZipSlip & Path Traversal Mitigation:** Archive unpacking validates target extraction paths.
 - **Atomic Replacement & Rollback:** The new executable is validated in a sub-process test run. If replacement or execution fails, the previous binary is restored immediately.
 

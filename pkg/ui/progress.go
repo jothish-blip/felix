@@ -24,6 +24,7 @@ type Progress struct {
 	quiet       bool
 	jsonMode    bool
 	interactive bool
+	noColor     bool
 }
 
 // New creates a new Progress instance configured for the current terminal context.
@@ -38,17 +39,35 @@ func New(opts Options) *Progress {
 		interactive = isatty.IsTerminal(f.Fd()) || isatty.IsCygwinTerminal(f.Fd())
 	}
 
+	noColor := opts.NoColor || os.Getenv("NO_COLOR") != "" || !interactive
+
 	return &Progress{
 		writer:      w,
 		quiet:       opts.Quiet,
 		jsonMode:    opts.JSONMode,
 		interactive: interactive,
+		noColor:     noColor,
 	}
 }
 
 // IsInteractive returns true if the output destination is an active TTY.
 func (p *Progress) IsInteractive() bool {
 	return p.interactive
+}
+
+// IsColorEnabled returns true if colored output should be rendered.
+func (p *Progress) IsColorEnabled() bool {
+	return p.interactive && !p.noColor && !p.quiet && !p.jsonMode
+}
+
+// Stage prints a multi-stage execution progress milestone (e.g. "[*] [1/4] Target Discovery & Scope Analysis").
+func (p *Progress) Stage(current, total int, stageName string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.quiet || p.jsonMode {
+		return
+	}
+	fmt.Fprintf(p.writer, "[*] [%d/%d] %s\n", current, total, stageName)
 }
 
 // Step prints an operational step notice (e.g. "[*] Connecting to target...").

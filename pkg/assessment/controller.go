@@ -948,11 +948,15 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 	}
 	var corrAttackPaths []report.AttackPathSummary
 	var corrStories []report.SecurityStory
+	var corrBottleneckSummary *report.BottleneckSummary
 	if len(allReportFindings) > 0 {
 		corrCfg := correlation.DefaultConfig()
 		corrEng := correlation.NewEngine(corrCfg)
 		corrSummary, paths, _, corrErr := corrEng.Correlate(ctx, allReportFindings)
 		if corrErr == nil && len(paths) > 0 {
+			if corrSummary.BottleneckAnalysis != nil {
+				corrBottleneckSummary = ConvertBottleneckAnalysisToReport(corrSummary.BottleneckAnalysis)
+			}
 			covJSON, _ := json.Marshal(corrSummary)
 			runRec := &correlation.RunRecord{
 				ID:                     uuid.New().String(),
@@ -972,30 +976,7 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 
 			for _, p := range paths {
 				corrStories = append(corrStories, p.SecurityStory)
-				var transitions []string
-				for _, e := range p.Edges {
-					transitions = append(transitions, fmt.Sprintf("[%s] %s -> %s: %s",
-						e.ValidationStatus, e.SourceTitle, e.TargetTitle, e.Explanation))
-				}
-				corrAttackPaths = append(corrAttackPaths, report.AttackPathSummary{
-					ID:                p.ID,
-					Title:             p.Title,
-					Status:            string(p.Status),
-					Confidence:        p.Confidence,
-					CombinedRiskLevel: p.CombinedRiskLevel,
-					CombinedRiskScore: p.CombinedRiskScore,
-					RiskRationale:     p.RiskRationale,
-					EntryPoint:        p.EntryPoint,
-					TargetAsset:       p.TargetAsset,
-					PrimaryWeakness:   p.PrimaryWeakness,
-					TerminalImpact:    p.TerminalImpact,
-					Transitions:       transitions,
-					Assumptions:       p.Assumptions,
-					MissingEvidence:   p.MissingEvidence,
-					Remediation:       p.Remediation,
-					NodeIDs:           p.NodeIDs,
-					SyntheticFixture:  p.SyntheticFixture,
-				})
+				corrAttackPaths = append(corrAttackPaths, ConvertAttackPathToSummary(p))
 			}
 			opts.ProgressFunc(fmt.Sprintf("[+] Correlation complete: %d attack path(s) mapped (highest risk: %s %d/100)",
 				len(paths), corrSummary.HighestRiskLevel, corrSummary.HighestRiskScore))
@@ -1037,6 +1018,9 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 		report.AttachSecurityStories(&rep, corrStories)
 	}
 	if len(corrAttackPaths) > 0 {
+		if corrBottleneckSummary != nil {
+			rep.RemediationBottlenecks = corrBottleneckSummary
+		}
 		report.AttachAttackPaths(&rep, corrAttackPaths)
 	}
 	rep.Duration = duration.Round(time.Millisecond).String()

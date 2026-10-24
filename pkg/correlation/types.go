@@ -50,12 +50,18 @@ const (
 type PathStatus string
 
 const (
-	PathVerified     PathStatus = "VERIFIED"
-	PathCandidate    PathStatus = "CANDIDATE"
-	PathInconclusive PathStatus = "INCONCLUSIVE"
-	PathObserved     PathStatus = "OBSERVED"
-	PathNotAssessed  PathStatus = "NOT_ASSESSED"
+	PathVerified          PathStatus = "VERIFIED"
+	PathCandidate         PathStatus = "CANDIDATE"
+	PathInconclusive      PathStatus = "INCONCLUSIVE"
+	PathObserved          PathStatus = "OBSERVED"
+	PathEvidenceSupported PathStatus = "EVIDENCE_SUPPORTED"
+	PathNotAssessed       PathStatus = "NOT_ASSESSED"
 )
+
+// IsEvidenceSupported returns true if the status represents an evidence-supported or observed attack path.
+func (ps PathStatus) IsEvidenceSupported() bool {
+	return ps == PathEvidenceSupported || ps == PathObserved
+}
 
 // RuleCode identifies standard Felix Stage 10 correlation rules.
 type RuleCode string
@@ -333,12 +339,14 @@ type Summary struct {
 	VerifiedPaths            int                         `json:"verified_paths"`
 	InconclusivePaths        int                         `json:"inconclusive_paths"`
 	ObservedPaths            int                         `json:"observed_paths"`
+	EvidenceSupportedPaths   int                         `json:"evidence_supported_paths,omitempty"`
 	HighestRiskLevel         string                      `json:"highest_risk_level"`
 	HighestRiskScore         int                         `json:"highest_risk_score"`
 	AffectedAssets           []string                    `json:"affected_assets"`
 	AssetAssociations        []AssetAssociation          `json:"asset_associations,omitempty"`
 	Relationships            []Relationship              `json:"relationships,omitempty"`
 	KeyRemediationPriorities []string                    `json:"key_remediation_priorities"`
+	BottleneckAnalysis       *BottleneckAnalysisResult   `json:"bottleneck_analysis,omitempty"`
 	LimitsReached            bool                        `json:"limits_reached,omitempty"`
 	TruncationReason         string                      `json:"truncation_reason,omitempty"`
 	SyntheticFixture         bool                        `json:"synthetic_fixture,omitempty"`
@@ -349,6 +357,7 @@ type Summary struct {
 type Config struct {
 	MaxPathDepth       int
 	MaxCandidatePaths  int
+	MinPathLength      int
 	MinConfidence      string
 	RulesEnabled       []RuleCode
 	AllowSynthetic     bool
@@ -359,6 +368,7 @@ func DefaultConfig() Config {
 	return Config{
 		MaxPathDepth:      4,
 		MaxCandidatePaths: 30,
+		MinPathLength:     2,
 		MinConfidence:     report.ConfidenceLow,
 		RulesEnabled: []RuleCode{
 			RuleCOR01, RuleCOR02, RuleCOR03, RuleCOR04, RuleCOR05,

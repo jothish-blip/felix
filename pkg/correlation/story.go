@@ -71,9 +71,17 @@ func GenerateSecurityStory(path *AttackPath) report.SecurityStory {
 			if !strings.Contains(storyTitle, "(Inconclusive)") {
 				storyTitle = fmt.Sprintf("Potential Attack Path: %s (Inconclusive)", storyTitle)
 			}
-		} else {
+		} else if path.Status == PathCandidate {
 			if !strings.Contains(storyTitle, "(Candidate)") {
 				storyTitle = fmt.Sprintf("Potential Attack Path: %s (Candidate)", storyTitle)
+			}
+		} else if path.Status == PathEvidenceSupported {
+			if !strings.Contains(storyTitle, "(Evidence-Supported)") {
+				storyTitle = fmt.Sprintf("Attack Path: %s (Evidence-Supported)", storyTitle)
+			}
+		} else {
+			if !strings.Contains(storyTitle, "(Observed)") {
+				storyTitle = fmt.Sprintf("Attack Path: %s (Observed)", storyTitle)
 			}
 		}
 	}
@@ -139,4 +147,14 @@ func deriveBottleneckRemediation(path *AttackPath) (string, string) {
 	}
 	return fmt.Sprintf("Investigate root cause at entry point %s.", fallbackEP),
 		fmt.Sprintf("Implement defensive controls at %s to break the attack sequence.", fallbackEP)
+}
+
+// DeriveMultiPathBottleneck evaluates a set of attack paths and returns the highest-leverage
+// remediation candidate that disrupts the greatest number of verified attack chains.
+func DeriveMultiPathBottleneck(paths []AttackPath, findings []NormalizedFinding) *RemediationCandidate {
+	res := AnalyzeRemediationBottlenecks(paths, findings, nil)
+	if res == nil {
+		return nil
+	}
+	return res.PrimaryRecommendation
 }

@@ -903,22 +903,67 @@ func GenerateGpgSigner(name, comment, email string) (*openpgp.Entity, error) {
 	return openpgp.NewEntity(name, comment, email, cfg)
 }
 
-// LoadOrCreateGpgSigner loads a persistent OpenPGP signing key or generates one if missing.
-// It searches in order:
-// 1. Environment variable FELIX_APT_SIGNING_KEY (armored private key string)
-// 2. File keysDir/apt-signing-key.priv.asc
-// 3. Generates a new 4096-bit RSA key, writing private and public keys to keysDir.
-func LoadOrCreateGpgSigner(keysDir, name, comment, email string) (*openpgp.Entity, error) {
-	if envKey := strings.TrimSpace(os.Getenv("FELIX_APT_SIGNING_KEY")); envKey != "" {
-		return LoadGpgEntityFromArmored([]byte(envKey))
-	}
+// CompromisedAptKeyFingerprint is the hexadecimal fingerprint of the permanently compromised
+// Debian APT repository signing key committed in commit f8f2f59d90fb3d02a4664c357e87f7528d3677ab.
+// This key must be strictly rejected from any production signing workflow.
+const CompromisedAptKeyFingerprint = "8ABF68D0253A139577CA06E7154B088FE357A53D"
 
-	privPath := filepath.Join(keysDir, "apt-signing-key.priv.asc")
+// IsCompromisedKey returns true if the entity matches the known compromised key fingerprint.
+func IsCompromisedKey(entity *openpgp.Entity) bool {
+	if entity == nil || entity.PrimaryKey == nil {
+		return false
+	}
+	return strings.EqualFold(fmt.Sprintf("%X", entity.PrimaryKey.Fingerprint), CompromisedAptKeyFingerprint)
+}
+
+// LoadProductionGpgSigner loads the GPG signing entity strictly from the FELIX_APT_SIGNING_KEY
+// environment variable. It fails closed if the secret is absent, empty, malformed, or matches
+// the known compromised key fingerprint.
+func LoadProductionGpgSigner() (*openpgp.Entity, error) {
+	envKey := strings.TrimSpace(os.Getenv("FELIX_APT_SIGNING_KEY"))
+	if envKey == "" {
+		return nil, fmt.Errorf("FELIX_APT_SIGNING_KEY is required for production release packaging (fail closed)")
+	}
+	entity, err := LoadGpgEntityFromArmored([]byte(envKey))
+	if err != nil {
+		return nil, fmt.Errorf("decoding FELIX_APT_SIGNING_KEY: %w", err)
+	}
+	if IsCompromisedKey(entity) {
+		return nil, fmt.Errorf("security violation: FELIX_APT_SIGNING_KEY matches known compromised key fingerprint (%s)", CompromisedAptKeyFingerprint)
+	}
+	return entity, nil
+}
+
+// LoadTestFixtureGpgSigner loads an isolated test key fixture from disk or generates one if missing.
+// It is intended exclusively for non-production local development and regression testing.
+// It strictly rejects the known compromised key fingerprint under all circumstances.
+func LoadTestFixtureGpgSigner(keysDir, name, comment, email string) (*openpgp.Entity, error) {
+	privPath := filepath.Join(keysDir, "test-fixture-signing-key.priv.asc")
 	if data, err := os.ReadFile(privPath); err == nil && len(data) > 0 {
-		return LoadGpgEntityFromArmored(data)
+		entity, err := LoadGpgEntityFromArmored(data)
+		if err != nil {
+			return nil, err
+		}
+		if IsCompromisedKey(entity) {
+			return nil, fmt.Errorf("security violation: test fixture matches known permanently compromised key fingerprint (%s)", CompromisedAptKeyFingerprint)
+		}
+		return entity, nil
 	}
 
-	// Generate persistent key
+	// Also check fallback path if legacy fixture exists, but verify it is NOT compromised
+	legacyPath := filepath.Join(keysDir, "apt-signing-key.priv.asc")
+	if data, err := os.ReadFile(legacyPath); err == nil && len(data) > 0 {
+		entity, err := LoadGpgEntityFromArmored(data)
+		if err == nil {
+			if IsCompromisedKey(entity) {
+				// Immediately reject the compromised key
+				return nil, fmt.Errorf("security violation: signer matches known permanently compromised key fingerprint (%s)", CompromisedAptKeyFingerprint)
+			}
+			return entity, nil
+		}
+	}
+
+	// Generate isolated persistent test key
 	if err := os.MkdirAll(keysDir, 0755); err != nil {
 		return nil, fmt.Errorf("creating keys directory: %w", err)
 	}
@@ -927,7 +972,7 @@ func LoadOrCreateGpgSigner(keysDir, name, comment, email string) (*openpgp.Entit
 		DefaultHash:            crypto.SHA256,
 		DefaultCipher:          packet.CipherAES256,
 		DefaultCompressionAlgo: packet.CompressionZIP,
-		RSABits:                4096,
+		RSABits:                2048, // Fast generation for test fixtures
 	}
 
 	entity, err := openpgp.NewEntity(name, comment, email, cfg)
@@ -935,7 +980,7 @@ func LoadOrCreateGpgSigner(keysDir, name, comment, email string) (*openpgp.Entit
 		return nil, fmt.Errorf("generating GPG entity: %w", err)
 	}
 
-	// Save armored private key
+	// Save armored private test key
 	privFile, err := os.Create(privPath)
 	if err != nil {
 		return nil, fmt.Errorf("creating private key file: %w", err)
@@ -971,6 +1016,26 @@ func LoadOrCreateGpgSigner(keysDir, name, comment, email string) (*openpgp.Entit
 	}
 
 	return entity, nil
+}
+
+// LoadOrCreateGpgSigner loads a persistent OpenPGP signing key or generates one if missing.
+// In production or CI environments, it strictly enforces LoadProductionGpgSigner and fails closed.
+func LoadOrCreateGpgSigner(keysDir, name, comment, email string) (*openpgp.Entity, error) {
+	isProductionRelease := os.Getenv("FELIX_REQUIRE_PRODUCTION_SIGNING") == "true" || os.Getenv("GITHUB_ACTIONS") == "true"
+	if isProductionRelease {
+		return LoadProductionGpgSigner()
+	}
+	if envKey := strings.TrimSpace(os.Getenv("FELIX_APT_SIGNING_KEY")); envKey != "" {
+		return LoadProductionGpgSigner()
+	}
+	signer, err := LoadTestFixtureGpgSigner(keysDir, name, comment, email)
+	if err != nil {
+		return nil, err
+	}
+	if IsCompromisedKey(signer) {
+		return nil, fmt.Errorf("security violation: loaded signer matches known permanently compromised key fingerprint (%s)", CompromisedAptKeyFingerprint)
+	}
+	return signer, nil
 }
 
 // LoadGpgEntityFromArmored parses an armored OpenPGP private key into an Entity.

@@ -3,9 +3,22 @@
     Test script for Felix installation, execution, scan, and uninstallation lifecycle.
 #>
 
+param(
+    [string]$InstallDir = "",
+    [string]$Target = "https://example.com",
+    [switch]$SkipPathCheck,
+    [switch]$SkipScan
+)
+
 $ErrorActionPreference = "Stop"
 
-$InstallDir = Join-Path $env:LOCALAPPDATA "Felix\bin"
+if (-not $InstallDir) {
+    if ($env:FELIX_INSTALL_DIR) {
+        $InstallDir = $env:FELIX_INSTALL_DIR
+    } else {
+        $InstallDir = Join-Path $env:LOCALAPPDATA "Felix\bin"
+    }
+}
 $FelixExe = Join-Path $InstallDir "felix.exe"
 
 Write-Host "==========================================================="
@@ -28,26 +41,34 @@ Write-Host "`n[*] Running: felix doctor..."
 & $FelixExe doctor
 
 # 4. Verify felix scan works on live target and produces report
-Write-Host "`n[*] Running: felix scan https://example.com --export report.html..."
-$ReportPath = Join-Path (Get-Location) "report.html"
-if (Test-Path $ReportPath) { Remove-Item -Force $ReportPath }
+if (-not $SkipScan) {
+    Write-Host "`n[*] Running: felix scan $Target --export report.html..."
+    $ReportPath = Join-Path (Get-Location) "report.html"
+    if (Test-Path $ReportPath) { Remove-Item -Force $ReportPath }
 
-& $FelixExe scan https://example.com --export report.html
-if (-not (Test-Path $ReportPath)) {
-    Write-Error "Expected report.html was not created"
-    exit 1
+    & $FelixExe scan $Target --export report.html
+    if (-not (Test-Path $ReportPath)) {
+        Write-Error "Expected report.html was not created"
+        exit 1
+    }
+    $repSize = (Get-Item $ReportPath).Length
+    Write-Host "[OK] Scan completed and generated report.html ($repSize bytes)"
+    Remove-Item -Force $ReportPath
+} else {
+    Write-Host "`n[*] Skipping scan check (SkipScan is set)."
 }
-$repSize = (Get-Item $ReportPath).Length
-Write-Host "[OK] Scan completed and generated report.html ($repSize bytes)"
-Remove-Item -Force $ReportPath
 
 # 5. Verify User PATH entry
-$UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
-if ($UserPath -like "*$InstallDir*") {
-    Write-Host "[OK] User PATH contains $InstallDir"
+if ($SkipPathCheck) {
+    Write-Host "[i] Skipping User PATH check (SkipPathCheck is set)."
 } else {
-    Write-Error "User PATH does not contain $InstallDir"
-    exit 1
+    $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    if ($UserPath -like "*$InstallDir*") {
+        Write-Host "[OK] User PATH contains $InstallDir"
+    } else {
+        Write-Error "User PATH does not contain $InstallDir"
+        exit 1
+    }
 }
 
 Write-Host "`n==========================================================="

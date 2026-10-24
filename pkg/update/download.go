@@ -33,8 +33,10 @@ func NewDownloader(repo string) *Downloader {
 	if repo == "" {
 		repo = DefaultGitHubRepo
 	}
+	allowLoopback := os.Getenv("FELIX_UPDATE_ALLOW_LOCAL") == "true"
 	safeTransport := crawler.NewSafeTransport(crawler.SafeTransportOptions{
-		Timeout: DownloadTimeout,
+		Timeout:       DownloadTimeout,
+		AllowLoopback: allowLoopback,
 	})
 	return &Downloader{
 		AllowedRepo: repo,
@@ -45,12 +47,15 @@ func NewDownloader(repo string) *Downloader {
 				if len(via) >= 10 {
 					return fmt.Errorf("too many redirects during artifact download")
 				}
+				host := strings.ToLower(req.URL.Hostname())
+				if allowLoopback && (host == "127.0.0.1" || host == "localhost") {
+					return nil
+				}
 				// Verify redirect destination is HTTPS
 				if req.URL.Scheme != "https" {
 					return fmt.Errorf("insecure redirect to non-HTTPS URL: %s", req.URL.String())
 				}
 				// Verify redirect destination belongs to GitHub download infrastructure
-				host := strings.ToLower(req.URL.Hostname())
 				if host != "github.com" &&
 					host != "objects.githubusercontent.com" &&
 					host != "github-releases.githubusercontent.com" &&
@@ -71,11 +76,15 @@ func (d *Downloader) ValidateDownloadURL(rawURL string) error {
 		return fmt.Errorf("invalid download URL: %w", err)
 	}
 
+	host := strings.ToLower(u.Hostname())
+	if os.Getenv("FELIX_UPDATE_ALLOW_LOCAL") == "true" && (host == "127.0.0.1" || host == "localhost") {
+		return nil
+	}
+
 	if u.Scheme != "https" {
 		return fmt.Errorf("download URL must use HTTPS: %s", rawURL)
 	}
 
-	host := strings.ToLower(u.Hostname())
 	if host != "github.com" &&
 		host != "objects.githubusercontent.com" &&
 		host != "github-releases.githubusercontent.com" &&
@@ -141,6 +150,8 @@ func (d *Downloader) DownloadFile(ctx context.Context, downloadURL, destPath str
 }
 
 // ParseChecksums parses a SHA256SUMS file into a map of filename -> sha256 hex string.
+// It enforces safe manifest structure, rejecting truncated entries, path traversal,
+// duplicate entries, and ambiguous conflicting digests.
 func ParseChecksums(r io.Reader) (map[string]string, error) {
 	sums := make(map[string]string)
 	scanner := bufio.NewScanner(r)
@@ -152,11 +163,30 @@ func ParseChecksums(r io.Reader) (map[string]string, error) {
 		}
 
 		fields := strings.Fields(line)
-		if len(fields) >= 2 {
-			hash := strings.ToLower(fields[0])
-			fileName := strings.TrimPrefix(fields[1], "*")
-			sums[fileName] = hash
+		if len(fields) < 2 {
+			return nil, fmt.Errorf("malformed checksum line (missing filename): %q", line)
 		}
+
+		hash := strings.ToLower(fields[0])
+		rawFileName := strings.TrimPrefix(strings.Join(fields[1:], " "), "*")
+		fileName := strings.TrimSpace(rawFileName)
+
+		if fileName == "" {
+			return nil, fmt.Errorf("empty filename in checksum entry: %q", line)
+		}
+
+		if strings.ContainsAny(fileName, "/\\") || fileName == "." || fileName == ".." {
+			return nil, fmt.Errorf("security violation: manifest filename %q contains illegal path separators", fileName)
+		}
+
+		if existing, exists := sums[fileName]; exists {
+			if existing != hash {
+				return nil, fmt.Errorf("ambiguous checksum manifest: conflicting digests for file %q", fileName)
+			}
+			return nil, fmt.Errorf("duplicate checksum entry for file %q", fileName)
+		}
+
+		sums[fileName] = hash
 	}
 
 	if err := scanner.Err(); err != nil {

@@ -467,14 +467,69 @@ func TestIntegrity_ConstantTimeComparison(t *testing.T) {
 
 	mac := hmac.New(sha256.New, key.Material)
 	mac.Write(data)
-	validTag := hex.EncodeToString(mac.Sum(nil))
+	validTagBytes := mac.Sum(nil)
+	validTag := hex.EncodeToString(validTagBytes)
 
+	// 1. Valid tag passes verification
 	if !VerifyAuthenticityTag(data, key, validTag) {
 		t.Errorf("valid tag failed verification")
 	}
 
-	invalidTag := validTag[:len(validTag)-2] + "ff"
-	if VerifyAuthenticityTag(data, key, invalidTag) {
-		t.Errorf("invalid tag succeeded verification")
+	// 2. Trailing byte tamper (byte 31): identical for 31 bytes, differs only at the tail.
+	// Exercises full ConstantTimeCompare traversal without early hex/length rejection.
+	var invalidTagTail string
+	if strings.HasSuffix(validTag, "ff") {
+		invalidTagTail = validTag[:len(validTag)-2] + "00"
+	} else {
+		invalidTagTail = validTag[:len(validTag)-2] + "ff"
+	}
+	if invalidTagTail == validTag {
+		t.Fatalf("mathematical invariant violated: invalidTagTail equals validTag")
+	}
+	if VerifyAuthenticityTag(data, key, invalidTagTail) {
+		t.Errorf("trailing-byte tampered tag succeeded verification")
+	}
+
+	// 3. Leading byte tamper (byte 0): differs at the head
+	var invalidTagHead string
+	if strings.HasPrefix(validTag, "aa") {
+		invalidTagHead = "bb" + validTag[2:]
+	} else {
+		invalidTagHead = "aa" + validTag[2:]
+	}
+	if invalidTagHead == validTag {
+		t.Fatalf("mathematical invariant violated: invalidTagHead equals validTag")
+	}
+	if VerifyAuthenticityTag(data, key, invalidTagHead) {
+		t.Errorf("leading-byte tampered tag succeeded verification")
+	}
+
+	// 4. Middle byte tamper (byte 16): differs in the middle
+	midIdx := 32 // character offset for byte 16
+	var invalidTagMid string
+	if validTag[midIdx:midIdx+2] == "cc" {
+		invalidTagMid = validTag[:midIdx] + "dd" + validTag[midIdx+2:]
+	} else {
+		invalidTagMid = validTag[:midIdx] + "cc" + validTag[midIdx+2:]
+	}
+	if invalidTagMid == validTag {
+		t.Fatalf("mathematical invariant violated: invalidTagMid equals validTag")
+	}
+	if VerifyAuthenticityTag(data, key, invalidTagMid) {
+		t.Errorf("middle-byte tampered tag succeeded verification")
+	}
+
+	// 5. Malformed hex and length boundary rejection
+	if VerifyAuthenticityTag(data, key, validTag[:len(validTag)-1]) {
+		t.Errorf("odd-length hex string must not pass verification")
+	}
+	if VerifyAuthenticityTag(data, key, validTag[:len(validTag)-2]) {
+		t.Errorf("truncated 31-byte tag must not pass verification")
+	}
+	if VerifyAuthenticityTag(data, key, validTag+"00") {
+		t.Errorf("oversized 33-byte tag must not pass verification")
+	}
+	if VerifyAuthenticityTag(data, key, "not_valid_hex_string_at_all_0000000000000000000000000000000000000000") {
+		t.Errorf("non-hex string must not pass verification")
 	}
 }

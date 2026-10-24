@@ -49,4 +49,35 @@
 - 11.8 — Database integrity: DONE
 - 11.9 — Access controls: DONE
 
-**Phase 12 — Multi-Platform Packaging, Distribution Channels & Automated Release Signing — PLANNED**
+**Phase 12 — Packaging and Release — DONE**
+
+- P12.1 — Installation: Validate supported installation environments: DONE
+- P12.2 — Upgrade workflows: Test clean installation and upgrades: DONE
+- P12.3 — Mobile workflow: Test `felix scan app.apk --export mobile_audit.html`: DONE
+- P12.4 — Representative assessments: Test cloud, database and API assessment flows against authorized fixtures: DONE
+- P12.5 — Reporting: Verify report generation: DONE
+- P12.6 — Regression suite: Run required regression and integration tests: DONE
+- P12.7 — Release artifacts: Verify artifact integrity and checksums: DONE
+- P12.8 — Documentation: Finalize operator and user documentation: DONE
+- P12.9 — Supported coverage: Document supported technologies and limitations: DONE
+- P12.10 — Release decision: Resolve or explicitly accept release-blocking defects: DONE (Private Repository Milestone)
+
+---
+
+**Phase 13 — The Autonomous Exploit Chain Engine & Visual Attack Path Synthesizer — DONE**
+
+- P13.1 — Multi-Hop Attack Path Traversal (3+ Hops): DONE
+- P13.2 — Visual Attack Path Synthesizer (DAG → Interactive SVG/HTML): DONE
+- P13.3 — One-Click, Sanitized, Non-Destructive Proof-of-Exploit Reproduction Script Engine: DONE
+- P13.4 — Compound Risk Escalation Engine (Multi-Step Compound Scoring): DONE
+- P13.5 — Autonomous Remediation Bottleneck Synthesizer (Minimum-Cut Engine): DONE
+
+---
+
+**Phase 14 — Autonomous Shadow API Discovery & Continuous Exploitability Validation — DONE**
+
+- P14.1 — Deep Client Bundle Deobfuscator & Route Extractor: DONE
+- P14.2 — Shadow vs. Documented API Topology Reconciliation: DONE
+- P14.3 — Zero-False-Positive Live Exploitability Prober: DONE
+- P14.4 — Declarative Multi-Tenant Scan Profile (felix.target.yml): DONE
+- P14.5 — Shadow Surface Temporal Drift & Instant Webhook Alerting: DONE

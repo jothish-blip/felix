@@ -8,7 +8,7 @@ echo "==========================================================="
 echo " FELIX :: CLI Installation (POSIX)"
 echo "==========================================================="
 
-INSTALL_DIR="${HOME}/.felix/bin"
+INSTALL_DIR="${FELIX_INSTALL_DIR:-${HOME}/.felix/bin}"
 mkdir -p "${INSTALL_DIR}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -44,7 +44,7 @@ if ! "${INSTALL_DIR}/felix" version >/dev/null 2>&1; then
 fi
 
 # PATH guidance
-if [[ ":$PATH:" != *":${INSTALL_DIR}:"* ]]; then
+if [ "${FELIX_NO_PATH_UPDATE:-false}" != "true" ] && [[ ":$PATH:" != *":${INSTALL_DIR}:"* ]]; then
     SHELL_PROFILE=""
     if [ -f "${HOME}/.zshrc" ]; then
         SHELL_PROFILE="${HOME}/.zshrc"

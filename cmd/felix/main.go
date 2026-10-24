@@ -29,6 +29,10 @@ func run(args []string) int {
 	switch cmd {
 	case "scan":
 		return runScan(subArgs)
+	case "target":
+		return runTarget(subArgs)
+	case "monitor":
+		return runMonitor(subArgs)
 	case "ci":
 		return runCI(subArgs)
 	case "apk":
@@ -60,6 +64,13 @@ func run(args []string) int {
 	case "doctor":
 		return runDoctor(subArgs)
 	case "version", "--version", "-V":
+		if os.Getenv("FELIX_TEST_FAIL_VERSION") == "true" {
+			if Release == "TestBuild" || strings.Contains(strings.ToLower(Release), "test") || GitCommit == "dev" {
+				fmt.Fprintln(os.Stderr, "[-] Simulated failure in version diagnostic (isolated test hook)")
+				return 2
+			}
+			fmt.Fprintln(os.Stderr, "[!] Warning: FELIX_TEST_FAIL_VERSION test hook is ignored in production release builds.")
+		}
 		return runVersion(subArgs)
 	case "install":
 		return runInstall(subArgs)
@@ -75,6 +86,10 @@ func run(args []string) int {
 			switch sub {
 			case "scan":
 				return runScan([]string{"--help"})
+			case "target":
+				return runTarget([]string{"--help"})
+			case "monitor":
+				return runMonitor([]string{"--help"})
 			case "ci":
 				return runCI([]string{"--help"})
 			case "apk":
@@ -105,6 +120,12 @@ func run(args []string) int {
 				return runUpdate([]string{"--help"})
 			case "completion":
 				return runCompletion([]string{"--help"})
+			case "install":
+				return runInstall([]string{"--help"})
+			case "uninstall":
+				return runUninstall([]string{"--help"})
+			case "version":
+				return runVersion([]string{"--help"})
 			default:
 				printRootHelp()
 				return clierror.ExitSuccess
@@ -133,6 +154,8 @@ func printRootHelp() {
 	fmt.Println("  felix <command> [arguments]")
 	fmt.Println("\nCommands:")
 	fmt.Println("  scan        Audit target web applications for security exposures")
+	fmt.Println("  target      Manage and validate declarative multi-tenant target profiles")
+	fmt.Println("  monitor     Temporal drift detection and instant webhook alerting for API surfaces")
 	fmt.Println("  ci          Execute automated security assessments for CI/CD pipelines")
 	fmt.Println("  apk         Validate, isolate, and audit Android APK packages (generates mobile_audit.html)")
 	fmt.Println("  report      Generate assessment reports from existing scan results (zero network)")

@@ -15,6 +15,7 @@ Felix is an evidence-first, non-destructive web security auditing platform writt
 ## Documentation Map
 
 - **[CLI Learning Guide (docs/cli/)](docs/cli/README.md)** — Comprehensive command-by-command learning, testing, and flag verification guide.
+- **[Capability & Validation Matrix](VALIDATION-MATRIX.md)** — Source-grounded inventory of supported technologies, test evidence, and platform statuses.
 - **[Architecture Guide](ARCHITECTURE.md)** — Deep dive into system components, data flow, concurrency, and pipeline design.
 - **[Operator Usage Guide](USAGE.md)** — CLI command reference, flag syntax, examples, shell completions, and configuration.
 - **[Detection & Verification Model](DETECTION-MODEL.md)** — The 5-stage evidence model, pattern registries, heuristic filters, and verification states.
@@ -87,7 +88,7 @@ Felix is engineered as a pure-Go application (`CGO_ENABLED=0`) with zero externa
 
 | Platform | Architecture | Compilation | Automated CI Tests | Native Runtime Verification |
 | :--- | :--- | :---: | :---: | :---: |
-| **Windows** | x86_64 (`amd64`) | **Verified** | **Verified** (22 suites passing) | **Verified** (Local testing & live targets) |
+| **Windows** | x86_64 (`amd64`) | **Verified** | **Verified** (37 packages passing) | **Verified** (Local testing & live targets) |
 | **Linux** | x86_64 (`amd64`) | **Verified** (ELF binary) | **Verified** (GitHub Actions `ubuntu-latest`) | **Pending Native Host Testing** |
 | **Linux** | ARM64 (`aarch64`) | **Verified** (ELF binary) | Cross-compiled | **Pending Native Host Testing** |
 | **macOS** | Apple Silicon (`arm64`)| **Verified** (Mach-O binary) | Cross-compiled | **Pending Native Host Testing** |
@@ -137,24 +138,34 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o bin
 
 ## Installation
 
-Felix is distributed through native package managers for Kali Linux/Debian and macOS, as well as standalone signed binaries for Windows and POSIX systems.
+Felix is distributed through native packages for Kali Linux/Debian and macOS, as well as standalone release archives for Windows and POSIX systems.
 
 For full distribution details, APT repository keys, and troubleshooting, see the **[Production Installation Guide (docs/INSTALLATION.md)](docs/INSTALLATION.md)**.
 
-### Kali Linux, Debian & Ubuntu (APT)
+### Kali Linux, Debian & Ubuntu (.deb Direct Install)
+
+> [!WARNING]
+> **APT Repository Security Advisory (Open Release Blocker for P12.10):**
+> External APT repository automated scripts are currently deferred pending production GPG key rotation and repository revocation. For safe, verified installation on Kali Linux, Debian, and Ubuntu, download the standalone `.deb` package directly from GitHub Releases and verify its cryptographic SHA-256 digest before installation:
 
 ```bash
-# Automated setup (installs repository signing key and source list):
-curl -fsSL https://jothish-blip.github.io/apt-repo/setup.sh | sudo bash
+# 1. Download official Debian package and checksum manifest
+curl -fsSLO https://github.com/jothish-blip/felix/releases/download/v2.0.0/felix_2.0.0_amd64.deb
+curl -fsSLO https://github.com/jothish-blip/felix/releases/download/v2.0.0/SHA256SUMS
 
-# Install Felix
-sudo apt update
-sudo apt install felix
+# 2. Verify SHA-256 cryptographic digest
+sha256sum --check --ignore-missing SHA256SUMS
 
-# Verify installation
-felix --version
+# 3. Install package
+sudo dpkg -i felix_2.0.0_amd64.deb
+
+# 4. Verify installation
+felix version
 felix doctor
 ```
+
+> [!NOTE]
+> **Transport Integrity vs. Authentication:** Verifying against `SHA256SUMS` guarantees transport integrity (detecting incomplete downloads or corrupted archives). However, because `SHA256SUMS` is retrieved from the same distribution release as the binary, it does not provide independent origin authentication. Independent GPG signing key rotation and trust migration remain an open release blocker for Phase 12.10.
 
 ### macOS (Homebrew Tap)
 
@@ -270,7 +281,7 @@ felix scan https://example.com
 ```
 
 ### 2. Export HTML Assessment Report
-Export an offline HTML report:
+Generate a single-file, self-contained HTML assessment report:
 ```bash
 felix scan https://example.com --export report.html
 ```
@@ -280,18 +291,20 @@ Export structured JSON results for pipeline integration:
 ```bash
 felix scan https://example.com --json scan-result.json
 ```
-Generate a single-file, self-contained HTML assessment report:
+
+### 4. Android APK Static Assessment
+Statically audit Android application packages (`.apk`) for hardcoded credentials, unpinned trust managers, and dangerous permissions:
 ```bash
-felix scan https://example.com --export report.html
+felix scan app.apk --export mobile_audit.html
 ```
 
-### 3. Generate Reusable JSON Scan Result
-Save the machine-readable scan result without rescanning:
+### 5. API Security & Specification Reconciliation
+Reconcile an OpenAPI/Swagger definition against live endpoints and probe with safe non-destructive checks:
 ```bash
-felix scan https://example.com --json scan-result.json
+felix scan https://api.example.com --spec openapi.json --probe-live
 ```
 
-### 4. Zero-Network Offline Reporting
+### 6. Zero-Network Offline Reporting
 Generate an HTML report from a previously saved JSON scan result with **zero network activity**:
 ```bash
 felix report scan-result.json --html offline-report.html
@@ -416,10 +429,17 @@ Top Priorities:
 
 | Subcommand | Purpose |
 | :--- | :--- |
-| `felix scan <target> [flags]` | Conduct an automated security audit against a target web application. |
-| `felix report <result.json> [flags]` | Generate HTML or JSON reports from saved results (**zero network requests**). |
+| `felix scan <target> [flags]` | Conduct an automated security audit against a target web application or APK. |
+| `felix apk <file.apk> [flags]` | Statically audit Android packages for manifest defects, exported components, and secrets. |
+| `felix report <result.json> [flags]` | Generate HTML, JSON, or SARIF reports from saved results (**zero network requests**). |
 | `felix client <subcommand> [flags]` | Manage clients and organizations for structured security auditing. |
 | `felix assessment <subcommand> [flags]` | Manage client-authorized security assessment projects, scopes, runs, and findings. |
+| `felix monitor <subcommand> [flags]` | Manage continuous endpoint monitoring, temporal diffs, and drift detection. |
+| `felix target <subcommand> [flags]` | Manage target inventory, technology tags, and scope boundaries. |
+| `felix compliance <subcommand> [flags]` | Map assessment findings to compliance standards (OWASP, NIST, PCI-DSS). |
+| `felix diff <run1> <run2> [flags]` | Compare two scan executions to detect temporal drift and regressions. |
+| `felix schedule <subcommand> [flags]` | Configure automated recurring scans and cron expressions. |
+| `felix ci [flags]` | Execute automated scan with CI/CD exit-code gates and SARIF export. |
 | `felix operator [options]` | Launch the browser-based curation console on strict loopback (`127.0.0.1`). |
 | `felix config [subcommand]` | View and manage persistent defaults in `~/.felix/config.json`. |
 | `felix doctor [options]` | Validate binary integrity, Go runtime, network stack, and permissions. |

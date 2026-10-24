@@ -282,32 +282,95 @@ func TestOpenPGPMPIComplianceRFC4880(t *testing.T) {
 }
 
 func TestLoadPersistentGpgSigner(t *testing.T) {
-	keysDir := filepath.Join("keys")
-	if _, err := os.Stat(filepath.Join(keysDir, "apt-signing-key.priv.asc")); os.IsNotExist(err) {
-		t.Skip("persistent keys directory not found relative to test runner")
-	}
+	tempKeysDir := t.TempDir()
 
-	signer, err := LoadOrCreateGpgSigner(keysDir, "Felix Security Auditor", "Official APT Repository Key", "jothishgandham2@gmail.com")
+	signer, err := LoadOrCreateGpgSigner(tempKeysDir, "Felix Test Signer", "Isolated Test Fixture", "test-fixture@felix.local")
 	if err != nil {
 		t.Fatalf("LoadOrCreateGpgSigner failed: %v", err)
 	}
 
-	expectedFP := "8ABF68D0253A139577CA06E7154B088FE357A53D"
+	if signer == nil || signer.PrimaryKey == nil {
+		t.Fatalf("expected non-nil signer entity with PrimaryKey")
+	}
+
 	actualFP := fmt.Sprintf("%X", signer.PrimaryKey.Fingerprint)
-	if actualFP != expectedFP {
-		t.Errorf("expected fingerprint %s, got %s", expectedFP, actualFP)
+	if actualFP == CompromisedAptKeyFingerprint {
+		t.Fatalf("CRITICAL SECURITY ERROR: generated/loaded test signer matches compromised fingerprint %s", CompromisedAptKeyFingerprint)
 	}
 
 	// Verify key identity
 	foundIdentity := false
 	for _, id := range signer.Identities {
-		if strings.Contains(id.Name, "Felix Security Auditor") {
+		if strings.Contains(id.Name, "Felix Test Signer") {
 			foundIdentity = true
 			break
 		}
 	}
 	if !foundIdentity {
-		t.Errorf("expected identity 'Felix Security Auditor' in loaded key")
+		t.Errorf("expected identity 'Felix Test Signer' in loaded key")
+	}
+
+	// Verify idempotency: second call loads the same persisted test fixture
+	signer2, err := LoadOrCreateGpgSigner(tempKeysDir, "Felix Test Signer", "Isolated Test Fixture", "test-fixture@felix.local")
+	if err != nil {
+		t.Fatalf("second LoadOrCreateGpgSigner failed: %v", err)
+	}
+	actualFP2 := fmt.Sprintf("%X", signer2.PrimaryKey.Fingerprint)
+	if actualFP2 != actualFP {
+		t.Errorf("expected idempotent fingerprint %s, got %s", actualFP, actualFP2)
+	}
+}
+
+func TestCompromisedKeyRejection(t *testing.T) {
+	keysDir := filepath.Join("keys")
+	privPath := filepath.Join(keysDir, "apt-signing-key.priv.asc")
+	if _, err := os.Stat(privPath); os.IsNotExist(err) {
+		t.Skip("persistent keys directory not found relative to test runner")
+	}
+
+	data, err := os.ReadFile(privPath)
+	if err != nil {
+		t.Fatalf("failed to read key fixture: %v", err)
+	}
+
+	entity, err := LoadGpgEntityFromArmored(data)
+	if err != nil {
+		t.Fatalf("LoadGpgEntityFromArmored failed: %v", err)
+	}
+
+	if !IsCompromisedKey(entity) {
+		t.Errorf("expected IsCompromisedKey to return true for compromised key %s", entity.PrimaryKey.KeyIdString())
+	}
+
+	// Test 1: Production loader fails if FELIX_APT_SIGNING_KEY is absent
+	t.Setenv("FELIX_APT_SIGNING_KEY", "")
+	if _, err := LoadProductionGpgSigner(); err == nil {
+		t.Errorf("expected LoadProductionGpgSigner to fail when env var is empty")
+	}
+
+	// Test 2: Production loader strictly rejects compromised key even if supplied in FELIX_APT_SIGNING_KEY
+	t.Setenv("FELIX_APT_SIGNING_KEY", string(data))
+	if _, err := LoadProductionGpgSigner(); err == nil {
+		t.Errorf("expected LoadProductionGpgSigner to reject compromised key, but it succeeded!")
+	} else if !strings.Contains(err.Error(), "security violation: FELIX_APT_SIGNING_KEY matches known compromised key") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+
+	// Test 3: LoadOrCreateGpgSigner fails closed in production mode when compromised key or missing key
+	t.Setenv("FELIX_REQUIRE_PRODUCTION_SIGNING", "true")
+	t.Setenv("FELIX_APT_SIGNING_KEY", "")
+	if _, err := LoadOrCreateGpgSigner(keysDir, "Name", "Comment", "email@example.com"); err == nil {
+		t.Errorf("expected LoadOrCreateGpgSigner to fail closed in production mode when secret is missing")
+	}
+
+	// Test 4: LoadTestFixtureGpgSigner strictly rejects legacy compromised key if present in keysDir
+	t.Setenv("FELIX_REQUIRE_PRODUCTION_SIGNING", "false")
+	t.Setenv("GITHUB_ACTIONS", "false")
+	t.Setenv("FELIX_APT_SIGNING_KEY", "")
+	if _, err := LoadTestFixtureGpgSigner(keysDir, "Name", "Comment", "email@example.com"); err == nil {
+		t.Errorf("expected LoadTestFixtureGpgSigner to reject compromised apt-signing-key.priv.asc, but it succeeded!")
+	} else if !strings.Contains(err.Error(), "security violation") {
+		t.Errorf("expected security violation error, got: %v", err)
 	}
 }
 

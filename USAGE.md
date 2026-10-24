@@ -16,13 +16,31 @@ Download the pre-compiled archive for your platform from the [GitHub Releases](h
 
 ### Package Manager Installation
 
-#### Kali Linux, Debian & Ubuntu (APT)
+#### Kali Linux, Debian & Ubuntu (.deb Direct Install)
+
+> [!WARNING]
+> **APT Repository Security Notice (Open Release Blocker for P12.10):**
+> External APT repository distribution is currently paused pending production key rotation and revocation following an exposed signing key.
+> For secure installation on Kali Linux, Debian, and Ubuntu, download the official `.deb` package directly from GitHub Releases and verify its cryptographic SHA-256 digest:
+
 ```bash
-sudo install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://jothish-blip.github.io/apt-repo/felix-archive-keyring.gpg | sudo tee /etc/apt/keyrings/felix-archive-keyring.gpg > /dev/null
-echo "deb [signed-by=/etc/apt/keyrings/felix-archive-keyring.gpg] https://jothish-blip.github.io/apt-repo stable main" | sudo tee /etc/apt/sources.list.d/felix.list > /dev/null
-sudo apt update && sudo apt install felix
+# 1. Download official Debian package and manifest
+curl -fsSLO https://github.com/jothish-blip/felix/releases/download/v2.0.0/felix_2.0.0_amd64.deb
+curl -fsSLO https://github.com/jothish-blip/felix/releases/download/v2.0.0/SHA256SUMS
+
+# 2. Verify SHA-256 cryptographic digest
+sha256sum --check --ignore-missing SHA256SUMS
+
+# 3. Install package
+sudo dpkg -i felix_2.0.0_amd64.deb
+
+# 4. Verify installation
+felix version
+felix doctor
 ```
+
+> [!NOTE]
+> **Transport Integrity vs. Authentication:** Verifying against `SHA256SUMS` guarantees transport integrity (detecting incomplete downloads or corrupted archives). However, because `SHA256SUMS` is retrieved from the same distribution release as the binary, it does not provide independent origin authentication. Independent GPG signing key rotation and trust migration remain an open release blocker for Phase 12.10.
 
 #### macOS (Homebrew Tap)
 ```bash
@@ -64,7 +82,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\uninstall-dev-trust.ps1
 ```
 
 ##### Path B: Public Production Distribution (Official Releases)
-1. Download `felix_1.0.0_windows_amd64.zip` from [GitHub Releases](https://github.com/jothish-blip/felix/releases).
+1. Download `felix_2.0.0_windows_amd64.zip` from [GitHub Releases](https://github.com/jothish-blip/felix/releases/tag/v2.0.0).
 2. Extract the archive.
 3. Run the automated installer:
    ```powershell
@@ -80,7 +98,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\uninstall-dev-trust.ps1
 #### Linux Installation
 1. Download and extract the archive for your architecture:
    ```bash
-   tar -xzf felix_1.0.0_linux_amd64.tar.gz
+   tar -xzf felix_2.0.0_linux_amd64.tar.gz
    ```
 2. Move the binary into your user bin directory:
    ```bash
@@ -101,10 +119,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\uninstall-dev-trust.ps1
 1. Download and extract the archive:
    ```bash
    # For Apple Silicon (M1/M2/M3/M4):
-   tar -xzf felix_1.0.0_darwin_arm64.tar.gz
+   tar -xzf felix_2.0.0_darwin_arm64.tar.gz
 
    # For Intel:
-   tar -xzf felix_1.0.0_darwin_amd64.tar.gz
+   tar -xzf felix_2.0.0_darwin_amd64.tar.gz
    ```
 2. Move binary into user bin directory:
    ```bash
@@ -290,6 +308,112 @@ Commercial Report 2.0 organizes audit data into eight canonical sections designe
 
 > [!NOTE]
 > **Explicit Remediation Omission:** Commercial Report 2.0 strictly excludes remediation instructions, fix recommendations, and automated code/configuration advice. These capabilities are reserved for Stage 13 Remediation Intelligence 3.0. Findings describe demonstrated vs plausible vs unverified impact without prescribing remediation.
+
+---
+
+## Mobile & Android APK Static Assessment
+
+Felix includes a dedicated mobile assessment pipeline for Android applications (`pkg/apk`), enabling static vulnerability discovery, manifest security analysis, DEX bytecode analysis, and standalone HTML audit reporting.
+
+### 1. Primary APK Scan Workflow (`felix scan <file.apk>`)
+You can scan an APK directly using the unified `felix scan` entrypoint:
+```bash
+# Analyze APK and export self-contained mobile audit HTML report
+felix scan target_app.apk --export mobile_audit.html
+
+# Analyze APK and export structured machine-readable JSON
+felix scan target_app.apk --json mobile_audit.json
+```
+
+### 2. Dedicated APK Subcommand (`felix apk`)
+For granular mobile analysis controls:
+```bash
+# Full static analysis with HTML report export
+felix apk target_app.apk --analyze-manifest --analyze-artifacts --export mobile_audit.html
+
+# Structural intake and validation only (checks ZIP integrity and size boundaries)
+felix apk target_app.apk --dry-run
+
+# Extract discovered backend API inventory and endpoints
+felix apk target_app.apk --build-inventory --json
+```
+
+### 3. Static Security Checks Performed
+- **Binary Manifest Parsing:** Safely decodes compiled Android Binary XML (`AndroidManifest.xml`) without external Java/Apktool dependencies.
+- **Component Exposure:** Flags exported Activities, Broadcast Receivers, Content Providers, and Services (`android:exported="true"`) missing required custom signature permissions.
+- **Transport Security:** Detects cleartext network traffic allowances (`android:usesCleartextTraffic="true"`).
+- **Debug & Backup Controls:** Flags `android:debuggable="true"` and `android:allowBackup="true"`.
+- **DEX Bytecode & Hardcoded Secrets:** Scans `classes.dex` for hardcoded cloud credentials, API tokens, and Firebase/Supabase connection strings.
+- **Deep Link & URI Scheme Hijacking:** Evaluates custom scheme intent filters for parameter injection risks.
+
+> [!NOTE]
+> **Static Analysis Boundary:** The mobile audit workflow is strictly non-destructive static analysis. Felix does not execute apps in an Android emulator or attach runtime instrumentation (no Frida or Xposed).
+
+---
+
+## Modern API Security & Specification Reconciliation
+
+Felix audits REST and GraphQL APIs through static schema analysis, route reconciliation, and safe, bounded live probing.
+
+### 1. Spec-Reconciled API Audit (`--spec`)
+Reconcile an existing OpenAPI 3.0 or Swagger 2.0 specification against live endpoints:
+```bash
+# Reconcile API specification and probe live endpoints safely
+felix scan https://api.example.com --spec openapi.yaml --probe-live --export api_audit.html
+```
+
+### 2. Capabilities & Operational Guarantees
+- **Shadow Route Detection:** Discovers active API endpoints present in client JavaScript bundles that are omitted from the official API specification.
+- **Orphan Route Identification:** Catalogs documented specification routes that return 404 or fail to resolve on the live server.
+- **Safe Read-Only Probing:** In `--probe-live` mode, Felix transmits only safe `GET` and `HEAD` probes with non-destructive, synthetic parameter values.
+- **Sensitive Parameter Redaction:** Parameters matching sensitive patterns (`ssn`, `password`, `token`, `secret`, `api_key`) are flagged and masked in all evidence fields.
+- **Authentication Gate Reasoning:** Analyzes HTTP status codes (200, 401, 403, 308) to classify endpoints as authenticated, publicly exposed, or defended.
+
+---
+
+## Cloud & Database Security Assessment
+
+Felix automatically audits discovered cloud backend services and database management interfaces during web assessments (`pkg/cloud`), verifying public exposure without invasive data modification.
+
+### Supported Cloud & Database Services
+- **Supabase:** Checks for publicly exposed REST endpoints (`/rest/v1/`) with disabled Row-Level Security (RLS).
+- **Firebase Realtime Database:** Evaluates whether `/.json` permits unauthorized anonymous reading.
+- **Object Storage Buckets:** Evaluates public listing and anonymous access on AWS S3, Google Cloud Storage, and Azure Blob Storage.
+- **Database Interfaces:** Checks for exposed Elasticsearch (`/_cluster/health`), Mongo Express (`/db`), PostgREST, Hasura GraphQL, and Prisma ORM debug interfaces.
+
+> [!IMPORTANT]
+> **Negative Evidence & Boundary Proofs:** When a cloud bucket or database returns HTTP 401 Unauthorized or 403 Forbidden, Felix records a verified `NOT_EXPOSED` boundary proof rather than leaving the check inconclusive.
+
+---
+
+## API Surface Monitoring & Temporal Drift Detection (`felix monitor`)
+
+Felix provides automated monitoring to detect API surface drift, newly exposed endpoints, and security regressions across repeated audit runs using declarative target profiles (`felix.target.yml`).
+
+### 1. Capture Initial Baseline Snapshot (`felix monitor snapshot`)
+```bash
+# Capture and establish the baseline snapshot
+felix monitor snapshot --profile felix.target.yml
+
+# Output baseline capture details in structured JSON
+felix monitor snapshot --profile felix.target.yml --json
+```
+
+### 2. Execute Drift Comparison (`felix monitor diff`)
+```bash
+# Compare current surface against established baseline to detect temporal drift
+felix monitor diff --profile felix.target.yml
+
+# Output structured drift comparison JSON
+felix monitor diff --profile felix.target.yml --json
+
+# Compare and trigger configured webhook alerts on drift events
+felix monitor diff --profile felix.target.yml --notify
+```
+*(Note: `felix monitor check` is supported as an alias for `felix monitor diff`).*
+
+### 3. Alert Webhook Delivery
+When drift or regressions exceed configured thresholds, Felix automatically delivers HMAC-SHA256 signed JSON payloads to your configured webhook endpoints, including timestamp replay protection (`FELIX_NOTIFY_SIG_TOLERANCE`).
 
 ---
 
@@ -677,12 +801,12 @@ felix update --check
 
 Example output:
 ```text
-[*] Checking for updates (current version: 1.0.0)...
-Current version: 1.0.0
-Latest version:  1.0.1
+[*] Checking for updates (current version: 2.0.0)...
+Current version: 2.0.0
+Latest version:  2.0.1
 
 Update available. Run 'felix update' to upgrade.
-Release details: https://github.com/jothish-blip/felix/releases/tag/v1.0.1
+Release details: https://github.com/jothish-blip/felix/releases/tag/v2.0.1
 ```
 
 ### 2. Perform Verified Self-Update (`felix update`)
@@ -693,18 +817,18 @@ felix update
 
 Example output:
 ```text
-[*] Starting Felix secure update (current: v1.0.0)...
+[*] Starting Felix secure update (current: v2.0.0)...
  [CHECK   ] Querying official release channels...
  [RESOLVE ] Resolving platform distribution for windows/amd64...
  [CHECKSUM] Downloading SHA256SUMS verification manifest...
- [DOWNLOAD] Downloading felix_1.0.1_windows_amd64.zip (3.91 MB)...
+ [DOWNLOAD] Downloading felix_2.0.1_windows_amd64.zip (7.67 MB)...
  [VERIFY  ] Verifying SHA256 cryptographic digest...
  [EXTRACT ] Extracting verified release package...
  [STAGE   ] Validating extracted binary integrity...
  [INSTALL ] Applying atomic self-replacement...
- [DONE    ] Successfully updated Felix to v1.0.1
+ [DONE    ] Successfully updated Felix to v2.0.1
 
-[+] Felix successfully updated to v1.0.1 (windows/amd64)
+[+] Felix successfully updated to v2.0.1 (windows/amd64)
 Run 'felix doctor' to verify system runtime readiness.
 ```
 
@@ -713,15 +837,18 @@ Run 'felix doctor' to verify system runtime readiness.
 | Option | Argument Syntax | Purpose |
 | :--- | :--- | :--- |
 | **`--check`**, `-c` | *boolean flag* | Check for updates only; does not download archive or replace binary. |
-| **`--version`**, `-v` | `<version>` (`1.0.1`) | Update or reinstall a specific release version. |
+| **`--version`** | `<version>` (`1.0.1`) | Update or reinstall a specific release version. |
 | **`--force`**, `-f` | *boolean flag* | Force reinstallation even if already on the target version or downgrading. |
 | **`--dry-run`** | *boolean flag* | Download and verify release archive without replacing the running executable. |
+| **`--keyring`** | `<path>` | Path to trusted OpenPGP public keyring file for manifest signature verification. |
+| **`--expected-key`** | `<fingerprint>` | Expected OpenPGP signer fingerprint (enforces exact key match). |
 | **`--repo`** | `<owner/repo>` | Override update source repository [default: `jothish-blip/felix`]. |
 
 ### 4. Integrity Verification & Atomic Rollback
 Felix protects your installation through strict defensive controls:
 - **HTTPS Only:** Updates are downloaded exclusively over TLS 1.2+ from official GitHub release infrastructure (`github.com/jothish-blip/felix` or verified GitHub CDN endpoints).
-- **Cryptographic Hashing:** The archive is hashed and compared against the authoritative `SHA256SUMS` manifest before any files are unpacked.
+- **Detached OpenPGP Signature Verification:** The `SHA256SUMS` manifest is verified against its detached OpenPGP signature (`SHA256SUMS.asc`) using trusted public keys (`--keyring` or `FELIX_UPDATE_KEYRING`). Missing signatures, invalid signatures, unknown signers, or known compromised keys fail closed immediately before any files are unpacked.
+- **Cryptographic Hashing:** The archive is hashed and compared against the verified `SHA256SUMS` manifest before any files are unpacked.
 - **ZipSlip Defense:** Archive extraction enforces destination sandboxing; any archive entry with `..`, absolute paths, or escaping prefixes is immediately rejected.
 - **Pre-Install Execution Probe:** The extracted binary is tested in a temporary sandbox (`version` execution check) before replacing the active binary.
 - **Atomic Replacement & Rollback:** On Windows, the running `.exe` is renamed to `.old` and the verified binary is copied into place. If the replacement or post-install verification fails, the original binary is automatically restored from backup.
@@ -733,10 +860,36 @@ Felix protects your installation through strict defensive controls:
 
 Felix stores persistent defaults in `~/.felix/config.json`. These settings are applied automatically to scans unless overridden by explicit CLI flags.
 
-### CLI Flag Precedence
+### Configuration Precedence & Environment Variables
+
+Felix resolves configuration settings deterministically using a 4-tier hierarchy:
+
 ```text
-CLI Flags > ~/.felix/config.json > Built-in Defaults
+1. Explicit CLI Flags              (Highest priority — overrides all below)
+2. Environment Variables (FELIX_*)  (Runtime process environment injection)
+3. Configuration File              (~/.felix/config.json or $FELIX_CONFIG)
+4. Built-in Defaults               (Hardcoded defensive operational defaults)
 ```
+
+#### Supported Environment Variables
+
+| Environment Variable | Equivalent Flag / Key | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `FELIX_CONFIG` | — | `~/.felix/config.json` | Custom configuration file path. |
+| `FELIX_DIR` | — | `~/.felix` | Custom configuration base directory. |
+| `FELIX_TIMEOUT` | `--timeout`, `-t` | `10` | Request timeout in seconds (1..3600). |
+| `FELIX_CONCURRENCY` | `--concurrency`, `-c` | `10` | Maximum concurrent worker goroutines (1..1000). |
+| `FELIX_SCOPE` | `--scope` | `same-origin` | Crawl boundary mode (`same-origin`, `subdomains`, `explicit`). |
+| `FELIX_MAX_SIZE_MB` | `--max-response-size` | `10` | Maximum asset response size cap in MB (1..1024). |
+| `FELIX_MAX_ASSETS` | `--max-assets` | `200` | Maximum assets discovered or crawled (1..10000). |
+| `FELIX_MAX_DEPTH` | Config only | `3` | Maximum crawl link recursion depth (1..20). |
+| `FELIX_MAX_REDIRECTS` | Config only | `5` | Maximum HTTP redirects followed before halting (0..20). |
+| `FELIX_USER_AGENT` | `--user-agent` | Built-in | Custom HTTP User-Agent string. |
+| `FELIX_INSECURE_SKIP_VERIFY` | `--insecure`, `--insecure-skip-verify` | `false` | Skip TLS certificate verification (`true`/`false`). |
+| `FELIX_ALLOW_PRIVATE_IPS` | `--allow-private` | `false` | Permit connections to RFC 1918 private subnets (`true`/`false`). |
+| `FELIX_ALLOW_LOOPBACK` | `--allow-loopback` | `false` | Permit connections to loopback/127.0.0.1 (`true`/`false`). |
+| `FELIX_ACTIVE_VERIFICATION` | `--active`, `--active-verification` | `false` | Permit active verification probes (`true`/`false`). |
+| `FELIX_POLICY_PATH` | `--policy` | — | Path to security threshold policy file (JSON/YAML). |
 
 ### View Configuration (`felix config show`)
 ```bash

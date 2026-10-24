@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"felix/pkg/update"
+
+	"github.com/ProtonMail/go-crypto/openpgp"
 )
 
 func runUpdate(args []string) int {
@@ -17,6 +19,8 @@ func runUpdate(args []string) int {
 		dryRun        bool
 		targetVersion string
 		repo          string
+		keyringPath   string
+		expectedKey   string
 	)
 
 	for i := 0; i < len(args); i++ {
@@ -49,6 +53,26 @@ func runUpdate(args []string) int {
 			repo = args[i]
 		case strings.HasPrefix(arg, "--repo="):
 			repo = strings.TrimPrefix(arg, "--repo=")
+		case arg == "--keyring":
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				fmt.Fprintf(os.Stderr, "[-] error: --keyring requires a path argument\n")
+				return 2
+			}
+			i++
+			keyringPath = args[i]
+		case strings.HasPrefix(arg, "--keyring="):
+			keyringPath = strings.TrimPrefix(arg, "--keyring=")
+		case arg == "--expected-key" || arg == "--expected-fingerprint":
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				fmt.Fprintf(os.Stderr, "[-] error: %s requires a key fingerprint argument\n", arg)
+				return 2
+			}
+			i++
+			expectedKey = args[i]
+		case strings.HasPrefix(arg, "--expected-key="):
+			expectedKey = strings.TrimPrefix(arg, "--expected-key=")
+		case strings.HasPrefix(arg, "--expected-fingerprint="):
+			expectedKey = strings.TrimPrefix(arg, "--expected-fingerprint=")
 		default:
 			fmt.Fprintf(os.Stderr, "[-] error: unknown argument %q\n\n", arg)
 			printUpdateHelp()
@@ -87,10 +111,32 @@ func runUpdate(args []string) int {
 	// Mode 2: Interactive or automated update execution
 	fmt.Printf("[*] Starting Felix secure update (current: v%s)...\n", Version)
 
+	var trustedKeyRing openpgp.KeyRing
+	resolvedKeyringPath := keyringPath
+	if resolvedKeyringPath == "" {
+		resolvedKeyringPath = os.Getenv("FELIX_UPDATE_KEYRING")
+	}
+	if resolvedKeyringPath != "" {
+		kr, err := update.LoadKeyringFile(resolvedKeyringPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Security Error: Failed to load trusted keyring: %v\n", err)
+			return 2
+		}
+		trustedKeyRing = kr
+	}
+
+	resolvedExpectedKey := expectedKey
+	if resolvedExpectedKey == "" {
+		resolvedExpectedKey = os.Getenv("FELIX_UPDATE_EXPECTED_KEY")
+	}
+
 	opts := update.UpdateOptions{
-		TargetVersion: targetVersion,
-		Force:         force,
-		DryRun:        dryRun,
+		TargetVersion:          targetVersion,
+		Force:                  force,
+		DryRun:                 dryRun,
+		RequireSignature:       true, // Security standard: enforce cryptographic detached signature verification
+		TrustedKeyRing:         trustedKeyRing,
+		ExpectedKeyFingerprint: resolvedExpectedKey,
 		Progress: func(step, details string) {
 			fmt.Printf(" [%-8s] %s\n", step, details)
 		},
@@ -129,10 +175,13 @@ func printUpdateHelp() {
 	fmt.Println("  --version <version> Install a specific release version (e.g. 1.0.1)")
 	fmt.Println("  --force, -f         Force installation even if already on the target version or downgrading")
 	fmt.Println("  --dry-run           Download and verify the update package without replacing the executable")
+	fmt.Println("  --keyring <path>    Path to trusted OpenPGP public keyring file for signature verification")
+	fmt.Println("  --expected-key <fp> Expected OpenPGP signer fingerprint (enforces exact key match)")
 	fmt.Println("  --repo <owner/repo> Override the update source repository [default: jothish-blip/felix]")
 	fmt.Println("  --help, -h          Show this help message")
 	fmt.Println("\nExamples:")
 	fmt.Println("  felix update --check")
 	fmt.Println("  felix update")
 	fmt.Println("  felix update --version 1.0.1")
+	fmt.Println("  felix update --keyring /etc/felix/release-keyring.gpg")
 }

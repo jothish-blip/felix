@@ -106,6 +106,16 @@ Felix's update subsystem (`pkg/update`) protects against software supply-chain t
 - **Atomic Replacement & Automatic Rollback:** The active executable is backed up prior to replacement. If file copying or post-install verification fails, the original binary is immediately restored.
 - **No Background Telemetry:** Updates are evaluated exclusively on explicit user command (`felix update --check` or `felix update`). Felix does not execute background telemetry, analytics, or automated background processes.
 
+### Package Repository Signing Key Isolation & Release Blocker (P12.10)
+
+During security audits (Phase 12.7), an OpenPGP private key was identified within historical repository commits (`scripts/packaging/keys/apt-signing-key.priv.asc`).
+To maintain absolute supply-chain integrity:
+- **Repository Keys are Fixtures Only:** Any private key files in the repository tree are treated strictly as test fixtures and are permanently disabled for production artifact signing.
+- **CI Secret Isolation:** Production APT release signatures require dynamic injection of `FELIX_APT_SIGNING_KEY` exclusively from protected GitHub Actions repository secrets (`${{ secrets.FELIX_APT_SIGNING_KEY }}`).
+- **Archive Leakage Defense:** Release packaging pipelines are strictly verified to ensure distribution archives (`.zip`, `.tar.gz`, `.deb`) contain zero private key files (`.asc`, `.key`, `.priv`, `.pem`), continuously enforced by automated regression testing.
+- **Open Release Blocker (P12.10):** Detached RFC 4880 OpenPGP signing (`SHA256SUMS.asc`) and updater verification have been implemented and verified across 16 security scenarios. However, full production signing key rotation, subkey revocation, and APT repository re-initialization remain an open release blocker for Phase 12.10 pending repository owner key provisioning and Git history scrubbing.
+- **Operator Direction:** Operators on Debian/Ubuntu/Kali are advised to install standalone `.deb` packages verified directly via `SHA256SUMS` and detached OpenPGP signatures once rotated production keys are active.
+
 ---
 
 ## 8. Windows Code Signing & Trust Architecture
@@ -121,7 +131,7 @@ For local development, building, and testing without requiring cloud subscriptio
 - **No Security Bypasses:** Felix strictly rejects disabling Windows Defender, modifying execution policies, or hacking SmartScreen. Trust is established purely through standard Windows Authenticode mechanisms.
 
 ### Public Production Distribution Path
-- Public releases are authenticated cryptographically through SHA-256 manifests (`SHA256SUMS`) and machine-readable release metadata (`update.json`).
+- Public releases are verified for file and transport integrity through SHA-256 manifests (`SHA256SUMS`) and machine-readable release metadata (`update.json`). Standalone SHA-256 manifests do not provide independent origin authentication without detached OpenPGP signatures.
 - Future production signing is configured via Microsoft Azure Trusted Signing / Apple Developer ID.
 - Development certificates are never represented as commercial production authorities.
 

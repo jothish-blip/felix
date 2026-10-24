@@ -18,51 +18,53 @@ To maintain strict engineering transparency, FELIX tracks the verification state
 | **Windows (Native)** | `amd64` | **Verified** | **Verified** (`.zip`, `.exe`) | **Verified** (GitHub Release) | **Verified** (`felix install`) | **Verified** (Native host) |
 
 > [!NOTE]
-> **Runtime Verification Note**: Cross-compilation, Debian packaging, and Homebrew formula generation have been mathematically and cryptographically certified with matched SHA-256 digests. Dedicated host hardware validation for Kali and macOS is labeled *Host Pending* where remote bare-metal execution has not occurred.
+> **Runtime Verification Note**: Cross-compilation, Debian packaging, and Homebrew formula generation have been verified with matched SHA-256 digests. Dedicated host hardware validation for Kali and macOS is labeled *Host Pending* where remote bare-metal execution has not occurred.
 
 ---
 
-## 2. Kali Linux, Debian & Ubuntu Installation (APT)
+## 2. Kali Linux, Debian & Ubuntu Installation (.deb & APT)
 
-FELIX distributes cryptographically signed Debian packages (`.deb`) through the official FELIX APT repository hosted on GitHub Pages:
-- **Repository URL:** `https://jothish-blip.github.io/apt-repo`
-- **Signing Key:** OpenPGP 2048-bit `Felix Security Auditor (Official APT Repository Key)`
-- **Architectures:** `amd64` (and `arm64`)
+> [!WARNING]
+> **APT Repository Security Advisory (Open Release Blocker for P12.10):**
+> External APT repository automated scripts are currently deferred pending production GPG key rotation and repository revocation. For safe, verified installation on Kali Linux, Debian, and Ubuntu, download the standalone `.deb` package directly from GitHub Releases and verify its cryptographic SHA-256 digest before installation.
 
-### Option A: One-Line Automated Setup (Recommended)
+### Primary Installation: Direct `.deb` Package Download (Recommended)
 
-Run the official repository bootstrap script, which installs the keyring and configures `/etc/apt/sources.list.d/felix.list`:
+1. **Download the official Debian package and checksum manifest:**
+   ```bash
+   curl -fsSLO https://github.com/jothish-blip/felix/releases/download/v2.0.0/felix_2.0.0_amd64.deb
+   curl -fsSLO https://github.com/jothish-blip/felix/releases/download/v2.0.0/SHA256SUMS
+   ```
+
+2. **Verify the SHA-256 cryptographic digest:**
+   ```bash
+   sha256sum --check --ignore-missing SHA256SUMS
+   ```
+
+3. **Install the package via dpkg:**
+   ```bash
+   sudo dpkg -i felix_2.0.0_amd64.deb
+   ```
+
+4. **Verify the installation:**
+   ```bash
+   felix version
+   felix doctor
+   ```
+
+> [!NOTE]
+> **Transport Integrity vs. Authentication:** Verifying against `SHA256SUMS` guarantees transport integrity (detecting incomplete downloads or corrupted archives). However, because `SHA256SUMS` is retrieved from the same distribution release as the binary, it does not provide independent origin authentication. Independent GPG signing key rotation and trust migration remain an open release blocker for Phase 12.10.
+
+### Deferred Distribution: APT Repository Setup
+
+> [!NOTE]
+> The automated APT repository setup below is retained for testing architecture verification and will be activated for production once key rotation completes in P12.10.
 
 ```bash
+# Automated setup (installs repository signing key and source list):
 curl -fsSL https://jothish-blip.github.io/apt-repo/setup.sh | sudo bash
-```
 
-### Option B: Manual Step-by-Step Repository Configuration
-
-If you prefer to configure the APT sources manually:
-
-```bash
-# 1. Ensure prerequisites are installed
-sudo apt update && sudo apt install -y curl gpg ca-certificates
-
-# 2. Create the APT keyrings directory if not present
-sudo install -m 0755 -d /etc/apt/keyrings
-
-# 3. Download and import the official repository GPG signing key
-curl -fsSL https://jothish-blip.github.io/apt-repo/felix-archive-keyring.gpg | sudo tee /etc/apt/keyrings/felix-archive-keyring.gpg > /dev/null
-
-# 4. Set appropriate permissions on the keyring
-sudo chmod 0644 /etc/apt/keyrings/felix-archive-keyring.gpg
-
-# 5. Add the Felix APT source list
-echo "deb [signed-by=/etc/apt/keyrings/felix-archive-keyring.gpg arch=amd64] https://jothish-blip.github.io/apt-repo stable main" | sudo tee /etc/apt/sources.list.d/felix.list > /dev/null
-```
-
-### Step 2: Install FELIX
-
-Once the repository is configured:
-
-```bash
+# Install Felix
 sudo apt update
 sudo apt install -y felix
 ```

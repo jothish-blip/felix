@@ -286,25 +286,85 @@ type SecurityStory struct {
 	RelatedIDs       []string `json:"related_finding_ids"`
 }
 
+// AttackPathNode represents an individual finding node in an attack path graph.
+type AttackPathNode struct {
+	ID                 string `json:"id"`
+	Title              string `json:"title"`
+	Severity           string `json:"severity"`
+	VerificationStatus string `json:"verification_status"`
+	Category           string `json:"category,omitempty"`
+	Endpoint           string `json:"endpoint,omitempty"`
+	EvidenceSummary    string `json:"evidence_summary,omitempty"`
+	IsEntrypoint       bool   `json:"is_entrypoint,omitempty"`
+	IsTarget           bool   `json:"is_target,omitempty"`
+}
+
+// AttackPathEdge represents a validated or candidate transition edge between findings.
+type AttackPathEdge struct {
+	ID                 string   `json:"id"`
+	SourceID           string   `json:"source_id"`
+	TargetID           string   `json:"target_id"`
+	SourceTitle        string   `json:"source_title,omitempty"`
+	TargetTitle        string   `json:"target_title,omitempty"`
+	RuleCode           string   `json:"rule_code"`
+	RuleName           string   `json:"rule_name,omitempty"`
+	Type               string   `json:"type"`
+	ValidationStatus   string   `json:"validation_status"`
+	Confidence         string   `json:"confidence"`
+	Explanation        string   `json:"explanation"`
+	EvidenceReferences []string `json:"evidence_references,omitempty"`
+}
+
 // AttackPathSummary represents an evidence-backed correlated attack path in client-facing reports.
 type AttackPathSummary struct {
-	ID                string   `json:"id"`
-	Title             string   `json:"title"`
-	Status            string   `json:"status"`
-	Confidence        string   `json:"confidence"`
-	CombinedRiskLevel string   `json:"combined_risk_level"`
-	CombinedRiskScore int      `json:"combined_risk_score"`
-	RiskRationale     string   `json:"risk_rationale,omitempty"`
-	EntryPoint        string   `json:"entry_point,omitempty"`
-	TargetAsset       string   `json:"target_asset"`
-	PrimaryWeakness   string   `json:"primary_weakness"`
-	TerminalImpact    string   `json:"terminal_impact"`
-	Transitions       []string `json:"transitions,omitempty"`
-	Assumptions       []string `json:"assumptions,omitempty"`
-	MissingEvidence   []string `json:"missing_evidence,omitempty"`
-	Remediation       string   `json:"remediation,omitempty"`
-	NodeIDs           []string `json:"node_ids"`
-	SyntheticFixture  bool     `json:"synthetic_fixture,omitempty"`
+	ID                string           `json:"id"`
+	Title             string           `json:"title"`
+	Status            string           `json:"status"`
+	Confidence        string           `json:"confidence"`
+	CombinedRiskLevel string           `json:"combined_risk_level"`
+	CombinedRiskScore int              `json:"combined_risk_score"`
+	RiskRationale     string           `json:"risk_rationale,omitempty"`
+	EntryPoint        string           `json:"entry_point,omitempty"`
+	TargetAsset       string           `json:"target_asset"`
+	PrimaryWeakness   string           `json:"primary_weakness"`
+	TerminalImpact    string           `json:"terminal_impact"`
+	Transitions       []string         `json:"transitions,omitempty"`
+	Assumptions       []string         `json:"assumptions,omitempty"`
+	MissingEvidence   []string         `json:"missing_evidence,omitempty"`
+	Remediation       string           `json:"remediation,omitempty"`
+	NodeIDs           []string         `json:"node_ids"`
+	SyntheticFixture  bool             `json:"synthetic_fixture,omitempty"`
+	GraphNodes        []AttackPathNode `json:"graph_nodes,omitempty"`
+	GraphEdges        []AttackPathEdge `json:"graph_edges,omitempty"`
+}
+
+// BottleneckCandidateSummary provides report serialization for remediation choke points.
+type BottleneckCandidateSummary struct {
+	ID                   string   `json:"id"`
+	Type                 string   `json:"type"`
+	Name                 string   `json:"name"`
+	Component            string   `json:"component,omitempty"`
+	Endpoint             string   `json:"endpoint,omitempty"`
+	AssociatedFindingIDs []string `json:"associated_finding_ids,omitempty"`
+	DisruptedPathIDs     []string `json:"disrupted_path_ids,omitempty"`
+	DisruptedCount       int      `json:"disrupted_count"`
+	TotalChains          int      `json:"total_chains"`
+	DisruptionPercentage float64  `json:"disruption_percentage"`
+	ResidualCount        int      `json:"residual_count"`
+	ActionableFix        string   `json:"actionable_fix"`
+	Rationale            string   `json:"rationale"`
+	VerificationStatus   string   `json:"verification_status"`
+}
+
+// BottleneckSummary provides high-level disruption metrics in report output.
+type BottleneckSummary struct {
+	TotalVerifiedChains   int                          `json:"total_verified_chains"`
+	TotalCandidateChains  int                          `json:"total_candidate_chains"`
+	PrimaryRecommendation *BottleneckCandidateSummary  `json:"primary_recommendation,omitempty"`
+	RankedCandidates      []BottleneckCandidateSummary `json:"ranked_candidates,omitempty"`
+	MinimumCutSize        int                          `json:"minimum_cut_size,omitempty"`
+	MinimumCutNodes       []string                     `json:"minimum_cut_nodes,omitempty"`
+	SummaryHeadline       string                       `json:"summary_headline,omitempty"`
 }
 
 // Summary provides a statistical breakdown of findings.
@@ -359,10 +419,14 @@ type Report struct {
 	Findings            []Finding           `json:"findings"`
 	SecurityStories     []SecurityStory     `json:"security_stories"`
 	AttackPaths         []AttackPathSummary `json:"attack_paths,omitempty"`
+	RemediationBottlenecks *BottleneckSummary `json:"remediation_bottlenecks,omitempty"`
 	VerificationSummary map[string]any      `json:"verification_summary,omitempty"`
 	CommercialReport    *CommercialReport   `json:"commercial_report,omitempty"`
 	ChangeSummary       *ChangeSummary      `json:"change_summary,omitempty"`
-	Metadata            map[string]any      `json:"metadata,omitempty"`
+	Reconciliation      *api.ReconciliationReport `json:"reconciliation,omitempty"`
+	ProberResults       *api.ProberReport         `json:"prober_results,omitempty"`
+	CrossTenantResults  *api.CrossTenantReport    `json:"cross_tenant_results,omitempty"`
+	Metadata            map[string]any            `json:"metadata,omitempty"`
 }
 
 // CloudServiceScopeItem represents an evaluated cloud or database service and its finding status.

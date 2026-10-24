@@ -18,7 +18,7 @@ func WriteCommercialJSON(cr CommercialReport, filePath string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filePath, data, 0600)
+	return writeReportFileSafely(filePath, data)
 }
 
 // ParseCommercialReport deserializes JSON bytes into a CommercialReport struct.

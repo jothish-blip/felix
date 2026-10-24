@@ -87,6 +87,13 @@ func SelfReplace(ctx context.Context, stagedBinaryPath, expectedVersion string) 
 	// Step 4: Cleanup backup on platforms where possible
 	if runtime.GOOS != "windows" {
 		_ = os.Remove(backupExe)
+	} else {
+		if remErr := os.Remove(backupExe); remErr != nil {
+			delCmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command",
+				`Start-Sleep -Milliseconds 500; if ($env:FELIX_CLEANUP_FILE -and (Test-Path -LiteralPath $env:FELIX_CLEANUP_FILE)) { Remove-Item -LiteralPath $env:FELIX_CLEANUP_FILE -Force -ErrorAction SilentlyContinue }`)
+			delCmd.Env = append(os.Environ(), "FELIX_CLEANUP_FILE="+backupExe)
+			_ = delCmd.Start()
+		}
 	}
 
 	return res, nil

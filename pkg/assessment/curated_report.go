@@ -180,30 +180,7 @@ func GenerateCuratedCommercialReport(
 			}
 
 			repStories = append(repStories, p.SecurityStory)
-			var transitions []string
-			for _, e := range p.Edges {
-				transitions = append(transitions, fmt.Sprintf("[%s] %s -> %s: %s",
-					e.ValidationStatus, e.SourceTitle, e.TargetTitle, e.Explanation))
-			}
-			repPaths = append(repPaths, report.AttackPathSummary{
-				ID:                p.ID,
-				Title:             p.Title,
-				Status:            string(p.Status),
-				Confidence:        p.Confidence,
-				CombinedRiskLevel: p.CombinedRiskLevel,
-				CombinedRiskScore: p.CombinedRiskScore,
-				RiskRationale:     p.RiskRationale,
-				EntryPoint:        p.EntryPoint,
-				TargetAsset:       p.TargetAsset,
-				PrimaryWeakness:   p.PrimaryWeakness,
-				TerminalImpact:    p.TerminalImpact,
-				Transitions:       transitions,
-				Assumptions:       p.Assumptions,
-				MissingEvidence:   p.MissingEvidence,
-				Remediation:       p.Remediation,
-				NodeIDs:           p.NodeIDs,
-				SyntheticFixture:  p.SyntheticFixture,
-			})
+			repPaths = append(repPaths, ConvertAttackPathToSummary(p))
 		}
 		if len(repStories) > 0 {
 			report.AttachSecurityStories(&rep, repStories)

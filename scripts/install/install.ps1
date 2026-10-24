@@ -21,12 +21,20 @@ param(
     [string]$BinaryPath = "",
     [string]$Version = "2.0.0",
     [string]$ExpectedSHA256 = "",
+    [string]$InstallDir = "",
+    [switch]$SkipPathUpdate,
     [switch]$DevSign
 )
 
 $ErrorActionPreference = "Stop"
 
-$InstallDir = Join-Path $env:LOCALAPPDATA "Felix\bin"
+if (-not $InstallDir) {
+    if ($env:FELIX_INSTALL_DIR) {
+        $InstallDir = $env:FELIX_INSTALL_DIR
+    } else {
+        $InstallDir = Join-Path $env:LOCALAPPDATA "Felix\bin"
+    }
+}
 $TargetExe = Join-Path $InstallDir "felix.exe"
 
 Write-Host "==========================================================="
@@ -122,21 +130,25 @@ if ($DevSign) {
 }
 
 # 3. Idempotent PATH management (User scope, zero admin required)
-$UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
-$PathEntries = @()
-if ($UserPath) {
-    $PathEntries = $UserPath -split ';' | Where-Object { $_ -ne '' }
-}
-
-if ($PathEntries -notcontains $InstallDir) {
-    $NewPath = $InstallDir
-    if ($UserPath) {
-        $NewPath = "$UserPath;$InstallDir"
-    }
-    [Environment]::SetEnvironmentVariable("Path", $NewPath, "User")
-    Write-Host "[OK] Added $InstallDir to User PATH."
+if ($SkipPathUpdate -or $env:FELIX_NO_PATH_UPDATE -eq "true") {
+    Write-Host "[i] Skipping User PATH registration (SkipPathUpdate is set)."
 } else {
-    Write-Host "[i] $InstallDir is already present in User PATH."
+    $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $PathEntries = @()
+    if ($UserPath) {
+        $PathEntries = $UserPath -split ';' | Where-Object { $_ -ne '' }
+    }
+
+    if ($PathEntries -notcontains $InstallDir) {
+        $NewPath = $InstallDir
+        if ($UserPath) {
+            $NewPath = "$UserPath;$InstallDir"
+        }
+        [Environment]::SetEnvironmentVariable("Path", $NewPath, "User")
+        Write-Host "[OK] Added $InstallDir to User PATH."
+    } else {
+        Write-Host "[i] $InstallDir is already present in User PATH."
+    }
 }
 
 # Update current session PATH so immediate verification works

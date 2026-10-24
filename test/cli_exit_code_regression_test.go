@@ -212,6 +212,15 @@ func TestPhase81_CompletedScanWithFindingsReturnsSecurityFailure(t *testing.T) {
 			TotalFindings: 1,
 			HighCount:     1,
 		},
+		Findings: []report.Finding{
+			{
+				ID:       "FIND-001",
+				Title:    "High Severity Finding",
+				Severity: "HIGH",
+				Category: "TEST",
+				Endpoint: "https://completed.local/test",
+			},
+		},
 	}
 
 	tmpFile := filepath.Join(t.TempDir(), "completed_scan_with_findings.json")

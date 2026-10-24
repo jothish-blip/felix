@@ -65,6 +65,59 @@ ac23626f28364f791f8d2b513d97eed6299637378194ea2f118b3ceaa3b501b8 *felix_1.0.0_li
 	}
 }
 
+func TestParseChecksums_SecurityValidations(t *testing.T) {
+	tests := []struct {
+		name        string
+		manifest    string
+		errContains string
+	}{
+		{
+			name:        "truncated entry without filename",
+			manifest:    "da30a272f4343fe82ffa718e898abe6967b8d2c13ff2584d46e4b68706295608\r\n",
+			errContains: "missing filename",
+		},
+		{
+			name:        "traversal filename with dot-dot",
+			manifest:    "da30a272f4343fe82ffa718e898abe6967b8d2c13ff2584d46e4b68706295608  ../escaped.zip\r\n",
+			errContains: "illegal path separators",
+		},
+		{
+			name:        "absolute path filename with slash",
+			manifest:    "da30a272f4343fe82ffa718e898abe6967b8d2c13ff2584d46e4b68706295608  /etc/felix.zip\r\n",
+			errContains: "illegal path separators",
+		},
+		{
+			name:        "windows path separator",
+			manifest:    "da30a272f4343fe82ffa718e898abe6967b8d2c13ff2584d46e4b68706295608  sub\\felix.zip\r\n",
+			errContains: "illegal path separators",
+		},
+		{
+			name: "duplicate entries",
+			manifest: "da30a272f4343fe82ffa718e898abe6967b8d2c13ff2584d46e4b68706295608  felix.zip\r\n" +
+				"da30a272f4343fe82ffa718e898abe6967b8d2c13ff2584d46e4b68706295608  felix.zip\r\n",
+			errContains: "duplicate checksum entry",
+		},
+		{
+			name: "conflicting ambiguous digests for same file",
+			manifest: "da30a272f4343fe82ffa718e898abe6967b8d2c13ff2584d46e4b68706295608  felix.zip\r\n" +
+				"1111111111111111111111111111111111111111111111111111111111111111  felix.zip\r\n",
+			errContains: "conflicting digests",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseChecksums(strings.NewReader(tt.manifest))
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tt.errContains)
+			}
+			if !strings.Contains(err.Error(), tt.errContains) {
+				t.Errorf("expected error containing %q, got: %v", tt.errContains, err)
+			}
+		})
+	}
+}
+
 func TestFileSHA256(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "test.txt")

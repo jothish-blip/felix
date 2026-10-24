@@ -169,6 +169,31 @@ func SanitizeReport(rep Report) Report {
 			cleanMe[j] = SanitizeEvidence(me)
 		}
 		cleanP.MissingEvidence = cleanMe
+
+		if len(p.GraphNodes) > 0 {
+			cleanNodes := make([]AttackPathNode, len(p.GraphNodes))
+			for j, n := range p.GraphNodes {
+				cn := n
+				cn.Title = SanitizeEvidence(n.Title)
+				cn.Endpoint = secrets.SanitizeURL(n.Endpoint)
+				cn.EvidenceSummary = SanitizeEvidence(n.EvidenceSummary)
+				cleanNodes[j] = cn
+			}
+			cleanP.GraphNodes = cleanNodes
+		}
+
+		if len(p.GraphEdges) > 0 {
+			cleanEdges := make([]AttackPathEdge, len(p.GraphEdges))
+			for j, e := range p.GraphEdges {
+				ce := e
+				ce.SourceTitle = SanitizeEvidence(e.SourceTitle)
+				ce.TargetTitle = SanitizeEvidence(e.TargetTitle)
+				ce.Explanation = SanitizeEvidence(e.Explanation)
+				cleanEdges[j] = ce
+			}
+			cleanP.GraphEdges = cleanEdges
+		}
+
 		cleanPaths[i] = cleanP
 	}
 
@@ -198,7 +223,7 @@ func WriteJSON(rep Report, filePath string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filePath, data, 0600)
+	return writeReportFileSafely(filePath, data)
 }
 
 // MaxReportFileSize defines the maximum permitted size (100 MB) for reading and parsing JSON, SARIF, and Commercial reports.

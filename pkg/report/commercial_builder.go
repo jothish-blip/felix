@@ -1115,6 +1115,7 @@ func buildRiskOverview(
 		ScoreBreakdown:           breakdown,
 		SecurityStories:          rep.SecurityStories,
 		AttackPaths:              rep.AttackPaths,
+		RemediationBottlenecks:   rep.RemediationBottlenecks,
 		RiskConcentrations:       concentrations,
 		RiskLimitations:          limitations,
 	}

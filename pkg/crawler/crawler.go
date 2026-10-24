@@ -28,6 +28,9 @@ type Result struct {
 	Header           http.Header             `json:"-"`       // HTTP response headers from target page
 	TLS              *tls.ConnectionState    `json:"-"`       // TLS handshake state if HTTPS
 	BrowserDiscovery *BrowserDiscoveryResult `json:"browser_discovery,omitempty"`
+	RouteCandidates  []RouteCandidate        `json:"route_candidates,omitempty"`
+	ServerActions    []ServerActionReference `json:"server_actions,omitempty"`
+	BundleAnalysis   *BundleAnalysisReport   `json:"bundle_analysis,omitempty"`
 	Err              error                   `json:"error,omitempty"`
 }
 
@@ -530,6 +533,142 @@ SourceMapLoop:
 		if len(res.Scripts) > c.config.MaxAssets {
 			res.Scripts = res.Scripts[:c.config.MaxAssets]
 		}
+	}
+
+	// Phase 4: Static Client Bundle Deobfuscation and Route Extraction (P14.1)
+	beOpts := c.config.BundleAnalysis
+	if beOpts.MaxBundleSize <= 0 {
+		beOpts.MaxBundleSize = c.config.MaxAssetSize
+	}
+	if beOpts.MaxTokens <= 0 {
+		beOpts.MaxTokens = 500000
+	}
+	if beOpts.MaxChunks <= 0 {
+		beOpts.MaxChunks = 50
+	}
+	if beOpts.ScopeURL == "" {
+		beOpts.ScopeURL = rawTarget
+	}
+	if beOpts.TargetHost == "" && parsedBase != nil {
+		beOpts.TargetHost = parsedBase.Host
+	}
+
+	extractor := NewBundleExtractor(beOpts)
+	var (
+		allCandidates    []RouteCandidate
+		allServerActions []ServerActionReference
+		allWarnings      []string
+		chunkInspections []ChunkInspectionResult
+		chunkQueue       []string
+		processedChunks  = make(map[string]bool)
+		bundlesScanned   int
+	)
+
+	if c.config.Progress != nil {
+		c.config.Progress("[*] Analyzing client bundles for embedded API routes and server actions...")
+	}
+
+	for _, a := range assets {
+		if (a.Type == AssetJavaScript || strings.HasSuffix(a.URL, ".js")) && len(a.Content) > 0 {
+			bundlesScanned++
+			candidates, actions, chunks, warnings := extractor.ExtractFromBundle(a.Content, a.URL)
+			allCandidates = append(allCandidates, candidates...)
+			allServerActions = append(allServerActions, actions...)
+			allWarnings = append(allWarnings, warnings...)
+
+			if beOpts.TraverseChunks {
+				for _, ch := range chunks {
+					if !processedChunks[ch] {
+						chunkQueue = append(chunkQueue, ch)
+					}
+				}
+			}
+		} else if (a.Type == AssetSourceMap || strings.HasSuffix(a.URL, ".map")) && len(a.Content) > 0 && beOpts.IncludeSourceMaps {
+			smCandidates := extractor.ExtractFromSourceMapJSON(a.Content, a.URL, "SOURCE_MAP")
+			allCandidates = append(allCandidates, smCandidates...)
+		}
+	}
+
+	// Traverse discovered asynchronous Webpack chunks (P14.1-C)
+	for len(chunkQueue) > 0 && len(chunkInspections) < beOpts.MaxChunks {
+		chunkURL := chunkQueue[0]
+		chunkQueue = chunkQueue[1:]
+
+		if processedChunks[chunkURL] {
+			continue
+		}
+		processedChunks[chunkURL] = true
+
+		// Check scope safety
+		inScope := scope.IsAllowed(chunkURL) && (c.config.IsAllowed == nil || c.config.IsAllowed(chunkURL)) && (c.config.IsExcluded == nil || !c.config.IsExcluded(chunkURL))
+		if !inScope {
+			chunkInspections = append(chunkInspections, ChunkInspectionResult{
+				URL:    chunkURL,
+				Status: "SKIPPED_OUT_OF_SCOPE",
+			})
+			continue
+		}
+
+		if ctx.Err() != nil {
+			break
+		}
+
+		// Bounded chunk download
+		chunkAsset := c.downloadAsset(ctx, targetClient, chunkURL, AssetJavaScript)
+		if chunkAsset.Error != nil {
+			chunkInspections = append(chunkInspections, ChunkInspectionResult{
+				URL:    chunkURL,
+				Status: "NOT_FOUND",
+				Error:  chunkAsset.Error.Error(),
+			})
+			continue
+		}
+
+		if len(chunkAsset.Content) == 0 {
+			chunkInspections = append(chunkInspections, ChunkInspectionResult{
+				URL:    chunkURL,
+				Status: "EMPTY",
+			})
+			continue
+		}
+
+		// Inspect chunk
+		bundlesScanned++
+		candidates, actions, subChunks, warnings := extractor.ExtractFromBundle(chunkAsset.Content, chunkAsset.URL)
+		allCandidates = append(allCandidates, candidates...)
+		allServerActions = append(allServerActions, actions...)
+		allWarnings = append(allWarnings, warnings...)
+
+		chunkInspections = append(chunkInspections, ChunkInspectionResult{
+			URL:        chunkURL,
+			Status:     "PROCESSED",
+			Size:       int64(len(chunkAsset.Content)),
+			Discovered: len(candidates),
+		})
+
+		// Track chunk in assets inventory
+		assets = append(assets, chunkAsset)
+
+		// Append newly discovered subchunks to queue if within budget
+		for _, sc := range subChunks {
+			if !processedChunks[sc] && len(chunkQueue)+len(chunkInspections) < beOpts.MaxChunks {
+				chunkQueue = append(chunkQueue, sc)
+			}
+		}
+	}
+
+	// Deduplicate globally across all bundles
+	allCandidates = extractor.deduplicateCandidates(allCandidates)
+
+	res.RouteCandidates = allCandidates
+	res.ServerActions = allServerActions
+	res.BundleAnalysis = &BundleAnalysisReport{
+		TotalBundlesScanned:          bundlesScanned,
+		TotalChunksTraversed:         len(chunkInspections),
+		TotalCandidatesDiscovered:    len(allCandidates),
+		TotalServerActionsDiscovered: len(allServerActions),
+		Chunks:                       chunkInspections,
+		Warnings:                     allWarnings,
 	}
 
 	res.Assets = assets

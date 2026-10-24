@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"felix/pkg/crawler"
@@ -46,6 +47,17 @@ type Client struct {
 	userAgent       string
 	isAllowed       func(string) bool
 	isExcluded      func(string) bool
+	retryAfterMap   sync.Map
+}
+
+// GetLastRetryAfter retrieves the most recent Retry-After header observed for a host.
+func (c *Client) GetLastRetryAfter(hostname string) string {
+	if val, ok := c.retryAfterMap.Load(hostname); ok {
+		if s, ok := val.(string); ok {
+			return s
+		}
+	}
+	return ""
 }
 
 // NewClient initializes a hardened API client with scope-bounded redirect handling.
@@ -249,6 +261,10 @@ func (c *Client) DoBounded(ctx context.Context, req *http.Request, maxBytes int6
 
 	// Rate limiting: halt immediately on 429
 	if resp.StatusCode == http.StatusTooManyRequests {
+		retryAfter := resp.Header.Get("Retry-After")
+		if retryAfter != "" && req.URL != nil {
+			c.retryAfterMap.Store(req.URL.Hostname(), retryAfter)
+		}
 		return nil, ErrRateLimited
 	}
 

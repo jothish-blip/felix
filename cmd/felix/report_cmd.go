@@ -12,6 +12,9 @@ import (
 	"felix/pkg/config"
 	"felix/pkg/policy"
 	"felix/pkg/report"
+	"felix/pkg/ui"
+
+	"github.com/mattn/go-isatty"
 )
 
 // runReport executes the "felix report" subcommand.
@@ -26,14 +29,17 @@ func runReport(args []string) int {
 	fs := flag.NewFlagSet("felix report", flag.ContinueOnError)
 
 	var (
-		htmlPath   string
-		jsonPath   string
-		sarifPath  string
-		exportPath string
-		policyPath string
-		verbose    bool
-		silent     bool
-		commercial bool
+		htmlPath       string
+		jsonPath       string
+		sarifPath      string
+		exportPath     string
+		policyPath     string
+		reproduceChain string
+		outputPath     string
+		overwrite      bool
+		verbose        bool
+		silent         bool
+		commercial     bool
 	)
 
 	fs.StringVar(&htmlPath, "html", "", "Export report to HTML file")
@@ -41,6 +47,9 @@ func runReport(args []string) int {
 	fs.StringVar(&sarifPath, "sarif", "", "Export report to SARIF 2.1.0 file")
 	fs.StringVar(&exportPath, "export", "", "Export report to specified path (.html, .json, or .sarif)")
 	fs.StringVar(&policyPath, "policy", "", "Path to security threshold policy file for evaluation")
+	fs.StringVar(&reproduceChain, "reproduce-chain", "", "Chain ID to export Proof-of-Exploit reproduction script for")
+	fs.StringVar(&outputPath, "output", "", "Output filepath for generated reproduction script")
+	fs.BoolVar(&overwrite, "overwrite", false, "Overwrite output script if file already exists")
 	fs.BoolVar(&verbose, "v", false, "Verbose terminal output")
 	fs.BoolVar(&verbose, "verbose", false, "Verbose terminal output")
 	fs.BoolVar(&silent, "s", false, "Silent / minimal terminal output")
@@ -65,7 +74,7 @@ func runReport(args []string) int {
 			if !strings.Contains(arg, "=") && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
 				flagName := strings.TrimLeft(arg, "-")
 				switch flagName {
-				case "html", "json", "sarif", "policy", "export":
+				case "html", "json", "sarif", "policy", "export", "reproduce-chain", "output":
 					i++
 					flagArgs = append(flagArgs, args[i])
 				}
@@ -134,6 +143,46 @@ func runReport(args []string) int {
 	// Recalculate risk score and risk level to reflect current deterministic scoring model
 	report.RecalculateReportRisk(&rep)
 
+	// Export Proof-of-Exploit Reproduction Script if requested
+	if reproduceChain != "" {
+		var targetPath *report.AttackPathSummary
+		var matchCount int
+		for i := range rep.AttackPaths {
+			p := &rep.AttackPaths[i]
+			if strings.EqualFold(p.ID, reproduceChain) {
+				targetPath = p
+				matchCount++
+			}
+		}
+
+		if matchCount == 0 {
+			fmt.Fprintf(os.Stderr, "[-] Error: attack path %q not found in scan result %s\n", reproduceChain, scanResultPath)
+			if len(rep.AttackPaths) > 0 {
+				fmt.Fprintln(os.Stderr, "    Available attack path IDs:")
+				for _, p := range rep.AttackPaths {
+					fmt.Fprintf(os.Stderr, "      - %s (%s)\n", p.ID, p.Title)
+				}
+			}
+			return 2
+		}
+
+		outScript, err := report.WriteReproductionScript(*targetPath, rep.Findings, report.ReproductionOptions{
+			OutputFile: outputPath,
+			Overwrite:  overwrite,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[-] Error: failed to export reproduction script: %v\n", err)
+			return 2
+		}
+
+		fmt.Printf("[+] Standalone reproduction script exported: %s\n", outScript)
+		fmt.Printf("    Chain ID:     %s\n", targetPath.ID)
+		fmt.Printf("    Title:        %s\n", targetPath.Title)
+		fmt.Printf("    Safety Mode:  Strict Non-Destructive\n")
+		fmt.Printf("    Run:          TARGET_ORIGIN=https://<target> ./%s\n", filepath.Base(outScript))
+		return 0
+	}
+
 	// Export HTML if requested
 	var exported []string
 	var exportErrs []error
@@ -160,11 +209,7 @@ func runReport(args []string) int {
 	if jsonPath != "" {
 		if commercial {
 			cr := report.BuildCommercialReport(rep)
-			crBytes, err := report.GenerateCommercialJSON(cr)
-			if err == nil {
-				err = os.WriteFile(jsonPath, crBytes, 0600)
-			}
-			if err != nil {
+			if err := report.WriteCommercialJSON(cr, jsonPath); err != nil {
 				fmt.Fprintf(os.Stderr, "[-] Failed to write Commercial JSON report to %s: %v\n", jsonPath, err)
 				exportErrs = append(exportErrs, err)
 			} else {
@@ -221,11 +266,7 @@ func runReport(args []string) int {
 		default:
 			if commercial {
 				cr := report.BuildCommercialReport(rep)
-				crBytes, err := report.GenerateCommercialJSON(cr)
-				if err == nil {
-					err = os.WriteFile(exportPath, crBytes, 0600)
-				}
-				if err != nil {
+				if err := report.WriteCommercialJSON(cr, exportPath); err != nil {
 					fmt.Fprintf(os.Stderr, "[-] Failed to write Commercial JSON report to %s: %v\n", exportPath, err)
 					exportErrs = append(exportErrs, err)
 				} else {
@@ -316,6 +357,27 @@ func printReportHelp() {
 
 // printCommercialReportSummary prints Commercial Report 2.0 sections in terminal.
 func printCommercialReportSummary(cr report.CommercialReport, verbose bool) {
+	isTerm := isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())
+	cardCfg := ui.DefaultCardConfig(isTerm)
+	colored := !cardCfg.NoColor
+
+	cardData := ui.CommercialSummaryCardData{
+		ReportID:        cr.ReportID,
+		Target:          cr.ExecutiveSummary.Target,
+		GeneratedAt:     cr.GeneratedAt,
+		CompletionState: cr.ExecutiveSummary.CompletionStatus,
+		RiskScore:       cr.RiskOverview.RiskScore,
+		RiskLevel:       cr.RiskOverview.RiskLevel,
+		ScoreAvailable:  cr.ExecutiveSummary.RiskScoreAvailable,
+		AssetsCount:     cr.AttackSurface.TotalAssets,
+		VerifiedCount:   cr.ExecutiveSummary.FindingsVerifiedCount,
+		DetectedCount:   cr.ExecutiveSummary.FindingsDetectedCount,
+		ObservedCount:   cr.ExecutiveSummary.ObservationsCount,
+		NegativeProbes:  len(cr.TechnicalAppendix.NegativeVerificationOutcomes),
+	}
+	fmt.Print(ui.RenderCommercialSummaryCard(cardData, cardCfg))
+	fmt.Println()
+
 	fmt.Println("===========================================================")
 	fmt.Println(" FELIX :: COMMERCIAL SECURITY ASSESSMENT REPORT 2.0")
 	fmt.Println("===========================================================")
@@ -350,7 +412,7 @@ func printCommercialReportSummary(cr report.CommercialReport, verbose bool) {
 		fmt.Println("  (No verified findings confirmed)")
 	} else {
 		for _, vf := range cr.VerifiedFindings {
-			fmt.Printf("  [%s] [%s] %s at %s\n", vf.Severity, vf.Verification.Status, vf.Title, vf.AffectedAsset)
+			fmt.Printf("  %s %s %s at %s\n", ui.SeverityBadge(vf.Severity, colored), ui.VerificationBadge(string(vf.Verification.Status), colored), vf.Title, vf.AffectedAsset)
 			fmt.Printf("    Impact: %s\n", vf.SecurityImpact.Summary)
 		}
 	}
@@ -361,7 +423,7 @@ func printCommercialReportSummary(cr report.CommercialReport, verbose bool) {
 		fmt.Println("  (No detected findings recorded)")
 	} else {
 		for _, df := range cr.DetectedFindings {
-			fmt.Printf("  [%s] [%s] %s at %s\n", df.Severity, df.Verification.Status, df.Title, df.AffectedAsset)
+			fmt.Printf("  %s %s %s at %s\n", ui.SeverityBadge(df.Severity, colored), ui.VerificationBadge(string(df.Verification.Status), colored), df.Title, df.AffectedAsset)
 			fmt.Printf("    Impact: %s\n", df.SecurityImpact.Summary)
 		}
 	}
@@ -383,53 +445,31 @@ func printCommercialReportSummary(cr report.CommercialReport, verbose bool) {
 
 // printReportSummary prints the unified assessment summary in the terminal.
 func printReportSummary(rep report.Report, verbose bool) {
-	fmt.Println("===========================================================")
-	fmt.Println(" FELIX :: SECURITY ASSESSMENT REPORT")
-	fmt.Println("===========================================================")
-	if rep.Target != "" {
-		fmt.Printf("Target:     %s\n", rep.Target)
-	}
-	if rep.CompletionStatus != "" {
-		fmt.Printf("Status:     %s\n", rep.CompletionStatus)
-	}
-	if rep.Timestamp != "" {
-		fmt.Printf("Timestamp:  %s\n", rep.Timestamp)
-	}
-	if rep.Duration != "" {
-		fmt.Printf("Duration:   %s\n", rep.Duration)
-	}
-	if rep.CompletionStatus == "BLOCKED" || rep.CompletionStatus == "FAILED" || !rep.RiskScoreAvailable || rep.RiskLevel == "UNAVAILABLE" {
-		fmt.Printf("Risk Score: N/A (%s)\n\n", rep.RiskLevel)
-	} else {
-		fmt.Printf("Risk Score: %d/100 (%s)\n\n", rep.RiskScore, rep.RiskLevel)
-	}
+	isTerm := isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())
+	cardCfg := ui.DefaultCardConfig(isTerm)
+	colored := !cardCfg.NoColor
 
-	fmt.Println("Findings Summary:")
-	fmt.Printf("  CRITICAL  %d\n", rep.Summary.CriticalCount)
-	fmt.Printf("  HIGH      %d\n", rep.Summary.HighCount)
-	fmt.Printf("  MEDIUM    %d\n", rep.Summary.MediumCount)
-	fmt.Printf("  LOW       %d\n", rep.Summary.LowCount)
-	fmt.Printf("  INFO      %d\n\n", rep.Summary.InfoCount)
-
-	fmt.Println("Verification Status:")
-	fmt.Printf("  VERIFIED     %d\n", rep.Summary.VerifiedCount)
-	fmt.Printf("  DETECTED     %d\n", rep.Summary.DetectedCount)
-	fmt.Printf("  OBSERVED     %d\n", rep.Summary.ObservedCount)
-	if rep.Summary.NotVerifiedCount > 0 {
-		fmt.Printf("  NOT_VERIFIED %d\n", rep.Summary.NotVerifiedCount)
+	cardData := ui.SummaryCardData{
+		Target:            rep.Target,
+		CompletionStatus:  rep.CompletionStatus,
+		Timestamp:         rep.Timestamp,
+		Duration:          rep.Duration,
+		RiskScore:         rep.RiskScore,
+		RiskLevel:         rep.RiskLevel,
+		ScoreAvailable:    rep.RiskScoreAvailable,
+		CriticalCount:     rep.Summary.CriticalCount,
+		HighCount:         rep.Summary.HighCount,
+		MediumCount:       rep.Summary.MediumCount,
+		LowCount:          rep.Summary.LowCount,
+		InfoCount:         rep.Summary.InfoCount,
+		VerifiedCount:     rep.Summary.VerifiedCount,
+		DetectedCount:     rep.Summary.DetectedCount,
+		ObservedCount:     rep.Summary.ObservedCount,
+		NotExposedCount:   rep.Summary.NotExposedCount,
+		BlockedCount:      rep.Summary.BlockedCount,
+		InconclusiveCount: rep.Summary.InconclusiveCount,
 	}
-	if rep.Summary.NotExposedCount > 0 {
-		fmt.Printf("  NOT_EXPOSED  %d\n", rep.Summary.NotExposedCount)
-	}
-	if rep.Summary.AttemptedCount > 0 {
-		fmt.Printf("  Attempted:   %d (Verification Rate: %.1f%%)\n", rep.Summary.AttemptedCount, rep.Summary.VerificationRateAttempted)
-	}
-	if rep.Summary.BlockedCount > 0 {
-		fmt.Printf("  Blocked:     %d (Safety Boundaries)\n", rep.Summary.BlockedCount)
-	}
-	if rep.Summary.InconclusiveCount > 0 {
-		fmt.Printf("  Inconclusive:%d\n", rep.Summary.InconclusiveCount)
-	}
+	fmt.Print(ui.RenderExecutiveSummaryCard(cardData, cardCfg))
 	fmt.Println()
 
 	if rep.ChangeSummary != nil {
@@ -478,7 +518,7 @@ func printReportSummary(rep report.Report, verbose bool) {
 			if s.RiskContribution > 0 {
 				bonus = fmt.Sprintf(" (+%d Risk Pts)", s.RiskContribution)
 			}
-			fmt.Printf("[%s] %s%s\n", s.Severity, s.Title, bonus)
+			fmt.Printf("%s %s%s\n", ui.SeverityBadge(s.Severity, colored), s.Title, bonus)
 			if s.Summary != "" {
 				fmt.Printf("  Summary:          %s\n", s.Summary)
 			}
@@ -498,7 +538,14 @@ func printReportSummary(rep report.Report, verbose bool) {
 			if p.SyntheticFixture {
 				synth = "[SYNTHETIC FIXTURE] "
 			}
-			fmt.Printf("[%s] [%s] %s%s (%d/100, Conf: %s)\n", p.Status, p.CombinedRiskLevel, synth, p.Title, p.CombinedRiskScore, p.Confidence)
+			fmt.Printf("[%s] %s %s%s (%d/100, Conf: %s)\n", p.Status, ui.SeverityBadge(p.CombinedRiskLevel, colored), synth, p.Title, p.CombinedRiskScore, p.Confidence)
+			if len(p.GraphNodes) > 0 {
+				var nodeLabels []string
+				for _, n := range p.GraphNodes {
+					nodeLabels = append(nodeLabels, "["+n.ID+"]")
+				}
+				fmt.Printf("  Chain:            %s\n", strings.Join(nodeLabels, " ➔ "))
+			}
 			if p.TargetAsset != "" {
 				fmt.Printf("  Target Asset:     %s\n", p.TargetAsset)
 			}
@@ -514,7 +561,27 @@ func printReportSummary(rep report.Report, verbose bool) {
 			if p.RiskRationale != "" {
 				fmt.Printf("  Risk Rationale:   %s\n", p.RiskRationale)
 			}
-			if len(p.Transitions) > 0 && verbose {
+			if len(p.GraphEdges) > 0 && verbose {
+				fmt.Println("  Validated Transitions:")
+				for _, edge := range p.GraphEdges {
+					ruleTag := string(edge.RuleCode)
+					if ruleTag == "" {
+						ruleTag = "TRANSITION"
+					}
+					statusTag := edge.ValidationStatus
+					if statusTag == "" {
+						statusTag = "CONFIRMED"
+					}
+					confStr := edge.Confidence
+					if confStr == "" {
+						confStr = "HIGH"
+					}
+					fmt.Printf("    ↳ [%s/%s] %s ➔ %s (Conf: %s)\n", ruleTag, statusTag, edge.SourceID, edge.TargetID, confStr)
+					if edge.Explanation != "" {
+						fmt.Printf("      Explanation: %s\n", edge.Explanation)
+					}
+				}
+			} else if len(p.Transitions) > 0 && verbose {
 				fmt.Println("  Validated Transitions:")
 				for _, tr := range p.Transitions {
 					fmt.Printf("    ↳ %s\n", tr)
@@ -531,29 +598,52 @@ func printReportSummary(rep report.Report, verbose bool) {
 			}
 			fmt.Println()
 		}
+	} else if verbose {
+		fmt.Println("[*] No evidence-supported multi-hop attack paths established.")
+	}
+
+	if rep.RemediationBottlenecks != nil && rep.RemediationBottlenecks.PrimaryRecommendation != nil {
+		bn := rep.RemediationBottlenecks
+		best := bn.PrimaryRecommendation
+		fmt.Println("Priority Remediation Bottleneck:")
+		fmt.Println("────────────────────────────────────────────────────────────")
+		fmt.Printf("  Candidate:        %s\n", best.Name)
+		if best.Component != "" {
+			fmt.Printf("  Component:        %s\n", best.Component)
+		}
+		if best.Endpoint != "" {
+			fmt.Printf("  Endpoint:         %s\n", best.Endpoint)
+		}
+		fmt.Printf("  Chains Disrupted: %d of %d (%.1f%%)\n", best.DisruptedCount, best.TotalChains, best.DisruptionPercentage)
+		fmt.Printf("  Residual Chains:  %d\n", best.ResidualCount)
+		fmt.Printf("  Actionable Fix:   %s\n", best.ActionableFix)
+		if bn.MinimumCutSize > 0 {
+			fmt.Printf("  Min Vertex Cut:   %d node(s) (%s)\n", bn.MinimumCutSize, strings.Join(bn.MinimumCutNodes, ", "))
+		}
+		fmt.Println()
 	}
 
 	if len(rep.TopPriorities) > 0 {
-		fmt.Println("Top Priorities:")
-		fmt.Println("────────────────────────────────────────")
+		fmt.Println("Top Actionable Priorities:")
+		fmt.Println("────────────────────────────────────────────────────────────")
 		for _, p := range rep.TopPriorities {
-			fmt.Printf("[%s] %s\n", p.Severity, p.Title)
-			fmt.Printf("  Confidence:   %s\n", p.Confidence)
+			fmt.Printf("%s %s\n", ui.SeverityBadge(p.Severity, colored), p.Title)
+			fmt.Printf("  Confidence:     %s\n", p.Confidence)
 			if p.Verification.Status != "" {
-				fmt.Printf("  Verification: %s\n", p.Verification.Status)
+				fmt.Printf("  Verification:   %s\n", ui.VerificationBadge(string(p.Verification.Status), colored))
 			}
 			loc := p.Endpoint
 			if p.EvidenceDetails.Location != "" {
 				loc = p.EvidenceDetails.Location
 			}
 			if loc != "" {
-				fmt.Printf("  Location:     %s\n", loc)
+				fmt.Printf("  Location:       %s\n", loc)
 			}
 			if p.EvidenceDetails.NegativeEvidence != "" {
-				fmt.Printf("  Negative Note:%s\n", p.EvidenceDetails.NegativeEvidence)
+				fmt.Printf("  Defensive Note: %s\n", p.EvidenceDetails.NegativeEvidence)
 			}
 			if p.Remediation != "" {
-				fmt.Printf("  Remediation:  %s\n", p.Remediation)
+				fmt.Printf("  Remediation:    %s\n", p.Remediation)
 			}
 			fmt.Println()
 		}
@@ -563,7 +653,7 @@ func printReportSummary(rep report.Report, verbose bool) {
 		fmt.Println("All Detailed Findings:")
 		fmt.Println("────────────────────────────────────────")
 		for _, f := range rep.Findings {
-			fmt.Printf("[%s] [%s] %s\n", f.Severity, f.Category, f.Title)
+			fmt.Printf("%s [%s] %s\n", ui.SeverityBadge(f.Severity, colored), f.Category, f.Title)
 			loc := f.Endpoint
 			if f.EvidenceDetails.Location != "" {
 				loc = f.EvidenceDetails.Location

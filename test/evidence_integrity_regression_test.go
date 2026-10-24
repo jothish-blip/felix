@@ -244,6 +244,13 @@ func TestEvidenceIntegrity_DeterministicReproducibility(t *testing.T) {
 		}
 	}
 
+	// Normalize timestamps for pure structural & content determinism comparison across second boundaries
+	rep2.Timestamp = rep1.Timestamp
+	if rep1.CommercialReport != nil && rep2.CommercialReport != nil {
+		cr := report.BuildCommercialReport(rep2, report.WithCompletionStatus("COMPLETED"))
+		rep2.CommercialReport = &cr
+	}
+
 	// Generate JSON from both runs and assert identical output
 	json1, err1 := report.GenerateJSON(rep1)
 	json2, err2 := report.GenerateJSON(rep2)

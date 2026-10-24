@@ -3,7 +3,6 @@ package report
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -488,7 +487,7 @@ func WriteSARIF(rep Report, filePath string) error {
 		return fmt.Errorf("generated SARIF failed schema validation: %w", err)
 	}
 
-	return os.WriteFile(filePath, data, 0600)
+	return writeReportFileSafely(filePath, data)
 }
 
 // GenerateCommercialSARIF constructs and exports a SARIF log from a CommercialReport.

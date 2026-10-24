@@ -8,6 +8,10 @@ import (
 )
 
 func runConfig(args []string) int {
+	if len(args) > 0 && (args[0] == "help" || args[0] == "--help" || args[0] == "-h") {
+		printConfigHelp()
+		return 0
+	}
 	if len(args) == 0 || args[0] == "show" {
 		cfg, err := config.Load()
 		if err != nil {
@@ -94,4 +98,15 @@ func runConfig(args []string) int {
 		fmt.Fprintf(os.Stderr, "Unknown config action %q. Use: show, get, set, path, reset\n", args[0])
 		return 2
 	}
+}
+
+func printConfigHelp() {
+	fmt.Println("Usage:")
+	fmt.Println("  felix config <action> [arguments]")
+	fmt.Println("\nActions:")
+	fmt.Println("  show              Display active configuration settings")
+	fmt.Println("  get <key>         Get value of a configuration setting")
+	fmt.Println("  set <key> <val>   Set value of a configuration setting")
+	fmt.Println("  path              Display path to configuration file")
+	fmt.Println("  reset             Restore default configuration")
 }

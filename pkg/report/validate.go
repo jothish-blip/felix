@@ -45,6 +45,9 @@ func ValidateReportIntegrity(rep Report) error {
 
 		// If summary counts were explicitly provided, check reconciliation
 		if sumTotal > 0 {
+			if rep.Summary.TotalFindings > 0 && rep.Summary.TotalFindings != actualTotal {
+				return fmt.Errorf("invalid report: summary total findings (%d) contradicts actual findings count (%d)", rep.Summary.TotalFindings, actualTotal)
+			}
 			if sumTotal != actualTotal {
 				return fmt.Errorf("invalid report: severity breakdown total (%d) contradicts summary total (%d)", actualTotal, sumTotal)
 			}

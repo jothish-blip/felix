@@ -366,3 +366,55 @@ func TestUpdater_ValidChecksumSucceedsInDryRun(t *testing.T) {
 		t.Errorf("expected ArchiveFile %s, got: %s", archiveName, res.ArchiveFile)
 	}
 }
+
+func TestUpdater_DowngradeRejectionFailsClosed(t *testing.T) {
+	u := NewUpdater("jothish-blip/felix", "2.0.0")
+	rel := GitHubRelease{
+		TagName: "v1.0.0",
+		Name:    "Release 1.0.0",
+	}
+	relBytes, _ := json.Marshal(rel)
+	u.Checker.HTTPClient = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader(relBytes)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	_, err := u.Update(context.Background(), UpdateOptions{TargetVersion: "1.0.0"})
+	if err == nil {
+		t.Fatal("expected downgrade to be rejected, got nil error")
+	}
+	if !strings.Contains(err.Error(), "downgrades are rejected") {
+		t.Errorf("expected downgrade rejection error, got: %v", err)
+	}
+}
+
+func TestUpdater_SameVersionNoOp(t *testing.T) {
+	u := NewUpdater("jothish-blip/felix", "2.0.0")
+	rel := GitHubRelease{
+		TagName: "v2.0.0",
+		Name:    "Release 2.0.0",
+	}
+	relBytes, _ := json.Marshal(rel)
+	u.Checker.HTTPClient = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader(relBytes)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	res, err := u.Update(context.Background(), UpdateOptions{TargetVersion: "2.0.0"})
+	if err != nil {
+		t.Fatalf("expected same-version to succeed without error, got: %v", err)
+	}
+	if res.PreviousVersion != "2.0.0" || res.UpdatedVersion != "2.0.0" {
+		t.Errorf("expected unchanged version 2.0.0, got: %+v", res)
+	}
+}

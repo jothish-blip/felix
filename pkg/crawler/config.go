@@ -43,6 +43,9 @@ type Config struct {
 	// Default is false (strictly blocked for SSRF protection).
 	AllowPrivateIPs bool `json:"allow_private_ips,omitempty"`
 
+	// BundleAnalysis configures static deobfuscation and route extraction from client bundles.
+	BundleAnalysis BundleAnalysisOptions `json:"bundle_analysis,omitempty"`
+
 	// Resolver allows injecting a custom DNS resolver for testing or enterprise resolution.
 	Resolver Resolver `json:"-"`
 
@@ -53,10 +56,11 @@ type Config struct {
 // DefaultConfig provides sensible defaults for web auditing.
 func DefaultConfig() Config {
 	return Config{
-		Concurrency:  DefaultConcurrency,
-		Timeout:      DefaultTimeout,
-		MaxAssetSize: DefaultMaxAssetSize,
-		UserAgent:    DefaultUserAgent,
-		ScopeMode:    ScopeSameOrigin,
+		Concurrency:    DefaultConcurrency,
+		Timeout:        DefaultTimeout,
+		MaxAssetSize:   DefaultMaxAssetSize,
+		UserAgent:      DefaultUserAgent,
+		ScopeMode:      ScopeSameOrigin,
+		BundleAnalysis: DefaultBundleAnalysisOptions(),
 	}
 }

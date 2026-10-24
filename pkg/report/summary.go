@@ -334,7 +334,13 @@ func AttachAttackPaths(rep *Report, paths []AttackPathSummary) {
 	if rep == nil || len(paths) == 0 {
 		return
 	}
+	for i := range paths {
+		EnrichAttackPathGraph(&paths[i], rep.Findings)
+	}
 	rep.AttackPaths = paths
+	if rep.RemediationBottlenecks == nil {
+		rep.RemediationBottlenecks = DeriveBottleneckSummaryFromPaths(paths, rep.Findings)
+	}
 	RecalculateReportRisk(rep)
 }
 
