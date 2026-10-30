@@ -1,0 +1,34 @@
+{
+  "conclusive_status": "PROVEN_VERIFIED",
+  "executor": "Antigravity Engineering / FELIX Core Team",
+  "exit_code": 0,
+  "metrics": {
+    "deterministic_unit_cases_passed": true,
+    "login_success_rate": 100,
+    "nodegoat_followup_verified": true,
+    "nodegoat_login_attempts": 10,
+    "nodegoat_login_failures": 0,
+    "nodegoat_login_successes": 10,
+    "nodegoat_session_cookie_captured": "connect.sid",
+    "session_isolation_zero_leakage": true,
+    "target_reachability": {
+      "NodeGoat (Port 4000)": true,
+      "WebGoat (Port 8080)": true
+    },
+    "webgoat_followup_verified": true,
+    "webgoat_login_attempts": 10,
+    "webgoat_login_failures": 0,
+    "webgoat_login_successes": 10,
+    "webgoat_session_cookie_captured": "JSESSIONID",
+    "zero_panics_verified": true
+  },
+  "phase_id": "phase3",
+  "receipt_version": "3.0.0",
+  "sha256_hash": "36607d6240ad2976c6c5f056f52a1969b788b7145bc23b77bb57a78daf25beb8",
+  "subphase_id": "3.1",
+  "target_repo": "webgoat, nodegoat",
+  "target_url": "http://127.0.0.1:8080/WebGoat/login, http://127.0.0.1:4000/login",
+  "test_command": "go test -v -count=1 ./pkg/auth -run TestBenchmark_LoginMacroReplay",
+  "timestamp": "2026-10-29T15:38:40Z",
+  "title": "Stateful Login Macro Replay Engine Verification"
+}
