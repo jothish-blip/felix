@@ -29,3 +29,13 @@ certs/
 # Logs & coverage
 *.log
 coverage.*
+
+# Roadmap & local testing ledgers
+Felix-Roadmap.txt
+felix-testing-cloned.txt
+
+# Evidence receipts & local test reports
+test/evidence/
+*.html
+*.sarif
+scratch/
