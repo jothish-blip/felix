@@ -438,10 +438,10 @@ func (e *Engine) assessXSS(ctx context.Context, actx *AssessmentContext, client 
 var sqlErrorSignatures = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)you have an error in your sql syntax`),
 	regexp.MustCompile(`(?i)check the manual that corresponds to your (?:mysql|mariadb) server version`),
-	regexp.MustCompile(`(?i)syntax error at or near`),
+	regexp.MustCompile(`(?i)(?:\b(?:psycopg2|pg_|postgresql|org\.postgresql|asyncpg|pdo)\b.*syntax error at or near|(?:\A|[\r\n]|;\s*)\s*ERROR:\s+syntax error at or near)`),
 	regexp.MustCompile(`(?i)pg_query\(\)`),
 	regexp.MustCompile(`(?i)unclosed quotation mark after the character string`),
-	regexp.MustCompile(`(?i)sqlite3::|near "[^"]+": syntax error`),
+	regexp.MustCompile(`(?i)sqlite3::|sqlite_error|near (?:&quot;|&#39;|["'])?[^:]+(?:&quot;|&#39;|["'])?: syntax error|near [^:]+: syntax error`),
 	regexp.MustCompile(`(?i)ORA-01756|ORA-00933`),
 	regexp.MustCompile(`(?i)Syntax error in string in query expression`),
 	regexp.MustCompile(`(?i)Microsoft OLE DB Provider for SQL Server`),

@@ -914,3 +914,67 @@ func TestScenarioE_SyntheticProvenancePreserved(t *testing.T) {
 		t.Errorf("Scenario E: SecurityStory must declare synthetic provenance in title: %s", paths[0].SecurityStory.Title)
 	}
 }
+
+// TestCorrelation_Regression_AdversarialHeadersAndFrameworkNotChained verifies that:
+// 1. Multiple independent missing security headers do not form causal multi-hop chains or cycles.
+// 2. Client-side source map discovery and server framework identification do not form an exploit chain.
+// 3. Genuine evidence-supported chains (e.g. Token Leak -> Sensitive API) remain fully detectable.
+func TestCorrelation_Regression_AdversarialHeadersAndFrameworkNotChained(t *testing.T) {
+	engine := NewEngine(DefaultConfig())
+
+	// NodeGoat finding set
+	findings := []report.Finding{
+		makeFinding("H-CSP", "Missing Content-Security-Policy (CSP)", "missing-csp", report.SeverityLow, report.ConfidenceHigh, report.VerificationVerified, "http://127.0.0.1:4000", "http://127.0.0.1:4000"),
+		makeFinding("H-XFO", "Missing X-Frame-Options header", "missing-x-frame-options", report.SeverityLow, report.ConfidenceHigh, report.VerificationVerified, "http://127.0.0.1:4000", "http://127.0.0.1:4000"),
+		makeFinding("H-XCTO", "Missing or incomplete X-Content-Type-Options: nosniff", "missing-x-content-type-options", report.SeverityInfo, report.ConfidenceHigh, report.VerificationVerified, "http://127.0.0.1:4000", "http://127.0.0.1:4000"),
+		makeFinding("H-REF", "Missing Referrer-Policy", "missing-referrer-policy", report.SeverityInfo, report.ConfidenceHigh, report.VerificationVerified, "http://127.0.0.1:4000", "http://127.0.0.1:4000"),
+		makeFinding("H-PERM", "Missing Permissions-Policy", "missing-permissions-policy", report.SeverityInfo, report.ConfidenceHigh, report.VerificationVerified, "http://127.0.0.1:4000", "http://127.0.0.1:4000"),
+		makeFinding("MAP-01", "Public JavaScript Source Map Discovered", "source-map-discovered", report.SeverityInfo, report.ConfidenceHigh, report.VerificationObserved, "http://127.0.0.1:4000", "http://127.0.0.1:4000/vendor/jquery.min.map"),
+		makeFinding("NODE-01", "Node.js Express framework identified via HTTP response header", "node-runtime-exposure", report.SeverityInfo, report.ConfidenceHigh, report.VerificationObserved, "http://127.0.0.1:4000", "http://127.0.0.1:4000/_felix_node_probe"),
+	}
+
+	summary, paths, _, err := engine.Correlate(context.Background(), findings)
+	if err != nil {
+		t.Fatalf("Correlate failed: %v", err)
+	}
+
+	if strings.Contains(summary.TruncationReason, "cycle") || strings.Contains(summary.TruncationReason, "Cycle") {
+		t.Errorf("expected no cyclic dependencies between independent headers, got cycle: %v", summary.TruncationReason)
+	}
+
+	// Must NOT form any spurious multi-hop attack path among headers or between source-map and express header
+	for _, p := range paths {
+		if strings.Contains(p.Title, "Missing Content-Security-Policy") && strings.Contains(p.Title, "Missing") {
+			t.Errorf("spurious header-to-header attack path detected: %s", p.Title)
+		}
+		if strings.Contains(p.TerminalImpact, "Express") {
+			t.Errorf("framework identification must not be an exploit terminal impact: %s", p.TerminalImpact)
+		}
+	}
+
+	// Now add a genuine chain: Token Leak -> Protected User Endpoint
+	genuineToken := makeFinding("TOK-01", "Exposed API Bearer Token in JS", "secret-token-leak", report.SeverityHigh, report.ConfidenceHigh, report.VerificationVerified, "http://127.0.0.1:4000", "http://127.0.0.1:4000/app.js")
+	genuineToken.Source = report.SourceSecrets
+	genuineToken.EvidenceDetails.Details["token_type"] = "Bearer"
+
+	genuineEndpoint := makeFinding("API-01", "Unprotected Admin User Endpoint", "bola-object-exposure", report.SeverityCritical, report.ConfidenceHigh, report.VerificationVerified, "http://127.0.0.1:4000", "http://127.0.0.1:4000/api/v1/users")
+	genuineEndpoint.Source = report.SourceAPI
+	genuineEndpoint.EvidenceDetails.Details["auth_required"] = "true"
+
+	mixedFindings := append(findings, genuineToken, genuineEndpoint)
+	_, mixedPaths, _, err := engine.Correlate(context.Background(), mixedFindings)
+	if err != nil {
+		t.Fatalf("Correlate with genuine chain failed: %v", err)
+	}
+
+	foundGenuineChain := false
+	for _, p := range mixedPaths {
+		if strings.Contains(p.PrimaryWeakness, "Exposed API Bearer Token") || strings.Contains(p.TerminalImpact, "Admin User Endpoint") {
+			foundGenuineChain = true
+			break
+		}
+	}
+	if !foundGenuineChain {
+		t.Errorf("genuine attack chain (Token -> Endpoint) must remain detectable")
+	}
+}

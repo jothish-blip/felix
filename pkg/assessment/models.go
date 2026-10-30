@@ -495,10 +495,15 @@ func SanitizeAssessmentFinding(f AssessmentFinding) AssessmentFinding {
 func ToReportFinding(f AssessmentFinding) report.Finding {
 	// Pre-sanitize the assessment finding
 	f = SanitizeAssessmentFinding(f)
+	var src string
+	if f.Provenance != nil && f.Provenance.SourceEngine != "" {
+		src = f.Provenance.SourceEngine
+	}
 	rf := report.Finding{
 		ID:                f.OriginalFindingID,
 		RuleID:            f.RuleID,
 		Status:            f.Status,
+		Source:            src,
 		AnalysisMethod:    f.AnalysisMethod,
 		PrimaryAssetID:    f.PrimaryAssetID,
 		AffectedAssetIDs:  f.AffectedAssetIDs,

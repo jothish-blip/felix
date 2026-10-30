@@ -55,14 +55,21 @@ func NormalizeFinding(f report.Finding) NormalizedFinding {
 	isCand := normVer == report.VerificationDetected || normVer == report.VerificationNotVerified ||
 		strings.Contains(titleLower, "(candidate)") || strings.Contains(titleLower, "candidate")
 
-	isEntry := strings.Contains(catLower, "route") ||
+	isHeaderOrOmission := strings.Contains(catLower, "missing-") ||
+		strings.Contains(catLower, "header") ||
+		strings.Contains(catLower, "csp") ||
+		strings.Contains(catLower, "runtime") ||
+		strings.Contains(catLower, "fingerprint") ||
+		strings.Contains(catLower, "source-map")
+
+	isEntry := !isHeaderOrOmission && (strings.Contains(catLower, "route") ||
 		strings.Contains(catLower, "endpoint") ||
 		strings.Contains(catLower, "api-docs") ||
 		strings.Contains(catLower, "discovery") ||
 		strings.Contains(titleLower, "entry point") ||
 		strings.Contains(titleLower, "accessible") ||
-		f.Source == report.SourceCrawler ||
-		(f.Source == report.SourceAPI && !strings.Contains(catLower, "bola") && !strings.Contains(catLower, "auth"))
+		(f.Source == report.SourceCrawler && !strings.Contains(catLower, "source-map")) ||
+		(f.Source == report.SourceAPI && !strings.Contains(catLower, "bola") && !strings.Contains(catLower, "auth")))
 
 	isAuthReq := strings.Contains(catLower, "auth") ||
 		strings.Contains(catLower, "session") ||
@@ -79,14 +86,14 @@ func NormalizeFinding(f report.Finding) NormalizedFinding {
 		details["role"] != "" ||
 		details["required_role"] != ""
 
-	isSensData := strings.Contains(catLower, "secret") ||
+	isSensData := (strings.Contains(catLower, "secret") ||
 		strings.Contains(catLower, "token") ||
 		strings.Contains(catLower, "key") ||
 		strings.Contains(catLower, "pii") ||
 		strings.Contains(catLower, "card") ||
 		strings.Contains(catLower, "data-leak") ||
 		strings.Contains(catLower, "sensitive") ||
-		strings.Contains(catLower, "exposure") ||
+		(strings.Contains(catLower, "exposure") && !strings.Contains(catLower, "runtime") && !strings.Contains(catLower, "header")) ||
 		strings.Contains(catLower, "credential") ||
 		strings.Contains(catLower, "backup") ||
 		strings.Contains(titleLower, "sensitive") ||
@@ -95,7 +102,10 @@ func NormalizeFinding(f report.Finding) NormalizedFinding {
 		strings.Contains(titleLower, "leak") ||
 		strings.Contains(titleLower, "backup") ||
 		details["sensitive_data"] == "true" ||
-		f.Source == report.SourceSecrets
+		f.Source == report.SourceSecrets) &&
+		!strings.Contains(catLower, "node-runtime") &&
+		!strings.Contains(catLower, "runtime") &&
+		!strings.Contains(catLower, "framework")
 
 	isCloud := f.Source == report.SourceCloud ||
 		strings.Contains(catLower, "s3") ||

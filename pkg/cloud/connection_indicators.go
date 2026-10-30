@@ -280,7 +280,7 @@ func (d *IndicatorDetector) DetectIndicators(source IndicatorSource, content []b
 	}
 
 	// 1. Prisma schema block scanning (multiline config)
-	if strings.Contains(string(scanContent), "datasource ") {
+	if bytes.Contains(scanContent, []byte("datasource ")) {
 		for _, ind := range d.scanPrismaBlocks(source, scanContent) {
 			addIndicator(ind, "")
 		}
@@ -291,25 +291,27 @@ func (d *IndicatorDetector) DetectIndicators(source IndicatorSource, content []b
 	lineNum := 0
 	for scanner.Scan() {
 		lineNum++
-		line := scanner.Text()
-		if len(line) > MaxLineScanLength {
-			line = line[:MaxLineScanLength]
+		lineBytes := scanner.Bytes()
+		if len(lineBytes) > MaxLineScanLength {
+			lineBytes = lineBytes[:MaxLineScanLength]
 		}
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "#") && !strings.Contains(trimmed, "=") {
+		trimmed := bytes.TrimSpace(lineBytes)
+		if len(trimmed) == 0 || bytes.HasPrefix(trimmed, []byte("//")) || (bytes.HasPrefix(trimmed, []byte("#")) && !bytes.Contains(trimmed, []byte("="))) {
 			// Skip pure comment lines unless they look like commented assignments
 			continue
 		}
 
-		hasColon := strings.Contains(line, ":")
-		hasAt := strings.Contains(line, "@")
-		hasEqual := strings.Contains(line, "=")
-		hasScheme := strings.Contains(line, "://")
+		hasColon := bytes.IndexByte(lineBytes, ':') != -1
+		hasAt := bytes.IndexByte(lineBytes, '@') != -1
+		hasEqual := bytes.IndexByte(lineBytes, '=') != -1
+		hasScheme := bytes.Contains(lineBytes, []byte("://"))
 
 		// Fast reject: skip lines that cannot possibly contain any connection indicator
-		if !hasColon && !hasAt && !hasEqual && !strings.Contains(line, "s3://") && !strings.Contains(line, "gs://") {
+		if !hasColon && !hasAt && !hasEqual && !bytes.Contains(lineBytes, []byte("s3://")) && !bytes.Contains(lineBytes, []byte("gs://")) {
 			continue
 		}
+
+		line := string(lineBytes)
 
 		lineSource := source
 		lineSource.LineNumber = lineNum

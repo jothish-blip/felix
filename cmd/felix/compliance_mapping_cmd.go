@@ -400,7 +400,7 @@ func loadFindingsFromFile(path string) ([]report.Finding, error) {
 
 	// Try unmarshaling as raw array
 	var list []report.Finding
-	if err := json.Unmarshal(data, &list); err == nil && len(list) > 0 {
+	if err := json.Unmarshal(data, &list); err == nil {
 		return list, nil
 	}
 
@@ -408,7 +408,7 @@ func loadFindingsFromFile(path string) ([]report.Finding, error) {
 	var container struct {
 		Findings []report.Finding `json:"findings"`
 	}
-	if err := json.Unmarshal(data, &container); err == nil && len(container.Findings) > 0 {
+	if err := json.Unmarshal(data, &container); err == nil {
 		return container.Findings, nil
 	}
 

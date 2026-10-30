@@ -251,3 +251,57 @@ func TestCLI_AssessmentBOPLA_ActiveRun_MockExecution(t *testing.T) {
 		t.Errorf("expected findings summary line in output")
 	}
 }
+
+func TestCLI_AssessmentBOPLA_ActiveRun_JSON_CleanOutput(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		authHdr := r.Header.Get("Authorization")
+
+		if r.URL.Path == "/api/users/profile" {
+			if strings.Contains(authHdr, "token_admin") {
+				w.WriteHeader(http.StatusOK)
+				fmt.Fprint(w, `{"id":"usr-01","username":"alice","role":"admin","salary":150000}`)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"id":"usr-01","username":"alice","role":"user"}`)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"status":"ok"}`)
+	}))
+	defer ts.Close()
+
+	asm, cleanup := setupTestAssessmentForBOPLA(t, ts.URL, true)
+	defer cleanup()
+
+	code, out, errOut := captureStdoutStderr(func() int {
+		return runAssessmentBOPLA([]string{
+			asm.Ref,
+			"--run",
+			"--json",
+			"--allow-loopback",
+			"--admin-token", "token_admin",
+			"--user-token", "token_user",
+		})
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d, errOut: %s", code, errOut)
+	}
+
+	trimmed := strings.TrimSpace(out)
+	if !strings.HasPrefix(trimmed, "{") {
+		t.Fatalf("regression: BOPLA JSON output has non-JSON prefix: %s", trimmed)
+	}
+
+	var jsonResult map[string]interface{}
+	if err := json.Unmarshal([]byte(trimmed), &jsonResult); err != nil {
+		t.Fatalf("regression: stdout failed to parse as JSON: %v\nOutput: %s", err, trimmed)
+	}
+
+	if jsonResult["assessment_ref"] != asm.Ref {
+		t.Errorf("expected assessment_ref %q, got %v", asm.Ref, jsonResult["assessment_ref"])
+	}
+}

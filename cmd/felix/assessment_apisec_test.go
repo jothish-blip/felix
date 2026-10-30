@@ -327,3 +327,34 @@ func TestCLI_AssessmentCreate_WithEngineType(t *testing.T) {
 		t.Errorf("expected error message to mention unsupported --type, got: %s", errOut3)
 	}
 }
+
+func TestCLI_AssessmentAPISec_ActiveRun_JSON_CleanOutput(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"status":"ok","items":[]}`)
+	}))
+	defer ts.Close()
+
+	asm, cleanup := setupTestAssessmentForAPISec(t, ts.URL, true)
+	defer cleanup()
+
+	code, out, errOut := captureStdoutStderr(func() int {
+		return runAssessmentAPISec([]string{asm.Ref, "--run", "--json", "--allow-loopback"})
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0 for active run with --json, got %d (err: %s)", code, errOut)
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &parsed); err != nil {
+		t.Fatalf("stdout contained non-JSON banner pollution: %v\nOutput was: %s", err, out)
+	}
+
+	if parsed["assessment_ref"] != asm.Ref {
+		t.Errorf("expected assessment_ref %s, got %v", asm.Ref, parsed["assessment_ref"])
+	}
+}

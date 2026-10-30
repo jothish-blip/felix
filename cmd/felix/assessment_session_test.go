@@ -32,6 +32,8 @@ func TestCLI_AssessmentSession_Help(t *testing.T) {
 		"--protected-url",
 		"--cookie",
 		"--allow-state-changing",
+		"--synthetic-fixture",
+		"--allow-loopback",
 		"--policy",
 		"--max-requests",
 	}
@@ -237,5 +239,51 @@ func TestCLI_AssessmentSession_ActiveRun_Authorized(t *testing.T) {
 	}
 	if !strings.Contains(out, "CATEGORY COVERAGE SUMMARY") {
 		t.Errorf("expected category coverage summary table in output, got: %s", out)
+	}
+}
+
+func TestCLI_AssessmentSession_ActiveRun_JSON(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/login" {
+			http.SetCookie(w, &http.Cookie{Name: "session", Value: "pre_auth_cli_test", Path: "/"})
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"status":"ok"}`)
+	}))
+	defer ts.Close()
+
+	// Authorized assessment (approveAuth = true)
+	asm, cleanup := setupTestAssessmentForSession(t, ts.URL, true)
+	defer cleanup()
+
+	code, out, errOut := captureStdoutStderr(func() int {
+		return runAssessmentSessionSec([]string{
+			asm.Ref,
+			"--run",
+			"--allow-loopback",
+			"--synthetic-fixture",
+			"--max-requests", "15",
+			"--json",
+		})
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0 for authorized active session assessment, got %d, errOut: %s", code, errOut)
+	}
+
+	// Verify no human-readable banner leaked into stdout before JSON
+	trimmed := strings.TrimSpace(out)
+	if !strings.HasPrefix(trimmed, "{") {
+		t.Fatalf("expected JSON output starting with '{', got prefix: %s", out[:min(len(out), 80)])
+	}
+
+	var jsonMap map[string]interface{}
+	if err := json.Unmarshal([]byte(trimmed), &jsonMap); err != nil {
+		t.Fatalf("failed to parse JSON from --run --json output: %v\nOutput was: %s", err, out)
+	}
+
+	if jsonMap["assessment_ref"] != asm.Ref {
+		t.Errorf("expected assessment_ref %q, got %v", asm.Ref, jsonMap["assessment_ref"])
 	}
 }

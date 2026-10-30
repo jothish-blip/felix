@@ -1,0 +1,28 @@
+{
+  "receipt_version": "3.0.0",
+  "phase_id": "phase1",
+  "subphase_id": "1.1",
+  "title": "Headless Chromium Process Lifecycle, Concurrency & Zero-Orphan Process Verification",
+  "target_repo": "local_host",
+  "target_url": "about:blank",
+  "timestamp": "2026-10-28T09:17:05Z",
+  "executor": "Antigravity Engineering / FELIX Core Team",
+  "test_command": "go test -v -count=1 ./pkg/crawler/browser -run \"TestSingleInstanceLifecycle|TestConcurrency10Sessions\"",
+  "exit_code": 0,
+  "metrics": {
+    "single_instance_spawn_ms": 422.8,
+    "spawn_time_limit_ms": 800.0,
+    "single_instance_threshold_met": true,
+    "concurrent_workers": 10,
+    "concurrent_batch_spawn_ms": 2781.3,
+    "total_active_processes_tracked": 101,
+    "zombie_processes_remaining": 0,
+    "profile_dir_collisions": 0,
+    "pid_collisions": 0,
+    "false_positives": 0,
+    "true_positives": 10,
+    "execution_time_ms": 21648.0
+  },
+  "conclusive_status": "PROVEN_VERIFIED",
+  "sha256_hash": "1693ffad1ccf5d2e645b8b2fc626e7d31fe94eee386530dcdfd550859b3be57f"
+}

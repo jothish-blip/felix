@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>FELIX Client Storage Test Bed</title>
+</head>
+<body>
+  <h1>Client Storage & Secret Exposure Test Fixture</h1>
+  <div id="storage-status">initializing</div>
+  <div id="storage-log"></div>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const mode = params.get('mode') || 'all';
+
+    function setStatus(text) {
+      const el = document.getElementById('storage-status');
+      if (el) el.textContent = text;
+    }
+
+    async function initStorage() {
+      try {
+        // 1. Seed localStorage
+        if (mode === 'all' || mode === 'local' || mode === 'benign' || mode === 'mock_tokens') {
+          // Benign controls & ambiguous identifiers
+          localStorage.setItem('theme', 'dark');
+          localStorage.setItem('language', 'en-US');
+          localStorage.setItem('feature_flags', JSON.stringify({ beta_dashboard: false, v3_preview: true }));
+          localStorage.setItem('layout_pref', 'compact');
+          localStorage.setItem('page_size', '25');
+          localStorage.setItem('request_id', 'c82ef943-424b-4b10-911e-055375ec01f3');
+          localStorage.setItem('device_uuid', '550e8400-e29b-41d4-a716-446655440000');
+          localStorage.setItem('build_hash', '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08');
+          localStorage.setItem('cache_buster', 'v3.0.0-98432a10c');
+
+          if (mode === 'mock_tokens') {
+            localStorage.setItem('mock_api_token', 'sk-test-mockcanary998877665544332211');
+            localStorage.setItem('test_jwt', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0In0.c2lnbl90ZXN0');
+            localStorage.setItem('session_tracking_uuid', '12345678-1234-1234-1234-123456789abc');
+          } else if (mode !== 'benign') {
+            // Sensitive canaries
+            const jwtCanary = params.get('jwt_canary') || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwicm9sZSI6ImFkbWluIiwiZXhwIjoxODAwMDAwMDAwfQ.dGVzdF9zaWduYXR1cmVfZmVsaXhfY2FuYXJ5';
+            const apiKeyCanary = params.get('api_canary') || 'sk-proj-felixcanary1234567890abcdef1234567890';
+            localStorage.setItem('auth_token', jwtCanary);
+            localStorage.setItem('felix_api_key', apiKeyCanary);
+          }
+        }
+
+        // 2. Seed sessionStorage
+        if (mode === 'all' || mode === 'session' || mode === 'benign' || mode === 'mock_tokens') {
+          sessionStorage.setItem('active_tab', 'overview');
+          sessionStorage.setItem('ui_zoom', '100%');
+          sessionStorage.setItem('trace_id', 'a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d');
+
+          if (mode !== 'benign' && mode !== 'mock_tokens') {
+            const sessCanary = params.get('sess_canary') || 'felix_sess_canary_9876543210abcdef';
+            sessionStorage.setItem('session_id', sessCanary);
+          }
+        }
+
+        // 3. Seed IndexedDB
+        if (mode === 'all' || mode === 'idb') {
+          await new Promise((resolve, reject) => {
+            const req = window.indexedDB.open('FelixStorageVault', 1);
+            req.onupgradeneeded = function(e) {
+              const db = e.target.result;
+              if (!db.objectStoreNames.contains('credentials')) {
+                db.createObjectStore('credentials', { keyPath: 'service' });
+              }
+              if (!db.objectStoreNames.contains('ui_cache')) {
+                db.createObjectStore('ui_cache', { keyPath: 'key' });
+              }
+            };
+            req.onsuccess = function(e) {
+              const db = e.target.result;
+              const tx = db.transaction(['credentials', 'ui_cache'], 'readwrite');
+              const credStore = tx.objectStore('credentials');
+              const cacheStore = tx.objectStore('ui_cache');
+
+              const idbCanary = params.get('idb_canary') || 'AKIAIOSFODNN7EXAMPLE';
+              credStore.put({
+                service: 'aws_cloud_vault',
+                access_key_id: idbCanary,
+                token: 'felix_idb_token_secret_canary_778899',
+                created_at: 1700000000
+              });
+
+              cacheStore.put({
+                key: 'dashboard_summary',
+                rendered_markup: '<div>Cached Dashboard Widget</div>',
+                ttl: 3600
+              });
+
+              tx.oncomplete = function() {
+                db.close();
+                resolve();
+              };
+              tx.onerror = function(err) {
+                db.close();
+                reject(err);
+              };
+            };
+            req.onerror = function(err) {
+              reject(err);
+            };
+          });
+        }
+
+        setStatus('storage_ready');
+      } catch(e) {
+        setStatus('error: ' + e.message);
+      }
+    }
+
+    window.addEventListener('DOMContentLoaded', initStorage);
+  </script>
+</body>
+</html>

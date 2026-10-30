@@ -93,6 +93,10 @@ func (e *Engine) AnalyzeAuthentication(
 					HTTPMethod:      "GET",
 					DetectionMethod: "PASSIVE_COOKIE_INSPECTION",
 					Provenance:      &prov,
+					Details: map[string]string{
+						"cookie_name": c.Name,
+						"defect":      defect,
+					},
 				}
 
 				findings = append(findings, report.Finding{

@@ -154,6 +154,10 @@ type VerificationSummary struct {
 	SyntheticCount           int                                 `json:"synthetic_count"`
 	VerificationRateAttempted float64                            `json:"verification_rate_attempted"` // Verified / Attempted
 	VerificationRateTotal    float64                             `json:"verification_rate_total"`     // Verified / Total
+	ConfirmationRate          float64                             `json:"confirmation_rate"`           // Verified / Attempted (Confirmation Rate)
+	ConclusiveCount           int                                 `json:"conclusive_count"`            // Verified + NotExposed (Conclusive outcomes)
+	ConclusiveRate            float64                             `json:"conclusive_rate"`             // ConclusiveCount / Attempted (Conclusive Verification Rate)
+	AttemptRate               float64                             `json:"attempt_rate"`                // Attempted / Total (Attempt Rate)
 	CategoryStats            map[string]CategoryVerificationStat `json:"category_stats"`
 	Limitations              []string                            `json:"limitations,omitempty"`
 }

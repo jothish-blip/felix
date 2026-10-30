@@ -808,3 +808,135 @@ func TestWebVuln_FullPipeline(t *testing.T) {
 	t.Logf("Full pipeline completed with %d tests, %d findings across %d categories",
 		summary.TotalTests, len(findings), summary.CategoriesCovered)
 }
+
+// TestWebVuln_SQLi_RealApplicationSQLiteSignatures tests that real running application
+// SQLite syntax errors (such as OWASP Juice Shop HTML-escaped quotes and SQLITE_ERROR strings)
+// are accurately detected and classified as StateVerified with CRITICAL severity.
+func TestWebVuln_SQLi_RealApplicationSQLiteSignatures(t *testing.T) {
+	// 1. Target returning OWASP Juice Shop style HTML-escaped SQLite syntax error
+	juiceShopStyleServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("q")
+		if strings.Contains(q, "'") {
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, `<html><head><meta charset='utf-8'><title>Error: SQLITE_ERROR: near &quot;&#39;%&#39;&quot;: syntax error</title></head></html>`)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"status":"success","data":[{"id":1,"name":"Apple Juice"}]}`)
+	}))
+	defer juiceShopStyleServer.Close()
+
+	engine := NewEngine(juiceShopStyleServer.Client(), DefaultConfig())
+	actx := &AssessmentContext{
+		AssessmentID: "asm-sqli-real-target",
+		ExecutionID:  "exec-sqli-real-target",
+		BaseURL:      juiceShopStyleServer.URL,
+		Endpoints: []TargetEndpoint{
+			{Method: "GET", Path: "/rest/products/search", Parameters: []string{"q"}},
+		},
+	}
+
+	results, findings, cov := engine.assessSQLi(context.Background(), actx, juiceShopStyleServer.Client())
+	if cov.Verified != 1 {
+		t.Fatalf("expected 1 verified SQLi finding for real Juice Shop SQLite error, got %d", cov.Verified)
+	}
+	if len(results) == 0 || results[0].VerificationState != StateVerified {
+		t.Fatalf("expected StateVerified result, got %+v", results)
+	}
+	if len(findings) != 1 || findings[0].Severity != report.SeverityCritical {
+		t.Fatalf("expected CRITICAL severity finding, got %+v", findings)
+	}
+	if !strings.Contains(results[0].EvidenceSummary, "database error signature") {
+		t.Errorf("expected evidence summary to contain database error signature, got: %s", results[0].EvidenceSummary)
+	}
+
+	// 2. Benign control: sanitized input returning normal response without database error
+	cleanServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"status":"success","data":[]}`)
+	}))
+	defer cleanServer.Close()
+
+	actxClean := &AssessmentContext{
+		AssessmentID: "asm-sqli-clean-control",
+		ExecutionID:  "exec-sqli-clean-control",
+		BaseURL:      cleanServer.URL,
+		Endpoints: []TargetEndpoint{
+			{Method: "GET", Path: "/rest/products/search", Parameters: []string{"q"}},
+		},
+	}
+
+	resultsClean, findingsClean, covClean := engine.assessSQLi(context.Background(), actxClean, cleanServer.Client())
+	if covClean.Verified != 0 || len(findingsClean) != 0 {
+		t.Errorf("clean control must not produce verified findings, got %d", len(findingsClean))
+	}
+	if len(resultsClean) == 0 || resultsClean[0].VerificationState != StateNotVulnerable {
+		t.Errorf("expected StateNotVulnerable for clean control, got %+v", resultsClean)
+	}
+}
+
+// TestWebVuln_SQLi_BenignTemplateSyntaxErrorAndPostgresSignatures tests that benign template
+// or parser errors are not misclassified as SQL injection, while genuine database driver
+// errors (such as PostgreSQL/psycopg2) are verified.
+func TestWebVuln_SQLi_BenignTemplateSyntaxErrorAndPostgresSignatures(t *testing.T) {
+	// 1. Benign template parser syntax error (must NOT trigger verified SQL injection)
+	templateErrorServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("q")
+		if strings.Contains(q, "'") {
+			w.WriteHeader(http.StatusOK) // App handles error with 200 page
+			fmt.Fprint(w, `<html><body><h1>Render Error</h1><p>TemplateSyntaxError: syntax error at or near tag 'endfor' in template index.html</p></body></html>`)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `<html><body><h1>Welcome</h1></body></html>`)
+	}))
+	defer templateErrorServer.Close()
+
+	engine := NewEngine(templateErrorServer.Client(), DefaultConfig())
+	actx := &AssessmentContext{
+		AssessmentID: "asm-sqli-template-test",
+		ExecutionID:  "exec-sqli-template-test",
+		BaseURL:      templateErrorServer.URL,
+		Endpoints: []TargetEndpoint{
+			{Method: "GET", Path: "/search", Parameters: []string{"q"}},
+		},
+	}
+
+	resultsTmpl, findingsTmpl, covTmpl := engine.assessSQLi(context.Background(), actx, templateErrorServer.Client())
+	if covTmpl.Verified != 0 || len(findingsTmpl) != 0 {
+		t.Fatalf("benign template syntax error must NOT produce verified SQLi finding, got %d findings", len(findingsTmpl))
+	}
+	if len(resultsTmpl) == 0 || resultsTmpl[0].VerificationState == StateVerified {
+		t.Fatalf("template syntax error must not be StateVerified, got: %+v", resultsTmpl)
+	}
+
+	// 2. Genuine PostgreSQL syntax error (must trigger verified SQL injection)
+	pgServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("q")
+		if strings.Contains(q, "'") {
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, `psycopg2.errors.SyntaxError: ERROR:  syntax error at or near "SELECT"`)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"status":"ok"}`)
+	}))
+	defer pgServer.Close()
+
+	actxPG := &AssessmentContext{
+		AssessmentID: "asm-sqli-pg-test",
+		ExecutionID:  "exec-sqli-pg-test",
+		BaseURL:      pgServer.URL,
+		Endpoints: []TargetEndpoint{
+			{Method: "GET", Path: "/users", Parameters: []string{"q"}},
+		},
+	}
+
+	resultsPG, findingsPG, covPG := engine.assessSQLi(context.Background(), actxPG, pgServer.Client())
+	if covPG.Verified != 1 || len(findingsPG) != 1 {
+		t.Fatalf("genuine PostgreSQL error must produce 1 verified SQLi finding, got %d", len(findingsPG))
+	}
+	if resultsPG[0].VerificationState != StateVerified {
+		t.Fatalf("expected StateVerified for genuine PostgreSQL error, got: %+v", resultsPG)
+	}
+}

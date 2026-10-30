@@ -126,6 +126,7 @@ func runScan(args []string) int {
 		probeLive            bool
 		profilePath          string
 		crossTenant          bool
+		enableSPA            bool
 		targets              []string
 	)
 
@@ -553,6 +554,12 @@ func runScan(args []string) int {
 			continue
 		}
 
+		// --spa / --spa-crawl: Opt-in for Phase 1.6 Single-Page Application state navigation
+		if arg == "--spa" || arg == "--spa=true" || arg == "--spa-crawl" {
+			enableSPA = true
+			continue
+		}
+
 		// Unknown flag
 		if strings.HasPrefix(arg, "-") {
 			fmt.Fprintf(os.Stderr, "[-] error: unknown flag %q\n\n", arg)
@@ -936,6 +943,12 @@ func runScan(args []string) int {
 		AllowPrivateIPs:    allowPrivate,
 		IsAllowed:          isTargetAuthorized,
 		Progress:           uiProg.Callback(),
+		BrowserDiscovery: crawler.BrowserDiscoveryOptions{
+			Enabled:             enableSPA,
+			EnableSPANavigation: enableSPA,
+			AllowLoopback:       allowLoopback,
+			AllowPrivateIPs:     allowPrivate,
+		},
 	}
 	c := crawler.New(cConfig)
 	detector := secrets.NewDetector()

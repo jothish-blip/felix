@@ -324,3 +324,58 @@ func TestCLI_AssessmentBOLA_DistinctUserTokensWired(t *testing.T) {
 		t.Errorf("security violation: live tokens exposed in CLI output")
 	}
 }
+
+func TestCLI_AssessmentBOLA_ActiveRun_JSON_CleanOutput(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.Header.Get("Authorization"), "user_b") {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"id":"usr-clean-1","owner":"user_b","data":"protected_data"}`)
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, `{"error":"forbidden"}`)
+	}))
+	defer ts.Close()
+
+	asm, cleanup := setupTestAssessmentForBOLA(t, ts.URL, true)
+	defer cleanup()
+
+	code, out, errOut := captureStdoutStderr(func() int {
+		return runAssessmentBOLA([]string{
+			asm.Ref,
+			"--run",
+			"--json",
+			"--endpoint", "/api/users/{id}",
+			"--object-id", "usr-clean-1",
+			"--user-a-token", "clean_token_a",
+			"--user-b-token", "clean_token_b",
+		})
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d, errOut: %s", code, errOut)
+	}
+
+	// Regression test: Verify stdout contains purely valid JSON without banner text prefixes
+	trimmed := strings.TrimSpace(out)
+	if !strings.HasPrefix(trimmed, "{") {
+		t.Fatalf("regression: stdout has non-JSON prefix: %s", trimmed[:min(len(trimmed), 100)])
+	}
+
+	var jsonResult map[string]interface{}
+	if err := json.Unmarshal([]byte(trimmed), &jsonResult); err != nil {
+		t.Fatalf("regression: stdout failed to parse as JSON: %v\nOutput: %s", err, trimmed)
+	}
+
+	if jsonResult["assessment_ref"] != asm.Ref {
+		t.Errorf("expected assessment_ref %q, got %v", asm.Ref, jsonResult["assessment_ref"])
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}

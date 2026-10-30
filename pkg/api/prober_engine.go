@@ -378,7 +378,7 @@ func (pe *ProberEngine) classifyResponse(resp *ProbeResponse, result *ProbeResul
 func (pe *ProberEngine) classifyTransportError(ctx context.Context, err error, result *ProbeResult) {
 	result.Reachability = ReachabilityUnconfirmed
 
-	if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if ctx.Err() != nil {
 		result.Classification = ClassificationInconclusive
 		result.TransportErrorCategory = "CONTEXT_CANCELED_OR_TIMEOUT"
 		result.TransportErrorDetails = err.Error()
@@ -434,15 +434,13 @@ func (pe *ProberEngine) classifyTransportError(ctx context.Context, err error, r
 	}
 
 	var netErr net.Error
-	if errors.As(err, &netErr) {
-		if netErr.Timeout() {
-			result.Classification = ClassificationTransportFailure
-			result.TransportErrorCategory = "TIMEOUT"
-			result.TransportErrorDetails = netErr.Error()
-			result.Rationale = fmt.Sprintf("Network connection timed out: %v", netErr)
-			result.ManualVerificationRecommended = true
-			return
-		}
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
+		result.Classification = ClassificationTransportFailure
+		result.TransportErrorCategory = "TIMEOUT"
+		result.TransportErrorDetails = err.Error()
+		result.Rationale = fmt.Sprintf("Network connection timed out: %v", err)
+		result.ManualVerificationRecommended = true
+		return
 	}
 
 	errStr := err.Error()

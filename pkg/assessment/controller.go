@@ -762,7 +762,7 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 				excluded, _ := scopeVal.IsExcluded(rawURL)
 				return excluded
 			},
-			MaxRequestsPerTarget: 20,
+			MaxRequestsPerTarget: 100,
 		})
 		verEngine := verification.NewEngine(safetyChecker)
 		verResults, summary := verEngine.VerifyFindings(ctx, allReportFindings)

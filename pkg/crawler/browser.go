@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/net/html"
@@ -25,12 +26,18 @@ var (
 
 // BrowserDiscoveryOptions controls dynamic headless browser execution.
 type BrowserDiscoveryOptions struct {
-	Enabled        bool                   `json:"enabled"`
-	BrowserBinary  string                 `json:"browser_binary,omitempty"`
-	Timeout        time.Duration          `json:"timeout,omitempty"`
-	WaitUntilReady time.Duration          `json:"wait_until_ready,omitempty"`
-	DisableSandbox bool                   `json:"disable_sandbox,omitempty"` // Explicit opt-in for containerized environments
-	Driver         BrowserDiscoveryDriver `json:"-"`
+	Enabled             bool                   `json:"enabled"`
+	BrowserBinary       string                 `json:"browser_binary,omitempty"`
+	Timeout             time.Duration          `json:"timeout,omitempty"`
+	WaitUntilReady      time.Duration          `json:"wait_until_ready,omitempty"`
+	DisableSandbox      bool                   `json:"disable_sandbox,omitempty"` // Explicit opt-in for containerized environments
+	Driver              BrowserDiscoveryDriver `json:"-"`
+	EnableSPANavigation bool                   `json:"enable_spa_navigation,omitempty"`
+	EnableDOMMonkey     bool                   `json:"enable_dom_monkey,omitempty"`
+	EnableDOMXSS        bool                   `json:"enable_dom_xss,omitempty"`
+	EnableStorageAudit  bool                   `json:"enable_storage_audit,omitempty"`
+	AllowLoopback       bool                   `json:"allow_loopback,omitempty"`
+	AllowPrivateIPs     bool                   `json:"allow_private_ips,omitempty"`
 }
 
 // DynamicEndpoint represents a route, link, script, or API request discovered dynamically.
@@ -45,17 +52,38 @@ type DynamicEndpoint struct {
 
 // BrowserDiscoveryResult represents the outcome of dynamic browser discovery.
 type BrowserDiscoveryResult struct {
-	Endpoints    []DynamicEndpoint `json:"endpoints"`
-	RenderedHTML string            `json:"rendered_html,omitempty"`
-	Inconclusive bool              `json:"inconclusive"`
-	Reason       string            `json:"reason,omitempty"`
-	Duration     time.Duration     `json:"duration"`
-	BinaryUsed   string            `json:"binary_used,omitempty"`
+	Endpoints     []DynamicEndpoint `json:"endpoints"`
+	RenderedHTML  string            `json:"rendered_html,omitempty"`
+	Inconclusive  bool              `json:"inconclusive"`
+	Reason        string            `json:"reason,omitempty"`
+	Duration      time.Duration     `json:"duration"`
+	BinaryUsed    string            `json:"binary_used,omitempty"`
+	SPANavigation any               `json:"spa_navigation,omitempty"`
+	StorageAudit  any               `json:"storage_audit,omitempty"`
 }
 
 // BrowserDiscoveryDriver defines the interface for headless browser discovery.
 type BrowserDiscoveryDriver interface {
 	Discover(ctx context.Context, targetURL string, opts BrowserDiscoveryOptions, scope *Scope) (*BrowserDiscoveryResult, error)
+}
+
+var (
+	defaultCDPDriverMu sync.RWMutex
+	defaultCDPDriver   BrowserDiscoveryDriver
+)
+
+// RegisterCDPDriver registers the global CDP browser discovery driver.
+func RegisterCDPDriver(d BrowserDiscoveryDriver) {
+	defaultCDPDriverMu.Lock()
+	defer defaultCDPDriverMu.Unlock()
+	defaultCDPDriver = d
+}
+
+// GetDefaultCDPDriver retrieves the registered CDP driver if available.
+func GetDefaultCDPDriver() BrowserDiscoveryDriver {
+	defaultCDPDriverMu.RLock()
+	defer defaultCDPDriverMu.RUnlock()
+	return defaultCDPDriver
 }
 
 // HeadlessBrowserDriver is the native, zero-runtime-dependency browser discovery driver.

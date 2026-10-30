@@ -172,6 +172,7 @@ type VerificationRecord struct {
 	SafeCurlCommand    string             `json:"safe_curl_command,omitempty"`
 	Limitations        []string           `json:"limitations,omitempty"`
 	SyntheticFixture   bool               `json:"synthetic_fixture,omitempty"`
+	Attempted          bool               `json:"attempted,omitempty"`
 }
 
 // EvidenceProvenance captures the lineage, collection context, and integrity of a piece of security evidence.
@@ -386,6 +387,10 @@ type Summary struct {
 	SyntheticCount            int            `json:"synthetic_count,omitempty"`
 	VerificationRateAttempted float64               `json:"verification_rate_attempted,omitempty"`
 	VerificationRateTotal     float64               `json:"verification_rate_total,omitempty"`
+	ConfirmationRate          float64               `json:"confirmation_rate,omitempty"`
+	ConclusiveCount           int                   `json:"conclusive_count,omitempty"`
+	ConclusiveRate            float64               `json:"conclusive_rate,omitempty"`
+	AttemptRate               float64               `json:"attempt_rate,omitempty"`
 	ConfirmedCount            int                   `json:"confirmed_count"`
 	SuspectedCount            int                   `json:"suspected_count"`
 	InconclusiveStatusCount   int                   `json:"inconclusive_status_count,omitempty"`

@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>FELIX SPA State Navigator Test Bed</title>
+  <style>
+    body { font-family: sans-serif; margin: 20px; }
+    .panel { display: none; padding: 15px; border: 1px solid #ccc; margin-top: 10px; }
+    .panel.active { display: block; }
+    .nav-btn { margin-right: 8px; padding: 6px 12px; cursor: pointer; }
+    .nav-btn.active { background-color: #007bff; color: white; }
+    .spinner { display: inline-block; width: 20px; height: 20px; border: 3px solid #ccc; border-top-color: #333; border-radius: 50%; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>FELIX SPA State Navigator Test Application</h1>
+    <nav id="main-nav">
+      <button id="nav-home" class="nav-btn active" role="tab" aria-selected="true" data-action="home">Home</button>
+      <button id="nav-settings" class="nav-btn" role="tab" aria-selected="false" data-action="settings">Settings</button>
+      <button id="nav-history-route" class="nav-btn" data-action="route-scoreboard">Score Board Route</button>
+      <button id="nav-wizard" class="nav-btn" data-action="wizard">Setup Wizard</button>
+      <button id="nav-cycle" class="nav-btn" data-action="cycle-toggle">Toggle View</button>
+      <button id="btn-noop-clock" class="nav-btn" data-action="update-clock">Update Clock (No-Op)</button>
+      <button id="btn-destructive-delete" class="nav-btn" data-action="delete-account" style="color: red;">Delete All Records</button>
+      <a id="link-external-threat" href="https://malicious-external-site.com" target="_blank">External Resource</a>
+    </nav>
+    <div id="live-clock" style="font-size: 0.85em; color: #666; margin-top: 5px;">Time: 12:00:00.000</div>
+  </header>
+
+  <main id="app-viewport">
+    <!-- View 1: Home View -->
+    <section id="view-home" class="panel active">
+      <h2>Dashboard Overview</h2>
+      <p>Welcome to the single-page application dashboard.</p>
+      <button id="btn-fetch-insights" data-action="fetch-insights">Fetch Dynamic Insights</button>
+      <div id="insights-container" style="margin-top: 10px;"></div>
+    </section>
+
+    <!-- View 2: Settings View (Hidden Panel Revealed by Tab) -->
+    <section id="view-settings" class="panel">
+      <h2>Account Settings</h2>
+      <p>Configure security preferences and profile options.</p>
+      <label><input type="checkbox" id="pref-2fa" checked> Enable Multi-Factor Authentication</label>
+    </section>
+
+    <!-- View 3: Score Board (History API Route Change) -->
+    <section id="view-scoreboard" class="panel">
+      <h2>Security Score Board</h2>
+      <p>Score Board route activated via HTML5 pushState.</p>
+      <div id="score-table">
+        <div>Challenge 1: SOLVED (100 pts)</div>
+        <div>Challenge 2: SOLVED (250 pts)</div>
+      </div>
+    </section>
+
+    <!-- View 4: Setup Wizard (Multi-step Form Progression) -->
+    <section id="view-wizard" class="panel">
+      <h2>Security Configuration Wizard</h2>
+      <div id="wizard-step-1" class="wizard-step">
+        <h3>Step 1: Administrator Credentials</h3>
+        <input type="text" id="wiz-admin-name" placeholder="Admin username" value="felix_admin">
+        <button id="btn-wiz-next-1" data-step="step-2">Next to Step 2 &rarr;</button>
+      </div>
+      <div id="wizard-step-2" class="wizard-step" style="display: none;">
+        <h3>Step 2: API Keys & Secrets</h3>
+        <input type="text" id="wiz-api-key" placeholder="API key">
+        <button id="btn-wiz-next-2" data-step="step-3">Next to Step 3 &rarr;</button>
+      </div>
+      <div id="wizard-step-3" class="wizard-step" style="display: none;">
+        <h3>Step 3: Confirmation</h3>
+        <p>Wizard Complete! Click to finalize.</p>
+        <button id="btn-wiz-finish" data-step="complete">Finish Wizard</button>
+      </div>
+    </section>
+
+    <!-- View 5: Cycle Views (State A <-> State B) -->
+    <section id="view-cycle-a" class="panel">
+      <h2>Cycle View Alpha</h2>
+      <p>View Alpha is active.</p>
+    </section>
+    <section id="view-cycle-b" class="panel">
+      <h2>Cycle View Beta</h2>
+      <p>View Beta is active.</p>
+    </section>
+  </main>
+
+  <script>
+    let clockTicks = 0;
+    function updateClock() {
+      clockTicks++;
+      const el = document.getElementById('live-clock');
+      if (el) el.textContent = 'Time: ' + new Date().toISOString() + ' (tick: ' + clockTicks + ')';
+    }
+
+    function switchView(viewId, navBtnId) {
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+      const target = document.getElementById(viewId);
+      if (target) target.classList.add('active');
+
+      document.querySelectorAll('.nav-btn').forEach(b => {
+        b.classList.remove('active');
+        b.setAttribute('aria-selected', 'false');
+      });
+      const btn = document.getElementById(navBtnId);
+      if (btn) {
+        btn.classList.add('active');
+        btn.setAttribute('aria-selected', 'true');
+      }
+    }
+
+    // Tab 1: Home
+    document.getElementById('nav-home').addEventListener('click', () => {
+      window.history.pushState(null, '', '/');
+      switchView('view-home', 'nav-home');
+    });
+
+    // Tab 2: Settings (Hidden Panel Discovery)
+    document.getElementById('nav-settings').addEventListener('click', () => {
+      window.history.pushState(null, '', '#/settings');
+      switchView('view-settings', 'nav-settings');
+    });
+
+    // Tab 3: History Route Scoreboard
+    document.getElementById('nav-history-route').addEventListener('click', () => {
+      window.history.pushState({ page: 'scoreboard' }, 'Score Board', '#/score-board');
+      switchView('view-scoreboard', 'nav-history-route');
+    });
+
+    // Tab 4: Wizard View
+    document.getElementById('nav-wizard').addEventListener('click', () => {
+      switchView('view-wizard', 'nav-wizard');
+    });
+
+    // Wizard Step Progression
+    document.getElementById('btn-wiz-next-1').addEventListener('click', () => {
+      document.getElementById('wizard-step-1').style.display = 'none';
+      document.getElementById('wizard-step-2').style.display = 'block';
+    });
+    document.getElementById('btn-wiz-next-2').addEventListener('click', () => {
+      document.getElementById('wizard-step-2').style.display = 'none';
+      document.getElementById('wizard-step-3').style.display = 'block';
+    });
+
+    // View Cycle Toggle (Alpha <-> Beta)
+    let cycleState = 'A';
+    document.getElementById('nav-cycle').addEventListener('click', () => {
+      if (cycleState === 'A') {
+        cycleState = 'B';
+        switchView('view-cycle-b', 'nav-cycle');
+      } else {
+        cycleState = 'A';
+        switchView('view-cycle-a', 'nav-cycle');
+      }
+    });
+
+    // No-Op Button (Only volatile clock updates, DOM structure unchanged)
+    document.getElementById('btn-noop-clock').addEventListener('click', updateClock);
+
+    // Dynamic Loading to Settled Transition
+    document.getElementById('btn-fetch-insights').addEventListener('click', () => {
+      const container = document.getElementById('insights-container');
+      container.innerHTML = '<div id="loading-indicator"><span class="spinner"></span> Loading dynamic insights...</div>';
+      setTimeout(() => {
+        container.innerHTML = '<div id="insights-data"><strong>Security Score: 98/100</strong> (Settled State)</div>';
+      }, 100);
+    });
+
+    // Listen to popstate for back navigation
+    window.addEventListener('popstate', (e) => {
+      if (window.location.hash === '#/score-board') {
+        switchView('view-scoreboard', 'nav-history-route');
+      } else if (window.location.hash === '#/settings') {
+        switchView('view-settings', 'nav-settings');
+      } else {
+        switchView('view-home', 'nav-home');
+      }
+    });
+  </script>
+</body>
+</html>

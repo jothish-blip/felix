@@ -246,3 +246,50 @@ func TestCLI_AssessmentBFLA_ActiveRun_Success(t *testing.T) {
 		t.Errorf("expected Assessment Complete in output, got: %s", out)
 	}
 }
+
+func TestCLI_AssessmentBFLA_ActiveRun_JSON_CleanOutput(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		authHdr := r.Header.Get("Authorization")
+		if strings.Contains(authHdr, "admin") {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"status":"ok","users":[{"id":1,"name":"admin"}],"metrics":42}`)
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, `{"error":"forbidden"}`)
+	}))
+	defer ts.Close()
+
+	asm, cleanup := setupTestAssessmentForBFLA(t, ts.URL, true)
+	defer cleanup()
+
+	code, out, errOut := captureStdoutStderr(func() int {
+		return runAssessmentBFLA([]string{
+			asm.Ref,
+			"--run",
+			"--json",
+			"--allow-loopback",
+			"--admin-token", "Bearer token_admin_clean",
+			"--user-token", "Bearer token_user_clean",
+		})
+	})
+
+	if code != 0 {
+		t.Fatalf("expected run to exit 0, got %d, errOut: %s", code, errOut)
+	}
+
+	trimmed := strings.TrimSpace(out)
+	if !strings.HasPrefix(trimmed, "{") {
+		t.Fatalf("regression: BFLA JSON output has non-JSON prefix: %s", trimmed)
+	}
+
+	var jsonResult map[string]interface{}
+	if err := json.Unmarshal([]byte(trimmed), &jsonResult); err != nil {
+		t.Fatalf("regression: stdout failed to parse as JSON: %v\nOutput: %s", err, trimmed)
+	}
+
+	if jsonResult["assessment_ref"] != asm.Ref {
+		t.Errorf("expected assessment_ref %q, got %v", asm.Ref, jsonResult["assessment_ref"])
+	}
+}

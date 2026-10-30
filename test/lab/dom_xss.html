@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>FELIX DOM XSS Test Bed</title>
+</head>
+<body>
+  <h1>DOM XSS Verification Fixture</h1>
+
+  <!-- Target Sinks -->
+  <div id="sink-vuln-html"></div>
+  <div id="sink-defended-text"></div>
+  <div id="sink-escaped-html"></div>
+  <div id="sink-harmless-reflection">Normal static text</div>
+
+  <!-- Interactive Monkey Fixture Section -->
+  <div id="monkey-container" style="display:none; margin-top: 20px;">
+    <h2>Interactive Monkey Test Bed</h2>
+    <input type="text" id="monkey-input" placeholder="Enter probe input" />
+    <button id="monkey-dispatch-btn" onclick="triggerMonkeyAction()">Process Payload</button>
+    <div id="monkey-state-status">idle</div>
+    <div id="monkey-sink-output"></div>
+  </div>
+
+  <script>
+    function escapeHTML(str) {
+      if (!str) return '';
+      return String(str).replace(/[&<>'"]/g, tag => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        "'": '&#39;',
+        '"': '&quot;'
+      }[tag] || tag));
+    }
+
+    function triggerMonkeyAction() {
+      const hash = window.location.hash ? decodeURIComponent(window.location.hash.substring(1)) : '';
+      const inputEl = document.getElementById('monkey-input');
+      const val = (inputEl && inputEl.value) ? inputEl.value : hash;
+
+      // Update state transition indicator
+      const statusEl = document.getElementById('monkey-state-status');
+      if (statusEl) {
+        statusEl.textContent = 'transition_completed';
+        statusEl.setAttribute('data-action-executed', 'true');
+      }
+
+      // Execute sink injection using the input/hash value
+      const sinkEl = document.getElementById('monkey-sink-output');
+      if (sinkEl) {
+        sinkEl.innerHTML = '<span class="interactive-rendered">' + val + '</span>';
+      }
+    }
+
+    function processInput() {
+      const hash = window.location.hash ? decodeURIComponent(window.location.hash.substring(1)) : '';
+      const params = new URLSearchParams(window.location.search);
+      const mode = params.get('mode');
+      const input = params.get('input') || hash;
+
+      if (mode === 'monkey_interactive') {
+        // Reveal monkey interactive UI and return without triggering sinks on load
+        const container = document.getElementById('monkey-container');
+        if (container) {
+          container.style.display = 'block';
+        }
+        return;
+      }
+
+      if (!input) return;
+
+      if (mode === 'vuln_html') {
+        // Case A: Unsafe direct HTML sink injection
+        document.getElementById('sink-vuln-html').innerHTML = input;
+      } else if (mode === 'defended_text') {
+        // Case B: Defended safe textContent rendering
+        document.getElementById('sink-defended-text').textContent = input;
+      } else if (mode === 'escaped_html') {
+        // Case B2: Defended HTML-entity escaped innerHTML rendering
+        document.getElementById('sink-escaped-html').innerHTML = escapeHTML(input);
+      } else if (mode === 'eval_sink') {
+        // Case D1: eval code injection sink
+        eval('var felix_test_val = "' + input + '";');
+      } else if (mode === 'doc_write') {
+        // Case D2: document.write sink
+        document.write('<div>' + input + '</div>');
+      } else if (mode === 'timeout_sink') {
+        // Case D3: setTimeout code evaluation sink
+        setTimeout("var felix_timeout_val = '" + input + "';", 20);
+      } else if (mode === 'func_sink') {
+        // Case D4: Function constructor sink
+        try {
+          var fn = new Function('var felix_fn_val = "' + input + '"; return felix_fn_val;');
+          fn();
+        } catch(e) {}
+      } else if (mode === 'href_sink') {
+        // Case D5: location.href navigation sink
+        try {
+          window.location.href = input;
+        } catch(e) {}
+      } else if (mode === 'confirm_exec') {
+        // Case D6: Controlled execution signal
+        if (typeof window.__felix_confirm_exec__ === 'function') {
+          window.__felix_confirm_exec__(input);
+        }
+      }
+    }
+
+    window.addEventListener('DOMContentLoaded', processInput);
+    window.addEventListener('hashchange', processInput);
+  </script>
+</body>
+</html>

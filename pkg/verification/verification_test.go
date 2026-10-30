@@ -841,3 +841,491 @@ func TestVerification_ClaimSpecificNegativeProofRegressions(t *testing.T) {
 		}
 	})
 }
+
+func TestVerification_Regression_FrameworkObservationAndHTTPCookie(t *testing.T) {
+	ctx := context.Background()
+	engine := NewEngine(NewSafetyChecker(SafetyOptions{
+		IsAuthorized: true,
+		InScopeFunc:  func(s string) bool { return true },
+	}))
+
+	// 1. Node runtime exposure via 404 probe response
+	fNode := report.Finding{
+		ID:       "REG-NODE-404",
+		Title:    "Node.js Express framework identified via HTTP response header",
+		Category: "node-runtime-exposure",
+		Target:   "http://127.0.0.1:4000",
+		Endpoint: "http://127.0.0.1:4000/_felix_node_probe",
+		Evidence: "HTTP 404 on http://127.0.0.1:4000/_felix_node_probe returned X-Powered-By: Express header.",
+		EvidenceDetails: report.EvidenceDetails{
+			HTTPStatus: 404,
+		},
+	}
+	resNode := engine.VerifyFinding(ctx, fNode)
+	if resNode.Status != StatusObserved {
+		t.Errorf("expected StatusObserved for framework identification probe, got %s (must not be NOT_VERIFIED)", resNode.Status)
+	}
+	if resNode.Attempted {
+		t.Errorf("expected Attempted=false for passive framework observation, got true")
+	}
+	if resNode.FailureReason != "" {
+		t.Errorf("framework identification on 404 probe must not have failure reason, got %s", resNode.FailureReason)
+	}
+
+	// 2. Session cookie missing Secure flag on HTTP-only local target
+	fCookie := report.Finding{
+		ID:       "REG-COOKIE-HTTP",
+		RuleID:   "AUTH-COOKIE-DEFECT",
+		Title:    "Session Cookie Security Defect: connect.sid (Missing Secure flag (target served over unencrypted HTTP))",
+		Category: "Authentication / Session Security",
+		Target:   "http://127.0.0.1:4000",
+		Endpoint: "/",
+		Evidence: "Cookie name: connect.sid | Secure: false | HttpOnly: true | SameSite: ",
+		EvidenceDetails: report.EvidenceDetails{
+			HTTPStatus: 200,
+			Details: map[string]string{
+				"cookie_name": "connect.sid",
+			},
+		},
+	}
+	resCookie := engine.VerifyFinding(ctx, fCookie)
+	if resCookie.Status != StatusObserved {
+		t.Errorf("expected StatusObserved for cookie on unencrypted HTTP target, got %s (must not be NOT_VERIFIED or INCONCLUSIVE)", resCookie.Status)
+	}
+	if resCookie.Attempted {
+		t.Errorf("expected Attempted=false for passive HTTP session cookie observation, got true")
+	}
+	if !strings.Contains(resCookie.ObservedBehavior, "unencrypted HTTP") {
+		t.Errorf("expected unencrypted HTTP context in observed behavior, got: %s", resCookie.ObservedBehavior)
+	}
+}
+
+func TestVerification_Regression_GraphQLIntrospection(t *testing.T) {
+	checker := NewSafetyChecker(SafetyOptions{
+		IsAuthorized: true,
+		InScopeFunc:  func(s string) bool { return true },
+	})
+	engine := NewEngine(checker)
+	ctx := context.Background()
+
+	// 1. Valid introspection evidence -> VERIFIED
+	t.Run("ValidIntrospectionEvidence", func(t *testing.T) {
+		f := report.Finding{
+			ID:       "REG-GQL-1",
+			Source:   report.SourceAPI,
+			RuleID:   "API-GRAPHQL-INTROSPECTION",
+			Title:    "GraphQL endpoint has public introspection enabled",
+			Category: "graphql-introspection",
+			Target:   "http://127.0.0.1:5013",
+			Endpoint: "http://127.0.0.1:5013/graphql",
+			Method:   "GET",
+			Evidence: "HTTP 200 OK. Introspection query succeeded (29 types observed; sensitive schema indicators: [CreateUser, UserInput, UserObject]). Full schema dump omitted.",
+			EvidenceDetails: report.EvidenceDetails{
+				HTTPStatus: 200,
+			},
+		}
+
+		res := engine.VerifyFinding(ctx, f)
+		if res.Status != StatusVerified {
+			t.Fatalf("expected StatusVerified for successful GraphQL introspection, got %s", res.Status)
+		}
+		if !res.Attempted {
+			t.Errorf("expected Attempted=true for active GraphQL introspection check")
+		}
+		if res.PolicyID != "POL-APISEC-01" {
+			t.Errorf("expected policy POL-APISEC-01, got %s", res.PolicyID)
+		}
+		if res.VerificationMethod != "graphql_introspection_query" {
+			t.Errorf("expected verification method 'graphql_introspection_query', got %s", res.VerificationMethod)
+		}
+	})
+
+	// 2. HTTP 200 without successful introspection (e.g. SPA shell fallback) -> NOT_VERIFIED
+	t.Run("HTTP200WithoutIntrospection_SPAShell", func(t *testing.T) {
+		f := report.Finding{
+			ID:       "REG-GQL-2A",
+			Source:   report.SourceAPI,
+			RuleID:   "API-GRAPHQL-INTROSPECTION",
+			Title:    "GraphQL endpoint has public introspection enabled",
+			Category: "graphql-introspection",
+			Target:   "http://127.0.0.1:5013",
+			Endpoint: "http://127.0.0.1:5013/graphql",
+			Method:   "GET",
+			Evidence: "<!DOCTYPE html><html><head><title>App Shell</title></head><body><div id=\"root\"></div></body></html>",
+			EvidenceDetails: report.EvidenceDetails{
+				HTTPStatus: 200,
+			},
+		}
+
+		res := engine.VerifyFinding(ctx, f)
+		if res.Status != StatusNotVerified {
+			t.Fatalf("expected StatusNotVerified for SPA HTML fallback, got %s", res.Status)
+		}
+		if !res.Attempted {
+			t.Errorf("expected Attempted=true for evaluated endpoint check")
+		}
+		if !strings.Contains(res.InconclusiveReason, "HTML document or SPA fallback shell") {
+			t.Errorf("expected HTML shell explanation in InconclusiveReason, got %s", res.InconclusiveReason)
+		}
+	})
+
+	// 2b. HTTP 200 without schema types (generic JSON) -> NOT_VERIFIED
+	t.Run("HTTP200WithoutIntrospection_GenericJSON", func(t *testing.T) {
+		f := report.Finding{
+			ID:       "REG-GQL-2B",
+			Source:   report.SourceAPI,
+			RuleID:   "API-GRAPHQL-INTROSPECTION",
+			Title:    "GraphQL endpoint has public introspection enabled",
+			Category: "graphql-introspection",
+			Target:   "http://127.0.0.1:5013",
+			Endpoint: "http://127.0.0.1:5013/graphql",
+			Method:   "GET",
+			Evidence: "{\"status\": \"ok\", \"service\": \"graphql-gateway\", \"version\": \"1.0.0\"}",
+			EvidenceDetails: report.EvidenceDetails{
+				HTTPStatus: 200,
+			},
+		}
+
+		res := engine.VerifyFinding(ctx, f)
+		if res.Status != StatusNotVerified {
+			t.Fatalf("expected StatusNotVerified for generic JSON 200 without schema, got %s", res.Status)
+		}
+		if !strings.Contains(res.InconclusiveReason, "lacks confirmed GraphQL schema types") {
+			t.Errorf("expected missing schema types explanation, got %s", res.InconclusiveReason)
+		}
+	})
+
+	// 3. Malformed or incomplete schema evidence (0 types observed) -> NOT_VERIFIED
+	t.Run("MalformedOrIncompleteSchema_ZeroTypes", func(t *testing.T) {
+		f := report.Finding{
+			ID:       "REG-GQL-3",
+			Source:   report.SourceAPI,
+			RuleID:   "API-GRAPHQL-INTROSPECTION",
+			Title:    "GraphQL endpoint has public introspection enabled",
+			Category: "graphql-introspection",
+			Target:   "http://127.0.0.1:5013",
+			Endpoint: "http://127.0.0.1:5013/graphql",
+			Method:   "GET",
+			Evidence: "HTTP 200 OK. Introspection query succeeded (0 types observed). Full schema dump omitted.",
+			EvidenceDetails: report.EvidenceDetails{
+				HTTPStatus: 200,
+			},
+		}
+
+		res := engine.VerifyFinding(ctx, f)
+		if res.Status != StatusNotVerified {
+			t.Fatalf("expected StatusNotVerified for 0 types observed, got %s", res.Status)
+		}
+		if !strings.Contains(res.InconclusiveReason, "0 types") {
+			t.Errorf("expected 0 types in InconclusiveReason, got %s", res.InconclusiveReason)
+		}
+	})
+
+	// 4. Unrelated error pages and generic API responses -> NOT_VERIFIED
+	t.Run("UnrelatedErrorPage_500InternalError", func(t *testing.T) {
+		f := report.Finding{
+			ID:       "REG-GQL-4",
+			Source:   report.SourceAPI,
+			RuleID:   "API-GRAPHQL-INTROSPECTION",
+			Title:    "GraphQL endpoint has public introspection enabled",
+			Category: "graphql-introspection",
+			Target:   "http://127.0.0.1:5013",
+			Endpoint: "http://127.0.0.1:5013/graphql",
+			Method:   "GET",
+			Evidence: "{\"error\": \"Internal Server Error\", \"code\": 500}",
+			EvidenceDetails: report.EvidenceDetails{
+				HTTPStatus: 500,
+			},
+		}
+
+		res := engine.VerifyFinding(ctx, f)
+		if res.Status != StatusNotVerified {
+			t.Fatalf("expected StatusNotVerified for 500 error response, got %s", res.Status)
+		}
+		if !strings.Contains(res.InconclusiveReason, "inconclusive generic API response") {
+			t.Errorf("expected generic API response rationale, got %s", res.InconclusiveReason)
+		}
+	})
+
+	// 5. Negative controls where introspection is disabled or unavailable -> NOT_EXPOSED
+	t.Run("NegativeControl_IntrospectionDenied403", func(t *testing.T) {
+		f := report.Finding{
+			ID:       "REG-GQL-5A",
+			Source:   report.SourceAPI,
+			RuleID:   "API-GRAPHQL-INTROSPECTION",
+			Title:    "GraphQL Introspection Denied",
+			Category: "graphql-introspection-denied",
+			Target:   "http://127.0.0.1:5013",
+			Endpoint: "http://127.0.0.1:5013/graphql",
+			Method:   "GET",
+			Evidence: "{\"errors\":[{\"message\":\"GraphQL introspection is not allowed by GraphQL server.\"}]}",
+			EvidenceDetails: report.EvidenceDetails{
+				HTTPStatus: 400,
+			},
+		}
+
+		res := engine.VerifyFinding(ctx, f)
+		if res.Status != StatusNotExposed {
+			t.Fatalf("expected StatusNotExposed for disabled GraphQL introspection, got %s", res.Status)
+		}
+		if !res.Attempted {
+			t.Errorf("expected Attempted=true for active barrier verification check")
+		}
+		if res.VerificationMethod != "graphql_introspection_barrier" {
+			t.Errorf("expected method 'graphql_introspection_barrier', got %s", res.VerificationMethod)
+		}
+	})
+
+	t.Run("NegativeControl_ForbiddenStatus403", func(t *testing.T) {
+		f := report.Finding{
+			ID:       "REG-GQL-5B",
+			Source:   report.SourceAPI,
+			RuleID:   "API-GRAPHQL-INTROSPECTION",
+			Title:    "GraphQL Introspection",
+			Category: "graphql-introspection",
+			Target:   "http://127.0.0.1:5013",
+			Endpoint: "http://127.0.0.1:5013/graphql",
+			Method:   "GET",
+			Evidence: "HTTP 403 Forbidden: Access to GraphQL introspection is restricted",
+			EvidenceDetails: report.EvidenceDetails{
+				HTTPStatus: 403,
+			},
+		}
+
+		res := engine.VerifyFinding(ctx, f)
+		if res.Status != StatusNotExposed {
+			t.Fatalf("expected StatusNotExposed for 403 forbidden introspection, got %s", res.Status)
+		}
+		if res.VerificationMethod != "graphql_introspection_barrier" {
+			t.Errorf("expected method 'graphql_introspection_barrier', got %s", res.VerificationMethod)
+		}
+	})
+}
+
+// TestVerification_Regression_WebGoatSevenFindings verifies that WebGoat's 7 findings
+// reconcile with 5 VERIFIED header findings and 2 NOT_EXPOSED defended route controls,
+// proving AttemptedCount = 7, VerifiedCount = 5, NotExposedCount = 2, NotVerifiedCount = 0,
+// and VerificationRateAttempted = 71.4%, without classifying defended controls as NOT_VERIFIED.
+func TestVerification_Regression_WebGoatSevenFindings(t *testing.T) {
+	ctx := context.Background()
+	checker := NewSafetyChecker(SafetyOptions{
+		IsAuthorized: true,
+		InScopeFunc:  func(s string) bool { return true },
+	})
+	engine := NewEngine(checker)
+
+	target := "http://127.0.0.1:8080/WebGoat/login"
+	findings := []report.Finding{
+		{
+			ID:       "API-ea50cdc6609b02b0",
+			RuleID:   "API-MISSING-CSP",
+			Title:    "Missing Content-Security-Policy (CSP) defense-in-depth header",
+			Category: "missing-csp",
+			Severity: report.SeverityLow,
+			Confidence: report.ConfidenceHigh,
+			Target:   target,
+			Endpoint: target,
+			Method:   "GET",
+			Source:   report.SourceAPI,
+			Evidence: "Response headers do not include Content-Security-Policy.",
+			EvidenceDetails: report.EvidenceDetails{
+				HTTPStatus:      200,
+				DetectionMethod: "header_inspection",
+			},
+		},
+		{
+			ID:       "API-0dd48df4fb1bbd13",
+			RuleID:   "API-MISSING-X-FRAME-OPTIONS",
+			Title:    "Missing X-Frame-Options header (clickjacking protection)",
+			Category: "missing-x-frame-options",
+			Severity: report.SeverityLow,
+			Confidence: report.ConfidenceHigh,
+			Target:   target,
+			Endpoint: target,
+			Method:   "GET",
+			Source:   report.SourceAPI,
+			Evidence: "Response headers do not include X-Frame-Options or CSP frame-ancestors directive.",
+			EvidenceDetails: report.EvidenceDetails{
+				HTTPStatus:      200,
+				DetectionMethod: "header_inspection",
+			},
+		},
+		{
+			ID:       "API-1695d04a8f808f33",
+			RuleID:   "API-MISSING-PERMISSIONS-POLICY",
+			Title:    "Missing Permissions-Policy header (browser feature gating)",
+			Category: "missing-permissions-policy",
+			Severity: report.SeverityInfo,
+			Confidence: report.ConfidenceHigh,
+			Target:   target,
+			Endpoint: target,
+			Method:   "GET",
+			Source:   report.SourceAPI,
+			Evidence: "Response headers do not include Permissions-Policy.",
+			EvidenceDetails: report.EvidenceDetails{
+				HTTPStatus:      200,
+				DetectionMethod: "header_inspection",
+			},
+		},
+		{
+			ID:       "API-69ae4973c13f6a16",
+			RuleID:   "API-MISSING-REFERRER-POLICY",
+			Title:    "Missing Referrer-Policy defense-in-depth header",
+			Category: "missing-referrer-policy",
+			Severity: report.SeverityInfo,
+			Confidence: report.ConfidenceHigh,
+			Target:   target,
+			Endpoint: target,
+			Method:   "GET",
+			Source:   report.SourceAPI,
+			Evidence: "Response headers do not include Referrer-Policy (browser default applies).",
+			EvidenceDetails: report.EvidenceDetails{
+				HTTPStatus:      200,
+				DetectionMethod: "header_inspection",
+			},
+		},
+		{
+			ID:       "API-2cd8d2e571c1283f",
+			RuleID:   "API-MISSING-X-CONTENT-TYPE-OPTIONS",
+			Title:    "Missing or incomplete X-Content-Type-Options: nosniff header",
+			Category: "missing-x-content-type-options",
+			Severity: report.SeverityInfo,
+			Confidence: report.ConfidenceHigh,
+			Target:   target,
+			Endpoint: target,
+			Method:   "GET",
+			Source:   report.SourceAPI,
+			Evidence: "X-Content-Type-Options observed: \"absent\" (expected 'nosniff').",
+			EvidenceDetails: report.EvidenceDetails{
+				HTTPStatus:      200,
+				DetectionMethod: "header_inspection",
+			},
+		},
+		{
+			ID:       "API-1957c2555281256f",
+			RuleID:   "API-LARAVEL-TELESCOPE-RESTRICTED",
+			Title:    "Laravel Telescope interface requires authentication (observed login redirect)",
+			Category: "laravel-telescope-restricted",
+			Severity: report.SeverityInfo,
+			Confidence: report.ConfidenceHigh,
+			Target:   target,
+			Endpoint: "http://127.0.0.1:8080/WebGoat/login/telescope",
+			Method:   "GET",
+			Source:   report.SourceAPI,
+			Evidence: "HTTP 302 redirect observed on http://127.0.0.1:8080/WebGoat/login/telescope to http://127.0.0.1:8080/WebGoat/login. Laravel Telescope dashboard route requires authentication.",
+			EvidenceDetails: report.EvidenceDetails{
+				HTTPStatus:       302,
+				DetectionMethod:  "active_probe",
+				NegativeEvidence: "Authentication redirect active on probed route; unauthenticated access to this endpoint is not permitted.",
+			},
+		},
+		{
+			ID:       "API-6c494905ee1f9ff2",
+			RuleID:   "API-LARAVEL-TELESCOPE-RESTRICTED",
+			Title:    "Laravel Telescope API requires authentication (observed login redirect)",
+			Category: "laravel-telescope-restricted",
+			Severity: report.SeverityInfo,
+			Confidence: report.ConfidenceHigh,
+			Target:   target,
+			Endpoint: "http://127.0.0.1:8080/WebGoat/login/telescope/telescope-api/requests",
+			Method:   "GET",
+			Source:   report.SourceAPI,
+			Evidence: "HTTP 302 redirect observed on http://127.0.0.1:8080/WebGoat/login/telescope/telescope-api/requests to http://127.0.0.1:8080/WebGoat/login. Laravel Telescope API route requires authentication.",
+			EvidenceDetails: report.EvidenceDetails{
+				HTTPStatus:       302,
+				DetectionMethod:  "active_probe",
+				NegativeEvidence: "Authentication redirect active on probed route; unauthenticated access to this API endpoint is not permitted.",
+			},
+		},
+	}
+
+	results, summary := engine.VerifyFindings(ctx, findings)
+
+	if len(results) != 7 {
+		t.Fatalf("expected 7 verification results, got %d", len(results))
+	}
+	if summary.TotalFindings != 7 {
+		t.Errorf("expected TotalFindings 7, got %d", summary.TotalFindings)
+	}
+	if summary.AttemptedCount != 7 {
+		t.Errorf("expected AttemptedCount 7, got %d", summary.AttemptedCount)
+	}
+	if summary.VerifiedCount != 5 {
+		t.Errorf("expected VerifiedCount 5, got %d", summary.VerifiedCount)
+	}
+	if summary.NotExposedCount != 2 {
+		t.Errorf("expected NotExposedCount 2, got %d", summary.NotExposedCount)
+	}
+	if summary.NotVerifiedCount != 0 {
+		t.Errorf("expected NotVerifiedCount 0, got %d", summary.NotVerifiedCount)
+	}
+	if summary.InconclusiveCount != 0 {
+		t.Errorf("expected InconclusiveCount 0 in verification summary, got %d", summary.InconclusiveCount)
+	}
+	if summary.VerificationRateAttempted != 71.4 {
+		t.Errorf("expected VerificationRateAttempted 71.4, got %.1f", summary.VerificationRateAttempted)
+	}
+	if summary.VerificationRateTotal != 71.4 {
+		t.Errorf("expected VerificationRateTotal 71.4, got %.1f", summary.VerificationRateTotal)
+	}
+
+	// Verify both telescope findings individually
+	resMap := make(map[string]VerificationResult)
+	for _, r := range results {
+		resMap[r.FindingID] = r
+	}
+
+	tel1 := resMap["API-1957c2555281256f"]
+	if tel1.Status != StatusNotExposed {
+		t.Errorf("expected tel1 StatusNotExposed, got %s", tel1.Status)
+	}
+	if !tel1.Attempted {
+		t.Errorf("expected tel1 Attempted=true")
+	}
+	if tel1.VerificationMethod != "diagnostic_barrier_check" {
+		t.Errorf("expected tel1 method 'diagnostic_barrier_check', got %s", tel1.VerificationMethod)
+	}
+
+	tel2 := resMap["API-6c494905ee1f9ff2"]
+	if tel2.Status != StatusNotExposed {
+		t.Errorf("expected tel2 StatusNotExposed, got %s", tel2.Status)
+	}
+	if !tel2.Attempted {
+		t.Errorf("expected tel2 Attempted=true")
+	}
+	if tel2.VerificationMethod != "diagnostic_barrier_check" {
+		t.Errorf("expected tel2 method 'diagnostic_barrier_check', got %s", tel2.VerificationMethod)
+	}
+
+	// Apply verification back to findings and verify report model status
+	updated := ApplyVerificationToFindings(findings, results)
+	repSummary := report.Summarize(updated)
+
+	if repSummary.TotalFindings != 7 {
+		t.Errorf("expected report TotalFindings 7, got %d", repSummary.TotalFindings)
+	}
+	if repSummary.VerifiedCount != 5 {
+		t.Errorf("expected report VerifiedCount 5, got %d", repSummary.VerifiedCount)
+	}
+	if repSummary.NotExposedCount != 2 {
+		t.Errorf("expected report NotExposedCount 2, got %d", repSummary.NotExposedCount)
+	}
+	if repSummary.NotVerifiedCount != 0 {
+		t.Errorf("expected report NotVerifiedCount 0, got %d", repSummary.NotVerifiedCount)
+	}
+	if repSummary.AttemptedCount != 7 {
+		t.Errorf("expected report AttemptedCount 7, got %d", repSummary.AttemptedCount)
+	}
+	if repSummary.ConfirmedCount != 5 {
+		t.Errorf("expected report ConfirmedCount 5, got %d", repSummary.ConfirmedCount)
+	}
+	if repSummary.InconclusiveCount != 2 {
+		t.Errorf("expected report InconclusiveCount 2, got %d", repSummary.InconclusiveCount)
+	}
+	if repSummary.VerificationRateAttempted != 71.4 {
+		t.Errorf("expected report VerificationRateAttempted 71.4, got %.1f", repSummary.VerificationRateAttempted)
+	}
+	if repSummary.VerificationRateTotal != 71.4 {
+		t.Errorf("expected report VerificationRateTotal 71.4, got %.1f", repSummary.VerificationRateTotal)
+	}
+}

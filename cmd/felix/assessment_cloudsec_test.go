@@ -254,3 +254,37 @@ func TestCLI_AssessmentCloudSec_ViewPastResults(t *testing.T) {
 		t.Errorf("expected at least 1 recorded cloudsec result, got 0")
 	}
 }
+
+func TestCLI_AssessmentCloudSec_CleanJSON_OnRun(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Server", "AmazonS3")
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>test-bucket</Name></ListBucketResult>`)
+	}))
+	defer ts.Close()
+
+	asm, cleanup := setupTestAssessmentForCloudSec(t, ts.URL+"/s3-test", true)
+	defer cleanup()
+
+	code, out, errOut := captureStdoutStderr(func() int {
+		return runAssessmentCloudSec([]string{asm.Ref, "--run", "--mode", "external", "--allow-loopback", "--json"})
+	})
+	if code != 0 {
+		t.Fatalf("expected exit code 0 for cloudsec run with --json, got %d (err: %s)", code, errOut)
+	}
+
+	trimmed := strings.TrimSpace(out)
+	if !strings.HasPrefix(trimmed, "{") || !strings.HasSuffix(trimmed, "}") {
+		t.Fatalf("cloudsec CLI output is polluted with banner text: %q", out)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
+		t.Fatalf("failed to parse cloudsec JSON output: %v\nOutput: %s", err, out)
+	}
+
+	if parsed["assessment_ref"] != asm.Ref {
+		t.Errorf("expected assessment_ref %s, got %v", asm.Ref, parsed["assessment_ref"])
+	}
+}

@@ -276,3 +276,44 @@ func TestCLI_AssessmentWorkflow_ViewPastResults(t *testing.T) {
 		t.Errorf("expected summary line in output, got: %s", outView)
 	}
 }
+
+func TestCLI_AssessmentWorkflow_CleanJSON_OnRun(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"status":"ok"}`)
+	}))
+	defer ts.Close()
+
+	asm, cleanup := setupTestAssessmentForWorkflow(t, ts.URL, true)
+	defer cleanup()
+
+	code, out, errOut := captureStdoutStderr(func() int {
+		return runAssessmentWorkflow([]string{
+			asm.Ref,
+			"--run",
+			"--allow-loopback",
+			"--owner-token", "token_owner",
+			"--attacker-token", "token_attacker",
+			"--json",
+		})
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit code 0 for workflow run with --json, got %d (err: %s)", code, errOut)
+	}
+
+	trimmed := strings.TrimSpace(out)
+	if !strings.HasPrefix(trimmed, "{") || !strings.HasSuffix(trimmed, "}") {
+		t.Fatalf("workflow CLI output is polluted with banner text: %q", out)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
+		t.Fatalf("failed to parse workflow JSON output: %v\nOutput: %s", err, out)
+	}
+
+	if parsed["assessment_ref"] != asm.Ref {
+		t.Errorf("expected assessment_ref %s, got %v", asm.Ref, parsed["assessment_ref"])
+	}
+}

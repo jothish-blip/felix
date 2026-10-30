@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"unicode"
 
 	"felix/pkg/crawler"
 )
@@ -261,26 +262,69 @@ func LineNumberAtOffset(content []byte, offset int) int {
 	return line
 }
 
-var sensitiveKeywords = []string{
-	"secret",
-	"key",
-	"token",
-	"password",
-	"passwd",
-	"credential",
-	"auth",
-	"api_key",
-	"apikey",
-	"private",
-	"bearer",
-	"stripe",
-	"access_token",
+var sensitiveWordSet = map[string]struct{}{
+	"secret":       {},
+	"secrets":      {},
+	"key":          {},
+	"keys":         {},
+	"token":        {},
+	"tokens":       {},
+	"password":     {},
+	"passwords":    {},
+	"passwd":       {},
+	"credential":   {},
+	"credentials":  {},
+	"auth":         {},
+	"oauth":        {},
+	"apikey":       {},
+	"api_key":      {},
+	"private":      {},
+	"bearer":       {},
+	"stripe":       {},
+	"access_token": {},
 }
 
+// extractContextTokens splits text into normalized lowercase word tokens,
+// respecting snake_case, kebab-case, camelCase boundaries, and non-alphanumeric punctuation.
+func extractContextTokens(s string) []string {
+	var tokens []string
+	var current strings.Builder
+	var prevRune rune
+
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			// CamelCase transition: previous is lower/digit and current is upper
+			if unicode.IsUpper(r) && (unicode.IsLower(prevRune) || unicode.IsDigit(prevRune)) {
+				if current.Len() > 0 {
+					tokens = append(tokens, strings.ToLower(current.String()))
+					current.Reset()
+				}
+			}
+			current.WriteRune(r)
+		} else {
+			// Non-alphanumeric delimiter
+			if current.Len() > 0 {
+				tokens = append(tokens, strings.ToLower(current.String()))
+				current.Reset()
+			}
+		}
+		prevRune = r
+	}
+	if current.Len() > 0 {
+		tokens = append(tokens, strings.ToLower(current.String()))
+	}
+	return tokens
+}
+
+// hasSecretContextKeywords determines whether surrounding context contains genuine secret indicators,
+// using boundary-aware token matching to prevent incidental substring collisions (e.g. "keyword", "keyboard", "author").
 func hasSecretContextKeywords(ctx string) bool {
-	lower := strings.ToLower(ctx)
-	for _, kw := range sensitiveKeywords {
-		if strings.Contains(lower, kw) {
+	if len(ctx) == 0 {
+		return false
+	}
+	tokens := extractContextTokens(ctx)
+	for _, tok := range tokens {
+		if _, ok := sensitiveWordSet[tok]; ok {
 			return true
 		}
 	}

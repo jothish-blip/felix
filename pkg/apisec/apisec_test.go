@@ -1379,3 +1379,40 @@ func TestAPISec_ScopedRedirectEnforcement(t *testing.T) {
 }
 
 
+
+// TestAPISec_Regression_TemplateSyntaxErrorNotFlaggedAsSQLError verifies that benign template
+// syntax errors are not falsely flagged as API8 database error syntax indicators.
+func TestAPISec_Regression_TemplateSyntaxErrorNotFlaggedAsSQLError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"error": "TemplateSyntaxError: syntax error at or near tag 'endfor'"}`))
+	}))
+	defer ts.Close()
+
+	engine := NewEngine(ts.Client(), DefaultConfig())
+	actx := &AssessmentContext{
+		AssessmentID: "test-reg-sqli-template",
+		ExecutionID:  "exec-reg-sqli-template",
+		BaseURL:      ts.URL,
+		Endpoints: []APIEndpoint{
+			AnalyzeEndpoint("GET", "/api/v1/render", "discovered"),
+		},
+	}
+
+	results, _, summary, err := engine.Assess(context.Background(), actx)
+	if err != nil {
+		t.Fatalf("engine.Assess failed: %v", err)
+	}
+
+	cov8 := summary.CoverageMap[string(CategoryAPI8_Misconfiguration)]
+	if cov8.Candidates > 0 {
+		t.Errorf("regression: benign template syntax error must not produce candidates, got %d", cov8.Candidates)
+	}
+
+	for _, r := range results {
+		if strings.Contains(r.TestName, "Database Error Syntax Indicator") {
+			t.Errorf("regression: benign template syntax error must not trigger Database Error Syntax Indicator candidate: %+v", r)
+		}
+	}
+}

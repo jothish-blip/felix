@@ -457,7 +457,15 @@ SourceMapLoop:
 	if c.config.BrowserDiscovery.Enabled {
 		driver := c.config.BrowserDiscovery.Driver
 		if driver == nil {
-			driver = NewHeadlessBrowserDriver()
+			if c.config.BrowserDiscovery.EnableSPANavigation || c.config.BrowserDiscovery.EnableDOMMonkey || c.config.BrowserDiscovery.EnableDOMXSS || c.config.BrowserDiscovery.EnableStorageAudit {
+				if cdp := GetDefaultCDPDriver(); cdp != nil {
+					driver = cdp
+				} else {
+					driver = NewHeadlessBrowserDriver()
+				}
+			} else {
+				driver = NewHeadlessBrowserDriver()
+			}
 		}
 
 		browserTimeout := c.config.BrowserDiscovery.Timeout
@@ -467,7 +475,14 @@ SourceMapLoop:
 		browserCtx, browserCancel := context.WithTimeout(ctx, browserTimeout)
 		defer browserCancel()
 
-		browserRes, bErr := driver.Discover(browserCtx, rawTarget, c.config.BrowserDiscovery, scope)
+		bOpts := c.config.BrowserDiscovery
+		if !bOpts.AllowLoopback && c.config.AllowLoopback {
+			bOpts.AllowLoopback = true
+		}
+		if !bOpts.AllowPrivateIPs && c.config.AllowPrivateIPs {
+			bOpts.AllowPrivateIPs = true
+		}
+		browserRes, bErr := driver.Discover(browserCtx, rawTarget, bOpts, scope)
 		if browserRes != nil {
 			res.BrowserDiscovery = browserRes
 			if bErr != nil {

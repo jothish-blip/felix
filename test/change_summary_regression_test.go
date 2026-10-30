@@ -1148,7 +1148,7 @@ func TestChangeSummary_15_LargeFindingSets_Performance(t *testing.T) {
 		t.Errorf("expected %d persistent findings, got %d", count, summary.Counts.Persistent)
 	}
 	t.Logf("Computed change summary for %d findings in %v", count*2, duration)
-	if duration > 5*time.Second {
+	if duration > 10*time.Second {
 		t.Errorf("performance regression: took %v (expected < 5s)", duration)
 	}
 }

@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>FELIX Benchmark - Multi-Context XSS Testbed</title>
+</head>
+<body>
+    <h1>FELIX Context-Aware XSS Reflection Benchmark</h1>
+
+    <!-- 1. HTML Body Context - Unencoded (Vulnerable) -->
+    <section id="body-unencoded">
+        <h2>Unencoded HTML Body Reflection</h2>
+        <div class="user-greeting">{{REFLECT_HTML_BODY_RAW}}</div>
+    </section>
+
+    <!-- 2. HTML Body Context - Entity Encoded (Defended) -->
+    <section id="body-encoded">
+        <h2>HTML Entity Encoded Body Reflection</h2>
+        <div class="user-safe">{{REFLECT_HTML_BODY_ENCODED}}</div>
+    </section>
+
+    <!-- 3. HTML Attribute Context - Double Quoted Breakout (Vulnerable) -->
+    <section id="attr-double-quote-vuln">
+        <h2>Attribute Double-Quote Breakout</h2>
+        <input type="text" name="search" value="{{REFLECT_ATTR_RAW}}">
+    </section>
+
+    <!-- 4. HTML Attribute Context - Entity Encoded Quotes (Defended) -->
+    <section id="attr-double-quote-defended">
+        <h2>Attribute Double-Quote Defended</h2>
+        <input type="text" name="safe_search" value="{{REFLECT_ATTR_ENCODED}}">
+    </section>
+
+    <!-- 5. Script Block Context - String Literal Breakout (Vulnerable) -->
+    <section id="script-vuln">
+        <h2>Script Tag Literal Breakout</h2>
+        <script>
+            var userQuery = '{{REFLECT_SCRIPT_RAW}}';
+            console.log("Logged query: " + userQuery);
+        </script>
+    </section>
+
+    <!-- 6. Script Block Context - Escaped Quotes (Defended) -->
+    <section id="script-defended">
+        <h2>Script Tag Escaped Literal Defended</h2>
+        <script>
+            var safeQuery = '{{REFLECT_SCRIPT_ESCAPED}}';
+            console.log("Logged safe query: " + safeQuery);
+        </script>
+    </section>
+
+    <!-- 7. HTML Comment Context - Breakout (Vulnerable) -->
+    <section id="comment-vuln">
+        <h2>HTML Comment Breakout</h2>
+        <!-- User audit log: {{REFLECT_COMMENT_RAW}} -->
+    </section>
+
+    <!-- 8. Inert Context - Textarea (Defended / Non-executable without closing tag) -->
+    <section id="inert-textarea">
+        <h2>Inert Context: Textarea</h2>
+        <textarea name="feedback" rows="4" cols="50">{{REFLECT_INERT_TEXTAREA}}</textarea>
+    </section>
+
+    <!-- 9. Inert Context - Title (Defended / Non-executable) -->
+    <section id="inert-title">
+        <h2>Inert Context: Title Tag</h2>
+        <title>Document Title: {{REFLECT_INERT_TITLE}}</title>
+    </section>
+
+    <!-- 10. Inert Context - Style Tag (Defended) -->
+    <section id="inert-style">
+        <h2>Inert Context: Style Tag</h2>
+        <style>
+            /* Dynamic theme color: {{REFLECT_INERT_STYLE}} */
+            .custom-theme { color: #333333; }
+        </style>
+    </section>
+</body>
+</html>

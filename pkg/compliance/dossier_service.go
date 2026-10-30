@@ -59,9 +59,19 @@ func (s *DossierService) GenerateDossier(ctx context.Context, req GenerateDossie
 		return nil, errors.New("assessment_id is required to generate a compliance dossier")
 	}
 
+	// 1. Resolve and validate the ControlCatalog if provided
+	catalog := req.Catalog
+	if catalog == nil && req.CatalogPath != "" {
+		loadedCat, loadErr := LoadCatalog(req.CatalogPath)
+		if loadErr != nil {
+			return nil, fmt.Errorf("failed loading catalog from %q: %w", req.CatalogPath, loadErr)
+		}
+		catalog = loadedCat
+	}
+
 	cleanCatID := strings.TrimSpace(req.CatalogID)
-	if cleanCatID == "" && req.Catalog != nil {
-		cleanCatID = req.Catalog.ID
+	if cleanCatID == "" && catalog != nil {
+		cleanCatID = catalog.ID
 	}
 	if cleanCatID == "" {
 		return nil, errors.New("catalog_id or a valid ControlCatalog is required to generate a compliance dossier")
@@ -69,7 +79,7 @@ func (s *DossierService) GenerateDossier(ctx context.Context, req GenerateDossie
 
 	now := s.clock.Now().UTC()
 
-	// 1. Retrieve the stored evaluation result
+	// 2. Retrieve the stored evaluation result
 	evalRes, err := s.store.GetEvaluationResult(cleanAssID, cleanCatID)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -79,16 +89,6 @@ func (s *DossierService) GenerateDossier(ctx context.Context, req GenerateDossie
 	}
 	if evalRes == nil {
 		return nil, fmt.Errorf("%w: evaluation result not found for assessment %q catalog %q", ErrNotFound, cleanAssID, cleanCatID)
-	}
-
-	// 2. Resolve and validate the ControlCatalog
-	catalog := req.Catalog
-	if catalog == nil && req.CatalogPath != "" {
-		loadedCat, loadErr := LoadCatalog(req.CatalogPath)
-		if loadErr != nil {
-			return nil, fmt.Errorf("failed loading catalog from %q: %w", req.CatalogPath, loadErr)
-		}
-		catalog = loadedCat
 	}
 
 	var (

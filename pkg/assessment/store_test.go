@@ -550,6 +550,94 @@ func TestStore_InventoryPersistenceAndTraceability(t *testing.T) {
 	}
 }
 
+func TestStore_MultiAssessmentInventoryScopeIsolation(t *testing.T) {
+	store, cleanup := newTestStore(t)
+	defer cleanup()
+
+	now := time.Now().UTC()
+	clientID := uuid.New().String()
+	_ = store.CreateClient(&Client{ID: clientID, Name: "Multi-Assessment Corp", CreatedAt: now, UpdatedAt: now})
+
+	asm1ID := uuid.New().String()
+	asm2ID := uuid.New().String()
+	if err := store.CreateAssessment(&Assessment{ID: asm1ID, Ref: "ASM-TEST-001", ClientID: clientID, Name: "Run 1", Status: StatusDraft, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("CreateAssessment asm1 failed: %v", err)
+	}
+	if err := store.CreateAssessment(&Assessment{ID: asm2ID, Ref: "ASM-TEST-002", ClientID: clientID, Name: "Run 2", Status: StatusDraft, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("CreateAssessment asm2 failed: %v", err)
+	}
+
+	exec1 := "exec-1"
+	exec2 := "exec-2"
+	_ = store.CreateExecution(&AssessmentExecution{
+		ID:           exec1,
+		AssessmentID: asm1ID,
+		Status:       StatusCompleted,
+		StartedAt:    now,
+	})
+	_ = store.CreateExecution(&AssessmentExecution{
+		ID:           exec2,
+		AssessmentID: asm2ID,
+		Status:       StatusCompleted,
+		StartedAt:    now,
+	})
+
+	// Same asset ID in two different assessments (e.g. scanning the same target URL twice)
+	assetID := "ast_shared_root"
+	asset1 := discovery.Asset{
+		ID:              assetID,
+		AssessmentID:    asm1ID,
+		ExecutionID:     exec1,
+		Type:            discovery.AssetTypeApplication,
+		CanonicalID:     "http://127.0.0.1:3000/",
+		DisplayName:     "http://127.0.0.1:3000/",
+		DiscoveryMethod: "HTML_ANALYSIS",
+		DiscoveryStatus: discovery.StatusObserved,
+		Confidence:      discovery.ConfidenceHigh,
+		InScope:         true,
+		FirstSeen:       now,
+		LastSeen:        now,
+	}
+	asset2 := discovery.Asset{
+		ID:              assetID,
+		AssessmentID:    asm2ID,
+		ExecutionID:     exec2,
+		Type:            discovery.AssetTypeApplication,
+		CanonicalID:     "http://127.0.0.1:3000/",
+		DisplayName:     "http://127.0.0.1:3000/",
+		DiscoveryMethod: "HTML_ANALYSIS",
+		DiscoveryStatus: discovery.StatusObserved,
+		Confidence:      discovery.ConfidenceHigh,
+		InScope:         true,
+		FirstSeen:       now,
+		LastSeen:        now,
+	}
+
+	if err := store.SaveInventory([]discovery.Asset{asset1}, nil); err != nil {
+		t.Fatalf("SaveInventory asm1 failed: %v", err)
+	}
+	if err := store.SaveInventory([]discovery.Asset{asset2}, nil); err != nil {
+		t.Fatalf("SaveInventory asm2 failed: %v", err)
+	}
+
+	// Verify both assessments have their asset
+	inv1, _, err := store.GetInventory(asm1ID, exec1, "", false)
+	if err != nil || len(inv1) != 1 {
+		t.Fatalf("expected asm1 to have 1 asset, got %d, err: %v", len(inv1), err)
+	}
+	if inv1[0].AssessmentID != asm1ID {
+		t.Errorf("expected inv1 AssessmentID %s, got %s", asm1ID, inv1[0].AssessmentID)
+	}
+
+	inv2, _, err := store.GetInventory(asm2ID, exec2, "", false)
+	if err != nil || len(inv2) != 1 {
+		t.Fatalf("expected asm2 to have 1 asset, got %d, err: %v", len(inv2), err)
+	}
+	if inv2[0].AssessmentID != asm2ID {
+		t.Errorf("expected inv2 AssessmentID %s, got %s", asm2ID, inv2[0].AssessmentID)
+	}
+}
+
 func TestStore_AuthInventoryPersistenceAndMigration(t *testing.T) {
 	store, cleanup := newTestStore(t)
 	defer cleanup()

@@ -123,8 +123,6 @@ func (bp *BasePolicy) createResult(
 	var aMethod report.AnalysisMethod
 	if attempted {
 		aMethod = report.AnalysisMethodActive
-	} else if f.AnalysisMethod != "" {
-		aMethod = f.AnalysisMethod
 	} else {
 		aMethod = report.AnalysisMethodStatic
 	}
@@ -207,17 +205,28 @@ func (p *DiscoveryExposurePolicy) AppliesTo(f report.Finding) bool {
 	cat := strings.ToUpper(f.Category)
 	src := f.Source
 	return src == report.SourceCrawler || src == report.SourceSecrets ||
-		strings.Contains(cat, "DISCOVERY") || strings.Contains(cat, "RECON") ||
+		strings.Contains(cat, "DISCOVER") || strings.Contains(cat, "RECON") ||
 		strings.Contains(cat, "EXPOSURE") || strings.Contains(cat, "SECRET")
 }
 
 func (p *DiscoveryExposurePolicy) Verify(ctx context.Context, f report.Finding, checker *SafetyChecker) (VerificationResult, error) {
 	start := time.Now().UTC()
 	cat := strings.ToUpper(f.Category)
+	src := f.Source
 	synthetic := f.Verification.SyntheticFixture || strings.Contains(f.Evidence, "[SYNTHETIC FIXTURE]") || strings.Contains(f.Title, "[SYNTHETIC FIXTURE]")
 
-	// Safety check
-	safety := checker.Check(f.Target, f.Endpoint, f.Method, false)
+	// Safety check: passive observations, inventory discoveries, and static pattern matches do not consume active probe quota
+	isPassive := strings.Contains(cat, "RUNTIME") || strings.Contains(cat, "FRAMEWORK") ||
+		strings.Contains(cat, "POWERED-BY") || strings.Contains(cat, "DISCOVER") ||
+		strings.Contains(cat, "ASSET") || src == report.SourceSecrets || strings.Contains(cat, "SECRET")
+	var safety SafetyDecisionResult
+	if isPassive && checker != nil {
+		safety = checker.CheckPassive(f.Target, f.Endpoint)
+	} else if checker != nil {
+		safety = checker.Check(f.Target, f.Endpoint, f.Method, false)
+	} else {
+		safety = SafetyDecisionResult{Allowed: true, Decision: DecisionAllowed}
+	}
 	if !safety.Allowed {
 		return p.createResult(
 			f, StatusNotVerified, "safety_block", false,
@@ -230,6 +239,77 @@ func (p *DiscoveryExposurePolicy) Verify(ctx context.Context, f report.Finding, 
 	}
 
 	var criteria []CriterionResult
+
+	// Case 0: Framework & Runtime Header Observation (e.g. node-runtime-exposure, server-header)
+	if strings.Contains(cat, "RUNTIME") || strings.Contains(cat, "FRAMEWORK") || strings.Contains(cat, "POWERED-BY") {
+		if strings.Contains(strings.ToLower(f.Evidence), "x-powered-by") || strings.Contains(strings.ToLower(f.Evidence), "server") || strings.Contains(strings.ToLower(f.Evidence), "express") {
+			criteria = append(criteria, CriterionResult{
+				CriterionID: "CRIT-FRAMEWORK-HEADER-OBSERVED",
+				Name:        "Framework Identification Header Observed",
+				Status:      CriterionPassed,
+				Evidence:    f.Evidence,
+				Rationale:   "HTTP response header disclosed backend runtime/framework information (informational observation)",
+			})
+			return p.createResult(
+				f, StatusObserved, "response_header_inspection", false,
+				report.ConfidenceHigh, ConfidenceHigh, criteria,
+				"Framework identification header observed on HTTP response",
+				f.Evidence,
+				[]string{"HTTP probe response header inspection"},
+				[]string{"Framework header identification is an informational configuration observation, not an exploitable vulnerability"},
+				"", "",
+				safety, synthetic, start,
+			), nil
+		}
+	}
+
+	// Case 0.5: Discovered API / Web Endpoints (e.g. CategoryEndpointDiscovered)
+	if strings.Contains(cat, "ENDPOINT-DISCOVERED") || (strings.Contains(cat, "DISCOVER") && strings.Contains(strings.ToLower(f.Title), "endpoint")) {
+		isAuthRequired := strings.Contains(strings.ToUpper(f.Title), "AUTH_REQUIRED") ||
+			strings.EqualFold(f.EvidenceDetails.Details["auth_state"], "AUTH_REQUIRED") ||
+			strings.EqualFold(f.EvidenceDetails.Details["auth_context"], "AUTH_REQUIRED") ||
+			strings.Contains(strings.ToLower(f.Evidence), "401") ||
+			strings.Contains(strings.ToLower(f.Evidence), "protected boundary active")
+
+		if isAuthRequired {
+			criteria = append(criteria, CriterionResult{
+				CriterionID: "CRIT-NEG-ENDPOINT-AUTH-REQUIRED",
+				Name:        "Endpoint Authentication Barrier Enforced",
+				Status:      CriterionPassed,
+				Evidence:    f.Evidence,
+				Rationale:   "Endpoint requires authentication (HTTP 401); affirmative access control barrier confirmed enforced",
+			})
+			return p.createResult(
+				f, StatusNotExposed, "boundary_inspection", true,
+				report.ConfidenceHigh, ConfidenceHigh, criteria,
+				"Authentication or authorization barrier enforced",
+				"HTTP 401 challenge returned; unauthenticated access denied",
+				[]string{"Endpoint discovery probe"},
+				[]string{"Negative verification strictly confirms unauthenticated access barrier; authenticated roles not evaluated"},
+				"", "",
+				safety, synthetic, start,
+			), nil
+		}
+
+		// Public endpoint reachability observation
+		criteria = append(criteria, CriterionResult{
+			CriterionID: "CRIT-ENDPOINT-INVENTORY-OBSERVED",
+			Name:        "Public Endpoint Reachability Observed",
+			Status:      CriterionPassed,
+			Evidence:    f.Evidence,
+			Rationale:   "Discovered endpoint responded without requiring authentication; cataloged in API inventory",
+		})
+		return p.createResult(
+			f, StatusObserved, "discovery_crawl", false,
+			report.ConfidenceHigh, ConfidenceHigh, criteria,
+			"Standard API route inventory cataloged",
+			"Discovered API endpoint reached with HTTP 200 OK",
+			[]string{"Asset discovery crawl"},
+			[]string{"Informational endpoint inventory observation, not an independently exploitable vulnerability"},
+			"", "",
+			safety, synthetic, start,
+		), nil
+	}
 
 	// Case 1: Secrets in client code (SourceSecrets)
 	if f.Source == report.SourceSecrets || strings.Contains(cat, "SECRET") {
@@ -384,7 +464,7 @@ func (p *DiscoveryExposurePolicy) Verify(ctx context.Context, f report.Finding, 
 	})
 
 	return p.createResult(
-		f, StatusObserved, "discovery_crawl", true,
+		f, StatusObserved, "discovery_crawl", false,
 		report.ConfidenceLow, ConfidenceNone, criteria,
 		"Expected standard web route behavior",
 		"Asset observed during discovery phase",
@@ -439,9 +519,34 @@ func (p *AuthenticationPolicy) Verify(ctx context.Context, f report.Finding, che
 
 	// Cookie attribute gap (e.g. HttpOnly / Secure missing on session cookie)
 	// Evaluated FIRST so cookie flaws are never obscured by an authentication response code
-	isCookieFlaw := strings.Contains(strings.ToLower(f.Title), "cookie") &&
-		(strings.Contains(strings.ToLower(f.Title), "httponly") || strings.Contains(strings.ToLower(f.Title), "samesite") || strings.Contains(strings.ToLower(f.Title), "secure"))
-	if isCookieFlaw && f.EvidenceDetails.Details != nil && f.EvidenceDetails.Details["cookie_name"] != "" {
+	isCookieFlaw := (strings.Contains(strings.ToLower(f.Title), "cookie") || strings.Contains(strings.ToLower(f.Category), "cookie") || f.RuleID == "AUTH-COOKIE-DEFECT") &&
+		(strings.Contains(strings.ToLower(f.Title), "httponly") || strings.Contains(strings.ToLower(f.Title), "samesite") || strings.Contains(strings.ToLower(f.Title), "secure") || strings.Contains(strings.ToLower(f.Evidence), "cookie name"))
+	if isCookieFlaw {
+		// Context check: Is the target served over unencrypted HTTP?
+		// Missing Secure flag on HTTP-only target requires context-aware interpretation; cannot claim production exploitability.
+		isHTTPTarget := strings.HasPrefix(strings.ToLower(f.Target), "http://") || strings.Contains(f.Title, "unencrypted HTTP")
+		isSecureDefectOnly := strings.Contains(f.Title, "Missing Secure flag") && !strings.Contains(f.Title, "HttpOnly")
+
+		if isHTTPTarget && isSecureDefectOnly {
+			criteria = append(criteria, CriterionResult{
+				CriterionID: "CRIT-COOKIE-HTTP-CONTEXT",
+				Name:        "Unencrypted HTTP Target Context",
+				Status:      CriterionPassed,
+				Evidence:    f.Evidence,
+				Rationale:   "Cookie served over unencrypted HTTP transport; Secure flag cannot be enforced without HTTPS (informational observation)",
+			})
+			return p.createResult(
+				f, StatusObserved, "cookie_attribute_inspection", false,
+				report.ConfidenceHigh, ConfidenceHigh, criteria,
+				"Secure flag requires HTTPS transport to be enforced by client browser",
+				"Session cookie observed without Secure flag on unencrypted HTTP endpoint; operational requirement for HTTPS",
+				[]string{"Set-Cookie header inspection over HTTP"},
+				[]string{"Local test target served over HTTP; Secure flag requires HTTPS deployment"},
+				"", "",
+				safety, synthetic, start,
+			), nil
+		}
+
 		criteria = append(criteria, CriterionResult{
 			CriterionID: "CRIT-COOKIE-HEADER",
 			Name:        "Set-Cookie Header Inspected",
@@ -713,6 +818,7 @@ func NewAPISecurityPolicy() *APISecurityPolicy {
 func (p *APISecurityPolicy) AppliesTo(f report.Finding) bool {
 	cat := strings.ToUpper(f.Category)
 	return f.Source == report.SourceAPI || strings.Contains(cat, "API") ||
+		strings.Contains(cat, "GRAPHQL") ||
 		strings.Contains(cat, "EXCESSIVE") || strings.Contains(cat, "HEADERS")
 }
 
@@ -720,7 +826,26 @@ func (p *APISecurityPolicy) Verify(ctx context.Context, f report.Finding, checke
 	start := time.Now().UTC()
 	synthetic := f.Verification.SyntheticFixture || strings.Contains(f.Evidence, "[SYNTHETIC FIXTURE]")
 
-	safety := checker.Check(f.Target, f.Endpoint, f.Method, false)
+	isHeaderAudit := strings.Contains(strings.ToLower(f.Category), "header") ||
+		strings.Contains(strings.ToLower(f.Title), "header") ||
+		strings.HasPrefix(strings.ToLower(f.Category), "missing-") ||
+		strings.HasPrefix(strings.ToLower(f.Category), "weak-") ||
+		strings.Contains(strings.ToLower(f.Title), "security-policy") ||
+		strings.Contains(strings.ToLower(f.Title), "csp") ||
+		strings.Contains(strings.ToLower(f.Title), "x-frame") ||
+		strings.Contains(strings.ToLower(f.Title), "nosniff")
+	isCORS := strings.Contains(strings.ToLower(f.Category), "cors") || strings.Contains(strings.ToLower(f.Title), "cors")
+	isEndpointDiscovered := strings.Contains(strings.ToLower(f.Category), "endpoint-discovered") || strings.Contains(strings.ToLower(f.Category), "discovered")
+	isPassive := isHeaderAudit || (isCORS && !strings.Contains(strings.ToLower(f.Evidence), "credentials: true")) || isEndpointDiscovered
+
+	var safety SafetyDecisionResult
+	if isPassive && checker != nil {
+		safety = checker.CheckPassive(f.Target, f.Endpoint)
+	} else if checker != nil {
+		safety = checker.Check(f.Target, f.Endpoint, f.Method, false)
+	} else {
+		safety = SafetyDecisionResult{Allowed: true, Decision: DecisionAllowed}
+	}
 	if !safety.Allowed {
 		return p.createResult(
 			f, StatusNotVerified, "safety_block", false,
@@ -735,7 +860,7 @@ func (p *APISecurityPolicy) Verify(ctx context.Context, f report.Finding, checke
 	var criteria []CriterionResult
 
 	// Missing security headers: verified if response headers confirmed missing required defensive header
-	if strings.Contains(strings.ToLower(f.Category), "header") || strings.Contains(strings.ToLower(f.Title), "header") {
+	if isHeaderAudit {
 		criteria = append(criteria, CriterionResult{
 			CriterionID: "CRIT-HEADER-INSPECTION",
 			Name:        "HTTP Header Audit",
@@ -757,7 +882,9 @@ func (p *APISecurityPolicy) Verify(ctx context.Context, f report.Finding, checke
 	// Excessive data exposure: verified if response contains sensitive data
 	isDataExposure := strings.Contains(strings.ToLower(f.Category), "data_exposure") ||
 		strings.Contains(strings.ToLower(f.Title), "pii") ||
-		strings.Contains(strings.ToLower(f.Title), "excessive data")
+		strings.Contains(strings.ToLower(f.Title), "excessive data") ||
+		strings.Contains(strings.ToLower(f.Category), "telescope-sensitive-data") ||
+		strings.Contains(strings.ToLower(f.Category), "sensitive-schema")
 
 	if isDataExposure && len(f.Evidence) > 0 {
 		criteria = append(criteria, CriterionResult{
@@ -773,6 +900,254 @@ func (p *APISecurityPolicy) Verify(ctx context.Context, f report.Finding, checke
 			"Minimal response schema without sensitive data",
 			"Sensitive fields present in JSON response body",
 			[]string{"API endpoint query"}, nil,
+			"", "",
+			safety, synthetic, start,
+		), nil
+	}
+
+	// GraphQL Introspection Evaluation
+	isGraphQL := strings.Contains(strings.ToLower(f.Category), "graphql")
+	if isGraphQL {
+		evLower := strings.ToLower(f.Evidence)
+		isHTML := strings.Contains(evLower, "<html") || strings.Contains(evLower, "<!doctype")
+
+		// 1. Negative Control: Introspection Denied or Restricted (HTTP 401, 403, or explicit restriction)
+		isDeniedCategory := strings.Contains(strings.ToLower(f.Category), "denied") ||
+			strings.Contains(strings.ToLower(f.Title), "denied")
+		hasDeniedStatus := f.EvidenceDetails.HTTPStatus == 401 || f.EvidenceDetails.HTTPStatus == 403
+		hasDeniedText := strings.Contains(evLower, "introspection is not allowed") ||
+			strings.Contains(evLower, "introspection disabled") ||
+			strings.Contains(evLower, "introspection is disabled") ||
+			strings.Contains(evLower, "graphql introspection is forbidden")
+
+		if isDeniedCategory || hasDeniedStatus || hasDeniedText {
+			criteria = append(criteria, CriterionResult{
+				CriterionID: "CRIT-NEG-GRAPHQL-RESTRICTED",
+				Name:        "GraphQL Introspection Barrier Confirmed",
+				Status:      CriterionPassed,
+				Evidence:    report.SanitizeEvidence(f.Evidence),
+				Rationale:   "Server actively enforced authorization or security policy prohibiting schema introspection",
+			})
+			return p.createResult(
+				f, StatusNotExposed, "graphql_introspection_barrier", true,
+				report.ConfidenceHigh, ConfidenceHigh, criteria,
+				"Introspection disabled or restricted by server security policy",
+				fmt.Sprintf("Introspection blocked with HTTP %d / access restricted; does not prove entire GraphQL schema or application is secure", f.EvidenceDetails.HTTPStatus),
+				[]string{"GraphQL introspection probe against endpoint"},
+				[]string{"Negative verification strictly limited to tested introspection query; custom queries and business logic not tested"},
+				"", "",
+				safety, synthetic, start,
+			), nil
+		}
+
+		// 2. Positive Verification: Confirmed Successful Introspection
+		// Must have HTTP 200, must NOT be an HTML shell/error page, must have positive types proof, and cannot have 0 types
+		hasZeroTypes := strings.Contains(evLower, "0 types observed") || strings.Contains(evLower, "zero types")
+		hasTypesObserved := strings.Contains(evLower, "types observed") && !hasZeroTypes
+		hasSucceededText := strings.Contains(evLower, "introspection query succeeded")
+		hasValidProof := (hasSucceededText || hasTypesObserved) &&
+			!hasZeroTypes &&
+			(f.EvidenceDetails.HTTPStatus == 200 || strings.Contains(evLower, "http 200 ok")) &&
+			!isHTML
+
+		if hasValidProof {
+			criteria = append(criteria, CriterionResult{
+				CriterionID: "CRIT-GRAPHQL-INTROSPECTION-ENABLED",
+				Name:        "GraphQL Introspection Succeeded",
+				Status:      CriterionPassed,
+				Evidence:    report.SanitizeEvidence(f.Evidence),
+				Rationale:   "Public GraphQL introspection query returned confirmed schema types and operations",
+			})
+			return p.createResult(
+				f, StatusVerified, "graphql_introspection_query", true,
+				report.ConfidenceHigh, ConfidenceHigh, criteria,
+				"Introspection disabled or restricted (HTTP 400/401/403/404)",
+				"HTTP 200 OK with schema types returned",
+				[]string{"GraphQL introspection query"}, nil,
+				"", "",
+				safety, synthetic, start,
+			), nil
+		}
+
+		// 3. Incomplete, Malformed, SPA HTML, or Generic/Unrelated Response -> NOT_VERIFIED
+		var inconclusiveReason string
+		switch {
+		case isHTML:
+			inconclusiveReason = "GraphQL endpoint returned HTML document or SPA fallback shell rather than valid GraphQL JSON schema"
+		case strings.Contains(evLower, "0 types observed"):
+			inconclusiveReason = "GraphQL introspection query returned empty schema with 0 types"
+		case f.EvidenceDetails.HTTPStatus == 200:
+			inconclusiveReason = "Endpoint returned HTTP 200 OK but response lacks confirmed GraphQL schema types"
+		default:
+			inconclusiveReason = "GraphQL introspection was unconfirmed or returned an inconclusive generic API response"
+		}
+
+		criteria = append(criteria, CriterionResult{
+			CriterionID: "CRIT-GRAPHQL-VERIFICATION-INCONCLUSIVE",
+			Name:        "GraphQL Schema Proof Evaluation",
+			Status:      CriterionInconclusive,
+			Evidence:    report.SanitizeEvidence(f.Evidence),
+			Rationale:   inconclusiveReason,
+		})
+		return p.createResult(
+			f, StatusNotVerified, "graphql_introspection_probe", true,
+			report.ConfidenceLow, ConfidenceNone, criteria,
+			"Empirical proof of GraphQL schema exposure with positive type count",
+			inconclusiveReason,
+			nil, []string{"Extended GraphQL query verification required"},
+			"", inconclusiveReason,
+			safety, synthetic, start,
+		), nil
+	}
+
+	// Diagnostic & Documentation Endpoints (Actuator, OpenAPI, Swagger, Framework Diagnostics)
+	isDiagnostic := strings.Contains(strings.ToLower(f.Category), "actuator") ||
+		strings.Contains(strings.ToLower(f.Category), "swagger") ||
+		strings.Contains(strings.ToLower(f.Category), "openapi") ||
+		strings.Contains(strings.ToLower(f.Category), "fastapi") ||
+		strings.Contains(strings.ToLower(f.Category), "django") ||
+		strings.Contains(strings.ToLower(f.Category), "laravel") ||
+		strings.Contains(strings.ToLower(f.Category), "telescope") ||
+		strings.Contains(strings.ToLower(f.Category), "ignition") ||
+		strings.Contains(strings.ToLower(f.Category), "pprof") ||
+		strings.Contains(strings.ToLower(f.Category), "restricted") ||
+		strings.Contains(strings.ToLower(f.Category), "protected")
+	if isDiagnostic {
+		evLower := strings.ToLower(f.Evidence)
+		isHTMLShell := strings.Contains(evLower, "<html") || strings.Contains(evLower, "<!doctype")
+
+		// Restricted or denied (HTTP 401, 403, 302 login redirect, or restricted/protected category)
+		isRestrictedStatus := f.EvidenceDetails.HTTPStatus == 401 || f.EvidenceDetails.HTTPStatus == 403 ||
+			(f.EvidenceDetails.HTTPStatus == 302 && (strings.Contains(strings.ToLower(f.Evidence), "redirect") || strings.Contains(strings.ToLower(f.Evidence), "login")))
+		isRestrictedCat := strings.Contains(strings.ToLower(f.Category), "restricted") ||
+			strings.Contains(strings.ToLower(f.Category), "protected") ||
+			strings.Contains(strings.ToLower(f.Title), "requires authentication") ||
+			strings.Contains(strings.ToLower(f.Title), "access restricted")
+		if isRestrictedStatus || isRestrictedCat {
+			criteria = append(criteria, CriterionResult{
+				CriterionID: "CRIT-NEG-DIAGNOSTIC-RESTRICTED",
+				Name:        "Diagnostic Endpoint Access Restricted",
+				Status:      CriterionPassed,
+				Evidence:    report.SanitizeEvidence(f.Evidence),
+				Rationale:   "Access restricted by authentication or authorization barrier",
+			})
+			return p.createResult(
+				f, StatusNotExposed, "diagnostic_barrier_check", true,
+				report.ConfidenceHigh, ConfidenceHigh, criteria,
+				"Access restricted (HTTP 401/403 or redirect)",
+				fmt.Sprintf("Diagnostic endpoint returned HTTP %d", f.EvidenceDetails.HTTPStatus),
+				[]string{"Direct HTTP reachability"},
+				[]string{"Negative verification strictly limited to tested endpoint"},
+				"", "",
+				safety, synthetic, start,
+			), nil
+		}
+
+		if (f.EvidenceDetails.HTTPStatus == 200 || strings.Contains(f.Evidence, "HTTP 200")) && len(f.Evidence) > 0 && !isHTMLShell {
+			criteria = append(criteria, CriterionResult{
+				CriterionID: "CRIT-DIAGNOSTIC-ENDPOINT-EXPOSED",
+				Name:        "Diagnostic/Documentation Endpoint Accessible",
+				Status:      CriterionPassed,
+				Evidence:    report.SanitizeEvidence(f.Evidence),
+				Rationale:   "Diagnostic or documentation interface responded with HTTP 200 OK and valid schema/telemetry",
+			})
+			return p.createResult(
+				f, StatusVerified, "active_get_probe", true,
+				report.ConfidenceHigh, ConfidenceHigh, criteria,
+				"Access restricted (HTTP 401/403/404)",
+				"Public diagnostic/documentation interface accessible with HTTP 200 OK",
+				[]string{"Direct HTTP reachability"}, nil,
+				"", "",
+				safety, synthetic, start,
+			), nil
+		}
+	}
+
+	// CORS Policy Evaluation
+	isCORSFinding := strings.Contains(strings.ToLower(f.Category), "cors") || strings.Contains(strings.ToLower(f.Title), "cors")
+	if isCORSFinding {
+		evLower := strings.ToLower(f.Evidence)
+		if strings.Contains(evLower, "credentials: true") || strings.Contains(evLower, "access-control-allow-credentials: true") {
+			criteria = append(criteria, CriterionResult{
+				CriterionID: "CRIT-CORS-CREDENTIALS-EXPOSED",
+				Name:        "CORS Arbitrary Origin Reflection with Credentials",
+				Status:      CriterionPassed,
+				Evidence:    report.SanitizeEvidence(f.Evidence),
+				Rationale:   "Target allows cross-origin requests with credentials from arbitrary origins",
+			})
+			return p.createResult(
+				f, StatusVerified, "active_cors_probe", true,
+				report.ConfidenceHigh, ConfidenceHigh, criteria,
+				"Allowlisted origin or credentials disallowed",
+				"Arbitrary origin reflection with credentials confirmed",
+				[]string{"CORS preflight / Origin probe"}, nil,
+				"", "",
+				safety, synthetic, start,
+			), nil
+		}
+
+		// CORS wildcard (*) or origin reflection without credentials -> Informational Observation
+		criteria = append(criteria, CriterionResult{
+			CriterionID: "CRIT-CORS-WILDCARD-OBSERVED",
+			Name:        "Permissive CORS Policy Observed",
+			Status:      CriterionPassed,
+			Evidence:    report.SanitizeEvidence(f.Evidence),
+			Rationale:   "Access-Control-Allow-Origin header returned without credentials; permitted for public endpoints",
+		})
+		return p.createResult(
+			f, StatusObserved, "response_header_inspection", false,
+			report.ConfidenceHigh, ConfidenceHigh, criteria,
+			"Standard restrictive CORS or public resource sharing",
+			"Wildcard CORS origin observed on public endpoint; credential reflection not present",
+			[]string{"Response header audit"},
+			[]string{"Permissive CORS without credentials is an informational architecture observation, not a vulnerability"},
+			"", "",
+			safety, synthetic, start,
+		), nil
+	}
+
+	// Endpoint Discovery Fallback
+	if strings.Contains(strings.ToUpper(f.Category), "DISCOVER") {
+		isAuthRequired := strings.Contains(strings.ToUpper(f.Title), "AUTH_REQUIRED") ||
+			strings.EqualFold(f.EvidenceDetails.Details["auth_state"], "AUTH_REQUIRED") ||
+			strings.EqualFold(f.EvidenceDetails.Details["auth_context"], "AUTH_REQUIRED") ||
+			strings.Contains(strings.ToLower(f.Evidence), "401") ||
+			strings.Contains(strings.ToLower(f.Evidence), "protected boundary active")
+
+		if isAuthRequired {
+			criteria = append(criteria, CriterionResult{
+				CriterionID: "CRIT-NEG-ENDPOINT-AUTH-REQUIRED",
+				Name:        "Endpoint Authentication Barrier Enforced",
+				Status:      CriterionPassed,
+				Evidence:    f.Evidence,
+				Rationale:   "Endpoint requires authentication (HTTP 401); affirmative access control barrier confirmed enforced",
+			})
+			return p.createResult(
+				f, StatusNotExposed, "boundary_inspection", true,
+				report.ConfidenceHigh, ConfidenceHigh, criteria,
+				"Authentication or authorization barrier enforced",
+				"HTTP 401 challenge returned; unauthenticated access denied",
+				[]string{"Endpoint discovery probe"},
+				[]string{"Negative verification strictly confirms unauthenticated access barrier; authenticated roles not evaluated"},
+				"", "",
+				safety, synthetic, start,
+			), nil
+		}
+
+		criteria = append(criteria, CriterionResult{
+			CriterionID: "CRIT-ENDPOINT-INVENTORY-OBSERVED",
+			Name:        "Public Endpoint Reachability Observed",
+			Status:      CriterionPassed,
+			Evidence:    f.Evidence,
+			Rationale:   "Discovered endpoint responded without requiring authentication; cataloged in API inventory",
+		})
+		return p.createResult(
+			f, StatusObserved, "discovery_crawl", false,
+			report.ConfidenceHigh, ConfidenceHigh, criteria,
+			"Standard API route inventory cataloged",
+			"Discovered API endpoint reached with HTTP 200 OK",
+			[]string{"Asset discovery crawl"},
+			[]string{"Informational endpoint inventory observation, not an independently exploitable vulnerability"},
 			"", "",
 			safety, synthetic, start,
 		), nil
@@ -1182,7 +1557,7 @@ func (p *CloudSecurityPolicy) Verify(ctx context.Context, f report.Finding, chec
 		Rationale:   "Cloud resource endpoint identified in client configuration",
 	})
 	return p.createResult(
-		f, StatusObserved, "cloud_discovery", true,
+		f, StatusObserved, "cloud_discovery", false,
 		report.ConfidenceLow, ConfidenceNone, criteria,
 		"Expected standard cloud endpoint configuration",
 		"Cloud endpoint observed",

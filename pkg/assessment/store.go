@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -545,7 +546,7 @@ func (s *SQLiteStore) migrate() error {
 
 		schemaV2 := `
 		CREATE TABLE IF NOT EXISTS assessment_inventory_assets (
-			id TEXT PRIMARY KEY,
+			id TEXT NOT NULL,
 			assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
 			execution_id TEXT NOT NULL REFERENCES assessment_executions(id) ON DELETE CASCADE,
 			target_id TEXT,
@@ -562,7 +563,8 @@ func (s *SQLiteStore) migrate() error {
 			evidence_json TEXT,
 			fingerprint TEXT NOT NULL,
 			first_seen TIMESTAMP NOT NULL,
-			last_seen TIMESTAMP NOT NULL
+			last_seen TIMESTAMP NOT NULL,
+			PRIMARY KEY (assessment_id, id)
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_inv_assets_asm_id ON assessment_inventory_assets(assessment_id);
@@ -2290,6 +2292,62 @@ func (s *SQLiteStore) migrate() error {
 		applied[24] = true
 	}
 
+	// Migration 25: Composite Primary Key on assessment_inventory_assets(assessment_id, id)
+	if !applied[25] {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		var assetsTableExists int
+		_ = tx.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='assessment_inventory_assets'`).Scan(&assetsTableExists)
+		if assetsTableExists > 0 {
+			_, err = tx.Exec(`
+				CREATE TABLE IF NOT EXISTS assessment_inventory_assets_v2 (
+					id TEXT NOT NULL,
+					assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+					execution_id TEXT NOT NULL REFERENCES assessment_executions(id) ON DELETE CASCADE,
+					target_id TEXT,
+					asset_type TEXT NOT NULL,
+					canonical_id TEXT NOT NULL,
+					parent_id TEXT,
+					display_name TEXT NOT NULL,
+					source_asset TEXT,
+					discovery_method TEXT NOT NULL,
+					discovery_status TEXT NOT NULL,
+					confidence TEXT NOT NULL,
+					in_scope INTEGER NOT NULL DEFAULT 1,
+					metadata_json TEXT,
+					evidence_json TEXT,
+					fingerprint TEXT NOT NULL,
+					first_seen TIMESTAMP NOT NULL,
+					last_seen TIMESTAMP NOT NULL,
+					PRIMARY KEY (assessment_id, id)
+				);
+				INSERT OR IGNORE INTO assessment_inventory_assets_v2 SELECT * FROM assessment_inventory_assets;
+				DROP TABLE assessment_inventory_assets;
+				ALTER TABLE assessment_inventory_assets_v2 RENAME TO assessment_inventory_assets;
+				CREATE INDEX IF NOT EXISTS idx_inv_assets_asm_id ON assessment_inventory_assets(assessment_id);
+				CREATE INDEX IF NOT EXISTS idx_inv_assets_exec_id ON assessment_inventory_assets(execution_id);
+				CREATE INDEX IF NOT EXISTS idx_inv_assets_type ON assessment_inventory_assets(asset_type);
+				CREATE INDEX IF NOT EXISTS idx_inv_assets_fingerprint ON assessment_inventory_assets(fingerprint);
+			`)
+			if err != nil {
+				return fmt.Errorf("migration v25 failed: %w", err)
+			}
+		}
+
+		if _, err := tx.Exec(`INSERT INTO schema_migrations (version, applied_at) VALUES (25, CURRENT_TIMESTAMP);`); err != nil {
+			return fmt.Errorf("migration v25 recording failed: %w", err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		applied[25] = true
+	}
+
 	return nil
 }
 
@@ -3326,7 +3384,9 @@ func (s *SQLiteStore) SaveInventory(assets []discovery.Asset, relations []discov
 				parent_id, display_name, source_asset, discovery_method, discovery_status,
 				confidence, in_scope, metadata_json, evidence_json, fingerprint, first_seen, last_seen
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(id) DO UPDATE SET
+			ON CONFLICT(assessment_id, id) DO UPDATE SET
+				execution_id = excluded.execution_id,
+				target_id = excluded.target_id,
 				last_seen = excluded.last_seen,
 				discovery_status = excluded.discovery_status,
 				metadata_json = excluded.metadata_json,
@@ -7208,10 +7268,16 @@ func (s *SQLiteStore) GetVerificationRun(assessmentID string, executionID string
 		       not_verified_count, not_exposed_count, blocked_count, inconclusive_count,
 		       synthetic_count, coverage_json, verifier_version, created_at
 		FROM assessment_verification_runs
-		WHERE assessment_id = ? AND execution_id = ?
-		ORDER BY created_at DESC LIMIT 1
+		WHERE assessment_id = ?
 	`
-	err := s.db.QueryRow(query, assessmentID, executionID).Scan(
+	args := []any{assessmentID}
+	if executionID != "" {
+		query += " AND execution_id = ?"
+		args = append(args, executionID)
+	}
+	query += " ORDER BY created_at DESC LIMIT 1"
+
+	err := s.db.QueryRow(query, args...).Scan(
 		&run.ID, &run.AssessmentID, &run.ExecutionID, &run.TotalFindings,
 		&run.AttemptedCount, &run.VerifiedCount, &run.DetectedCount, &run.ObservedCount,
 		&run.NotVerifiedCount, &run.NotExposedCount, &run.BlockedCount, &run.InconclusiveCount,
@@ -7290,9 +7356,13 @@ func (s *SQLiteStore) GetVerificationResults(assessmentID string, executionID st
 		       block_reason, failure_reason, inconclusive_reason,
 		       synthetic_fixture, created_at
 		FROM assessment_verification_results
-		WHERE assessment_id = ? AND execution_id = ?
+		WHERE assessment_id = ?
 	`
-	args := []any{assessmentID, executionID}
+	args := []any{assessmentID}
+	if executionID != "" {
+		query += " AND execution_id = ?"
+		args = append(args, executionID)
+	}
 	if status != "" {
 		query += " AND status = ?"
 		args = append(args, strings.ToUpper(status))
@@ -7366,6 +7436,18 @@ func (s *SQLiteStore) GetVerificationSummary(assessmentID string, executionID st
 	if err == nil && run != nil && run.CoverageJSON != "" {
 		var sum verification.VerificationSummary
 		if err := json.Unmarshal([]byte(run.CoverageJSON), &sum); err == nil {
+			if sum.ConfirmationRate == 0 && sum.AttemptedCount > 0 && sum.VerifiedCount > 0 {
+				sum.ConfirmationRate = math.Round(float64(sum.VerifiedCount)/float64(sum.AttemptedCount)*1000) / 10
+			}
+			if sum.ConclusiveCount == 0 {
+				sum.ConclusiveCount = sum.VerifiedCount + sum.NotExposedCount
+			}
+			if sum.ConclusiveRate == 0 && sum.AttemptedCount > 0 {
+				sum.ConclusiveRate = math.Round(float64(sum.ConclusiveCount)/float64(sum.AttemptedCount)*1000) / 10
+			}
+			if sum.AttemptRate == 0 && sum.TotalFindings > 0 {
+				sum.AttemptRate = math.Round(float64(sum.AttemptedCount)/float64(sum.TotalFindings)*1000) / 10
+			}
 			return &sum, nil
 		}
 	}
@@ -7408,11 +7490,25 @@ func (s *SQLiteStore) GetVerificationSummary(assessmentID string, executionID st
 		}
 	}
 
-	if sum.AttemptedCount > 0 {
-		sum.VerificationRateAttempted = float64(sum.VerifiedCount) / float64(sum.AttemptedCount) * 100.0
-	}
 	if sum.TotalFindings > 0 {
-		sum.VerificationRateTotal = float64(sum.VerifiedCount) / float64(sum.TotalFindings) * 100.0
+		sum.AttemptRate = math.Round(float64(sum.AttemptedCount)/float64(sum.TotalFindings)*1000) / 10
+		sum.VerificationRateTotal = math.Round(float64(sum.VerifiedCount)/float64(sum.TotalFindings)*1000) / 10
+	} else {
+		sum.AttemptRate = 0.0
+		sum.VerificationRateTotal = 0.0
+	}
+
+	sum.ConclusiveCount = sum.VerifiedCount + sum.NotExposedCount
+	if sum.AttemptedCount > 0 {
+		rate := float64(sum.VerifiedCount) / float64(sum.AttemptedCount) * 100.0
+		sum.ConfirmationRate = math.Round(rate*10) / 10
+		sum.VerificationRateAttempted = sum.ConfirmationRate
+		conclusiveRate := float64(sum.ConclusiveCount) / float64(sum.AttemptedCount) * 100.0
+		sum.ConclusiveRate = math.Round(conclusiveRate*10) / 10
+	} else {
+		sum.ConfirmationRate = 0.0
+		sum.VerificationRateAttempted = 0.0
+		sum.ConclusiveRate = 0.0
 	}
 
 	return sum, nil

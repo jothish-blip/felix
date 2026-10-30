@@ -250,6 +250,17 @@ func evaluateCOR01(f1, f2 *NormalizedFinding) (Relationship, bool) {
 		return Relationship{}, false
 	}
 
+	// Target must not be a configuration omission, missing header, or informational fingerprint
+	cat2 := strings.ToLower(f2.NormalizedCategory)
+	if strings.HasPrefix(cat2, "missing-") ||
+		strings.Contains(cat2, "header") ||
+		strings.Contains(cat2, "csp") ||
+		strings.Contains(cat2, "runtime") ||
+		strings.Contains(cat2, "fingerprint") ||
+		strings.Contains(cat2, "source-map") {
+		return Relationship{}, false
+	}
+
 	// Do not correlate entrypoint with itself
 	if f1.ID == f2.ID || (f1.Category == f2.Category && samePath) {
 		return Relationship{}, false
@@ -1078,10 +1089,15 @@ func evaluateCOR10(f1, f2 *NormalizedFinding) (Relationship, bool) {
 		return Relationship{}, false
 	}
 
-	isVulnerableAPI := strings.Contains(f2.NormalizedCategory, "bola") ||
-		strings.Contains(f2.NormalizedCategory, "idor") ||
-		strings.Contains(f2.NormalizedCategory, "xss") ||
-		strings.Contains(f2.NormalizedCategory, "auth") ||
+	cat2 := strings.ToLower(f2.NormalizedCategory)
+	if strings.Contains(cat2, "runtime") || strings.Contains(cat2, "fingerprint") || strings.HasPrefix(cat2, "missing-") || strings.Contains(cat2, "header") {
+		return Relationship{}, false
+	}
+
+	isVulnerableAPI := strings.Contains(cat2, "bola") ||
+		strings.Contains(cat2, "idor") ||
+		strings.Contains(cat2, "xss") ||
+		strings.Contains(cat2, "auth") ||
 		f2.IsSensitiveData
 
 	if !isVulnerableAPI {

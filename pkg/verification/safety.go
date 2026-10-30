@@ -123,3 +123,50 @@ func (sc *SafetyChecker) Check(targetURL, endpoint, method string, isStateChangi
 		Decision: DecisionAllowed,
 	}
 }
+
+// CheckPassive evaluates scope and authorization for passive evidence evaluations without consuming active probe quota.
+func (sc *SafetyChecker) CheckPassive(targetURL, endpoint string) SafetyDecisionResult {
+	if sc == nil {
+		return SafetyDecisionResult{
+			Allowed:  true,
+			Decision: DecisionAllowed,
+		}
+	}
+
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+
+	// 1. Authorization check
+	if !sc.isAuthorized {
+		return SafetyDecisionResult{
+			Allowed:     false,
+			Decision:    DecisionBlocked,
+			BlockReason: "Assessment authorization is missing, expired, pending, or revoked (safety fail-closed)",
+		}
+	}
+
+	// 2. Scope check
+	evalURL := endpoint
+	if evalURL == "" {
+		evalURL = targetURL
+	}
+	if sc.isExcludedFunc != nil && sc.isExcludedFunc(evalURL) {
+		return SafetyDecisionResult{
+			Allowed:     false,
+			Decision:    DecisionBlocked,
+			BlockReason: fmt.Sprintf("Target URL '%s' is explicitly excluded by assessment scope rules", evalURL),
+		}
+	}
+	if sc.inScopeFunc != nil && !sc.inScopeFunc(evalURL) {
+		return SafetyDecisionResult{
+			Allowed:     false,
+			Decision:    DecisionBlocked,
+			BlockReason: fmt.Sprintf("Target URL '%s' is outside authorized assessment boundaries", evalURL),
+		}
+	}
+
+	return SafetyDecisionResult{
+		Allowed:  true,
+		Decision: DecisionAllowed,
+	}
+}

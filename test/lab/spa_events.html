@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>FELIX DOM Monkey SPA Event Lab</title>
+  <style>
+    .hidden { display: none; }
+    .revealed { display: block; margin: 10px 0; padding: 10px; background: #eef; border: 1px solid #99c; }
+  </style>
+</head>
+<body>
+  <h1>DOM Monkey Multi-Layer Interaction Fixture</h1>
+
+  <!-- Layer 1 Controls -->
+  <section id="layer1">
+    <h3>Layer 1 Controls</h3>
+
+    <!-- 1. Genuinely Hidden Route (Starts inside hidden panel, revealed via toggle button) -->
+    <button id="btn-reveal-tools" onclick="revealHiddenTools()">Open Diagnostic Panel</button>
+    <div id="hidden-tools" class="hidden">
+      <button id="btn-hidden-route" onclick="triggerHiddenRoute()">Query Hidden Service</button>
+    </div>
+
+    <!-- 2. Blocking Alert Trigger -->
+    <button id="btn-stall-alert" onclick="triggerAlert()">Trigger Stall Alert</button>
+
+    <!-- 3. Destructive Confirmation Modal (Safe Mode Audit must REJECT this) -->
+    <button id="btn-destructive-action" onclick="triggerDestructiveConfirm()">Dangerous Purge Action</button>
+
+    <!-- 4. Form with Synthetic Inputs -->
+    <form id="audit-form" onsubmit="submitForm(event)">
+      <input type="email" id="user-email" placeholder="Email" />
+      <input type="password" id="user-pass" placeholder="Password" />
+      <button type="submit" id="btn-submit-form">Submit Audit Form</button>
+    </form>
+
+    <!-- 5. Multi-layer Progression: Button A reveals Layer 2 -->
+    <button id="btn-layer-a" onclick="revealLayerB()">Step 1: Reveal Next Action</button>
+  </section>
+
+  <!-- Layer 2 (Initially Hidden, Revealed by Button A) -->
+  <section id="layer2" class="hidden">
+    <h3>Layer 2 Controls</h3>
+    <button id="btn-layer-b" onclick="revealLayerC()">Step 2: Advance to Final Phase</button>
+  </section>
+
+  <!-- Layer 3 (Initially Hidden, Revealed by Button B) -->
+  <section id="layer3" class="hidden">
+    <h3>Layer 3 Controls</h3>
+    <button id="btn-layer-c" onclick="triggerLayer3Action()">Step 3: Execute Layer 3 Payload</button>
+    <div id="layer3-result">Ready</div>
+  </section>
+
+  <div id="execution-log" style="margin-top: 20px; font-family: monospace;"></div>
+
+  <script>
+    function revealHiddenTools() {
+      document.getElementById('hidden-tools').className = 'revealed';
+      document.getElementById('execution-log').innerText += ' [tools-panel-opened]';
+    }
+
+    function triggerHiddenRoute() {
+      fetch('/api/hidden-route', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: 'monkey_layer1', target: 'hidden_endpoint' })
+      }).then(r => r.json()).then(d => {
+        document.getElementById('execution-log').innerText += ' [hidden-route-fired]';
+      }).catch(e => console.error(e));
+    }
+
+    function triggerAlert() {
+      alert('Stall!');
+      document.getElementById('execution-log').innerText += ' [alert-handled]';
+    }
+
+    function triggerDestructiveConfirm() {
+      const confirmed = confirm('Are you sure you want to permanently delete all records?');
+      if (confirmed) {
+        // Should NEVER happen in safe audit mode
+        fetch('/api/destructive-delete-all', { method: 'POST' });
+        document.getElementById('execution-log').innerText += ' [DESTRUCTIVE-PURGE-EXECUTED]';
+      } else {
+        document.getElementById('execution-log').innerText += ' [destructive-confirm-safely-dismissed]';
+      }
+    }
+
+    function submitForm(e) {
+      e.preventDefault();
+      fetch('/api/form-submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: document.getElementById('user-email').value,
+          password: document.getElementById('user-pass').value
+        })
+      });
+      document.getElementById('execution-log').innerText += ' [form-submitted]';
+    }
+
+    function revealLayerB() {
+      document.getElementById('layer2').className = 'revealed';
+      document.getElementById('execution-log').innerText += ' [layer2-revealed]';
+    }
+
+    function revealLayerC() {
+      document.getElementById('layer3').className = 'revealed';
+      fetch('/api/layer3', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ layer: 2, action: 'advance_to_layer_3' })
+      });
+      document.getElementById('execution-log').innerText += ' [layer3-revealed]';
+    }
+
+    function triggerLayer3Action() {
+      document.getElementById('layer3-result').innerText = 'Layer 3 Executed Successfully';
+      fetch('/api/layer3-completed', { method: 'GET' });
+      document.getElementById('execution-log').innerText += ' [layer3-completed]';
+    }
+  </script>
+</body>
+</html>

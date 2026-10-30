@@ -1155,7 +1155,10 @@ func (e *Engine) assessAPI8(ctx context.Context, actx *AssessmentContext, client
 	hasStackTrace := strings.Contains(bodyStr, "Traceback (most recent call last)") ||
 		strings.Contains(bodyStr, "Fatal error:")
 	hasSQLErrorHint := strings.Contains(bodyStr, "SQL syntax error") ||
-		strings.Contains(bodyStr, "syntax error at or near")
+		strings.Contains(bodyStr, "ERROR:  syntax error at or near") ||
+		strings.Contains(bodyStr, "ERROR: syntax error at or near") ||
+		strings.Contains(bodyStr, "psycopg2.errors.SyntaxError") ||
+		strings.Contains(bodyStr, "org.postgresql.util.PSQLException")
 
 	if hasStackTrace {
 		r := Result{

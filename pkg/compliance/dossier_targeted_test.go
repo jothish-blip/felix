@@ -2,7 +2,9 @@ package compliance
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -576,5 +578,44 @@ func TestDossier_Targeted_LoadingHostileAndTruncatedInputs(t *testing.T) {
 	_, errEmptyPath := LoadDossierFromFile("")
 	if errEmptyPath == nil {
 		t.Error("expected error for empty file path, got nil")
+	}
+}
+
+// TestDossier_Targeted_CatalogPathWithoutCatalogID_Regression verifies that GenerateDossier
+// resolves the catalog identity when CatalogPath is supplied without an explicit CatalogID.
+func TestDossier_Targeted_CatalogPathWithoutCatalogID_Regression(t *testing.T) {
+	store := setupTestDossierStore(t)
+	defer store.Close()
+
+	clock := NewMockClock(time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC))
+	svc := NewDossierService(store, clock)
+
+	evalRes := sampleValidEvaluationResult("ASM-REGRESSION-CATPATH")
+	if err := store.SaveEvaluationResult(evalRes); err != nil {
+		t.Fatalf("SaveEvaluationResult failed: %v", err)
+	}
+
+	tmpDir := t.TempDir()
+	catPath := filepath.Join(tmpDir, "catalog.json")
+	cat := sampleValidCatalog()
+	cat.ID = "nist-sp800-53-sample"
+	data, err := json.Marshal(cat)
+	if err != nil {
+		t.Fatalf("failed serializing catalog: %v", err)
+	}
+	if err := os.WriteFile(catPath, data, 0600); err != nil {
+		t.Fatalf("failed writing catalog file: %v", err)
+	}
+
+	// Request with CatalogPath provided, but CatalogID and Catalog intentionally omitted
+	dossier, err := svc.GenerateDossier(context.Background(), GenerateDossierRequest{
+		AssessmentID: "ASM-REGRESSION-CATPATH",
+		CatalogPath:  catPath,
+	})
+	if err != nil {
+		t.Fatalf("GenerateDossier failed when CatalogPath provided without CatalogID: %v", err)
+	}
+	if dossier.Identity.CatalogID != cat.ID {
+		t.Errorf("expected dossier catalog ID %q, got %q", cat.ID, dossier.Identity.CatalogID)
 	}
 }

@@ -125,13 +125,26 @@ func (e *Engine) VerifyFindings(ctx context.Context, findings []report.Finding) 
 		catStats[cat] = stat
 	}
 
-	if summary.AttemptedCount > 0 {
-		rate := float64(summary.VerifiedCount) / float64(summary.AttemptedCount) * 100.0
-		summary.VerificationRateAttempted = math.Round(rate*10) / 10
-	}
 	if summary.TotalFindings > 0 {
+		summary.AttemptRate = math.Round(float64(summary.AttemptedCount)/float64(summary.TotalFindings)*1000) / 10
 		rateTotal := float64(summary.VerifiedCount) / float64(summary.TotalFindings) * 100.0
 		summary.VerificationRateTotal = math.Round(rateTotal*10) / 10
+	} else {
+		summary.AttemptRate = 0.0
+		summary.VerificationRateTotal = 0.0
+	}
+
+	summary.ConclusiveCount = summary.VerifiedCount + summary.NotExposedCount
+	if summary.AttemptedCount > 0 {
+		rate := float64(summary.VerifiedCount) / float64(summary.AttemptedCount) * 100.0
+		summary.ConfirmationRate = math.Round(rate*10) / 10
+		summary.VerificationRateAttempted = summary.ConfirmationRate
+		conclusiveRate := float64(summary.ConclusiveCount) / float64(summary.AttemptedCount) * 100.0
+		summary.ConclusiveRate = math.Round(conclusiveRate*10) / 10
+	} else {
+		summary.ConfirmationRate = 0.0
+		summary.VerificationRateAttempted = 0.0
+		summary.ConclusiveRate = 0.0
 	}
 
 	return results, summary
@@ -162,6 +175,7 @@ func ApplyVerificationToFindings(findings []report.Finding, results []Verificati
 		fCopy.Verification.SafeCurlCommand = res.Reproduction.SafeCurlCommand
 		fCopy.Verification.Limitations = res.Limitations
 		fCopy.Verification.SyntheticFixture = res.SyntheticFixture
+		fCopy.Verification.Attempted = res.Attempted
 		fCopy.Verification.Rationale = res.ConfidenceRationale
 		if res.FailureReason != "" {
 			fCopy.Verification.Result = res.FailureReason

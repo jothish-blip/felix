@@ -1059,6 +1059,9 @@ func runAssessmentRun(args []string) int {
 		idempotencyKey string
 		baselineRef    string
 		baselineScope  string
+		allowLoopback  bool
+		allowPrivate   bool
+		insecureSkip   bool
 	)
 
 	for i := 0; i < len(args); i++ {
@@ -1128,6 +1131,12 @@ func runAssessmentRun(args []string) int {
 				baselineScope = strings.ToLower(args[i+1])
 				i++
 			}
+		case "--allow-loopback":
+			allowLoopback = true
+		case "--allow-private":
+			allowPrivate = true
+		case "--insecure":
+			insecureSkip = true
 		case "--help", "-h":
 			fmt.Println("Usage: felix assessment run <assessment-id> [flags]")
 			fmt.Println("\nFlags:")
@@ -1225,13 +1234,27 @@ func runAssessmentRun(args []string) int {
 		maxSizeBytes = int64(maxSizeMB) * 1024 * 1024
 	}
 
+	isTargetLoopback := false
+	for _, t := range asm.Targets {
+		if u, err := url.Parse(t.TargetURL); err == nil {
+			h := u.Hostname()
+			if h == "localhost" || h == "127.0.0.1" || h == "::1" || strings.HasPrefix(h, "127.") {
+				isTargetLoopback = true
+				break
+			}
+		}
+	}
+
 	opts := assessment.ExecutionOptions{
-		TimeoutDuration: timeoutDur,
-		Concurrency:     concurrency,
-		MaxAssets:       maxAssets,
-		MaxSizeBytes:    maxSizeBytes,
-		FelixVersion:    Version,
-		BuildID:         GitCommit,
+		TimeoutDuration:    timeoutDur,
+		Concurrency:        concurrency,
+		MaxAssets:          maxAssets,
+		MaxSizeBytes:       maxSizeBytes,
+		AllowLoopback:      allowLoopback || isTargetLoopback || os.Getenv("FELIX_ALLOW_LOOPBACK") == "true",
+		AllowPrivateIPs:    allowPrivate || os.Getenv("FELIX_ALLOW_PRIVATE") == "true",
+		InsecureSkipVerify: insecureSkip,
+		FelixVersion:       Version,
+		BuildID:            GitCommit,
 		ExportHTMLPath:  exportHTMLPath,
 		ExportJSONPath:  exportJSONPath,
 		ExportSARIFPath: exportSARIFPath,
@@ -2075,6 +2098,13 @@ func runAssessmentAuth(args []string) int {
 			}
 		}
 
+		uTarget, _ := url.Parse(targetBase)
+		targetHost := ""
+		if uTarget != nil {
+			targetHost = uTarget.Hostname()
+		}
+		isTargetLoopback := targetHost == "localhost" || targetHost == "127.0.0.1" || targetHost == "::1" || strings.HasPrefix(targetHost, "127.")
+
 		vCfg := auth.VerificationConfig{
 			TargetURL:               targetBase,
 			Endpoints:               endpoints,
@@ -2085,7 +2115,7 @@ func runAssessmentAuth(args []string) int {
 			MaxRequestsTotal:        maxRequests,
 			MaxRequestsPerHost:      maxPerHost,
 			RateLimit:               rateLimit,
-			AllowLoopback:           allowLoopback,
+			AllowLoopback:           allowLoopback || isTargetLoopback || os.Getenv("FELIX_ALLOW_LOOPBACK") == "true",
 			AllowPrivateIPs:         allowPrivate,
 			DryRun:                  dryRun,
 			CheckRateLimiting:       checkRateLimit,
@@ -2295,6 +2325,8 @@ func printAuthzHelp() {
 	fmt.Println("  --dry-run                Display planned test cases without executing network requests")
 	fmt.Println("  --category, -c <string>  Filter by category (BOLA, BFLA, BOPLA, HORIZONTAL, VERTICAL)")
 	fmt.Println("  --status, -s <string>    Filter by verification state (VERIFIED, CANDIDATE, INCONCLUSIVE, NOT_VULNERABLE)")
+	fmt.Println("  --allow-loopback         Allow loopback and local test fixture addresses")
+	fmt.Println("  --allow-private          Allow internal private IP addresses")
 	fmt.Println("  --verbose, -v            Display extended evidence details, observed status, and diffs")
 	fmt.Println("  --json                   Output authorization intelligence as JSON")
 	fmt.Println("\nExamples:")
@@ -2312,6 +2344,8 @@ func runAssessmentAuthz(args []string) int {
 		dryRun         bool
 		categoryFilter string
 		statusFilter   string
+		allowLoopback  bool
+		allowPrivate   bool
 		jsonOutput     bool
 		verbose        bool
 	)
@@ -2338,6 +2372,10 @@ func runAssessmentAuthz(args []string) int {
 				statusFilter = strings.ToUpper(args[i+1])
 				i++
 			}
+		case arg == "--allow-loopback":
+			allowLoopback = true
+		case arg == "--allow-private":
+			allowPrivate = true
 		case arg == "--json":
 			jsonOutput = true
 		case arg == "--verbose" || arg == "-v":
@@ -2391,6 +2429,16 @@ func runAssessmentAuthz(args []string) int {
 		}
 		planner := authz.NewPlanner(policy)
 		planned := planner.PlanTestCases(targetBase)
+
+		if jsonOutput {
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			_ = enc.Encode(map[string]any{
+				"assessment_ref": asm.Ref,
+				"planned_tests":  planned,
+			})
+			return 0
+		}
 
 		fmt.Println("===========================================================")
 		fmt.Printf("  FELIX :: AUTHORIZATION TEST PLAN (DRY-RUN): %s\n", asm.Ref)
@@ -2472,9 +2520,19 @@ func runAssessmentAuthz(args []string) int {
 			targetURLs = append(targetURLs, t.TargetURL)
 		}
 		scopeVal := assessment.NewScopeValidator(asm.ScopeMode, targetURLs, asm.ScopeRules, asm.Exclusions)
+
+		uTarget, _ := url.Parse(targetURL)
+		targetHost := ""
+		if uTarget != nil {
+			targetHost = uTarget.Hostname()
+		}
+		isTargetLoopback := targetHost == "localhost" || targetHost == "127.0.0.1" || targetHost == "::1" || strings.HasPrefix(targetHost, "127.")
+
 		authzHTTPClient := &http.Client{
 			Transport: crawler.NewRateLimitedTransport(crawler.NewSafeTransport(crawler.SafeTransportOptions{
-				Timeout: 15 * time.Second,
+				Timeout:         15 * time.Second,
+				AllowLoopback:   allowLoopback || isTargetLoopback || os.Getenv("FELIX_ALLOW_LOOPBACK") == "true",
+				AllowPrivateIPs: allowPrivate,
 			}), crawler.RateLimitOptions{}),
 			Timeout: 15 * time.Second,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -2490,10 +2548,12 @@ func runAssessmentAuthz(args []string) int {
 		}
 		engine := authz.NewEngine(authzHTTPClient)
 
-		fmt.Println("===========================================================")
-		fmt.Printf("  EXECUTING AUTHORIZATION AUDIT: %s (%s)\n", asm.Ref, asm.Name)
-		fmt.Printf("  Target: %s | Write Tests Allowed: %t\n", targetURL, policy.AllowWriteTests)
-		fmt.Println("===========================================================")
+		if !jsonOutput {
+			fmt.Println("===========================================================")
+			fmt.Printf("  EXECUTING AUTHORIZATION AUDIT: %s (%s)\n", asm.Ref, asm.Name)
+			fmt.Printf("  Target: %s | Write Tests Allowed: %t\n", targetURL, policy.AllowWriteTests)
+			fmt.Println("===========================================================")
+		}
 
 		startTime := time.Now()
 		results, findings, summary, err := engine.Execute(
@@ -2536,8 +2596,10 @@ func runAssessmentAuthz(args []string) int {
 		}
 		_ = store.UpdateExecution(execRecord)
 
-		fmt.Printf("[✓] Authorization assessment completed in %s (%d tests executed, %d verified findings)\n",
-			duration.Round(time.Millisecond), len(results), summary.VerifiedCount)
+		if !jsonOutput {
+			fmt.Printf("[✓] Authorization assessment completed in %s (%d tests executed, %d verified findings)\n",
+				duration.Round(time.Millisecond), len(results), summary.VerifiedCount)
+		}
 	}
 
 	// 3. Display Results Mode
@@ -2778,6 +2840,20 @@ func runAssessmentAPISec(args []string) int {
 
 	// 1. Dry Run Mode
 	if dryRun {
+		if jsonOutput {
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			out := map[string]any{
+				"mode":           "dry-run",
+				"assessment_ref": asm.Ref,
+				"assessment_id":  asm.ID,
+				"target_base":    targetBase,
+				"endpoints":      endpoints,
+			}
+			_ = enc.Encode(out)
+			return 0
+		}
+
 		fmt.Println("===========================================================")
 		fmt.Printf("  FELIX :: OWASP API SECURITY PLAN (DRY-RUN): %s\n", asm.Ref)
 		fmt.Printf("  Target Base: %s | Endpoints Analyzed: %d\n", targetBase, len(endpoints))
@@ -2913,10 +2989,12 @@ func runAssessmentAPISec(args []string) int {
 			IsExcluded:   func(u string) bool { excluded, _ := scopeVal.IsExcluded(u); return excluded },
 		}
 
-		fmt.Println("===========================================================")
-		fmt.Printf("  EXECUTING OWASP API SECURITY AUDIT: %s (%s)\n", asm.Ref, asm.Name)
-		fmt.Printf("  Target: %s | Endpoints: %d\n", targetBase, len(endpoints))
-		fmt.Println("===========================================================")
+		if !jsonOutput {
+			fmt.Println("===========================================================")
+			fmt.Printf("  EXECUTING OWASP API SECURITY AUDIT: %s (%s)\n", asm.Ref, asm.Name)
+			fmt.Printf("  Target: %s | Endpoints: %d\n", targetBase, len(endpoints))
+			fmt.Println("===========================================================")
+		}
 
 		startTime := time.Now()
 		results, findings, summary, err := engine.Assess(context.Background(), actx)
@@ -2971,8 +3049,10 @@ func runAssessmentAPISec(args []string) int {
 		}
 		_ = store.UpdateExecution(execRecord)
 
-		fmt.Printf("[✓] API Security assessment completed in %s (%d tests executed, %d verified findings)\n",
-			duration.Round(time.Millisecond), summary.TotalTests, summary.VerifiedCount)
+		if !jsonOutput {
+			fmt.Printf("[✓] API Security assessment completed in %s (%d tests executed, %d verified findings)\n",
+				duration.Round(time.Millisecond), summary.TotalTests, summary.VerifiedCount)
+		}
 	}
 
 	// 3. Display Results Mode
@@ -3079,6 +3159,9 @@ func printWebVulnHelp() {
 	fmt.Println("  -c, --category <name>  Filter results by category (XSS, SQLI, NOSQLI, CMDI, PATH_TRAVERSAL, SSTI, SSRF, OPEN_REDIRECT, etc.)")
 	fmt.Println("  -s, --status <state>   Filter results by verification state (VERIFIED, CANDIDATE, OBSERVED, NOT_VULNERABLE)")
 	fmt.Println("  --canary <url>         Public canary callback URL for SSRF out-of-band verification")
+	fmt.Println("  --synthetic-fixture    Enable synthetic fixture mode for safe deterministic vulnerability verification")
+	fmt.Println("  --allow-loopback       Permit HTTP requests to loopback addresses (127.0.0.1, localhost)")
+	fmt.Println("  --allow-private        Permit HTTP requests to RFC1918 private IP addresses")
 	fmt.Println("  -v, --verbose          Display detailed evidence summaries")
 	fmt.Println("  --json                 Output machine-readable JSON")
 	fmt.Println("  -h, --help             Display this help message")
@@ -3091,14 +3174,17 @@ func printWebVulnHelp() {
 
 func runAssessmentWebVuln(args []string) int {
 	var (
-		assessmentRef  string
-		runExecution   bool
-		dryRun         bool
-		categoryFilter string
-		statusFilter   string
-		canaryURL      string
-		jsonOutput     bool
-		verbose        bool
+		assessmentRef        string
+		runExecution         bool
+		dryRun               bool
+		categoryFilter       string
+		statusFilter         string
+		canaryURL            string
+		allowLoopback        bool
+		allowPrivate         bool
+		syntheticFixtureFlag bool
+		jsonOutput           bool
+		verbose              bool
 	)
 
 	for i := 0; i < len(args); i++ {
@@ -3123,6 +3209,12 @@ func runAssessmentWebVuln(args []string) int {
 				canaryURL = args[i+1]
 				i++
 			}
+		case arg == "--synthetic-fixture":
+			syntheticFixtureFlag = true
+		case arg == "--allow-loopback":
+			allowLoopback = true
+		case arg == "--allow-private":
+			allowPrivate = true
 		case arg == "--json":
 			jsonOutput = true
 		case arg == "--verbose" || arg == "-v":
@@ -3233,8 +3325,31 @@ func runAssessmentWebVuln(args []string) int {
 		dryRun = true
 	}
 
+	uTarget, _ := url.Parse(targetBase)
+	targetHost := ""
+	if uTarget != nil {
+		targetHost = uTarget.Hostname()
+	}
+	isTargetLoopback := targetHost == "localhost" || targetHost == "127.0.0.1" || targetHost == "::1" || strings.HasPrefix(targetHost, "127.")
+	syntheticFixture := syntheticFixtureFlag || isTargetLoopback
+
 	// 1. Dry Run Mode
 	if dryRun {
+		if jsonOutput {
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			out := map[string]any{
+				"mode":              "dry-run",
+				"assessment_ref":    asm.Ref,
+				"assessment_id":     asm.ID,
+				"target_base":       targetBase,
+				"endpoints":         targetEndpoints,
+				"synthetic_fixture": syntheticFixture,
+			}
+			_ = enc.Encode(out)
+			return 0
+		}
+
 		fmt.Println("===========================================================")
 		fmt.Printf("  FELIX :: WEB VULNERABILITY ENGINE PLAN (DRY-RUN): %s\n", asm.Ref)
 		fmt.Printf("  Assessment: %s | Target Base: %s\n", asm.Name, targetBase)
@@ -3331,7 +3446,9 @@ func runAssessmentWebVuln(args []string) int {
 
 		webvulnHTTPClient := &http.Client{
 			Transport: crawler.NewRateLimitedTransport(crawler.NewSafeTransport(crawler.SafeTransportOptions{
-				Timeout: cfg.Timeout,
+				Timeout:         cfg.Timeout,
+				AllowLoopback:   allowLoopback || isTargetLoopback || os.Getenv("FELIX_ALLOW_LOOPBACK") == "true",
+				AllowPrivateIPs: allowPrivate || os.Getenv("FELIX_ALLOW_PRIVATE") == "true",
 			}), crawler.RateLimitOptions{
 				MaxConcurrency: cfg.Concurrency,
 			}),
@@ -3349,18 +3466,21 @@ func runAssessmentWebVuln(args []string) int {
 		}
 		engine := webvuln.NewEngine(webvulnHTTPClient, cfg)
 		actx := &webvuln.AssessmentContext{
-			AssessmentID: asm.ID,
-			ExecutionID:  execID,
-			BaseURL:      targetBase,
-			Endpoints:    targetEndpoints,
-			IsAllowed:    scopeVal.IsAllowed,
-			IsExcluded:   func(u string) bool { excluded, _ := scopeVal.IsExcluded(u); return excluded },
+			AssessmentID:     asm.ID,
+			ExecutionID:      execID,
+			BaseURL:          targetBase,
+			Endpoints:        targetEndpoints,
+			IsAllowed:        scopeVal.IsAllowed,
+			IsExcluded:       func(u string) bool { excluded, _ := scopeVal.IsExcluded(u); return excluded },
+			SyntheticFixture: syntheticFixture,
 		}
 
-		fmt.Println("===========================================================")
-		fmt.Printf("  EXECUTING WEB VULNERABILITY AUDIT: %s (%s)\n", asm.Ref, asm.Name)
-		fmt.Printf("  Target: %s | Endpoints: %d\n", targetBase, len(targetEndpoints))
-		fmt.Println("===========================================================")
+		if !jsonOutput {
+			fmt.Println("===========================================================")
+			fmt.Printf("  EXECUTING WEB VULNERABILITY AUDIT: %s (%s)\n", asm.Ref, asm.Name)
+			fmt.Printf("  Target: %s | Endpoints: %d\n", targetBase, len(targetEndpoints))
+			fmt.Println("===========================================================")
+		}
 
 		startTime := time.Now()
 		results, findings, summary, err := engine.Assess(context.Background(), actx)
@@ -3415,8 +3535,10 @@ func runAssessmentWebVuln(args []string) int {
 		}
 		_ = store.UpdateExecution(execRecord)
 
-		fmt.Printf("[✓] Web vulnerability audit completed in %s (%d tests executed, %d verified findings)\n",
-			duration.Round(time.Millisecond), summary.TotalTests, summary.VerifiedCount)
+		if !jsonOutput {
+			fmt.Printf("[✓] Web vulnerability audit completed in %s (%d tests executed, %d verified findings)\n",
+				duration.Round(time.Millisecond), summary.TotalTests, summary.VerifiedCount)
+		}
 	}
 
 	// 3. Display Results Mode
@@ -3517,6 +3639,9 @@ func printSessionSecHelp() {
 	fmt.Println("  --protected-url <url>    Specify explicit protected resource endpoint path or URL")
 	fmt.Println("  --cookie <name=value>    Provide test session cookie for authenticated verification")
 	fmt.Println("  --allow-state-changing   Opt-in to state-changing lifecycle tests (logout, invalidation)")
+	fmt.Println("  --synthetic-fixture      Enable synthetic test fixture evaluation")
+	fmt.Println("  --allow-loopback         Allow loopback and local test fixture addresses")
+	fmt.Println("  --allow-private          Allow internal private IP addresses")
 	fmt.Println("  --policy <path>          Path to authorization policy file (JSON) with test identities")
 	fmt.Println("  --max-requests <n>       Maximum request budget (default: 30)")
 	fmt.Println("  --category, -c <cat>     Filter by session category (FIXATION, COOKIE, INVALIDATION, etc.)")
@@ -3536,23 +3661,24 @@ func printSessionSecHelp() {
 
 func runAssessmentSessionSec(args []string) int {
 	var (
-		assessmentRef      string
-		runExecution       bool
-		dryRun             bool
-		policyPath         string
-		categoryFilter     string
-		statusFilter       string
-		jsonOutput         bool
-		verbose            bool
-		targetOverride     string
-		loginURLFlag       string
-		logoutURLFlag      string
-		protectedURLFlag   string
-		cookieFlag         string
-		allowStateChanging bool
-		allowLoopback      bool
-		allowPrivate       bool
-		maxRequests        int = 30
+		assessmentRef        string
+		runExecution         bool
+		dryRun               bool
+		policyPath           string
+		categoryFilter       string
+		statusFilter         string
+		jsonOutput           bool
+		verbose              bool
+		targetOverride       string
+		loginURLFlag         string
+		logoutURLFlag        string
+		protectedURLFlag     string
+		cookieFlag           string
+		allowStateChanging   bool
+		syntheticFixtureFlag bool
+		allowLoopback        bool
+		allowPrivate         bool
+		maxRequests          int = 30
 	)
 
 	for i := 0; i < len(args); i++ {
@@ -3589,6 +3715,8 @@ func runAssessmentSessionSec(args []string) int {
 			}
 		case arg == "--allow-state-changing":
 			allowStateChanging = true
+		case arg == "--synthetic-fixture":
+			syntheticFixtureFlag = true
 		case arg == "--allow-loopback":
 			allowLoopback = true
 		case arg == "--allow-private":
@@ -3856,6 +3984,14 @@ func runAssessmentSessionSec(args []string) int {
 
 	// 1. Dry Run Mode
 	if dryRun {
+		uTarget, _ := url.Parse(targetBase)
+		targetHost := ""
+		if uTarget != nil {
+			targetHost = uTarget.Hostname()
+		}
+		isTargetLoopback := targetHost == "localhost" || targetHost == "127.0.0.1" || targetHost == "::1" || strings.HasPrefix(targetHost, "127.") || sessionsec.IsLoopbackHost(targetHost)
+		syntheticFixture := syntheticFixtureFlag || isTargetLoopback || os.Getenv("FELIX_SYNTHETIC_FIXTURE") == "true"
+
 		engine := sessionsec.NewEngine(nil, sessionsec.DefaultConfig())
 		actx := &sessionsec.AssessmentContext{
 			AssessmentID:            asm.ID,
@@ -3864,6 +4000,7 @@ func runAssessmentSessionSec(args []string) int {
 			Identities:              identities,
 			AllowStateChangingTests: allowStateChanging,
 			MaxRequests:             maxRequests,
+			SyntheticFixture:        syntheticFixture,
 			DryRun:                  true,
 		}
 		plan, _ := engine.Plan(context.Background(), actx)
@@ -3956,13 +4093,18 @@ func runAssessmentSessionSec(args []string) int {
 		scopeVal := assessment.NewScopeValidator(asm.ScopeMode, targetURLs, asm.ScopeRules, asm.Exclusions)
 
 		uTarget, _ := url.Parse(targetBase)
-		isTargetLoopback := uTarget != nil && sessionsec.IsLoopbackHost(uTarget.Hostname())
+		targetHost := ""
+		if uTarget != nil {
+			targetHost = uTarget.Hostname()
+		}
+		isTargetLoopback := targetHost == "localhost" || targetHost == "127.0.0.1" || targetHost == "::1" || strings.HasPrefix(targetHost, "127.") || sessionsec.IsLoopbackHost(targetHost)
+		syntheticFixture := syntheticFixtureFlag || isTargetLoopback || os.Getenv("FELIX_SYNTHETIC_FIXTURE") == "true"
 
 		cfg := sessionsec.DefaultConfig()
 		sessionHTTPClient := &http.Client{
 			Transport: crawler.NewRateLimitedTransport(crawler.NewSafeTransport(crawler.SafeTransportOptions{
 				Timeout:         cfg.Timeout,
-				AllowLoopback:   allowLoopback || isTargetLoopback,
+				AllowLoopback:   allowLoopback || isTargetLoopback || os.Getenv("FELIX_ALLOW_LOOPBACK") == "true",
 				AllowPrivateIPs: allowPrivate,
 			}), crawler.RateLimitOptions{}),
 			Timeout: cfg.Timeout,
@@ -4003,13 +4145,16 @@ func runAssessmentSessionSec(args []string) int {
 			Authorization:           authRec,
 			AllowStateChangingTests: allowStateChanging,
 			MaxRequests:             maxRequests,
+			SyntheticFixture:        syntheticFixture,
 			DispatchedRequests:      &dispatchedRequests,
 		}
 
-		fmt.Println("================================================================================")
-		fmt.Printf("  EXECUTING SESSION & IDENTITY SECURITY AUDIT: %s (%s)\n", asm.Ref, asm.Name)
-		fmt.Printf("  Target: %s | Endpoints: %d | Identities: %d\n", targetBase, len(targetEndpoints), len(identities))
-		fmt.Println("================================================================================")
+		if !jsonOutput {
+			fmt.Println("================================================================================")
+			fmt.Printf("  EXECUTING SESSION & IDENTITY SECURITY AUDIT: %s (%s)\n", asm.Ref, asm.Name)
+			fmt.Printf("  Target: %s | Endpoints: %d | Identities: %d\n", targetBase, len(targetEndpoints), len(identities))
+			fmt.Println("================================================================================")
+		}
 
 		startTime := time.Now()
 		results, findings, summary, err := engine.Assess(context.Background(), actx)
@@ -4067,10 +4212,12 @@ func runAssessmentSessionSec(args []string) int {
 
 		_ = store.UpdateExecution(execRecord)
 
-		fmt.Printf("\n[+] Assessment Complete in %v\n", duration.Round(time.Millisecond))
-		fmt.Printf("    Total Tests: %d | Categories Assessed: %d\n", summary.TotalTests, summary.CategoriesCovered)
-		fmt.Printf("    Verified Issues: %d | Candidates: %d | Observations: %d\n",
-			summary.VerifiedCount, summary.CandidateCount, summary.ObservedCount)
+		if !jsonOutput {
+			fmt.Printf("\n[+] Assessment Complete in %v\n", duration.Round(time.Millisecond))
+			fmt.Printf("    Total Tests: %d | Categories Assessed: %d\n", summary.TotalTests, summary.CategoriesCovered)
+			fmt.Printf("    Verified Issues: %d | Candidates: %d | Observations: %d\n",
+				summary.VerifiedCount, summary.CandidateCount, summary.ObservedCount)
+		}
 	}
 
 	// 3. Reporting / Inspection Mode
@@ -4657,11 +4804,13 @@ func runAssessmentBOLA(args []string) int {
 			DispatchedRequests:      &dispatchedRequests,
 		}
 
-		fmt.Println("================================================================================")
-		fmt.Printf("  EXECUTING BOLA / IDOR VERIFICATION: %s (%s)\n", asm.Ref, asm.Name)
-		fmt.Printf("  Target: %s | Endpoints: %d | Objects: %d | Identities: %d\n",
-			targetBase, len(targetEndpoints), len(targetObjects), len(identities))
-		fmt.Println("================================================================================")
+		if !jsonOutput {
+			fmt.Println("================================================================================")
+			fmt.Printf("  EXECUTING BOLA / IDOR VERIFICATION: %s (%s)\n", asm.Ref, asm.Name)
+			fmt.Printf("  Target: %s | Endpoints: %d | Objects: %d | Identities: %d\n",
+				targetBase, len(targetEndpoints), len(targetObjects), len(identities))
+			fmt.Println("================================================================================")
+		}
 
 		startTime := time.Now()
 		results, summary, err := engine.Assess(context.Background(), actx)
@@ -4721,10 +4870,12 @@ func runAssessmentBOLA(args []string) int {
 
 		_ = store.UpdateExecution(execRecord)
 
-		fmt.Printf("\n[+] Assessment Complete in %v\n", duration.Round(time.Millisecond))
-		fmt.Printf("    Total Tests: %d | Categories Assessed: %d\n", summary.TotalTests, summary.CategoriesCovered)
-		fmt.Printf("    Verified Issues: %d | Candidates: %d | Not Vulnerable: %d | Inconclusive: %d\n",
-			summary.VerifiedCount, summary.CandidateCount, summary.NotVulnerableCount, summary.InconclusiveCount)
+		if !jsonOutput {
+			fmt.Printf("\n[+] Assessment Complete in %v\n", duration.Round(time.Millisecond))
+			fmt.Printf("    Total Tests: %d | Categories Assessed: %d\n", summary.TotalTests, summary.CategoriesCovered)
+			fmt.Printf("    Verified Issues: %d | Candidates: %d | Not Vulnerable: %d | Inconclusive: %d\n",
+				summary.VerifiedCount, summary.CandidateCount, summary.NotVulnerableCount, summary.InconclusiveCount)
+		}
 	}
 
 	// 3. Reporting / Inspection Mode
@@ -5192,12 +5343,14 @@ func runAssessmentBFLA(args []string) int {
 		}
 		scopeVal := assessment.NewScopeValidator(asm.ScopeMode, targetURLs, asm.ScopeRules, asm.Exclusions)
 
-		fmt.Println("================================================================================")
-		fmt.Println("  FELIX :: BFLA / BROKEN FUNCTION LEVEL AUTHORIZATION VERIFICATION")
-		fmt.Printf("  Assessment: %s (%s) | Target: %s\n", asm.Name, asm.Ref, targetBase)
-		fmt.Println("================================================================================")
-		fmt.Printf("[*] Dispatched at %s | Max Requests: %d | Concurrency: 3\n",
-			now.Format(time.RFC3339), maxRequests)
+		if !jsonOutput {
+			fmt.Println("================================================================================")
+			fmt.Println("  FELIX :: BFLA / BROKEN FUNCTION LEVEL AUTHORIZATION VERIFICATION")
+			fmt.Printf("  Assessment: %s (%s) | Target: %s\n", asm.Name, asm.Ref, targetBase)
+			fmt.Println("================================================================================")
+			fmt.Printf("[*] Dispatched at %s | Max Requests: %d | Concurrency: 3\n",
+				now.Format(time.RFC3339), maxRequests)
+		}
 
 		cfg := bfla.DefaultConfig()
 		cfg.AllowActiveTesting = true
@@ -5309,10 +5462,12 @@ func runAssessmentBFLA(args []string) int {
 
 		_ = store.UpdateExecution(execRecord)
 
-		fmt.Printf("\n[+] Assessment Complete in %v\n", duration.Round(time.Millisecond))
-		fmt.Printf("    Total Tests: %d | Categories Assessed: %d\n", summary.TotalTests, summary.CategoriesCovered)
-		fmt.Printf("    Verified Issues: %d | Candidates: %d | Not Vulnerable: %d | Inconclusive: %d\n",
-			summary.VerifiedCount, summary.CandidateCount, summary.NotVulnerableCount, summary.InconclusiveCount)
+		if !jsonOutput {
+			fmt.Printf("\n[+] Assessment Complete in %v\n", duration.Round(time.Millisecond))
+			fmt.Printf("    Total Tests: %d | Categories Assessed: %d\n", summary.TotalTests, summary.CategoriesCovered)
+			fmt.Printf("    Verified Issues: %d | Candidates: %d | Not Vulnerable: %d | Inconclusive: %d\n",
+				summary.VerifiedCount, summary.CandidateCount, summary.NotVulnerableCount, summary.InconclusiveCount)
+		}
 	}
 
 	// Mode 3: Inspection / Reporting
@@ -5855,12 +6010,14 @@ func runAssessmentBOPLA(args []string) int {
 		}
 		scopeVal := assessment.NewScopeValidator(asm.ScopeMode, targetURLs, asm.ScopeRules, asm.Exclusions)
 
-		fmt.Println("================================================================================")
-		fmt.Println("  FELIX :: BOPLA / BROKEN OBJECT PROPERTY LEVEL AUTHORIZATION VERIFICATION")
-		fmt.Printf("  Assessment: %s (%s) | Target: %s\n", asm.Name, asm.Ref, targetBase)
-		fmt.Println("================================================================================")
-		fmt.Printf("[*] Dispatched at %s | Max Requests: %d | Concurrency: 3\n",
-			now.Format(time.RFC3339), maxRequests)
+		if !jsonOutput {
+			fmt.Println("================================================================================")
+			fmt.Println("  FELIX :: BOPLA / BROKEN OBJECT PROPERTY LEVEL AUTHORIZATION VERIFICATION")
+			fmt.Printf("  Assessment: %s (%s) | Target: %s\n", asm.Name, asm.Ref, targetBase)
+			fmt.Println("================================================================================")
+			fmt.Printf("[*] Dispatched at %s | Max Requests: %d | Concurrency: 3\n",
+				now.Format(time.RFC3339), maxRequests)
+		}
 
 		cfg := bopla.DefaultConfig()
 		cfg.AllowActiveTesting = true
@@ -6566,12 +6723,14 @@ func runAssessmentWorkflow(args []string) int {
 		}
 		scopeVal := assessment.NewScopeValidator(asm.ScopeMode, targetURLs, asm.ScopeRules, asm.Exclusions)
 
-		fmt.Println("================================================================================")
-		fmt.Println("  FELIX :: WORKFLOW INTEGRITY & STATE TRANSITION ASSESSMENT")
-		fmt.Printf("  Assessment: %s (%s) | Target: %s\n", asm.Name, asm.Ref, targetBase)
-		fmt.Println("================================================================================")
-		fmt.Printf("[*] Dispatched at %s | Max Requests: %d | Concurrency: %d\n",
-			now.Format(time.RFC3339), maxRequests, concurrency)
+		if !jsonOutput {
+			fmt.Println("================================================================================")
+			fmt.Println("  FELIX :: WORKFLOW INTEGRITY & STATE TRANSITION ASSESSMENT")
+			fmt.Printf("  Assessment: %s (%s) | Target: %s\n", asm.Name, asm.Ref, targetBase)
+			fmt.Println("================================================================================")
+			fmt.Printf("[*] Dispatched at %s | Max Requests: %d | Concurrency: %d\n",
+				now.Format(time.RFC3339), maxRequests, concurrency)
+		}
 
 		cfg := workflow.DefaultConfig()
 		cfg.Concurrency = concurrency
@@ -6851,6 +7010,7 @@ func runAssessmentCloudSec(args []string) int {
 		statusFilter    string
 		allowLoopback   bool
 		allowPrivate    bool
+		syntheticFixture bool
 		jsonOutput      bool
 		verbose         bool
 	)
@@ -6901,6 +7061,8 @@ func runAssessmentCloudSec(args []string) int {
 			allowLoopback = true
 		case arg == "--allow-private":
 			allowPrivate = true
+		case arg == "--synthetic-fixture":
+			syntheticFixture = true
 		case arg == "--json":
 			jsonOutput = true
 		case arg == "--verbose" || arg == "-v":
@@ -7062,14 +7224,15 @@ func runAssessmentCloudSec(args []string) int {
 	scopeVal := assessment.NewScopeValidator(asm.ScopeMode, targetURLs, asm.ScopeRules, asm.Exclusions)
 
 	actx := &cloudsec.AssessmentContext{
-		AssessmentID:    asm.ID,
-		Mode:            mode,
-		Provider:        provider,
-		Scope:           declaredScope,
-		Credentials:     creds,
-		ExternalTargets: extTargets,
-		IsAllowed:       scopeVal.IsAllowed,
-		IsExcluded:      func(u string) bool { excluded, _ := scopeVal.IsExcluded(u); return excluded },
+		AssessmentID:     asm.ID,
+		Mode:             mode,
+		Provider:         provider,
+		Scope:            declaredScope,
+		Credentials:      creds,
+		ExternalTargets:  extTargets,
+		SyntheticFixture: syntheticFixture,
+		IsAllowed:        scopeVal.IsAllowed,
+		IsExcluded:       func(u string) bool { excluded, _ := scopeVal.IsExcluded(u); return excluded },
 	}
 
 	provQuery := string(provider)
@@ -7193,17 +7356,19 @@ func runAssessmentCloudSec(args []string) int {
 		}), crawler.RateLimitOptions{})
 		engine := cloudsec.NewEngine(cloudCfg)
 
-		fmt.Println("================================================================================")
-		fmt.Printf("  EXECUTING CLOUD SECURITY AUDIT: %s (%s)\n", asm.Ref, asm.Name)
-		fmt.Printf("  Mode: %s | Provider: %s\n", mode, provider)
-		if declaredScope.TargetAccountID != "" {
-			fmt.Printf("  Target Account ID: %s\n", declaredScope.TargetAccountID)
-		} else if declaredScope.TargetSubscription != "" {
-			fmt.Printf("  Target Subscription: %s\n", declaredScope.TargetSubscription)
-		} else if declaredScope.TargetProjectID != "" {
-			fmt.Printf("  Target Project ID: %s\n", declaredScope.TargetProjectID)
+		if !jsonOutput {
+			fmt.Println("================================================================================")
+			fmt.Printf("  EXECUTING CLOUD SECURITY AUDIT: %s (%s)\n", asm.Ref, asm.Name)
+			fmt.Printf("  Mode: %s | Provider: %s\n", mode, provider)
+			if declaredScope.TargetAccountID != "" {
+				fmt.Printf("  Target Account ID: %s\n", declaredScope.TargetAccountID)
+			} else if declaredScope.TargetSubscription != "" {
+				fmt.Printf("  Target Subscription: %s\n", declaredScope.TargetSubscription)
+			} else if declaredScope.TargetProjectID != "" {
+				fmt.Printf("  Target Project ID: %s\n", declaredScope.TargetProjectID)
+			}
+			fmt.Println("================================================================================")
 		}
-		fmt.Println("================================================================================")
 
 		startTime := time.Now()
 		results, findings, summary, err := engine.Assess(context.Background(), actx)
@@ -7270,10 +7435,12 @@ func runAssessmentCloudSec(args []string) int {
 
 		_ = store.UpdateExecution(execRecord)
 
-		fmt.Printf("\n[+] Assessment Complete in %v\n", duration.Round(time.Millisecond))
-		fmt.Printf("    Total Checks: %d | Services Assessed: %d\n", summary.TotalChecks, summary.ServicesAssessed)
-		fmt.Printf("    Verified Issues: %d | Candidates: %d | Observations: %d | Inconclusive: %d | Not Vulnerable: %d\n",
-			summary.VerifiedCount, summary.CandidateCount, summary.ObservedCount, summary.InconclusiveCount, summary.NotVulnerableCount)
+		if !jsonOutput {
+			fmt.Printf("\n[+] Assessment Complete in %v\n", duration.Round(time.Millisecond))
+			fmt.Printf("    Total Checks: %d | Services Assessed: %d\n", summary.TotalChecks, summary.ServicesAssessed)
+			fmt.Printf("    Verified Issues: %d | Candidates: %d | Observations: %d | Inconclusive: %d | Not Vulnerable: %d\n",
+				summary.VerifiedCount, summary.CandidateCount, summary.ObservedCount, summary.InconclusiveCount, summary.NotVulnerableCount)
+		}
 	}
 
 	// 3. Reporting / Inspection Mode
@@ -7705,19 +7872,21 @@ func runAssessmentBusinessLogic(args []string) int {
 		}
 		engine := businesslogic.NewEngine(blogicHTTPClient, cfg)
 
-		fmt.Println("================================================================================")
-		fmt.Printf("FELIX BUSINESS LOGIC SECURITY ENGINE - ACTIVE EVALUATION\n")
-		fmt.Println("================================================================================")
-		fmt.Printf("Assessment:     %s (%s)\n", asm.Name, asm.Ref)
-		fmt.Printf("Target Base:    %s\n", targetBase)
-		fmt.Printf("Execution ID:   %s\n", execID)
-		if stateChanging {
-			fmt.Println("Mode:           STATE-CHANGING ENABLED")
-		} else {
-			fmt.Println("Mode:           SAFE READ-ONLY (State mutations blocked by policy)")
+		if !jsonOutput {
+			fmt.Println("================================================================================")
+			fmt.Printf("FELIX BUSINESS LOGIC SECURITY ENGINE - ACTIVE EVALUATION\n")
+			fmt.Println("================================================================================")
+			fmt.Printf("Assessment:     %s (%s)\n", asm.Name, asm.Ref)
+			fmt.Printf("Target Base:    %s\n", targetBase)
+			fmt.Printf("Execution ID:   %s\n", execID)
+			if stateChanging {
+				fmt.Println("Mode:           STATE-CHANGING ENABLED")
+			} else {
+				fmt.Println("Mode:           SAFE READ-ONLY (State mutations blocked by policy)")
+			}
+			fmt.Println("--------------------------------------------------------------------------------")
+			fmt.Println("[*] Modeling business workflows and evaluating state boundaries...")
 		}
-		fmt.Println("--------------------------------------------------------------------------------")
-		fmt.Println("[*] Modeling business workflows and evaluating state boundaries...")
 
 		results, findings, summary, err := engine.Assess(context.Background(), actx)
 		if err != nil {
@@ -7779,13 +7948,15 @@ func runAssessmentBusinessLogic(args []string) int {
 			}
 		}
 
-		fmt.Printf("[+] Assessment completed: %d checks run across %d workflows\n", summary.TotalChecks, summary.WorkflowsModeled)
-		fmt.Printf("    Verified:       %d\n", summary.VerifiedCount)
-		fmt.Printf("    Candidates:     %d\n", summary.CandidateCount)
-		fmt.Printf("    Observations:   %d\n", summary.ObservedCount)
-		fmt.Printf("    Not Vulnerable: %d\n", summary.NotVulnerableCount)
-		fmt.Printf("    Blocked/Safety: %d\n", summary.BlockedCount)
-		fmt.Printf("    Inconclusive:   %d\n", summary.InconclusiveCount)
+		if !jsonOutput {
+			fmt.Printf("[+] Assessment completed: %d checks run across %d workflows\n", summary.TotalChecks, summary.WorkflowsModeled)
+			fmt.Printf("    Verified:       %d\n", summary.VerifiedCount)
+			fmt.Printf("    Candidates:     %d\n", summary.CandidateCount)
+			fmt.Printf("    Observations:   %d\n", summary.ObservedCount)
+			fmt.Printf("    Not Vulnerable: %d\n", summary.NotVulnerableCount)
+			fmt.Printf("    Blocked/Safety: %d\n", summary.BlockedCount)
+			fmt.Printf("    Inconclusive:   %d\n", summary.InconclusiveCount)
+		}
 	}
 
 	// 3. Reporting / Inspection Mode
@@ -7970,7 +8141,7 @@ func runAssessmentCorrelate(args []string) int {
 		return 1
 	}
 
-	store, err := assessment.NewSQLiteStore("")
+	store, err := getAssessmentStore()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[-] Database initialization failed: %v\n", err)
 		return 1
@@ -7985,15 +8156,17 @@ func runAssessmentCorrelate(args []string) int {
 
 	// 1. Run Mode
 	if runFlag {
-		fmt.Println("================================================================================")
-		fmt.Printf("FELIX CORRELATION & ATTACK PATH ENGINE - ANALYSIS RUN\n")
-		fmt.Println("================================================================================")
-		fmt.Printf("Assessment:     %s (%s)\n", asm.Name, asm.Ref)
-		if executionID != "" {
-			fmt.Printf("Execution ID:   %s\n", executionID)
+		if !jsonOutput {
+			fmt.Println("================================================================================")
+			fmt.Printf("FELIX CORRELATION & ATTACK PATH ENGINE - ANALYSIS RUN\n")
+			fmt.Println("================================================================================")
+			fmt.Printf("Assessment:     %s (%s)\n", asm.Name, asm.Ref)
+			if executionID != "" {
+				fmt.Printf("Execution ID:   %s\n", executionID)
+			}
+			fmt.Println("--------------------------------------------------------------------------------")
+			fmt.Println("[*] Fetching recorded assessment findings for cross-finding correlation...")
 		}
-		fmt.Println("--------------------------------------------------------------------------------")
-		fmt.Println("[*] Fetching recorded assessment findings for cross-finding correlation...")
 
 		rawFindings, err := store.GetFindings(asm.ID, executionID)
 		if err != nil {
@@ -8002,7 +8175,9 @@ func runAssessmentCorrelate(args []string) int {
 		}
 
 		if len(rawFindings) == 0 {
-			fmt.Printf("[*] No findings recorded for assessment %s to correlate.\n", asm.Ref)
+			if !jsonOutput {
+				fmt.Printf("[*] No findings recorded for assessment %s to correlate.\n", asm.Ref)
+			}
 			return 0
 		}
 
@@ -8014,7 +8189,9 @@ func runAssessmentCorrelate(args []string) int {
 		cfg := correlation.DefaultConfig()
 		engine := correlation.NewEngine(cfg)
 
-		fmt.Printf("[*] Evaluating correlation rules COR-01 through COR-10 across %d findings...\n", len(reportFindings))
+		if !jsonOutput {
+			fmt.Printf("[*] Evaluating correlation rules COR-01 through COR-10 across %d findings...\n", len(reportFindings))
+		}
 		summary, paths, relationships, err := engine.Correlate(context.Background(), reportFindings)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[-] Correlation engine error: %v\n", err)
@@ -8124,17 +8301,19 @@ func runAssessmentCorrelate(args []string) int {
 			}
 		}
 
-		fmt.Printf("[+] Correlation analysis completed:\n")
-		fmt.Printf("    Evaluated Findings:        %d\n", summary.EvaluatedFindings)
-		fmt.Printf("    Asset Associations:        %d\n", len(summary.AssetAssociations))
-		fmt.Printf("    Candidate Relationships:   %d\n", summary.CandidateRelationships)
-		fmt.Printf("    Confirmed Relationships:   %d\n", summary.ConfirmedRelationships)
-		fmt.Printf("    Candidate Attack Paths:    %d\n", summary.CandidatePaths)
-		fmt.Printf("    Verified Attack Paths:     %d\n", summary.VerifiedPaths)
-		fmt.Printf("    Inconclusive Paths:        %d\n", summary.InconclusivePaths)
-		fmt.Printf("    Highest Combined Risk:     %s (%d/100)\n", summary.HighestRiskLevel, summary.HighestRiskScore)
-		if summary.LimitsReached {
-			fmt.Printf("    [!] Limits Reached:        %s\n", summary.TruncationReason)
+		if !jsonOutput {
+			fmt.Printf("[+] Correlation analysis completed:\n")
+			fmt.Printf("    Evaluated Findings:        %d\n", summary.EvaluatedFindings)
+			fmt.Printf("    Asset Associations:        %d\n", len(summary.AssetAssociations))
+			fmt.Printf("    Candidate Relationships:   %d\n", summary.CandidateRelationships)
+			fmt.Printf("    Confirmed Relationships:   %d\n", summary.ConfirmedRelationships)
+			fmt.Printf("    Candidate Attack Paths:    %d\n", summary.CandidatePaths)
+			fmt.Printf("    Verified Attack Paths:     %d\n", summary.VerifiedPaths)
+			fmt.Printf("    Inconclusive Paths:        %d\n", summary.InconclusivePaths)
+			fmt.Printf("    Highest Combined Risk:     %s (%d/100)\n", summary.HighestRiskLevel, summary.HighestRiskScore)
+			if summary.LimitsReached {
+				fmt.Printf("    [!] Limits Reached:        %s\n", summary.TruncationReason)
+			}
 		}
 		_ = relationships
 	}
@@ -8438,6 +8617,13 @@ func runAssessmentVerify(args []string) int {
 			fmt.Println("  --finding <id>     Inspect verification details for a specific finding")
 			fmt.Println("  --json             Output results as formatted JSON")
 			fmt.Println("  --verbose          Display full reproduction commands, criteria results, and evidence")
+			fmt.Println("\nMetrics & Semantics:")
+			fmt.Println("  Attempt Rate:            Attempted findings / Total findings")
+			fmt.Println("  Confirmation Rate:       Confirmed vulnerabilities (VERIFIED) / Attempted findings")
+			fmt.Println("  Conclusive Rate:         Conclusive outcomes (VERIFIED + NOT_EXPOSED) / Attempted findings")
+			fmt.Println("  Verification Rate:       Public metric synonymous with Confirmation Rate (VERIFIED / Attempted)")
+			fmt.Println("  Inconclusive Probes:     Active probe executions that failed ambiguously (timeouts, network errors)")
+			fmt.Println("  Defended Controls:       Probes proving target is defended/authenticated (NOT_EXPOSED)")
 			return 0
 		default:
 			if !strings.HasPrefix(arg, "-") && assessmentRef == "" {
@@ -8452,7 +8638,7 @@ func runAssessmentVerify(args []string) int {
 		return 1
 	}
 
-	store, err := assessment.NewSQLiteStore("")
+	store, err := getAssessmentStore()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[-] Database initialization failed: %v\n", err)
 		return 1
@@ -8467,15 +8653,17 @@ func runAssessmentVerify(args []string) int {
 
 	// 1. Run Mode: Execute verification on candidate findings
 	if runFlag {
-		fmt.Println("================================================================================")
-		fmt.Println("FELIX VERIFICATION ENGINE 2.0 - EMPIRICAL VERIFICATION RUN")
-		fmt.Println("================================================================================")
-		fmt.Printf("Assessment:     %s (%s)\n", asm.Name, asm.Ref)
-		if executionID != "" {
-			fmt.Printf("Execution ID:   %s\n", executionID)
+		if !jsonOutput {
+			fmt.Println("================================================================================")
+			fmt.Println("FELIX VERIFICATION ENGINE 2.0 - EMPIRICAL VERIFICATION RUN")
+			fmt.Println("================================================================================")
+			fmt.Printf("Assessment:     %s (%s)\n", asm.Name, asm.Ref)
+			if executionID != "" {
+				fmt.Printf("Execution ID:   %s\n", executionID)
+			}
+			fmt.Println("--------------------------------------------------------------------------------")
+			fmt.Println("[*] Fetching candidate findings for verification...")
 		}
-		fmt.Println("--------------------------------------------------------------------------------")
-		fmt.Println("[*] Fetching candidate findings for verification...")
 
 		rawFindings, err := store.GetFindings(asm.ID, executionID)
 		if err != nil {
@@ -8484,7 +8672,9 @@ func runAssessmentVerify(args []string) int {
 		}
 
 		if len(rawFindings) == 0 {
-			fmt.Printf("[*] No findings recorded for assessment %s to verify.\n", asm.Ref)
+			if !jsonOutput {
+				fmt.Printf("[*] No findings recorded for assessment %s to verify.\n", asm.Ref)
+			}
 			return 0
 		}
 
@@ -8499,11 +8689,13 @@ func runAssessmentVerify(args []string) int {
 			AllowStateChanging:   false,
 			InScopeFunc:          func(rawURL string) bool { return true },
 			IsExcludedFunc:       func(rawURL string) bool { return false },
-			MaxRequestsPerTarget: 20,
+			MaxRequestsPerTarget: 100,
 		})
 		verEngine := verification.NewEngine(safetyChecker)
 
-		fmt.Printf("[*] Evaluating verification policies across %d findings...\n", len(reportFindings))
+		if !jsonOutput {
+			fmt.Printf("[*] Evaluating verification policies across %d findings...\n", len(reportFindings))
+		}
 		results, summary := verEngine.VerifyFindings(context.Background(), reportFindings)
 
 		execID := executionID
@@ -8574,24 +8766,28 @@ func runAssessmentVerify(args []string) int {
 			fmt.Fprintf(os.Stderr, "[-] Warning: failed to save verified findings to database: %v\n", err)
 		}
 
-		fmt.Printf("[+] Verification Engine 2.0 completed:\n")
-		fmt.Printf("    Evaluated Findings:        %d\n", summary.TotalFindings)
-		fmt.Printf("    Attempted Verifications:   %d (%.1f%%)\n", summary.AttemptedCount, summary.VerificationRateAttempted)
-		fmt.Printf("    VERIFIED:                  %d\n", summary.VerifiedCount)
-		fmt.Printf("    DETECTED:                  %d\n", summary.DetectedCount)
-		fmt.Printf("    OBSERVED:                  %d\n", summary.ObservedCount)
-		fmt.Printf("    NOT_VERIFIED:              %d\n", summary.NotVerifiedCount)
-		fmt.Printf("    NOT_EXPOSED:               %d\n", summary.NotExposedCount)
-		if summary.BlockedCount > 0 {
-			fmt.Printf("    BLOCKED (Safety Policy):   %d\n", summary.BlockedCount)
+		if !jsonOutput {
+			fmt.Printf("[+] Verification Engine 2.0 completed:\n")
+			fmt.Printf("    Evaluated Findings:        %d\n", summary.TotalFindings)
+			fmt.Printf("    Attempted Verifications:   %d (Attempt Rate: %.1f%%)\n", summary.AttemptedCount, summary.AttemptRate)
+			fmt.Printf("    VERIFIED:                  %d\n", summary.VerifiedCount)
+			fmt.Printf("    DETECTED:                  %d\n", summary.DetectedCount)
+			fmt.Printf("    OBSERVED:                  %d\n", summary.ObservedCount)
+			fmt.Printf("    NOT_VERIFIED:              %d\n", summary.NotVerifiedCount)
+			fmt.Printf("    NOT_EXPOSED:               %d\n", summary.NotExposedCount)
+			if summary.BlockedCount > 0 {
+				fmt.Printf("    BLOCKED (Safety Policy):   %d\n", summary.BlockedCount)
+			}
+			if summary.InconclusiveCount > 0 {
+				fmt.Printf("    Inconclusive Probes:       %d\n", summary.InconclusiveCount)
+			}
+			if summary.SyntheticCount > 0 {
+				fmt.Printf("    Synthetic Fixtures:        %d\n", summary.SyntheticCount)
+			}
+			fmt.Printf("    Confirmation Rate:         %.1f%% (%d/%d confirmed)\n", summary.ConfirmationRate, summary.VerifiedCount, summary.AttemptedCount)
+			fmt.Printf("    Conclusive Rate:           %.1f%% (%d/%d conclusive)\n", summary.ConclusiveRate, summary.ConclusiveCount, summary.AttemptedCount)
+			fmt.Println()
 		}
-		if summary.InconclusiveCount > 0 {
-			fmt.Printf("    Inconclusive:              %d\n", summary.InconclusiveCount)
-		}
-		if summary.SyntheticCount > 0 {
-			fmt.Printf("    Synthetic Fixtures:        %d\n", summary.SyntheticCount)
-		}
-		fmt.Println()
 	}
 
 	// 2. Inspection / Output Mode
@@ -8662,7 +8858,11 @@ func runAssessmentVerify(args []string) int {
 		fmt.Printf("Total Findings: %d  |  Verified: %d  |  Detected: %d  |  Not Verified: %d  |  Not Exposed: %d\n",
 			summary.TotalFindings, summary.VerifiedCount, summary.DetectedCount, summary.NotVerifiedCount, summary.NotExposedCount)
 		if summary.AttemptedCount > 0 {
-			fmt.Printf("Verification Rate: %.1f%% (Attempted: %d, Blocked: %d, Inconclusive: %d)\n",
+			fmt.Printf("Confirmation Rate: %.1f%% (%d/%d confirmed)  |  Conclusive Rate: %.1f%% (%d/%d conclusive)  |  Inconclusive Probes: %d\n",
+				summary.ConfirmationRate, summary.VerifiedCount, summary.AttemptedCount,
+				summary.ConclusiveRate, summary.ConclusiveCount, summary.AttemptedCount,
+				summary.InconclusiveCount)
+			fmt.Printf("Verification Rate: %.1f%% (Attempted: %d, Blocked: %d, Inconclusive Probes: %d)\n",
 				summary.VerificationRateAttempted, summary.AttemptedCount, summary.BlockedCount, summary.InconclusiveCount)
 		}
 	}

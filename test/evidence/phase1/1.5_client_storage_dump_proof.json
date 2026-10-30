@@ -1,0 +1,31 @@
+{
+  "receipt_version": "3.0.0",
+  "phase_id": "phase1",
+  "subphase_id": "1.5",
+  "title": "Client Storage & Secret Exposure Assessment Engine Verification",
+  "target_repo": "test/lab/client_storage.html (Local Synthetic Fixture)",
+  "target_url": "http://127.0.0.1:<dynamic_port> (Ephemeral Loopback Fixture: test/lab/client_storage.html)",
+  "timestamp": "2026-10-28T11:13:53Z",
+  "executor": "Antigravity Engineering / FELIX Core Team",
+  "test_command": "go test -v -count=1 ./pkg/crawler/browser -run \"TestClientStorage\"",
+  "exit_code": 0,
+  "metrics": {
+    "surfaces_tested": 4,
+    "local_storage_sensitive_detected": true,
+    "session_storage_sensitive_detected": true,
+    "indexeddb_sensitive_detected": true,
+    "cookie_security_attributes_verified": true,
+    "benign_controls_false_positives": 0,
+    "redaction_guarantee_verified": true,
+    "true_positives": 5,
+    "false_positives": 0,
+    "execution_time_ms": 21947.0
+  },
+  "limitations": [
+    "Cache Storage and OPFS (Origin Private File System) are not enumerated in Phase 1.5 scope",
+    "WebSQL is deprecated and unsupported in modern Chromium",
+    "Third-party iframe isolated storage partitions require context-specific frame targeting"
+  ],
+  "conclusive_status": "PROVEN_VERIFIED",
+  "sha256_hash": "0aa0d081f58c549526c1181d1024c9c89d5c3e787ffeff24288f732d0021f8ae"
+}

@@ -8,6 +8,7 @@ import (
 
 	"felix/pkg/clierror"
 	"felix/pkg/crawler"
+	_ "felix/pkg/crawler/browser"
 )
 
 const banner = `

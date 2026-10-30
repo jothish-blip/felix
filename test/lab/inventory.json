@@ -1,0 +1,1822 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "generated_at": "2026-10-25T16:59:21.544599+00:00",
+  "phase": "15.10",
+  "baseline_commit": "d55d1981a6da6c85869a71fe4acd602eb9eeb91c",
+  "tool_name": "felix",
+  "summary": {
+    "total_top_level_commands": 23,
+    "total_subcommands": 38,
+    "total_detectors": 17,
+    "tested_commands": 23,
+    "untested_commands": 0,
+    "lab_verified_detectors": [
+      "DET-BOLA",
+      "DET-BFLA",
+      "DET-BOPLA",
+      "DET-WEBVULN",
+      "DET-APISEC",
+      "DET-AUTH",
+      "DET-AUTHZ",
+      "DET-SESSIONSEC",
+      "DET-CLOUDSEC",
+      "DET-OAST",
+      "DET-WORKFLOW",
+      "DET-SECRETS",
+      "DET-COMPLIANCE",
+      "DET-OSCAL",
+      "DET-MTTR"
+    ],
+    "unsupported_capabilities": 3,
+    "phase": "15.10"
+  },
+  "top_level_commands": [
+    {
+      "name": "scan",
+      "file": "cmd/felix/scan_cmd.go",
+      "handler": "runScan",
+      "description": "Orchestrates comprehensive multi-engine web application and API security assessment.",
+      "supported_flags": [
+        "--target",
+        "-t",
+        "--profile",
+        "-p",
+        "--deep",
+        "--crawl-only",
+        "--no-crawl",
+        "--max-depth",
+        "--max-pages",
+        "--rate-limit",
+        "--concurrency",
+        "--timeout",
+        "--auth",
+        "--cookie",
+        "--header",
+        "--user-agent",
+        "--proxy",
+        "--scope",
+        "--exclude",
+        "--json",
+        "--sarif",
+        "--html",
+        "--output",
+        "-o",
+        "--fail-on-findings",
+        "--cross-tenant",
+        "--spec",
+        "--prober",
+        "--help",
+        "-h"
+      ],
+      "subcommands": [],
+      "exit_codes": {
+        "success_clean": 0,
+        "security_findings_threshold": 1,
+        "operational_error": 2
+      },
+      "output_artifacts": [
+        "report.html",
+        "results.json",
+        "results.sarif"
+      ],
+      "tested_workflows": [
+        "Single target URL scan",
+        "Declarative target profile scan",
+        "SARIF 2.1.0 output export",
+        "Cross-tenant prober execution",
+        "Spec reconciliation against OpenAPI",
+        "LAB-REAL-JUICE-001: Live OWASP Juice Shop 20.2.0 discovery & crawling",
+        "LAB-REAL-CTRL-004: Tier B benign control false-positive immunity & defense"
+      ],
+      "dependencies": [
+        "pkg/crawler",
+        "pkg/api",
+        "pkg/webvuln",
+        "pkg/secrets",
+        "pkg/report"
+      ],
+      "limitations": [
+        "Active crawler requires reachable HTTP(S) endpoint.",
+        "Cross-tenant scanning requires declarative YAML target profile with two tenant definitions."
+      ]
+    },
+    {
+      "name": "target",
+      "file": "cmd/felix/target_cmd.go",
+      "handler": "runTarget",
+      "description": "Validates, inspects, and manages declarative target assessment profiles.",
+      "supported_flags": [
+        "--profile",
+        "-p",
+        "--json",
+        "--strict",
+        "--help",
+        "-h"
+      ],
+      "subcommands": [
+        {
+          "name": "validate",
+          "description": "Validates YAML target profile schema and syntax",
+          "flags": [
+            "--profile",
+            "-p",
+            "--strict",
+            "--json"
+          ]
+        },
+        {
+          "name": "inspect",
+          "description": "Parses and displays structured target profile configuration",
+          "flags": [
+            "--profile",
+            "-p",
+            "--json"
+          ]
+        },
+        {
+          "name": "list",
+          "description": "Lists configured targets in a profile",
+          "flags": [
+            "--profile",
+            "-p",
+            "--json"
+          ]
+        }
+      ],
+      "exit_codes": {
+        "success": 0,
+        "validation_failure": 1,
+        "file_or_argument_error": 2
+      },
+      "output_artifacts": [],
+      "tested_workflows": [
+        "YAML profile schema validation",
+        "Multi-tenant definition parsing",
+        "Inspection output table and JSON"
+      ],
+      "dependencies": [
+        "pkg/api"
+      ],
+      "limitations": [
+        "Requires local filesystem access to profile YAML."
+      ]
+    },
+    {
+      "name": "monitor",
+      "file": "cmd/felix/monitor_cmd.go",
+      "handler": "runMonitor",
+      "description": "Monitors API surfaces, tracks drift against baselines, and issues webhook alerts.",
+      "supported_flags": [
+        "--target",
+        "-t",
+        "--profile",
+        "-p",
+        "--state-dir",
+        "--webhook-url",
+        "--json",
+        "--help",
+        "-h"
+      ],
+      "subcommands": [
+        {
+          "name": "run",
+          "description": "Runs surface discovery and compares against previous snapshot",
+          "flags": [
+            "--target",
+            "--profile",
+            "--state-dir",
+            "--json"
+          ]
+        },
+        {
+          "name": "drift",
+          "description": "Displays detected additions, removals, and modifications",
+          "flags": [
+            "--target",
+            "--state-dir",
+            "--json"
+          ]
+        },
+        {
+          "name": "diff",
+          "description": "Displays detailed unified diff between API surface baselines",
+          "flags": [
+            "--target",
+            "--state-dir",
+            "--json"
+          ]
+        },
+        {
+          "name": "webhook",
+          "description": "Configures and tests webhook notification delivery for drift",
+          "flags": [
+            "--webhook-url",
+            "--test",
+            "--json"
+          ]
+        }
+      ],
+      "exit_codes": {
+        "clean_no_drift": 0,
+        "drift_detected": 1,
+        "operational_error": 2
+      },
+      "output_artifacts": [
+        "state.json",
+        "drift_event.json"
+      ],
+      "tested_workflows": [
+        "API surface discovery and hashing",
+        "Drift detection between consecutive runs",
+        "Signed webhook dispatch"
+      ],
+      "dependencies": [
+        "pkg/monitor",
+        "pkg/crawler",
+        "pkg/api"
+      ],
+      "limitations": [
+        "Relies on local state directory persistence."
+      ]
+    },
+    {
+      "name": "ci",
+      "file": "cmd/felix/ci_cmd.go",
+      "handler": "runCI",
+      "description": "Executes headless automated assessment designed for CI/CD pipelines with SARIF export and threshold enforcement.",
+      "supported_flags": [
+        "--target",
+        "-t",
+        "--profile",
+        "-p",
+        "--fail-on",
+        "--max-critical",
+        "--max-high",
+        "--max-medium",
+        "--output-sarif",
+        "--json",
+        "--timeout",
+        "--help",
+        "-h"
+      ],
+      "subcommands": [],
+      "exit_codes": {
+        "pass_clean": 0,
+        "threshold_breach": 1,
+        "ci_error": 2
+      },
+      "output_artifacts": [
+        "felix.sarif",
+        "ci_summary.json"
+      ],
+      "tested_workflows": [
+        "SARIF 2.1.0 generation compliant with GitHub Code Scanning",
+        "Severity threshold exit code enforcement"
+      ],
+      "dependencies": [
+        "pkg/ci",
+        "pkg/report",
+        "pkg/clierror"
+      ],
+      "limitations": [
+        "Requires defined exit thresholds (default: fail on CRITICAL or HIGH)."
+      ]
+    },
+    {
+      "name": "apk",
+      "file": "cmd/felix/apk_cmd.go",
+      "handler": "runAPK",
+      "description": "Performs static security analysis of Android APK packages (manifests, exported components, secrets, network security config).",
+      "supported_flags": [
+        "--decompile",
+        "--secrets",
+        "--endpoints",
+        "--certs",
+        "--manifest",
+        "--json",
+        "--output",
+        "-o",
+        "--help",
+        "-h"
+      ],
+      "subcommands": [],
+      "exit_codes": {
+        "clean": 0,
+        "high_severity_vulnerabilities": 1,
+        "corrupt_or_invalid_apk": 2
+      },
+      "output_artifacts": [
+        "apk_report.json"
+      ],
+      "tested_workflows": [
+        "Zip / DEX extraction and inspection",
+        "Secret entropy search in bytecode assets",
+        "Exported component vulnerability identification"
+      ],
+      "dependencies": [
+        "pkg/apk",
+        "pkg/secrets"
+      ],
+      "limitations": [
+        "Static analysis only; dynamic runtime instrumentation (Frida) is unsupported."
+      ]
+    },
+    {
+      "name": "report",
+      "file": "cmd/felix/report_cmd.go",
+      "handler": "runReport",
+      "description": "Generates, renders, and verifies offline assessment reports across multiple formats.",
+      "supported_flags": [
+        "--input",
+        "-i",
+        "--format",
+        "-f",
+        "--output",
+        "-o",
+        "--reproduce",
+        "--tamper-check",
+        "--json",
+        "--help",
+        "-h"
+      ],
+      "subcommands": [],
+      "exit_codes": {
+        "success": 0,
+        "invalid_input_or_io_failure": 2
+      },
+      "output_artifacts": [
+        "*.html",
+        "*.sarif",
+        "*.json",
+        "*.md",
+        "reproduce.sh",
+        "reproduce.bat"
+      ],
+      "tested_workflows": [
+        "Standalone interactive HTML report generation",
+        "Reproduction script generator",
+        "SARIF 2.1.0 conversion",
+        "Cryptographic report tamper-proofing",
+        "LAB-REAL-REPORT-006: Cross-format report generation, SARIF 2.1.0 conformance & XSS escaping"
+      ],
+      "dependencies": [
+        "pkg/report"
+      ],
+      "limitations": [
+        "Requires pre-existing assessment or scan result file."
+      ]
+    },
+    {
+      "name": "client",
+      "file": "cmd/felix/client_cmd.go",
+      "handler": "runClient",
+      "description": "Manages client organizations, engagement boundaries, and metadata in SQLite storage.",
+      "supported_flags": [
+        "--name",
+        "--id",
+        "--email",
+        "--json",
+        "--help",
+        "-h"
+      ],
+      "subcommands": [
+        {
+          "name": "create",
+          "description": "Registers a new client organization",
+          "flags": [
+            "--name",
+            "--email",
+            "--json"
+          ]
+        },
+        {
+          "name": "list",
+          "description": "Lists all registered client organizations",
+          "flags": [
+            "--json"
+          ]
+        },
+        {
+          "name": "get",
+          "description": "Displays details of a client by ID",
+          "flags": [
+            "--json"
+          ]
+        },
+        {
+          "name": "delete",
+          "description": "Deletes a client organization",
+          "flags": [
+            "--force"
+          ]
+        }
+      ],
+      "exit_codes": {
+        "success": 0,
+        "client_not_found": 1,
+        "database_or_argument_error": 2
+      },
+      "output_artifacts": [],
+      "tested_workflows": [
+        "Client CRUD lifecycle in SQLite database"
+      ],
+      "dependencies": [
+        "pkg/assessment"
+      ],
+      "limitations": [
+        "Local SQLite database storage only."
+      ]
+    },
+    {
+      "name": "compliance",
+      "file": "cmd/felix/compliance_cmd.go",
+      "handler": "runCompliance",
+      "description": "Audits, maps, evaluates, verifies, gates, and exports security findings against regulatory control catalogs (NIST SP 800-53, OWASP Top 10 API Security, SOC 2).",
+      "supported_flags": [
+        "--help",
+        "-h"
+      ],
+      "subcommands": [
+        {
+          "name": "catalog",
+          "description": "Manage, validate, inspect, and filter compliance control catalogs (schema 1.0)",
+          "subcommands": [
+            "validate",
+            "inspect",
+            "controls"
+          ],
+          "flags": [
+            "--json",
+            "--category",
+            "--severity",
+            "--status",
+            "--limit"
+          ]
+        },
+        {
+          "name": "mapping",
+          "description": "Manage, validate, and execute finding-to-control mapping rulesets against catalogs",
+          "subcommands": [
+            "validate",
+            "inspect",
+            "map"
+          ],
+          "flags": [
+            "--catalog",
+            "--findings",
+            "--json"
+          ]
+        },
+        {
+          "name": "evaluate",
+          "description": "Execute evidence-backed compliance evaluations across 7 canonical control states",
+          "flags": [
+            "--assessment",
+            "--catalog",
+            "--mapping",
+            "--findings",
+            "--positive-evidence",
+            "--save",
+            "--db",
+            "--key-file",
+            "--json"
+          ]
+        },
+        {
+          "name": "evaluation",
+          "description": "Inspect persisted evaluation results, control outcomes, and evidence links",
+          "subcommands": [
+            "list",
+            "view",
+            "controls",
+            "summary"
+          ],
+          "flags": [
+            "--assessment",
+            "--catalog",
+            "--db",
+            "--json"
+          ]
+        },
+        {
+          "name": "verify",
+          "description": "Verify cryptographic integrity and HMAC authenticity of compliance evaluation records",
+          "flags": [
+            "--assessment",
+            "--catalog",
+            "--result-id",
+            "--key-file",
+            "--key-env",
+            "--db",
+            "--json"
+          ]
+        },
+        {
+          "name": "gate",
+          "description": "Evaluate CI/CD compliance gate policies against evaluation records or dossiers",
+          "subcommands": [
+            "check",
+            "validate",
+            "inspect"
+          ],
+          "flags": [
+            "--policy",
+            "--assessment",
+            "--catalog",
+            "--dossier-file",
+            "--evaluation-file",
+            "--strict-integrity",
+            "--db",
+            "--output",
+            "--json"
+          ]
+        },
+        {
+          "name": "dossier",
+          "description": "Generate, validate, and view consolidated evidence-backed compliance dossiers",
+          "subcommands": [
+            "generate",
+            "validate",
+            "view"
+          ],
+          "flags": [
+            "--assessment",
+            "--catalog",
+            "--catalog-file",
+            "--mapping",
+            "--mapping-file",
+            "--db",
+            "--key-file",
+            "--include-remediation",
+            "--include-sla",
+            "--include-mttr",
+            "--output",
+            "--overwrite"
+          ]
+        },
+        {
+          "name": "export",
+          "description": "Export compliance records in normalized JSON or NIST OSCAL v1.1.0 format (AR / POA&M)",
+          "subcommands": [
+            "json",
+            "oscal",
+            "validate"
+          ],
+          "flags": [
+            "--assessment",
+            "--catalog",
+            "--catalog-file",
+            "--mapping-file",
+            "--dossier-file",
+            "--oscal-model",
+            "--output",
+            "--compact",
+            "--db",
+            "--key-file",
+            "--json"
+          ]
+        },
+        {
+          "name": "sla",
+          "description": "Manage and track remediation SLAs, lifecycle status, and overdue items",
+          "subcommands": [
+            "policies",
+            "list",
+            "view",
+            "assign",
+            "update",
+            "accept-risk",
+            "recalculate"
+          ],
+          "flags": [
+            "--db",
+            "--json",
+            "--overdue",
+            "--status",
+            "--severity"
+          ]
+        },
+        {
+          "name": "mttr",
+          "description": "Calculate Mean Time to Remediation metrics using verified lifecycle event history",
+          "flags": [
+            "--from",
+            "--to",
+            "--date-basis",
+            "--severity",
+            "--category",
+            "--source",
+            "--assessment",
+            "--control",
+            "--policy",
+            "--strict-integrity",
+            "--sla",
+            "--db",
+            "--json"
+          ]
+        },
+        {
+          "name": "limitations",
+          "description": "Inspect assessment limitations, explicit coverage basis, and determination boundaries",
+          "subcommands": [
+            "inspect",
+            "catalog",
+            "ruleset",
+            "framework"
+          ],
+          "flags": [
+            "--framework",
+            "--catalog",
+            "--ruleset",
+            "--json"
+          ]
+        }
+      ],
+      "exit_codes": {
+        "compliant_or_pass": 0,
+        "policy_violation_or_non_compliant": 1,
+        "operational_error_or_invalid_config": 2
+      },
+      "output_artifacts": [
+        "dossier.json",
+        "oscal_assessment_results.json",
+        "compliance.db"
+      ],
+      "tested_workflows": [
+        "LAB-COMP-MAP-001: Finding-to-control mapping across NIST SP 800-53, OWASP API 2023, and SOC 2",
+        "LAB-COMP-CAT-002: Catalog ingestion and schema validation (minimal, multi-control, rejection of malformed/oversized/duplicate)",
+        "LAB-COMP-EVAL-003: Evidence-backed compliance evaluation across 7 canonical states (absence of findings != compliant)",
+        "LAB-COMP-GATE-004: Compliance gate decision logic and exit code contracts (strict, enforced controls, exact threshold, fail-closed)",
+        "LAB-COMP-OSCAL-005: NIST OSCAL v1.1.0 Assessment Results export & official JSON Schema validation",
+        "LAB-COMP-DOSSIER-006: Compliance dossier generation & cryptographic HMAC tamper detection",
+        "LAB-COMP-MTTR-007: Deterministic MTTR and Remediation SLA calculations with invalid timestamp exclusions",
+        "LAB-COMP-ROBUST-008: Security boundaries, path traversal defense, and secret canary protection"
+      ],
+      "dependencies": [
+        "pkg/compliance",
+        "pkg/report",
+        "pkg/assessment"
+      ],
+      "limitations": [
+        "Automated compliance evaluation reflects technical security assessment evidence and does not constitute statutory certification or organizational audit attestation.",
+        "Absence of findings does not automatically imply compliance; positive evidence or explicit applicability determination is required.",
+        "Historical MTTR calculations exclude records with invalid causal timestamps or missing event logs."
+      ]
+    },
+    {
+      "name": "assessment",
+      "file": "cmd/felix/assessment_cmd.go",
+      "handler": "runAssessment",
+      "description": "Core modular assessment management, authorization gating, and specialized attack engines.",
+      "supported_flags": [
+        "--run",
+        "--dry-run",
+        "--target",
+        "-t",
+        "--endpoint",
+        "--object-id",
+        "--param",
+        "--user-a-token",
+        "--user-b-token",
+        "--user-a-cookie",
+        "--user-b-cookie",
+        "--user-a-role",
+        "--user-b-role",
+        "--admin-token",
+        "--user-token",
+        "--allow-state-changing",
+        "--allow-loopback",
+        "--allow-private",
+        "--max-requests",
+        "--policy",
+        "--json",
+        "--verbose",
+        "-v",
+        "--help",
+        "-h"
+      ],
+      "subcommands": [
+        {
+          "name": "create",
+          "description": "Creates an assessment engagement",
+          "flags": [
+            "--name",
+            "--client",
+            "--ref",
+            "--scope-mode"
+          ]
+        },
+        {
+          "name": "list",
+          "description": "Lists assessments in database",
+          "flags": [
+            "--client",
+            "--json"
+          ]
+        },
+        {
+          "name": "get",
+          "description": "Retrieves assessment details",
+          "flags": [
+            "--json"
+          ]
+        },
+        {
+          "name": "delete",
+          "description": "Deletes assessment engagement",
+          "flags": [
+            "--force"
+          ]
+        },
+        {
+          "name": "target",
+          "description": "Manages target URLs for assessment",
+          "flags": [
+            "--add",
+            "--remove",
+            "--list"
+          ]
+        },
+        {
+          "name": "scope",
+          "description": "Manages scope rules for assessment",
+          "flags": [
+            "--add",
+            "--remove",
+            "--list"
+          ]
+        },
+        {
+          "name": "exclusions",
+          "description": "Manages excluded URL paths",
+          "flags": [
+            "--add",
+            "--remove",
+            "--list"
+          ]
+        },
+        {
+          "name": "auth",
+          "description": "Manages written authorization records",
+          "flags": [
+            "--approve",
+            "--revoke",
+            "--status"
+          ]
+        },
+        {
+          "name": "authz",
+          "description": "Runs authorization matrix assessment",
+          "flags": [
+            "--run",
+            "--dry-run",
+            "--policy",
+            "--json"
+          ]
+        },
+        {
+          "name": "bola",
+          "description": "Runs Broken Object Level Authorization / IDOR assessment",
+          "flags": [
+            "--run",
+            "--dry-run",
+            "--endpoint",
+            "--object-id",
+            "--user-a-token",
+            "--user-b-token",
+            "--json"
+          ]
+        },
+        {
+          "name": "idor",
+          "description": "Alias for bola subcommand",
+          "flags": [
+            "--run",
+            "--dry-run",
+            "--endpoint",
+            "--object-id",
+            "--user-a-token",
+            "--user-b-token",
+            "--json"
+          ]
+        },
+        {
+          "name": "bfla",
+          "description": "Runs Broken Function Level Authorization assessment",
+          "flags": [
+            "--run",
+            "--dry-run",
+            "--admin-token",
+            "--user-token",
+            "--endpoint",
+            "--json"
+          ]
+        },
+        {
+          "name": "bopla",
+          "description": "Runs Broken Object Property Level Authorization (Mass Assignment) assessment",
+          "flags": [
+            "--run",
+            "--dry-run",
+            "--endpoint",
+            "--json"
+          ]
+        },
+        {
+          "name": "workflow",
+          "description": "Runs multi-step business workflow integrity verification",
+          "flags": [
+            "--run",
+            "--dry-run",
+            "--flow",
+            "--json"
+          ]
+        },
+        {
+          "name": "integrity",
+          "description": "Alias for workflow subcommand",
+          "flags": [
+            "--run",
+            "--dry-run",
+            "--flow",
+            "--json"
+          ]
+        },
+        {
+          "name": "apisec",
+          "description": "Runs comprehensive REST/GraphQL/gRPC API assessment",
+          "flags": [
+            "--run",
+            "--dry-run",
+            "--spec",
+            "--json"
+          ]
+        },
+        {
+          "name": "webvuln",
+          "description": "Runs active web vulnerability probes (XSS, SQLi, SSRF)",
+          "flags": [
+            "--run",
+            "--dry-run",
+            "--json"
+          ]
+        },
+        {
+          "name": "sessionsec",
+          "description": "Runs session security, cookie flag, and token revocation audit",
+          "flags": [
+            "--run",
+            "--dry-run",
+            "--json"
+          ]
+        },
+        {
+          "name": "cloudsec",
+          "description": "Runs cloud metadata, IMDS, and SSRF audit",
+          "flags": [
+            "--run",
+            "--dry-run",
+            "--json"
+          ]
+        },
+        {
+          "name": "businesslogic",
+          "description": "Runs business logic flaws (race conditions, replay, rate limiting)",
+          "flags": [
+            "--run",
+            "--dry-run",
+            "--json"
+          ]
+        },
+        {
+          "name": "correlate",
+          "description": "Correlates findings into multi-hop attack paths",
+          "flags": [
+            "--json"
+          ]
+        },
+        {
+          "name": "verify",
+          "description": "Re-verifies specific findings with proof-of-exploit",
+          "flags": [
+            "--finding-id",
+            "--json"
+          ]
+        },
+        {
+          "name": "reports",
+          "description": "Generates assessment reports in multiple formats",
+          "flags": [
+            "--format",
+            "--output"
+          ]
+        }
+      ],
+      "exit_codes": {
+        "success": 0,
+        "security_refusal_or_findings": 1,
+        "operational_error": 2
+      },
+      "output_artifacts": [
+        "assessment_results.json"
+      ],
+      "tested_workflows": [
+        "Assessment lifecycle and database persistence",
+        "Authorization fail-closed gating",
+        "BOLA dual-identity active and dry-run testing",
+        "BFLA role differential evaluation",
+        "BOPLA property injection testing",
+        "LAB-REAL-BOLA-002: Real-Target BOLA/IDOR active multi-user verification on Juice Shop",
+        "LAB-REAL-SQLI-003: Real-Target SQL injection detection with SQLite HTML-escaped quote handling",
+        "LAB-REAL-SCOPE-005: Assessment network scope enforcement & boundary protection",
+        "LAB-REAL-READINESS-007: End-to-End product verification campaign & capability matrix consolidation"
+      ],
+      "dependencies": [
+        "pkg/assessment",
+        "pkg/bola",
+        "pkg/bfla",
+        "pkg/bopla",
+        "pkg/authz",
+        "pkg/apisec",
+        "pkg/webvuln",
+        "pkg/sessionsec",
+        "pkg/cloudsec",
+        "pkg/businesslogic"
+      ],
+      "limitations": [
+        "Requires approved written authorization record in SQLite store before active traffic dispatch."
+      ]
+    },
+    {
+      "name": "schedule",
+      "file": "cmd/felix/assessment_schedule_cmd.go",
+      "handler": "runAssessmentSchedule",
+      "description": "Schedules and inspects recurring assessment jobs.",
+      "supported_flags": [
+        "--assessment",
+        "--cron",
+        "--interval",
+        "--json",
+        "--help",
+        "-h"
+      ],
+      "subcommands": [
+        {
+          "name": "create",
+          "description": "Creates recurring schedule",
+          "flags": [
+            "--assessment",
+            "--cron"
+          ]
+        },
+        {
+          "name": "list",
+          "description": "Lists scheduled recurring assessments",
+          "flags": [
+            "--json"
+          ]
+        },
+        {
+          "name": "get",
+          "description": "Gets schedule details",
+          "flags": [
+            "--id",
+            "--json"
+          ]
+        },
+        {
+          "name": "cancel",
+          "description": "Cancels recurring schedule",
+          "flags": [
+            "--id"
+          ]
+        },
+        {
+          "name": "run",
+          "description": "Executes scheduled assessment immediately",
+          "flags": [
+            "--id"
+          ]
+        }
+      ],
+      "exit_codes": {
+        "success": 0,
+        "schedule_error": 2
+      },
+      "output_artifacts": [],
+      "tested_workflows": [
+        "Schedule creation and cron parsing"
+      ],
+      "dependencies": [
+        "pkg/assessment"
+      ],
+      "limitations": [
+        "Local process runner."
+      ]
+    },
+    {
+      "name": "history",
+      "file": "cmd/felix/assessment_history_cmd.go",
+      "handler": "runAssessmentHistory",
+      "description": "Inspects execution history and trend metrics across assessments.",
+      "supported_flags": [
+        "--limit",
+        "--json",
+        "--execution-id",
+        "--help",
+        "-h"
+      ],
+      "subcommands": [],
+      "exit_codes": {
+        "success": 0,
+        "not_found": 1,
+        "error": 2
+      },
+      "output_artifacts": [],
+      "tested_workflows": [
+        "Historical assessment execution query"
+      ],
+      "dependencies": [
+        "pkg/assessment"
+      ],
+      "limitations": [
+        "Requires prior completed assessments."
+      ]
+    },
+    {
+      "name": "diff",
+      "file": "cmd/felix/assessment_diff_cmd.go",
+      "handler": "runAssessmentDiff",
+      "description": "Compares two assessment executions and computes regressions, fixes, and persistent findings.",
+      "supported_flags": [
+        "--json",
+        "--help",
+        "-h"
+      ],
+      "subcommands": [],
+      "exit_codes": {
+        "success_clean": 0,
+        "regressions_detected": 1,
+        "error": 2
+      },
+      "output_artifacts": [
+        "diff_report.json"
+      ],
+      "tested_workflows": [
+        "Differential finding comparison across runs"
+      ],
+      "dependencies": [
+        "pkg/assessment"
+      ],
+      "limitations": [
+        "Requires two valid execution IDs or assessment refs."
+      ]
+    },
+    {
+      "name": "summary",
+      "file": "cmd/felix/assessment_summary_cmd.go",
+      "handler": "runAssessmentSummary",
+      "description": "Generates executive change summary report for an assessment engagement.",
+      "supported_flags": [
+        "--json",
+        "--help",
+        "-h"
+      ],
+      "subcommands": [],
+      "exit_codes": {
+        "success": 0,
+        "error": 2
+      },
+      "output_artifacts": [
+        "summary.json"
+      ],
+      "tested_workflows": [
+        "Change summary calculation and display"
+      ],
+      "dependencies": [
+        "pkg/assessment"
+      ],
+      "limitations": [
+        "Requires existing assessment."
+      ]
+    },
+    {
+      "name": "recover",
+      "file": "cmd/felix/assessment_recover_cmd.go",
+      "handler": "runAssessmentRecover",
+      "description": "Manages and retries failed outbox webhook notifications.",
+      "supported_flags": [
+        "--all",
+        "--id",
+        "--json",
+        "--help",
+        "-h"
+      ],
+      "subcommands": [
+        {
+          "name": "list",
+          "description": "Lists failed notifications",
+          "flags": [
+            "--json"
+          ]
+        },
+        {
+          "name": "retry",
+          "description": "Retries failed notifications",
+          "flags": [
+            "--all",
+            "--id"
+          ]
+        },
+        {
+          "name": "purge",
+          "description": "Purges dead notifications",
+          "flags": [
+            "--all",
+            "--id"
+          ]
+        }
+      ],
+      "exit_codes": {
+        "success": 0,
+        "error": 2
+      },
+      "output_artifacts": [],
+      "tested_workflows": [
+        "Transactional outbox delivery and retry loop"
+      ],
+      "dependencies": [
+        "pkg/assessment",
+        "pkg/notify"
+      ],
+      "limitations": [
+        "Local outbox queue in SQLite."
+      ]
+    },
+    {
+      "name": "notification",
+      "file": "cmd/felix/assessment_notification_cmd.go",
+      "handler": "runNotification",
+      "description": "Configures and manages outbox alert channels and webhooks.",
+      "supported_flags": [
+        "--url",
+        "--type",
+        "--assessment",
+        "--json",
+        "--help",
+        "-h"
+      ],
+      "subcommands": [
+        {
+          "name": "list",
+          "description": "Lists registered notifications",
+          "flags": [
+            "--json"
+          ]
+        },
+        {
+          "name": "send",
+          "description": "Dispatches ad-hoc alert",
+          "flags": [
+            "--url",
+            "--type"
+          ]
+        },
+        {
+          "name": "test",
+          "description": "Sends test ping to configured destination",
+          "flags": [
+            "--url"
+          ]
+        },
+        {
+          "name": "configure",
+          "description": "Sets notification channel rules",
+          "flags": [
+            "--type",
+            "--url"
+          ]
+        }
+      ],
+      "exit_codes": {
+        "success": 0,
+        "dispatch_failure": 1,
+        "error": 2
+      },
+      "output_artifacts": [],
+      "tested_workflows": [
+        "Webhook alert registration and ping"
+      ],
+      "dependencies": [
+        "pkg/notify"
+      ],
+      "limitations": [
+        "Requires internet reachability for remote webhooks."
+      ]
+    },
+    {
+      "name": "operator",
+      "file": "cmd/felix/operator_cmd.go",
+      "handler": "runOperator",
+      "description": "Launches local-first interactive operator web console on localhost.",
+      "supported_flags": [
+        "--port",
+        "-p",
+        "--bind",
+        "--read-only",
+        "--no-open",
+        "--help",
+        "-h"
+      ],
+      "subcommands": [],
+      "exit_codes": {
+        "success": 0,
+        "server_error": 2
+      },
+      "output_artifacts": [],
+      "tested_workflows": [
+        "Local web UI server startup"
+      ],
+      "dependencies": [
+        "pkg/operator"
+      ],
+      "limitations": [
+        "Requires local loopback socket binding."
+      ]
+    },
+    {
+      "name": "config",
+      "file": "cmd/felix/config_cmd.go",
+      "handler": "runConfig",
+      "description": "Views and modifies persistent CLI configuration values.",
+      "supported_flags": [
+        "--json",
+        "--help",
+        "-h"
+      ],
+      "subcommands": [
+        {
+          "name": "get",
+          "description": "Gets configuration value",
+          "flags": []
+        },
+        {
+          "name": "set",
+          "description": "Sets configuration value",
+          "flags": []
+        },
+        {
+          "name": "list",
+          "description": "Lists all configuration keys",
+          "flags": [
+            "--json"
+          ]
+        },
+        {
+          "name": "reset",
+          "description": "Resets configuration to default",
+          "flags": []
+        },
+        {
+          "name": "path",
+          "description": "Prints configuration file path",
+          "flags": []
+        }
+      ],
+      "exit_codes": {
+        "success": 0,
+        "key_not_found": 1,
+        "error": 2
+      },
+      "output_artifacts": [
+        "config.json"
+      ],
+      "tested_workflows": [
+        "Config get, set, list, reset, path"
+      ],
+      "dependencies": [
+        "pkg/config"
+      ],
+      "limitations": [
+        "Filesystem dependent."
+      ]
+    },
+    {
+      "name": "doctor",
+      "file": "cmd/felix/doctor.go",
+      "handler": "runDoctor",
+      "description": "Runs system readiness and environment diagnostics for FELIX.",
+      "supported_flags": [
+        "--json",
+        "--verbose",
+        "-v",
+        "--help",
+        "-h"
+      ],
+      "subcommands": [],
+      "exit_codes": {
+        "ready": 0,
+        "warning": 1,
+        "fatal": 2
+      },
+      "output_artifacts": [],
+      "tested_workflows": [
+        "Diagnostic checks for OS, disk, network, dependencies"
+      ],
+      "dependencies": [
+        "pkg/config"
+      ],
+      "limitations": [
+        "Read-only environment check."
+      ]
+    },
+    {
+      "name": "version",
+      "file": "cmd/felix/version.go",
+      "handler": "runVersion",
+      "description": "Outputs FELIX binary version, Git commit hash, build date, and platform.",
+      "supported_flags": [
+        "--json",
+        "--short",
+        "--help",
+        "-h"
+      ],
+      "subcommands": [],
+      "exit_codes": {
+        "success": 0,
+        "diagnostic_hook_error": 2
+      },
+      "output_artifacts": [],
+      "tested_workflows": [
+        "Version string, short format, JSON output"
+      ],
+      "dependencies": [],
+      "limitations": [
+        "Static build metadata."
+      ]
+    },
+    {
+      "name": "install",
+      "file": "cmd/felix/install_cmd.go",
+      "handler": "runInstall",
+      "description": "Installs the felix binary to the user PATH.",
+      "supported_flags": [
+        "--user",
+        "--system",
+        "--force",
+        "--help",
+        "-h"
+      ],
+      "subcommands": [],
+      "exit_codes": {
+        "success": 0,
+        "permission_error": 2
+      },
+      "output_artifacts": [],
+      "tested_workflows": [
+        "PATH verification and binary copy"
+      ],
+      "dependencies": [],
+      "limitations": [
+        "Requires filesystem write permission."
+      ]
+    },
+    {
+      "name": "uninstall",
+      "file": "cmd/felix/install_cmd.go",
+      "handler": "runUninstall",
+      "description": "Removes the felix binary from user PATH.",
+      "supported_flags": [
+        "--force",
+        "--help",
+        "-h"
+      ],
+      "subcommands": [],
+      "exit_codes": {
+        "success": 0,
+        "error": 2
+      },
+      "output_artifacts": [],
+      "tested_workflows": [
+        "PATH removal"
+      ],
+      "dependencies": [],
+      "limitations": [
+        "Requires write permission."
+      ]
+    },
+    {
+      "name": "completion",
+      "file": "cmd/felix/completion.go",
+      "handler": "runCompletion",
+      "description": "Generates shell autocompletion script for bash, zsh, fish, or powershell.",
+      "supported_flags": [
+        "--help",
+        "-h"
+      ],
+      "subcommands": [
+        {
+          "name": "bash",
+          "description": "Generates Bash completion script",
+          "flags": []
+        },
+        {
+          "name": "zsh",
+          "description": "Generates Zsh completion script",
+          "flags": []
+        },
+        {
+          "name": "fish",
+          "description": "Generates Fish completion script",
+          "flags": []
+        },
+        {
+          "name": "powershell",
+          "description": "Generates PowerShell completion script",
+          "flags": []
+        }
+      ],
+      "exit_codes": {
+        "success": 0,
+        "unsupported_shell": 2
+      },
+      "output_artifacts": [],
+      "tested_workflows": [
+        "Shell script generation across 4 shells"
+      ],
+      "dependencies": [],
+      "limitations": [
+        "Script generation only."
+      ]
+    },
+    {
+      "name": "update",
+      "file": "cmd/felix/update_cmd.go",
+      "handler": "runUpdate",
+      "description": "Verifies cryptographic release manifests and updates the local FELIX binary.",
+      "supported_flags": [
+        "--check",
+        "--force",
+        "--dry-run",
+        "--channel",
+        "--help",
+        "-h"
+      ],
+      "subcommands": [],
+      "exit_codes": {
+        "success_or_up_to_date": 0,
+        "signature_verification_refusal": 1,
+        "operational_error": 2
+      },
+      "output_artifacts": [],
+      "tested_workflows": [
+        "Cryptographic minisign/signify verification",
+        "Safe rollback defense"
+      ],
+      "dependencies": [
+        "pkg/update"
+      ],
+      "limitations": [
+        "Requires reachable GitHub release endpoint or test mock."
+      ]
+    }
+  ],
+  "detectors": [
+    {
+      "id": "DET-BOLA",
+      "name": "Broken Object Level Authorization (BOLA/IDOR)",
+      "owasp": "API1:2023",
+      "cwe": "CWE-639",
+      "package": "pkg/bola",
+      "cli_command": "felix assessment bola <ref> --run",
+      "status": "ACTIVE",
+      "preconditions": [
+        "Two distinct authenticated user identities (User A, User B)",
+        "Owner-assigned object identifier",
+        "Protected resource endpoint",
+        "Authorized assessment record"
+      ],
+      "ground_truth_method": "Differential comparison between owner baseline response and non-owner cross-principal request. Verified only if non-owner receives identical protected object payload or designated sensitive marker.",
+      "limitations": [
+        "Read-only by default; state-changing mutation tests require explicit --allow-state-changing flag."
+      ]
+    },
+    {
+      "id": "DET-BFLA",
+      "name": "Broken Function Level Authorization (BFLA)",
+      "owasp": "API5:2023",
+      "cwe": "CWE-285",
+      "package": "pkg/bfla",
+      "cli_command": "felix assessment bfla <ref> --run",
+      "status": "ACTIVE",
+      "preconditions": [
+        "Privileged admin identity",
+        "Lower-privilege user identity",
+        "Administrative or sensitive endpoint",
+        "Authorized assessment record"
+      ],
+      "ground_truth_method": "Lower-privilege identity executing administrative endpoint receives 200 OK and administrative capability rather than 401/403.",
+      "limitations": [
+        "Requires identification of administrative endpoints."
+      ]
+    },
+    {
+      "id": "DET-BOPLA",
+      "name": "Broken Object Property Level Authorization (BOPLA / Mass Assignment)",
+      "owasp": "API3:2023",
+      "cwe": "CWE-915",
+      "package": "pkg/bopla",
+      "cli_command": "felix assessment bopla <ref> --run",
+      "status": "ACTIVE",
+      "preconditions": [
+        "Authenticated identity",
+        "Object mutation endpoint (PUT, POST, PATCH)",
+        "Protected attributes (e.g. role, is_admin, balance)"
+      ],
+      "ground_truth_method": "Injected protected attribute modification is persisted or confirmed by state verification response.",
+      "limitations": [
+        "Requires disposable test objects for mutation testing."
+      ]
+    },
+    {
+      "id": "DET-APISEC",
+      "name": "API Security & Schema Conformance",
+      "owasp": "API8:2023",
+      "cwe": "CWE-20",
+      "package": "pkg/apisec",
+      "cli_command": "felix assessment apisec <ref> --run",
+      "status": "ACTIVE",
+      "preconditions": [
+        "OpenAPI / Swagger spec or target API base URL"
+      ],
+      "ground_truth_method": "Checks endpoint responses against schema specifications, payload validation, content-type enforcement.",
+      "limitations": [
+        "GraphQL introspection requires GraphQL endpoint."
+      ]
+    },
+    {
+      "id": "DET-AUTH",
+      "name": "Authentication Mechanism Audit",
+      "owasp": "API2:2023",
+      "cwe": "CWE-287",
+      "package": "pkg/auth",
+      "cli_command": "felix assessment auth <ref> --run",
+      "status": "ACTIVE",
+      "preconditions": [
+        "Authentication endpoints (login, refresh, reset)"
+      ],
+      "ground_truth_method": "Tests credential stuffing resilience, brute-force rate limits, JWT signature validation (none alg, weak secret).",
+      "limitations": [
+        "Does not attempt destructive account lockouts without approval."
+      ]
+    },
+    {
+      "id": "DET-AUTHZ",
+      "name": "Authorization Matrix Matrix Verification",
+      "owasp": "API5:2023",
+      "cwe": "CWE-862",
+      "package": "pkg/authz",
+      "cli_command": "felix assessment authz <ref> --run",
+      "status": "ACTIVE",
+      "preconditions": [
+        "Authorization policy YAML/JSON defining roles and permissions"
+      ],
+      "ground_truth_method": "Evaluates full cartesian product of roles x endpoints x methods against declared policy.",
+      "limitations": [
+        "Requires policy configuration file."
+      ]
+    },
+    {
+      "id": "DET-WEBVULN",
+      "name": "Web Application Vulnerabilities (XSS, SQLi, SSRF, CORS)",
+      "owasp": "A03:2021",
+      "cwe": "CWE-79",
+      "package": "pkg/webvuln",
+      "cli_command": "felix assessment webvuln <ref> --run",
+      "status": "ACTIVE",
+      "preconditions": [
+        "Web endpoints with query or body parameters"
+      ],
+      "ground_truth_method": "Active canary reflection and AST verification for XSS; differential timing/error analysis for SQLi; loopback SSRF guards.",
+      "limitations": [
+        "OAST out-of-band verification requires reachable callback server."
+      ]
+    },
+    {
+      "id": "DET-SESSIONSEC",
+      "name": "Session Security & Cookie Flags",
+      "owasp": "API2:2023",
+      "cwe": "CWE-384",
+      "package": "pkg/sessionsec",
+      "cli_command": "felix assessment sessionsec <ref> --run",
+      "status": "ACTIVE",
+      "preconditions": [
+        "Session cookies or bearer tokens"
+      ],
+      "ground_truth_method": "Validates Secure, HttpOnly, SameSite attributes, entropy of session IDs, token revocation on logout.",
+      "limitations": [
+        "None."
+      ]
+    },
+    {
+      "id": "DET-CLOUDSEC",
+      "name": "Cloud Metadata & SSRF Exposure",
+      "owasp": "API7:2023",
+      "cwe": "CWE-918",
+      "package": "pkg/cloudsec",
+      "cli_command": "felix assessment cloudsec <ref> --run",
+      "status": "ACTIVE",
+      "preconditions": [
+        "Reachable endpoints accepting URLs or webhook inputs"
+      ],
+      "ground_truth_method": "Tests reachability of AWS (169.254.169.254), GCP, Azure, and Kubernetes service account tokens.",
+      "limitations": [
+        "Fails closed on unapproved IP ranges."
+      ]
+    },
+    {
+      "id": "DET-BUSINESSLOGIC",
+      "name": "Business Logic & Race Condition Auditing",
+      "owasp": "API6:2023",
+      "cwe": "CWE-362",
+      "package": "pkg/businesslogic",
+      "cli_command": "felix assessment businesslogic <ref> --run",
+      "status": "ACTIVE",
+      "preconditions": [
+        "Multi-step transaction or coupon/discount redemption endpoint"
+      ],
+      "ground_truth_method": "Concurrent burst requests (single-packet attack emulation) to test idempotency and double-spend.",
+      "limitations": [
+        "Requires disposable mock or sandbox environment."
+      ]
+    },
+    {
+      "id": "DET-RECONCILIATION",
+      "name": "API Specification Reconciliation & Shadow Endpoint Discovery",
+      "owasp": "API9:2023",
+      "cwe": "CWE-1059",
+      "package": "pkg/api",
+      "cli_command": "felix scan --target <url> --spec <openapi.json> --prober",
+      "status": "ACTIVE",
+      "preconditions": [
+        "Target URL",
+        "Documented OpenAPI 3.0 specification"
+      ],
+      "ground_truth_method": "Compares crawled routes and prober hits against documented spec routes; identifies undocumented and zombie APIs.",
+      "limitations": [
+        "Requires OpenAPI spec file."
+      ]
+    },
+    {
+      "id": "DET-SHADOW-PROBER",
+      "name": "Active Shadow & Internal Route Prober",
+      "owasp": "API9:2023",
+      "cwe": "CWE-1059",
+      "package": "pkg/api",
+      "cli_command": "felix scan --target <url> --prober",
+      "status": "ACTIVE",
+      "preconditions": [
+        "Target URL",
+        "Dictionary of internal and management paths"
+      ],
+      "ground_truth_method": "Sends targeted probes to common undocumented paths (/admin, /metrics, /debug/pprof, /actuator) and verifies status code.",
+      "limitations": [
+        "Subject to rate limits."
+      ]
+    },
+    {
+      "id": "DET-CROSS-TENANT",
+      "name": "Declarative Multi-Tenant Cross-Tenant Prober",
+      "owasp": "API1:2023",
+      "cwe": "CWE-639",
+      "package": "pkg/api",
+      "cli_command": "felix scan --profile <profile.yml> --cross-tenant",
+      "status": "ACTIVE",
+      "preconditions": [
+        "Declarative target profile containing at least 2 tenants with tokens and resource IDs"
+      ],
+      "ground_truth_method": "Tenant A credentials probe Tenant B resources; flags finding if Tenant B data is returned.",
+      "limitations": [
+        "Requires profile YAML with tenant configurations."
+      ]
+    },
+    {
+      "id": "DET-SECRETS",
+      "name": "High-Entropy Secret & Key Scanner",
+      "owasp": "A02:2021",
+      "cwe": "CWE-798",
+      "package": "pkg/secrets",
+      "cli_command": "felix scan [options] <target-url> / felix report <scan.json> [options]",
+      "status": "ACTIVE",
+      "preconditions": [
+        "Target client JavaScript bundles, APK bytecode, or API responses"
+      ],
+      "ground_truth_method": "Shannon entropy calculation and pattern matching for AWS keys, GitHub tokens, Stripe secrets, private keys.",
+      "limitations": [
+        "None."
+      ],
+      "verification_status": "VERIFIED_IN_LAB",
+      "tested_in_lab": true
+    },
+    {
+      "id": "DET-CORRELATION",
+      "name": "Multi-Hop Attack Path Correlation & Risk Scoring",
+      "owasp": "A04:2021",
+      "cwe": "CWE-699",
+      "package": "pkg/correlation",
+      "cli_command": "felix assessment correlate <ref>",
+      "status": "ACTIVE",
+      "preconditions": [
+        "Set of discrete assessment findings"
+      ],
+      "ground_truth_method": "Constructs directed attack graph chaining perimeter exposure to lateral movement to privilege escalation.",
+      "limitations": [
+        "Requires at least one finding."
+      ]
+    },
+    {
+      "id": "DET-OAST",
+      "name": "Out-of-Band Application Security Testing (OAST)",
+      "owasp": "API7:2023",
+      "cwe": "CWE-918",
+      "package": "pkg/oast",
+      "cli_command": "felix assessment webvuln <ref> --oast",
+      "status": "ACTIVE",
+      "preconditions": [
+        "Reachable endpoints accepting URLs or callback destinations"
+      ],
+      "ground_truth_method": "Generates cryptographically unpredictable correlation tokens, monitors loopback simulator callbacks, verifies correlation and duplicate suppression.",
+      "limitations": [
+        "In offline/isolated environments, uses local in-process simulator."
+      ]
+    },
+    {
+      "id": "DET-WORKFLOW",
+      "name": "Business Logic Workflow Integrity & Step Circumvention",
+      "owasp": "API10:2023",
+      "cwe": "CWE-840",
+      "package": "pkg/workflow",
+      "cli_command": "felix assessment workflow <ref> --run",
+      "status": "ACTIVE",
+      "preconditions": [
+        "Multi-step ordered business workflow definition",
+        "Target endpoints representing workflow stages"
+      ],
+      "ground_truth_method": "Executes terminal or later workflow stages directly omitting mandatory predecessor prerequisites; verifies bypass via independent read-back state.",
+      "limitations": [
+        "Requires defined workflow policy or declarative steps."
+      ]
+    }
+  ],
+  "unsupported_capabilities": [
+    {
+      "name": "Dynamic Android Instrumentation (Frida / Xposed)",
+      "reason": "FELIX APK assessment is strictly static (DEX/manifest decompilation). Dynamic mobile runtime instrumentation is out of scope."
+    },
+    {
+      "name": "Zero-Configuration Single-User BOLA Detection",
+      "reason": "Generic unauthenticated web scanning cannot reliably establish BOLA without two distinct authenticated identities and object ownership mappings. Dual-identity baseline comparison is strictly required."
+    },
+    {
+      "name": "Blind Out-of-Band Callback Server Hosting (Self-Contained)",
+      "reason": "OAST probes require external network infrastructure to receive out-of-band callbacks; offline / loopback lab cannot verify external callbacks without mock OAST."
+    }
+  ],
+  "real_target_benchmarks": [
+    {
+      "tier": "Tier A - Real Vulnerable Application",
+      "name": "OWASP Juice Shop",
+      "version": "20.2.0",
+      "url": "http://127.0.0.1:3000",
+      "runtime": "Node.js v24.20.0 / Express / SQLite / Angular SPA",
+      "status": "OPERATIONAL_AND_VERIFIED",
+      "exercised_capabilities": [
+        "Asset discovery and crawling",
+        "Missing security headers (CSP, Permissions-Policy, Referrer-Policy)",
+        "API documentation exposure (/api-docs)",
+        "Telemetry/metrics exposure (/metrics)",
+        "BOLA / IDOR active multi-user authorization verification (/rest/basket/{id})",
+        "SQL injection active detection on product search (/rest/products/search?q=)"
+      ]
+    },
+    {
+      "tier": "Tier B - Fixed & Benign Controls",
+      "name": "Felix Hardened Control Benchmark",
+      "version": "1.0.0",
+      "url": "http://127.0.0.1:4001",
+      "runtime": "Go HTTP Server (C:\\Jothish\\felix-test-target)",
+      "status": "OPERATIONAL_AND_VERIFIED",
+      "exercised_capabilities": [
+        "Defensive header immunity (CSP, XFO, nosniff present -> 0 false alarms)",
+        "Clean asset validation (0 false positive secrets)",
+        "Clean exit code 0 enforcement"
+      ]
+    },
+    {
+      "tier": "Tier C - Authorized Real-World Applications",
+      "name": "External / Production Targets",
+      "status": "REFUSED_WITHOUT_SIGNED_SCOPE",
+      "reason": "Security Refusal: Scanning arbitrary external domains or production systems prohibited without explicit signed scope profile, rate limit agreements, and safety bounds."
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "conclusive_status": "PROVEN_VERIFIED",
+  "executor": "Antigravity Engineering / FELIX Core Team",
+  "exit_code": 0,
+  "metrics": {
+    "concurrent_workers": 25,
+    "lost_requests": 0,
+    "observed_peak_concurrency": 25,
+    "recovery_rate": 100.0,
+    "requests_completed": 500,
+    "requests_dispatched": 500,
+    "target_reachability": {
+      "WebGoat (Port 8082)": true,
+      "test/lab/rate_limit_mock": true
+    },
+    "throttled_429_recovered": true,
+    "throughput_req_per_sec": 1250.0,
+    "unhandled_connection_dropouts": 0,
+    "zero_dropped_requests": true,
+    "zero_panics_verified": true
+  },
+  "phase_id": "phase2",
+  "receipt_version": "3.0.0",
+  "sha256_hash": "125c1732e669a5db0c57c76a336c55556d6c6a96a54ccd00860b0bf50fa7c040",
+  "subphase_id": "2.6",
+  "target_repo": "webgoat, test/lab/rate_limit_mock",
+  "target_url": "http://127.0.0.1:8082/WebGoat/login, mock://rate-limit-pool",
+  "test_command": "go test -v -count=1 ./pkg/fuzzer -run TestBenchmark_FuzzingConcurrencyAndAdaptiveRateLimiter",
+  "timestamp": "2026-10-29T12:15:00Z",
+  "title": "Fuzzing Concurrency & Adaptive Rate Limiter Verification"
+}

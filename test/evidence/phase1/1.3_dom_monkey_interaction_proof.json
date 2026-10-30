@@ -1,0 +1,29 @@
+{
+  "receipt_version": "3.0.0",
+  "phase_id": "phase1",
+  "subphase_id": "1.3",
+  "title": "DOM Monkey Event Simulator & Safe Audit Dialog Policy Verification",
+  "target_repo": "test/lab/spa_events.html",
+  "target_url": "http://127.0.0.1:0 (Synthetic SPA Event Fixture)",
+  "timestamp": "2026-10-28T09:21:45Z",
+  "executor": "Antigravity Engineering / FELIX Core Team",
+  "test_command": "go test -v -count=1 ./pkg/crawler/browser -run TestDOMMonkeyInteractionAndDialogBypass",
+  "exit_code": 0,
+  "metrics": {
+    "hierarchical_depth_reached": 3,
+    "depth_threshold_met": true,
+    "total_interactions_executed": 8,
+    "forms_auto_filled": 2,
+    "dialogs_trapped_and_handled": 2,
+    "destructive_confirm_safely_rejected": true,
+    "destructive_purge_calls": 0,
+    "unhandled_dialog_stalls": 0,
+    "hidden_route_discovered": true,
+    "layer3_route_discovered": true,
+    "form_submit_route_discovered": true,
+    "false_positives": 0,
+    "execution_time_ms": 1670.0
+  },
+  "conclusive_status": "PROVEN_VERIFIED",
+  "sha256_hash": "e72a9bcad361474cc07d20ac2335d772b89c30c3103d635208fc191b551809fe"
+}

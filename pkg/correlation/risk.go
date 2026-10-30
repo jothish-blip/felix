@@ -493,12 +493,16 @@ func CalculateCompoundRisk(path *AttackPath, cfg CompoundRiskConfig) (*CompoundR
 			calculatedScore = unverifiedCap
 			isCapped = true
 		}
-		if hasBrokenSequence {
-			rationaleFactors = append(rationaleFactors, fmt.Sprintf("Provisional score capped at %.0f pts (HIGH) due to broken or incomplete edge sequence", unverifiedCap))
-		} else if hasUnverifiedHop {
-			rationaleFactors = append(rationaleFactors, fmt.Sprintf("Provisional score capped at %.0f pts (HIGH) due to unverified or inconclusive transition in chain", unverifiedCap))
+		if isCapped {
+			if hasBrokenSequence {
+				rationaleFactors = append(rationaleFactors, fmt.Sprintf("Provisional score capped at %.0f pts (HIGH) due to broken or incomplete edge sequence", unverifiedCap))
+			} else if hasUnverifiedHop {
+				rationaleFactors = append(rationaleFactors, fmt.Sprintf("Provisional score capped at %.0f pts (HIGH) due to unverified or inconclusive transition in chain", unverifiedCap))
+			} else {
+				rationaleFactors = append(rationaleFactors, fmt.Sprintf("Provisional score capped at %.0f pts (HIGH) because path is %s", unverifiedCap, path.Status))
+			}
 		} else {
-			rationaleFactors = append(rationaleFactors, fmt.Sprintf("Provisional score capped at %.0f pts (HIGH) because path is %s", unverifiedCap, path.Status))
+			rationaleFactors = append(rationaleFactors, fmt.Sprintf("Provisional risk unescalated; path status is %s", path.Status))
 		}
 	}
 

@@ -177,7 +177,7 @@ func TestPhase96_RemediationSLA_EndToEnd(t *testing.T) {
 	}
 
 	// 6. Assign SLA to Finding 1 (CRITICAL: 24h deadline)
-	startTime := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
+	startTime := time.Now().UTC().Add(-26 * time.Hour)
 	clock := compliance.NewMockClock(startTime)
 	svc := compliance.NewRemediationService(clock, 12*time.Hour)
 

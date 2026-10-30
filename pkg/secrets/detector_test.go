@@ -3,6 +3,7 @@ package secrets
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"math"
 	"strings"
 	"sync"
@@ -652,3 +653,102 @@ func TestSupabaseKeyClassification(t *testing.T) {
 	}
 }
 
+// TestContextKeywords_BoundaryAware_Regression validates that incidental substrings
+// (such as "keyword", "keywords", "author", "turkey") do not spuriously trigger context boosting,
+// while genuine boundary-delimited keywords (snake_case, camelCase, plain identifiers) are detected.
+func TestContextKeywords_BoundaryAware_Regression(t *testing.T) {
+	// 1. Isolated helper verification: Benign prose containing incidental substrings must return false
+	benignCases := []string{
+		"const keyword = 'title_tag';",
+		"list of keywords for SEO indexing",
+		"keyboard layout default configuration",
+		"keynote presentation slide 4",
+		"keypoint model feature extraction",
+		"author of this document",
+		"authors and contributors list",
+		"authority certificate validator",
+		"turkey holiday schedule",
+		"monkey patching disabled",
+		"hockey league fixtures",
+		"whiskey production data",
+		"betokened changes in behavior",
+		"secretion rate from pump",
+		"// Padded separation to prevent context keyword spillover",
+		"// General unprivileged JWT without sensitive context keywords",
+	}
+
+	for _, tc := range benignCases {
+		if hasSecretContextKeywords(tc) {
+			t.Errorf("hasSecretContextKeywords(%q) = true, expected false (spurious substring match)", tc)
+		}
+	}
+
+	// 2. Isolated helper verification: Genuine sensitive keywords must return true
+	positiveCases := []string{
+		"const api_key = 'some_val';",
+		"const apiKey = 'some_val';",
+		"const my_secret_key = 'some_val';",
+		"const clientSecret = 'some_val';",
+		"const access_token = 'some_val';",
+		"const accessToken = 'some_val';",
+		"const authToken = 'some_val';",
+		"Authorization: Bearer some_token_here",
+		"user_password = 'secret_pass'",
+		"db_passwd = 'secret_pass'",
+		"credentials: { user, pass }",
+		"stripe_key = 'sk_live_...'",
+		"private key block begins",
+		"oauth token callback",
+		"keys: ['a', 'b']",
+		"tokens: ['x', 'y']",
+	}
+
+	for _, tc := range positiveCases {
+		if !hasSecretContextKeywords(tc) {
+			t.Errorf("hasSecretContextKeywords(%q) = false, expected true", tc)
+		}
+	}
+
+	// 3. Full Detector Scan: Generic unprivileged JWT surrounded by ordinary words like "keyword" and "keywords"
+	// MUST retain ConfidenceMedium (NOT boosted to ConfidenceHigh)
+	d := NewDetector()
+	genericClaims := map[string]interface{}{
+		"sub":  "user-100234",
+		"name": "Jane Doe",
+		"role": "member",
+	}
+	genericJWT := createTestJWT(genericClaims)
+
+	benignProseCode := fmt.Sprintf(`
+		// Padded separation to prevent context keyword spillover
+		// General unprivileged JWT surrounded by ordinary words: keyword, keywords, author, keyboard
+		const clientProfile = "%s";
+	`, genericJWT)
+
+	findingsBenign := d.ScanContent("bundle.js", []byte(benignProseCode))
+	if len(findingsBenign) == 0 {
+		t.Fatalf("expected generic JWT finding, got 0")
+	}
+	if findingsBenign[0].Confidence != ConfidenceMedium {
+		t.Errorf("Generic JWT surrounded by 'keyword'/'keywords' confidence = %q, want %q (should NOT be boosted)",
+			findingsBenign[0].Confidence, ConfidenceMedium)
+	}
+	if findingsBenign[0].Severity != SeverityMedium {
+		t.Errorf("Generic JWT severity = %q, want %q", findingsBenign[0].Severity, SeverityMedium)
+	}
+
+	// 4. Positive Control: The exact same generic JWT placed in genuinely sensitive context (e.g. const api_token)
+	// MUST be boosted to ConfidenceHigh
+	sensitiveProseCode := fmt.Sprintf(`
+		const api_token = "%s";
+	`, genericJWT)
+
+	findingsSensitive := d.ScanContent("bundle.js", []byte(sensitiveProseCode))
+	if len(findingsSensitive) == 0 {
+		t.Fatalf("expected generic JWT finding in sensitive context, got 0")
+	}
+	if findingsSensitive[0].Confidence != ConfidenceHigh {
+		t.Errorf("Generic JWT in sensitive context confidence = %q, want %q (SHOULD be boosted)",
+			findingsSensitive[0].Confidence, ConfidenceHigh)
+	}
+}

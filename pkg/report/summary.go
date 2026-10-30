@@ -32,16 +32,26 @@ func Summarize(findings []Finding) Summary {
 		switch NormalizeVerificationStatus(f.Verification.Status) {
 		case VerificationVerified:
 			s.VerifiedCount++
-			s.AttemptedCount++
 		case VerificationDetected:
 			s.DetectedCount++
-			s.AttemptedCount++
 		case VerificationNotVerified:
 			s.NotVerifiedCount++
 		case VerificationObserved:
 			s.ObservedCount++
 		case VerificationNotExposed:
 			s.NotExposedCount++
+		}
+
+		isAttempted := f.Verification.Attempted
+		if !isAttempted {
+			if f.Verification.PolicyID == "" {
+				switch NormalizeVerificationStatus(f.Verification.Status) {
+				case VerificationVerified, VerificationDetected, VerificationNotExposed:
+					isAttempted = true
+				}
+			}
+		}
+		if isAttempted {
 			s.AttemptedCount++
 		}
 
@@ -89,11 +99,23 @@ func Summarize(findings []Finding) Summary {
 		}
 	}
 
-	if s.AttemptedCount > 0 {
-		s.VerificationRateAttempted = math.Round(float64(s.VerifiedCount)/float64(s.AttemptedCount)*1000) / 10
-	}
 	if s.TotalFindings > 0 {
+		s.AttemptRate = math.Round(float64(s.AttemptedCount)/float64(s.TotalFindings)*1000) / 10
 		s.VerificationRateTotal = math.Round(float64(s.VerifiedCount)/float64(s.TotalFindings)*1000) / 10
+	} else {
+		s.AttemptRate = 0.0
+		s.VerificationRateTotal = 0.0
+	}
+
+	s.ConclusiveCount = s.VerifiedCount + s.NotExposedCount
+	if s.AttemptedCount > 0 {
+		s.ConfirmationRate = math.Round(float64(s.VerifiedCount)/float64(s.AttemptedCount)*1000) / 10
+		s.VerificationRateAttempted = s.ConfirmationRate
+		s.ConclusiveRate = math.Round(float64(s.ConclusiveCount)/float64(s.AttemptedCount)*1000) / 10
+	} else {
+		s.ConfirmationRate = 0.0
+		s.VerificationRateAttempted = 0.0
+		s.ConclusiveRate = 0.0
 	}
 
 	return s
