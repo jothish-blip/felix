@@ -930,3 +930,88 @@ func (g *DAGAttackGraph) ToCanonicalJSON() ([]byte, string, error) {
 	hash := sha256.Sum256(canonicalBytes)
 	return canonicalBytes, hex.EncodeToString(hash[:]), nil
 }
+
+// ToAttackGraph converts a DAGAttackGraph into an AttackGraph for backwards compatibility
+// with existing correlation reporting and visualization pipelines.
+func (g *DAGAttackGraph) ToAttackGraph() *AttackGraph {
+	nodes := make(map[string]*GraphNode, len(g.Nodes))
+	adj := make(map[string][]*GraphEdge)
+	inEdges := make(map[string][]*GraphEdge)
+	var edges []*GraphEdge
+
+	for id, dagNode := range g.Nodes {
+		var f NormalizedFinding
+		if dagNode.Finding != nil {
+			f = *dagNode.Finding
+		} else {
+			evSummary := ""
+			if len(dagNode.EvidenceReferences) > 0 {
+				evSummary = dagNode.EvidenceReferences[0]
+			}
+			f = NormalizedFinding{
+				ID:                 dagNode.ID,
+				Title:              dagNode.Title,
+				Severity:           dagNode.Severity,
+				Confidence:         dagNode.Confidence,
+				VerificationStatus: dagNode.VerificationStatus,
+				Source:             dagNode.SourceEngine,
+				EvidenceSummary:    evSummary,
+				CanonicalAssetKey:  dagNode.AssetAssociation,
+				IsEntrypoint:       dagNode.IsEntrypoint,
+			}
+		}
+		nodes[id] = &GraphNode{
+			ID:        id,
+			Finding:   f,
+			InDegree:  dagNode.InDegree,
+			OutDegree: dagNode.OutDegree,
+		}
+	}
+
+	for _, e := range g.Edges {
+		ge := &GraphEdge{
+			ID:                 e.ID,
+			SourceID:           e.SourceID,
+			TargetID:           e.TargetID,
+			RuleCode:           e.RuleCode,
+			Confidence:         e.Confidence,
+			Weight:             e.Weight,
+			ValidationStatus:   e.ValidationStatus,
+			EvidenceReferences: e.EvidenceReferences,
+			Relationship: Relationship{
+				ID:                 e.ID,
+				SourceFindingID:   e.SourceID,
+				TargetFindingID:   e.TargetID,
+				RuleCode:           e.RuleCode,
+				Confidence:         e.Confidence,
+				ValidationStatus:   e.ValidationStatus,
+				EvidenceReferences: e.EvidenceReferences,
+				Explanation:        e.Explanation,
+			},
+		}
+		edges = append(edges, ge)
+		adj[e.SourceID] = append(adj[e.SourceID], ge)
+		inEdges[e.TargetID] = append(inEdges[e.TargetID], ge)
+	}
+
+	// Sort adjacency deterministically
+	for srcID := range adj {
+		sort.Slice(adj[srcID], func(i, j int) bool {
+			if adj[srcID][i].RuleCode != adj[srcID][j].RuleCode {
+				return adj[srcID][i].RuleCode < adj[srcID][j].RuleCode
+			}
+			return adj[srcID][i].TargetID < adj[srcID][j].TargetID
+		})
+	}
+
+	ag := &AttackGraph{
+		ID:         g.ID,
+		Nodes:      nodes,
+		Edges:      edges,
+		Adjacency:  adj,
+		InEdges:    inEdges,
+		Validation: g.Validation,
+	}
+
+	return ag
+}

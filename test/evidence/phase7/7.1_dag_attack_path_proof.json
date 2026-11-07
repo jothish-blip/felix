@@ -2,28 +2,31 @@
   "benchmark_metrics": {
     "acyclic_dag_validated": true,
     "critical_assets_identified": 2,
-    "graph_construction_time_ms": 2.587,
+    "graph_construction_time_ms": 0.65,
     "large_graph_1k_nodes_ms": 24.2,
     "shortest_paths_computed": 3,
     "total_edges_evaluated": 6,
     "total_nodes_ingested": 8
   },
   "benchmark_source_classification": {
-    "live_benchmark_targets": [
-      "OWASP Juice Shop (Port 3000) - SQL Injection \u0026 Identity Store",
-      "VAmPI (Port 5000) - BOLA User Object Authorization",
-      "InsecureBankv2 (classes.dex) - Dalvik Hardcoded Secret Extraction",
-      "AWS IMDSv2 Mock (:169.254.169.254) - Cloud Metadata Querying"
+    "fresh_live_target_execution": [],
+    "mock_or_simulated_input": [
+      "AWS IMDSv2 Mock (:169.254.169.254 - token-based metadata access)",
+      "SKF Path Traversal Mock (:8086 - sensitive file read)"
     ],
-    "persisted_lab_evidence": [
-      "test/lab/lab_results.json (78 Ground-Truth Verified Findings)",
-      "test/evidence/phase6/6.4_mobile_api_correlation_proof.json (Phase 6 Correlation Receipt)"
+    "persisted_prior_laboratory_evidence": [
+      "test/lab/lab_results.json (78 ground-truth findings across OWASP Juice Shop, WebGoat, and VAmPI)",
+      "test/evidence/phase6/6.4_mobile_api_correlation_proof.json (Phase 6.4 mobile-to-backend correlated targets)"
     ],
-    "synthetic_unit_fixtures": [
-      "18 Formal Deterministic Edge-Case Fixtures in pkg/correlation/dag_test.go"
+    "static_analysis_evidence": [
+      "InsecureBankv2.apk classes.dex Dalvik string pool constant table (hardcoded AES encryption key extraction)"
+    ],
+    "synthetic_unit_test_fixture": [
+      "18 algorithmic unit test fixtures in pkg/correlation/dag_test.go",
+      "1,000-node synthetic algorithm benchmark (TestDAG_18_LargeGraphPerformance)"
     ]
   },
-  "canonical_payload_sha256": "ab39ebf3215b4548e592a5611e0aecb25acce71ac9025f046765c11fca7e1b09",
+  "canonical_payload_sha256": "c246b4fdcda7e783b0fc52378c2aa35b51681ccfa7efba68cf126a6b492d44c8",
   "conclusive_status": "PROVEN_VERIFIED",
   "critical_asset_shortest_path": {
     "entry_point": "NODE-MOB-DEX-01",

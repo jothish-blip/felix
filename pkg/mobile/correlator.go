@@ -1241,3 +1241,124 @@ func BuildMobileBackendGraph(
 
 	return g
 }
+
+// ToDAGAttackGraph converts a MobileBackendGraph into a correlation.DAGAttackGraph,
+// enabling cross-layer shortest attack-path calculation and cycle validation.
+func (g *MobileBackendGraph) ToDAGAttackGraph(rejectCycles bool) (*correlation.DAGAttackGraph, error) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	dag := correlation.NewDAGAttackGraph(rejectCycles)
+
+	// Sort node IDs for deterministic construction
+	nodeIDs := make([]string, 0, len(g.Nodes))
+	for id := range g.Nodes {
+		nodeIDs = append(nodeIDs, id)
+	}
+	sort.Strings(nodeIDs)
+
+	for _, id := range nodeIDs {
+		node := g.Nodes[id]
+		dagNodeType := correlation.NodeTypeFinding
+		isEntrypoint := false
+		isCritical := false
+		sev := report.SeverityMedium
+		conf := "HIGH"
+		verStatus := report.VerificationDetected
+
+		if node.Attributes != nil {
+			if s, ok := node.Attributes["severity"]; ok && s != "" {
+				sev = s
+			}
+			if c, ok := node.Attributes["confidence"]; ok && c != "" {
+				conf = c
+			}
+			if v, ok := node.Attributes["verification_state"]; ok && v != "" {
+				verStatus = report.VerificationStatus(v)
+			}
+		}
+
+		if sev == report.SeverityCritical || strings.Contains(strings.ToLower(node.DisplayName), "database") || strings.Contains(strings.ToLower(node.DisplayName), "admin") {
+			isCritical = true
+		}
+
+		switch node.Type {
+		case discovery.AssetTypeApplication:
+			dagNodeType = correlation.NodeTypeApplication
+			isEntrypoint = true
+		case discovery.AssetTypeHost:
+			dagNodeType = correlation.NodeTypeComponent
+		case discovery.AssetTypeEndpoint:
+			if strings.HasPrefix(node.ID, "finding:") {
+				dagNodeType = correlation.NodeTypeFinding
+			} else {
+				dagNodeType = correlation.NodeTypeRoute
+			}
+		}
+
+		if strings.Contains(strings.ToLower(node.DisplayName), "secret") || strings.Contains(strings.ToLower(node.DisplayName), "credential") {
+			dagNodeType = correlation.NodeTypeCredential
+		}
+
+		dagNode := &correlation.DAGNode{
+			ID:                 node.ID,
+			Type:               dagNodeType,
+			Title:              node.DisplayName,
+			Severity:           sev,
+			Confidence:         conf,
+			VerificationStatus: verStatus,
+			SourceEngine:       "ENGINE_6_MOBILE",
+			AssetAssociation:   node.Host,
+			IsCriticalAsset:    isCritical,
+			IsEntrypoint:       isEntrypoint,
+			Attributes:         node.Attributes,
+		}
+
+		_ = dag.AddNode(dagNode)
+	}
+
+	for _, edge := range g.Edges {
+		srcNode, srcOk := dag.Nodes[edge.SourceID]
+		tgtNode, tgtOk := dag.Nodes[edge.TargetID]
+		if !srcOk || !tgtOk {
+			continue
+		}
+
+		dagEdgeType := correlation.DAGEdgeSequenceTransition
+		ruleCode := correlation.RuleCOR01
+		if edge.Type == correlation.RelReaches {
+			ruleCode = correlation.RuleCOR01
+		} else if edge.Type == correlation.RelExposes {
+			ruleCode = correlation.RuleCOR02
+		} else if edge.Type == correlation.RelEnables {
+			ruleCode = correlation.RuleCOR03
+		}
+
+		if srcNode.Type == correlation.NodeTypeCredential && tgtNode.Type == correlation.NodeTypeRoute {
+			dagEdgeType = correlation.DAGEdgeCredToRoute
+			ruleCode = correlation.RuleCOR02
+		}
+
+		weight := correlation.CalculateEdgeCost(srcNode, tgtNode, edge.Confidence)
+
+		dagEdge := &correlation.DAGEdge{
+			ID:                 edge.ID,
+			SourceID:           edge.SourceID,
+			TargetID:           edge.TargetID,
+			Type:               dagEdgeType,
+			RuleCode:           ruleCode,
+			Confidence:         edge.Confidence,
+			Weight:             weight,
+			Explanation:        edge.Evidence,
+			ValidationStatus:   edge.ValidationStatus,
+		}
+		_ = dag.AddEdge(dagEdge)
+	}
+
+	dag.Validation = dag.Validate()
+	if rejectCycles && dag.Validation.HasCycle {
+		return dag, fmt.Errorf("cycle detected in mobile-backend graph: %s", strings.Join(dag.Validation.CycleNodes, ", "))
+	}
+
+	return dag, nil
+}

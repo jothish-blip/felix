@@ -26,6 +26,7 @@ type GraphEdge struct {
 	RuleCode           RuleCode         `json:"rule_code"`
 	Confidence         string           `json:"confidence"`
 	ValidationStatus   ValidationStatus `json:"validation_status"`
+	Weight             float64          `json:"weight,omitempty"`
 	EvidenceReferences []string         `json:"evidence_references,omitempty"`
 }
 
@@ -426,4 +427,121 @@ func (g *AttackGraph) Sinks() []*GraphNode {
 		return sinks[i].ID < sinks[j].ID
 	})
 	return sinks
+}
+
+// ToDAG converts an AttackGraph into an enriched DAGAttackGraph, mapping nodes and edges
+// into the heterogeneous entity model and computing edge traversal costs.
+func (g *AttackGraph) ToDAG(rejectCycles bool) (*DAGAttackGraph, error) {
+	dag := NewDAGAttackGraph(rejectCycles)
+
+	// Deterministically iterate sorted nodes
+	nodeIDs := make([]string, 0, len(g.Nodes))
+	for id := range g.Nodes {
+		nodeIDs = append(nodeIDs, id)
+	}
+	sort.Strings(nodeIDs)
+
+	for _, id := range nodeIDs {
+		n := g.Nodes[id]
+		f := n.Finding
+
+		nodeType := NodeTypeFinding
+		if f.IsSensitiveData {
+			nodeType = NodeTypeSensitiveData
+		} else if f.IsCloudResource {
+			nodeType = NodeTypeCloudResource
+		} else if strings.Contains(strings.ToUpper(f.NormalizedCategory), "CREDENTIAL") || strings.Contains(strings.ToUpper(f.Title), "TOKEN") {
+			nodeType = NodeTypeCredential
+		}
+
+		engine := "ENGINE_UNKNOWN"
+		if f.Source != "" {
+			engine = f.Source
+		}
+
+		isCritical := f.Severity == "CRITICAL"
+
+		var evRefs []string
+		if f.EvidenceSummary != "" {
+			evRefs = []string{f.EvidenceSummary}
+		}
+
+		dagNode := &DAGNode{
+			ID:                 f.ID,
+			Type:               nodeType,
+			FindingID:          f.ID,
+			Finding:            &f,
+			Title:              f.Title,
+			Severity:           f.Severity,
+			Confidence:         f.Confidence,
+			VerificationStatus: f.VerificationStatus,
+			SourceEngine:       engine,
+			EvidenceReferences: evRefs,
+			AssetAssociation:   f.CanonicalAssetKey,
+			IsCriticalAsset:    isCritical,
+			IsEntrypoint:       f.IsEntrypoint,
+		}
+
+		if err := dag.AddNode(dagNode); err != nil {
+			continue
+		}
+	}
+
+	for _, edge := range g.Edges {
+		srcNode, srcOk := dag.Nodes[edge.SourceID]
+		tgtNode, tgtOk := dag.Nodes[edge.TargetID]
+		if !srcOk || !tgtOk {
+			continue
+		}
+
+		weight := edge.Weight
+		if weight <= 0 {
+			weight = CalculateEdgeCost(srcNode, tgtNode, edge.Confidence)
+		}
+
+		dagEdge := &DAGEdge{
+			ID:                 edge.ID,
+			SourceID:           edge.SourceID,
+			TargetID:           edge.TargetID,
+			Type:               DAGEdgeSequenceTransition,
+			RuleCode:           edge.RuleCode,
+			Confidence:         edge.Confidence,
+			Weight:             weight,
+			EvidenceReferences: edge.EvidenceReferences,
+			Explanation:        edge.Relationship.Explanation,
+			ValidationStatus:   edge.ValidationStatus,
+		}
+		_ = dag.AddEdge(dagEdge)
+	}
+
+	// Also infer domain-specific transitions
+	inferredEdges := InferDAGEdges(dag.Nodes)
+	for _, edge := range inferredEdges {
+		_ = dag.AddEdge(edge)
+	}
+
+	dag.Validation = dag.Validate()
+	if rejectCycles && dag.Validation.HasCycle {
+		return dag, fmt.Errorf("cycle detected in attack graph: %s", strings.Join(dag.Validation.CycleNodes, ", "))
+	}
+
+	return dag, nil
+}
+
+// ShortestPath delegates shortest attack path calculation to DAGAttackGraph.
+func (g *AttackGraph) ShortestPath(startID, targetID string) (*DAGShortestPathResult, error) {
+	dag, err := g.ToDAG(false)
+	if err != nil {
+		return nil, err
+	}
+	return dag.ShortestPath(startID, targetID)
+}
+
+// FindShortestPathToCriticalAsset evaluates reachable critical assets via the DAG adapter.
+func (g *AttackGraph) FindShortestPathToCriticalAsset(startID string) (*DAGShortestPathResult, error) {
+	dag, err := g.ToDAG(false)
+	if err != nil {
+		return nil, err
+	}
+	return dag.FindShortestPathToCriticalAsset(startID)
 }

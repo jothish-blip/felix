@@ -30,7 +30,7 @@ certs/
 *.log
 coverage.*
 
-# Local test reports & scratch
-*.html
-*.sarif
+# Root temporary test reports & scratch
+/*.html
+/*.sarif
 scratch/
