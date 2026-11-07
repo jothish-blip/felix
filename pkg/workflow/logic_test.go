@@ -891,7 +891,7 @@ func TestBenchmark_BusinessLogic_ControlledFixture(t *testing.T) {
 				_, _ = w.Write([]byte(`{"error":"Coupon already redeemed"}`))
 				return
 			}
-			time.Sleep(10 * time.Millisecond) // Race window
+			time.Sleep(35 * time.Millisecond) // Race window
 			mu.Lock()
 			couponUsedFlag = true
 			mu.Unlock()

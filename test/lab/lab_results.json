@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-30T06:05:49.0824457Z",
+  "generated_at": "2026-11-07T16:34:10.7272531Z",
   "total_cases": 78,
   "passed": 78,
   "failed": 0,
@@ -22,11 +22,11 @@
       "expected_exit_code": 0,
       "actual_result": "Successfully detected BOLA vulnerability. Verified findings count: 1",
       "actual_exit_code": 0,
-      "duration_ms": 138,
+      "duration_ms": 260,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-BOLA-VULN\",\n  \"results\": [\n    {\n      \"id\": \"4933d3d1-5256-4bbe-82ab-db40efe9667d\",\n      \"assessment_id\": \"asm-lab-bola-vuln\",\n      \"execution_id\": \"exec-7486a55e-833c-4cff-bee7-cd362e02395e\",\n      \"category\": \"BOLA-USER-READ\",\n      \"vuln_code\": \"BOLA-USER-READ\",\n      \"test_id\": \"BOLA-TEST-001\",\n      \"test_name\": \"Unauthorized Cross-User Object Read: /api/users/{id}\",\n      \"owasp_ref\": \"API1:2023\",\n      \"cwe_ref\": \"CWE-639\",\n      \"endpoint\": \"/api/users/{id}\"... [truncated]",
+      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-BOLA-VULN\",\n  \"results\": [\n    {\n      \"id\": \"80c1abfa-6a1e-4a98-9c6f-85ed4ed1f4e9\",\n      \"assessment_id\": \"asm-lab-bola-vuln\",\n      \"execution_id\": \"exec-7200fcac-d0b1-4f88-a1a7-64a7da45313e\",\n      \"category\": \"BOLA-USER-READ\",\n      \"vuln_code\": \"BOLA-USER-READ\",\n      \"test_id\": \"BOLA-TEST-001\",\n      \"test_name\": \"Unauthorized Cross-User Object Read: /api/users/{id}\",\n      \"owasp_ref\": \"API1:2023\",\n      \"cwe_ref\": \"CWE-639\",\n      \"endpoint\": \"/api/users/{id}\"... [truncated]",
       "evidence": "BOLA verified: User A received identical protected payload for usr-1002. Summary: map[blocked_count:0 candidate_count:0 categories_covered:1 coverage_map:map[BOLA-COLLECTION:map[blocked:0 candidates:0 category:BOLA-COLLECTION code:BOLA-COLLECTION explanation: inconclusive:0 name:Collection Object Level Authorization Leakage owasp_ref:API1:2023 status:UNTESTED tests_run:0 verified:0] BOLA-TENANT-READ:map[blocked:0 candidates:0 category:BOLA-TENANT-READ code:BOLA-TENANT-READ explanation: inconclusive:0 name:Cross-Tenant Object Isolation Failure owasp_ref:API1:2023 status:UNTESTED tests_run:0 verified:0] BOLA-USER-READ:map[blocked:0 candidates:0 category:BOLA-USER-READ code:BOLA-USER-READ explanation:BOLA verified: non-owner user_a accessed owner user_b's object usr-1002 and received identical protected object payload inconclusive:0 name:Unauthorized Cross-User Object Read owasp_ref:API1:2023 status:VERIFIED_ISSUE_FOUND tests_run:1 verified:1] BOLA-WRITE-MUTATION:map[blocked:0 candidates:0 category:BOLA-WRITE-MUTATION code:BOLA-WRITE-MUTATION explanation: inconclusive:0 name:Unauthorized Object Mutation or Deletion owasp_ref:API1:2023 status:UNTESTED tests_run:0 verified:0]] inconclusive_count:0 not_vulnerable_count:0 total_tests:1 verified_count:1]",
-      "executed_at": "2026-10-30T06:05:07.8927612Z"
+      "executed_at": "2026-11-07T16:33:11.5358842Z"
     },
     {
       "test_id": "LAB-BOLA-002",
@@ -44,11 +44,11 @@
       "expected_exit_code": 0,
       "actual_result": "Confirmed benign control: 0 verified findings, 1 not vulnerable results.",
       "actual_exit_code": 0,
-      "duration_ms": 236,
+      "duration_ms": 368,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-BOLA-FIXED\",\n  \"results\": [\n    {\n      \"id\": \"8b8d3cac-02ea-4c7d-b694-95784e373322\",\n      \"assessment_id\": \"asm-lab-bola-fixed\",\n      \"execution_id\": \"exec-1c4866d1-bbea-4c05-b15b-464a53358f44\",\n      \"category\": \"BOLA-USER-READ\",\n      \"vuln_code\": \"BOLA-USER-READ\",\n      \"test_id\": \"BOLA-TEST-001\",\n      \"test_name\": \"Unauthorized Cross-User Object Read: /api/users/{id}\",\n      \"owasp_ref\": \"API1:2023\",\n      \"cwe_ref\": \"CWE-639\",\n      \"endpoint\": \"/api/users/{id... [truncated]",
+      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-BOLA-FIXED\",\n  \"results\": [\n    {\n      \"id\": \"9a92c9d4-86dd-4b9c-9b67-4e70b623e477\",\n      \"assessment_id\": \"asm-lab-bola-fixed\",\n      \"execution_id\": \"exec-5f125d57-9759-4f22-9653-e3ed3d10360d\",\n      \"category\": \"BOLA-USER-READ\",\n      \"vuln_code\": \"BOLA-USER-READ\",\n      \"test_id\": \"BOLA-TEST-001\",\n      \"test_name\": \"Unauthorized Cross-User Object Read: /api/users/{id}\",\n      \"owasp_ref\": \"API1:2023\",\n      \"cwe_ref\": \"CWE-639\",\n      \"endpoint\": \"/api/users/{id... [truncated]",
       "evidence": "Fixed endpoint properly denied access (403 Forbidden). Status confirmed NOT_VULNERABLE.",
-      "executed_at": "2026-10-30T06:05:08.3196635Z"
+      "executed_at": "2026-11-07T16:33:12.3068467Z"
     },
     {
       "test_id": "LAB-BOLA-003",
@@ -66,7 +66,7 @@
       "duration_ms": 0,
       "status": "PASS",
       "evidence": "Status 200 OK, payload contains secret data: Bob Confidential Vault 789",
-      "executed_at": "2026-10-30T06:05:08.3235613Z"
+      "executed_at": "2026-11-07T16:33:12.3115318Z"
     },
     {
       "test_id": "LAB-SCOPE-001",
@@ -83,7 +83,7 @@
       "duration_ms": 0,
       "status": "PASS",
       "evidence": "Guard message: SECURITY REFUSAL: Target \"https://example.com\" is outside authorized local test scope (strictly 127.0.0.1 / localhost)",
-      "executed_at": "2026-10-30T06:05:08.324268Z"
+      "executed_at": "2026-11-07T16:33:12.3115318Z"
     },
     {
       "test_id": "LAB-BOLA-004",
@@ -100,7 +100,7 @@
       "duration_ms": 0,
       "status": "PASS",
       "evidence": "Neither User A nor User B tokens were present in CLI stdout or stderr.",
-      "executed_at": "2026-10-30T06:05:08.6718804Z"
+      "executed_at": "2026-11-07T16:33:12.9627398Z"
     },
     {
       "test_id": "LAB-BFLA-001",
@@ -118,7 +118,7 @@
       "duration_ms": 0,
       "status": "PASS",
       "evidence": "Response returned 200 OK with privileged metrics data.",
-      "executed_at": "2026-10-30T06:05:08.7149707Z"
+      "executed_at": "2026-11-07T16:33:13.0063036Z"
     },
     {
       "test_id": "LAB-BFLA-002",
@@ -136,11 +136,11 @@
       "expected_exit_code": 0,
       "actual_result": "BFLA detected: verified_count = 1",
       "actual_exit_code": 0,
-      "duration_ms": 156,
+      "duration_ms": 372,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-BFLA-VULN\",\n  \"results\": [\n    {\n      \"id\": \"88f55f8f-6ec9-4021-852a-c5cd9d1e8ba7\",\n      \"assessment_id\": \"asm-lab-bfla-vuln\",\n      \"execution_id\": \"exec-e03409cb-23b0-41df-a429-a0985e417bbd\",\n      \"category\": \"BFLA-ADMIN-ENDPOINT\",\n      \"vuln_code\": \"BFLA-ADMIN-ENDPOINT\",\n      \"test_id\": \"bfla-cli-endpoint-test\",\n      \"test_name\": \"Function Authorization on GET /api/admin/metrics\",\n      \"owasp_ref\": \"API5:2023\",\n      \"cwe_ref\": \"CWE-285\",\n      \"endpoint\": \"/... [truncated]",
+      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-BFLA-VULN\",\n  \"results\": [\n    {\n      \"id\": \"83072456-18ae-4e1e-94a4-12440d050d8e\",\n      \"assessment_id\": \"asm-lab-bfla-vuln\",\n      \"execution_id\": \"exec-bd0777d1-e2e2-4722-ba5e-5094a82fdbd2\",\n      \"category\": \"BFLA-ADMIN-ENDPOINT\",\n      \"vuln_code\": \"BFLA-ADMIN-ENDPOINT\",\n      \"test_id\": \"bfla-cli-endpoint-test\",\n      \"test_name\": \"Function Authorization on GET /api/admin/metrics\",\n      \"owasp_ref\": \"API5:2023\",\n      \"cwe_ref\": \"CWE-285\",\n      \"endpoint\": \"/... [truncated]",
       "evidence": "Verified lower-privilege access to admin endpoint. Summary: map[blocked_count:0 candidate_count:0 categories_covered:1 coverage_map:map[BFLA-ADMIN-ENDPOINT:map[blocked:0 candidates:0 category:BFLA-ADMIN-ENDPOINT code:BFLA-ADMIN-ENDPOINT explanation:One or more verified function-level authorization bypasses detected inconclusive:0 name:Lower-Privilege Role Accesses Admin-Only Endpoint owasp_ref:API5:2023 status:VERIFIED_ISSUE_FOUND tests_run:1 verified:1] BFLA-METHOD-BYPASS:map[blocked:0 candidates:0 category:BFLA-METHOD-BYPASS code:BFLA-METHOD-BYPASS explanation: inconclusive:0 name:Function Authorization Inconsistently Enforced Across HTTP Methods owasp_ref:API5:2023 status:UNTESTED tests_run:0 verified:0] BFLA-PRIVILEGE-ESCALATION:map[blocked:0 candidates:0 category:BFLA-PRIVILEGE-ESCALATION code:BFLA-PRIVILEGE-ESCALATION explanation: inconclusive:0 name:Principal Invokes Function Exceeding Assigned Privilege Level owasp_ref:API5:2023 status:UNTESTED tests_run:0 verified:0] BFLA-WRITE-MUTATION:map[blocked:0 candidates:0 category:BFLA-WRITE-MUTATION code:BFLA-WRITE-MUTATION explanation: inconclusive:0 name:Read-Only or Lower-Privilege Role Executes Privileged Mutation owasp_ref:API5:2023 status:UNTESTED tests_run:0 verified:0]] inconclusive_count:0 not_vulnerable_count:0 total_tests:1 verified_count:1]",
-      "executed_at": "2026-10-30T06:05:09.070142Z"
+      "executed_at": "2026-11-07T16:33:13.7507243Z"
     },
     {
       "test_id": "LAB-BFLA-003",
@@ -158,11 +158,11 @@
       "expected_exit_code": 0,
       "actual_result": "Confirmed benign control: 0 verified findings, 1 not vulnerable results.",
       "actual_exit_code": 0,
-      "duration_ms": 97,
+      "duration_ms": 190,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-BFLA-FIXED\",\n  \"results\": [\n    {\n      \"id\": \"53a2537a-edfd-40c9-ac0a-d1a724547a4b\",\n      \"assessment_id\": \"asm-lab-bfla-fixed\",\n      \"execution_id\": \"exec-57d717f0-4001-42ac-bc72-a14ae070e582\",\n      \"category\": \"BFLA-ADMIN-ENDPOINT\",\n      \"vuln_code\": \"BFLA-ADMIN-ENDPOINT\",\n      \"test_id\": \"bfla-cli-endpoint-test\",\n      \"test_name\": \"Function Authorization on GET /api/admin/metrics\",\n      \"owasp_ref\": \"API5:2023\",\n      \"cwe_ref\": \"CWE-285\",\n      \"endpoint\": ... [truncated]",
+      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-BFLA-FIXED\",\n  \"results\": [\n    {\n      \"id\": \"a5476028-2683-4589-a11c-835d542163b1\",\n      \"assessment_id\": \"asm-lab-bfla-fixed\",\n      \"execution_id\": \"exec-ba205f98-62f6-4649-ad59-1610155d210f\",\n      \"category\": \"BFLA-ADMIN-ENDPOINT\",\n      \"vuln_code\": \"BFLA-ADMIN-ENDPOINT\",\n      \"test_id\": \"bfla-cli-endpoint-test\",\n      \"test_name\": \"Function Authorization on GET /api/admin/metrics\",\n      \"owasp_ref\": \"API5:2023\",\n      \"cwe_ref\": \"CWE-285\",\n      \"endpoint\": ... [truncated]",
       "evidence": "Fixed endpoint properly denied access (403 Forbidden). Status confirmed NOT_VULNERABLE.",
-      "executed_at": "2026-10-30T06:05:09.3397Z"
+      "executed_at": "2026-11-07T16:33:14.6173314Z"
     },
     {
       "test_id": "LAB-BFLA-004",
@@ -179,7 +179,7 @@
       "duration_ms": 0,
       "status": "PASS",
       "evidence": "HTTP status code 401 returned for unauthenticated request.",
-      "executed_at": "2026-10-30T06:05:09.3435656Z"
+      "executed_at": "2026-11-07T16:33:14.6221836Z"
     },
     {
       "test_id": "LAB-BFLA-005",
@@ -197,7 +197,7 @@
       "duration_ms": 0,
       "status": "PASS",
       "evidence": "Response status 200 OK, payload: {\"dashboard_access\":true,\"role\":\"user\",\"status\":\"ok\",\"user_id\":\"usr-standard-1\",\"username\":\"bob\"}\n",
-      "executed_at": "2026-10-30T06:05:09.3448967Z"
+      "executed_at": "2026-11-07T16:33:14.6236643Z"
     },
     {
       "test_id": "LAB-BOPLA-001",
@@ -215,11 +215,11 @@
       "expected_exit_code": 0,
       "actual_result": "BOPLA mutation detected: verified_count = 1",
       "actual_exit_code": 0,
-      "duration_ms": 149,
+      "duration_ms": 229,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-BOPLA-VULN\",\n  \"dispatched\": 3,\n  \"duration_ms\": 6,\n  \"execution_id\": \"exec-0b91531a-ce58-437e-b79a-d7603bc02c73\",\n  \"results\": [\n    {\n      \"id\": \"048bab8e-cdb7-41a6-8351-2871faf97a34\",\n      \"assessment_id\": \"asm-lab-bopla-vuln\",\n      \"execution_id\": \"exec-0b91531a-ce58-437e-b79a-d7603bc02c73\",\n      \"category\": \"BOPLA-PROPERTY-WRITE\",\n      \"vuln_code\": \"BOPLA-PROPERTY-WRITE\",\n      \"test_id\": \"bopla-cli-property-test\",\n      \"test_name\": \"Property Authorization o... [truncated]",
+      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-BOPLA-VULN\",\n  \"dispatched\": 3,\n  \"duration_ms\": 13,\n  \"execution_id\": \"exec-42611098-2f4e-4b78-9054-f8a419092ab2\",\n  \"results\": [\n    {\n      \"id\": \"ebe48294-c569-4cd7-b17d-ff4a9cdf66bc\",\n      \"assessment_id\": \"asm-lab-bopla-vuln\",\n      \"execution_id\": \"exec-42611098-2f4e-4b78-9054-f8a419092ab2\",\n      \"category\": \"BOPLA-PROPERTY-WRITE\",\n      \"vuln_code\": \"BOPLA-PROPERTY-WRITE\",\n      \"test_id\": \"bopla-cli-property-test\",\n      \"test_name\": \"Property Authorization ... [truncated]",
       "evidence": "Verified unauthorized property write confirmed persisted on read-back. Summary: map[blocked_count:0 candidate_count:0 categories_covered:1 coverage_map:map[BOPLA-EXCESSIVE-EXPOSURE:map[blocked:0 candidates:0 category:BOPLA-EXCESSIVE-EXPOSURE code:BOPLA-EXCESSIVE-EXPOSURE explanation: inconclusive:0 name:Excessive Data Exposure of Sensitive Fields owasp_ref:API3:2023 status:UNTESTED tests_run:0 verified:0] BOPLA-MASS-ASSIGNMENT:map[blocked:0 candidates:0 category:BOPLA-MASS-ASSIGNMENT code:BOPLA-MASS-ASSIGNMENT explanation: inconclusive:0 name:Mass Assignment of Unauthorized Object Properties owasp_ref:API3:2023 status:UNTESTED tests_run:0 verified:0] BOPLA-PROPERTY-READ:map[blocked:0 candidates:0 category:BOPLA-PROPERTY-READ code:BOPLA-PROPERTY-READ explanation: inconclusive:0 name:Unauthorized Read of Protected Object Properties owasp_ref:API3:2023 status:UNTESTED tests_run:0 verified:0] BOPLA-PROPERTY-WRITE:map[blocked:0 candidates:0 category:BOPLA-PROPERTY-WRITE code:BOPLA-PROPERTY-WRITE explanation: inconclusive:0 name:Unauthorized Modification of Protected Object Properties owasp_ref:API3:2023 status:VERIFIED_ISSUE_FOUND tests_run:1 verified:1] BOPLA-REPRESENTATION-BYPASS:map[blocked:0 candidates:0 category:BOPLA-REPRESENTATION-BYPASS code:BOPLA-REPRESENTATION-BYPASS explanation: inconclusive:0 name:Property Authorization Bypass Across Representations owasp_ref:API3:2023 status:UNTESTED tests_run:0 verified:0]] inconclusive_count:0 not_vulnerable_count:0 total_tests:1 verified_count:1]",
-      "executed_at": "2026-10-30T06:05:09.6976043Z"
+      "executed_at": "2026-11-07T16:33:15.2157011Z"
     },
     {
       "test_id": "LAB-BOPLA-002",
@@ -237,11 +237,11 @@
       "expected_exit_code": 0,
       "actual_result": "Confirmed benign control: 0 verified findings, 1 not vulnerable results.",
       "actual_exit_code": 0,
-      "duration_ms": 97,
+      "duration_ms": 123,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-BOPLA-FIXED\",\n  \"dispatched\": 3,\n  \"duration_ms\": 13,\n  \"execution_id\": \"exec-4cb40ee5-2d75-4e30-bd04-c72099a2cd72\",\n  \"results\": [\n    {\n      \"id\": \"296bc70a-8140-4838-8773-452ab0f9e9c2\",\n      \"assessment_id\": \"asm-lab-bopla-fixed\",\n      \"execution_id\": \"exec-4cb40ee5-2d75-4e30-bd04-c72099a2cd72\",\n      \"category\": \"BOPLA-PROPERTY-WRITE\",\n      \"vuln_code\": \"BOPLA-PROPERTY-WRITE\",\n      \"test_id\": \"bopla-cli-property-test\",\n      \"test_name\": \"Property Authorizatio... [truncated]",
+      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-BOPLA-FIXED\",\n  \"dispatched\": 3,\n  \"duration_ms\": 10,\n  \"execution_id\": \"exec-c2d3121b-1490-4429-bd69-b9121a8b587f\",\n  \"results\": [\n    {\n      \"id\": \"9b1910bc-329a-444c-a053-2535eb427b50\",\n      \"assessment_id\": \"asm-lab-bopla-fixed\",\n      \"execution_id\": \"exec-c2d3121b-1490-4429-bd69-b9121a8b587f\",\n      \"category\": \"BOPLA-PROPERTY-WRITE\",\n      \"vuln_code\": \"BOPLA-PROPERTY-WRITE\",\n      \"test_id\": \"bopla-cli-property-test\",\n      \"test_name\": \"Property Authorizatio... [truncated]",
       "evidence": "Fixed endpoint safely ignored unauthorized property role; read-back confirmed property unchanged. Status confirmed NOT_VULNERABLE.",
-      "executed_at": "2026-10-30T06:05:09.967931Z"
+      "executed_at": "2026-11-07T16:33:15.7281957Z"
     },
     {
       "test_id": "LAB-BOPLA-003",
@@ -259,7 +259,7 @@
       "duration_ms": 0,
       "status": "PASS",
       "evidence": "Read-back confirmed bio updated: {\"accountBalance\":100,\"bio\":\"Legitimate bio updated by user\",\"id\":\"usr-dave-01\",\"isAdmin\":false,\"role\":\"user\",\"username\":\"dave\"}\n",
-      "executed_at": "2026-10-30T06:05:09.9752824Z"
+      "executed_at": "2026-11-07T16:33:15.7371681Z"
     },
     {
       "test_id": "LAB-BOPLA-004",
@@ -276,7 +276,7 @@
       "duration_ms": 0,
       "status": "PASS",
       "evidence": "HTTP status code 401 returned for unauthenticated PUT request.",
-      "executed_at": "2026-10-30T06:05:09.9781146Z"
+      "executed_at": "2026-11-07T16:33:15.7387065Z"
     },
     {
       "test_id": "LAB-BOPLA-005",
@@ -294,11 +294,11 @@
       "expected_exit_code": 0,
       "actual_result": "BOPLA Read detected: verified_count = 1",
       "actual_exit_code": 0,
-      "duration_ms": 159,
+      "duration_ms": 185,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-BOPLA-READ\",\n  \"dispatched\": 2,\n  \"duration_ms\": 7,\n  \"execution_id\": \"exec-7e3c6b94-9a45-42ec-96c6-897887f6838c\",\n  \"results\": [\n    {\n      \"id\": \"9fd9975f-7581-42dd-8c13-2953f513b47a\",\n      \"assessment_id\": \"asm-lab-bopla-read\",\n      \"execution_id\": \"exec-7e3c6b94-9a45-42ec-96c6-897887f6838c\",\n      \"category\": \"BOPLA-PROPERTY-READ\",\n      \"vuln_code\": \"BOPLA-PROPERTY-READ\",\n      \"test_id\": \"bopla-cli-property-test\",\n      \"test_name\": \"Property Authorization on ... [truncated]",
+      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-BOPLA-READ\",\n  \"dispatched\": 2,\n  \"duration_ms\": 8,\n  \"execution_id\": \"exec-95da475d-c7f5-4d45-91ad-2f1ed9fe8244\",\n  \"results\": [\n    {\n      \"id\": \"dc9f416c-89c5-4a14-ba72-4bad92c1c7e7\",\n      \"assessment_id\": \"asm-lab-bopla-read\",\n      \"execution_id\": \"exec-95da475d-c7f5-4d45-91ad-2f1ed9fe8244\",\n      \"category\": \"BOPLA-PROPERTY-READ\",\n      \"vuln_code\": \"BOPLA-PROPERTY-READ\",\n      \"test_id\": \"bopla-cli-property-test\",\n      \"test_name\": \"Property Authorization on ... [truncated]",
       "evidence": "Verified unauthorized property exposure for salary. Summary: map[blocked_count:0 candidate_count:0 categories_covered:1 coverage_map:map[BOPLA-EXCESSIVE-EXPOSURE:map[blocked:0 candidates:0 category:BOPLA-EXCESSIVE-EXPOSURE code:BOPLA-EXCESSIVE-EXPOSURE explanation: inconclusive:0 name:Excessive Data Exposure of Sensitive Fields owasp_ref:API3:2023 status:UNTESTED tests_run:0 verified:0] BOPLA-MASS-ASSIGNMENT:map[blocked:0 candidates:0 category:BOPLA-MASS-ASSIGNMENT code:BOPLA-MASS-ASSIGNMENT explanation: inconclusive:0 name:Mass Assignment of Unauthorized Object Properties owasp_ref:API3:2023 status:UNTESTED tests_run:0 verified:0] BOPLA-PROPERTY-READ:map[blocked:0 candidates:0 category:BOPLA-PROPERTY-READ code:BOPLA-PROPERTY-READ explanation: inconclusive:0 name:Unauthorized Read of Protected Object Properties owasp_ref:API3:2023 status:VERIFIED_ISSUE_FOUND tests_run:1 verified:1] BOPLA-PROPERTY-WRITE:map[blocked:0 candidates:0 category:BOPLA-PROPERTY-WRITE code:BOPLA-PROPERTY-WRITE explanation: inconclusive:0 name:Unauthorized Modification of Protected Object Properties owasp_ref:API3:2023 status:UNTESTED tests_run:0 verified:0] BOPLA-REPRESENTATION-BYPASS:map[blocked:0 candidates:0 category:BOPLA-REPRESENTATION-BYPASS code:BOPLA-REPRESENTATION-BYPASS explanation: inconclusive:0 name:Property Authorization Bypass Across Representations owasp_ref:API3:2023 status:UNTESTED tests_run:0 verified:0]] inconclusive_count:0 not_vulnerable_count:0 total_tests:1 verified_count:1]",
-      "executed_at": "2026-10-30T06:05:10.3212902Z"
+      "executed_at": "2026-11-07T16:33:16.1798831Z"
     },
     {
       "test_id": "LAB-WV-XSS-001",
@@ -315,11 +315,11 @@
       "expected_exit_code": 0,
       "actual_result": "Successfully detected XSS: verified_count = 1",
       "actual_exit_code": 0,
-      "duration_ms": 217,
+      "duration_ms": 201,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"assessment_id\": \"asm-lab-wv-xss-vuln\",\n  \"assessment_ref\": \"LAB-WV-XSS-VULN\",\n  \"results\": [\n    {\n      \"id\": \"2dd77ea8-7979-4dd4-a3cc-040474a24a01\",\n      \"assessment_id\": \"asm-lab-wv-xss-vuln\",\n      \"execution_id\": \"exec-9d28406a-bfe8-4cc6-a63c-58f3fd055463\",\n      \"category\": \"XSS\",\n      \"vuln_code\": \"WV-XSS\",\n      \"test_name\": \"XSS Context Reflection Analysis (q)\",\n      \"endpoint\": \"http://127.0.0.1:52249/search?q=%3Cflx_xss_flx_7e194%3E\",\n      \"method\": \"GET\",\n      \"verification... [truncated]",
+      "stdout_snippet": "{\n  \"assessment_id\": \"asm-lab-wv-xss-vuln\",\n  \"assessment_ref\": \"LAB-WV-XSS-VULN\",\n  \"results\": [\n    {\n      \"id\": \"0fe0b723-786d-4fbe-bac5-14ea47276faa\",\n      \"assessment_id\": \"asm-lab-wv-xss-vuln\",\n      \"execution_id\": \"exec-850a5196-f959-4d6b-885c-057c09defa06\",\n      \"category\": \"XSS\",\n      \"vuln_code\": \"WV-XSS\",\n      \"test_name\": \"XSS Context Reflection Analysis (q)\",\n      \"endpoint\": \"http://127.0.0.1:62870/search?q=%3Cflx_xss_flx_a3ac%3E\",\n      \"method\": \"GET\",\n      \"verification_... [truncated]",
       "evidence": "Verified XSS finding generated for /search. Summary: map[candidate_count:0 categories_covered:13 coverage_map:map[CMDI:map[candidates:0 category:CMDI code:WV-CMDI explanation:Assessed 0 command execution candidate surfaces (zero live destructive payloads) name:OS Command Injection observations:0 status:PASSIVELY_ASSESSED tests_run:0 verified:0] DESERIALIZATION:map[candidates:0 category:DESERIALIZATION code:WV-DESERIAL explanation:Assessed serialized object signatures (passive static inspection only; zero gadget chains) name:Insecure Deserialization observations:1 status:PASSIVELY_ASSESSED tests_run:1 verified:0] FILE_INCLUSION:map[candidates:0 category:FILE_INCLUSION code:WV-FILEINC explanation:Assessed 0 file inclusion parameter surfaces (zero remote attacker inclusion) name:Local/Remote File Inclusion observations:0 status:PASSIVELY_ASSESSED tests_run:0 verified:0] INFO_DISCLOSURE:map[candidates:0 category:INFO_DISCLOSURE code:WV-INFODISC explanation:Evaluated 3 information disclosure tests (0 verified exposures) name:Information Disclosure observations:0 status:ACTIVELY_TESTED tests_run:3 verified:0] MISCONFIGURATION:map[candidates:0 category:MISCONFIGURATION code:WV-MISCONFIG explanation:Evaluated 5 misconfiguration checks (0 verified issues) name:Security Misconfiguration observations:0 status:ACTIVELY_TESTED tests_run:5 verified:0] NOSQLI:map[candidates:0 category:NOSQLI code:WV-NOSQLI explanation:Evaluated 1 NoSQL operator tests (0 verified NoSQLi vulnerabilities) name:NoSQL Injection observations:0 status:ACTIVELY_TESTED tests_run:1 verified:0] OPEN_REDIRECT:map[candidates:0 category:OPEN_REDIRECT code:WV-REDIRECT explanation:Evaluated 0 redirect parameters (0 verified open redirects) name:Open Redirect observations:0 status:ACTIVELY_TESTED tests_run:0 verified:0] PATH_TRAVERSAL:map[candidates:0 category:PATH_TRAVERSAL code:WV-PATH explanation:Evaluated 0 path traversal parameters (zero sensitive files accessed) name:Path Traversal observations:0 status:ACTIVELY_TESTED tests_run:0 verified:0] REQUEST_ISSUES:map[candidates:0 category:REQUEST_ISSUES code:WV-REQISSUE explanation:Assessed HTTP header normalization (active request smuggling disabled by default) name:HTTP Request Issues / Smuggling observations:1 status:PASSIVELY_ASSESSED tests_run:1 verified:0] SQLI:map[candidates:0 category:SQLI code:WV-SQLI explanation:Evaluated 1 SQL syntax tests (0 verified SQLi vulnerabilities) name:SQL Injection observations:0 status:ACTIVELY_TESTED tests_run:1 verified:0] SSRF:map[candidates:0 category:SSRF code:WV-SSRF explanation:Assessed 0 SSRF candidate surfaces (zero internal/metadata addresses probed) name:Server-Side Request Forgery observations:0 status:PASSIVELY_ASSESSED tests_run:0 verified:0] SSTI:map[candidates:0 category:SSTI code:WV-SSTI explanation:Evaluated 3 SSTI arithmetic expressions (0 verified SSTI vulnerabilities) name:Server-Side Template Injection observations:0 status:ACTIVELY_TESTED tests_run:3 verified:0] XSS:map[candidates:0 category:XSS code:WV-XSS explanation:Evaluated 1 reflection tests across input parameters (1 verified XSS vulnerabilities) name:Cross-Site Scripting (XSS) observations:0 status:VERIFIED_ISSUE_FOUND tests_run:1 verified:1]] inconclusive_count:0 not_vulnerable_count:0 observed_count:2 total_tests:16 verified_count:1]",
-      "executed_at": "2026-10-30T06:05:10.7980619Z"
+      "executed_at": "2026-11-07T16:33:16.7352773Z"
     },
     {
       "test_id": "LAB-WV-XSS-002",
@@ -333,11 +333,11 @@
       "expected_exit_code": 0,
       "actual_result": "Clean: verified_count = 0, no false positive generated on properly encoded input",
       "actual_exit_code": 0,
-      "duration_ms": 108,
+      "duration_ms": 169,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"assessment_id\": \"asm-lab-wv-xss-fixed\",\n  \"assessment_ref\": \"LAB-WV-XSS-FIXED\",\n  \"results\": [\n    {\n      \"id\": \"ce093efc-f7f8-4fc3-88c0-2bc7a8850e4e\",\n      \"assessment_id\": \"asm-lab-wv-xss-fixed\",\n      \"execution_id\": \"exec-37ef8fb5-644f-4f9d-9cf8-5546fbfcf14b\",\n      \"category\": \"XSS\",\n      \"vuln_code\": \"WV-XSS\",\n      \"test_name\": \"XSS Context Reflection Analysis (q)\",\n      \"endpoint\": \"http://127.0.0.1:57780/search?q=%3Cflx_xss_flx_37848%3E\",\n      \"method\": \"GET\",\n      \"verificat... [truncated]",
+      "stdout_snippet": "{\n  \"assessment_id\": \"asm-lab-wv-xss-fixed\",\n  \"assessment_ref\": \"LAB-WV-XSS-FIXED\",\n  \"results\": [\n    {\n      \"id\": \"b9086914-9684-444a-9234-21ff57607413\",\n      \"assessment_id\": \"asm-lab-wv-xss-fixed\",\n      \"execution_id\": \"exec-742bbdb4-83e2-4f57-9706-5729040eee72\",\n      \"category\": \"XSS\",\n      \"vuln_code\": \"WV-XSS\",\n      \"test_name\": \"XSS Context Reflection Analysis (q)\",\n      \"endpoint\": \"http://127.0.0.1:62873/search?q=%3Cflx_xss_flx_3118c%3E\",\n      \"method\": \"GET\",\n      \"verificat... [truncated]",
       "evidence": "Fixed endpoint confirmed defended. Summary: map[candidate_count:0 categories_covered:13 coverage_map:map[CMDI:map[candidates:0 category:CMDI code:WV-CMDI explanation:Assessed 0 command execution candidate surfaces (zero live destructive payloads) name:OS Command Injection observations:0 status:PASSIVELY_ASSESSED tests_run:0 verified:0] DESERIALIZATION:map[candidates:0 category:DESERIALIZATION code:WV-DESERIAL explanation:Assessed serialized object signatures (passive static inspection only; zero gadget chains) name:Insecure Deserialization observations:1 status:PASSIVELY_ASSESSED tests_run:1 verified:0] FILE_INCLUSION:map[candidates:0 category:FILE_INCLUSION code:WV-FILEINC explanation:Assessed 0 file inclusion parameter surfaces (zero remote attacker inclusion) name:Local/Remote File Inclusion observations:0 status:PASSIVELY_ASSESSED tests_run:0 verified:0] INFO_DISCLOSURE:map[candidates:0 category:INFO_DISCLOSURE code:WV-INFODISC explanation:Evaluated 3 information disclosure tests (0 verified exposures) name:Information Disclosure observations:0 status:ACTIVELY_TESTED tests_run:3 verified:0] MISCONFIGURATION:map[candidates:0 category:MISCONFIGURATION code:WV-MISCONFIG explanation:Evaluated 5 misconfiguration checks (0 verified issues) name:Security Misconfiguration observations:0 status:ACTIVELY_TESTED tests_run:5 verified:0] NOSQLI:map[candidates:0 category:NOSQLI code:WV-NOSQLI explanation:Evaluated 1 NoSQL operator tests (0 verified NoSQLi vulnerabilities) name:NoSQL Injection observations:0 status:ACTIVELY_TESTED tests_run:1 verified:0] OPEN_REDIRECT:map[candidates:0 category:OPEN_REDIRECT code:WV-REDIRECT explanation:Evaluated 0 redirect parameters (0 verified open redirects) name:Open Redirect observations:0 status:ACTIVELY_TESTED tests_run:0 verified:0] PATH_TRAVERSAL:map[candidates:0 category:PATH_TRAVERSAL code:WV-PATH explanation:Evaluated 0 path traversal parameters (zero sensitive files accessed) name:Path Traversal observations:0 status:ACTIVELY_TESTED tests_run:0 verified:0] REQUEST_ISSUES:map[candidates:0 category:REQUEST_ISSUES code:WV-REQISSUE explanation:Assessed HTTP header normalization (active request smuggling disabled by default) name:HTTP Request Issues / Smuggling observations:1 status:PASSIVELY_ASSESSED tests_run:1 verified:0] SQLI:map[candidates:0 category:SQLI code:WV-SQLI explanation:Evaluated 1 SQL syntax tests (0 verified SQLi vulnerabilities) name:SQL Injection observations:0 status:ACTIVELY_TESTED tests_run:1 verified:0] SSRF:map[candidates:0 category:SSRF code:WV-SSRF explanation:Assessed 0 SSRF candidate surfaces (zero internal/metadata addresses probed) name:Server-Side Request Forgery observations:0 status:PASSIVELY_ASSESSED tests_run:0 verified:0] SSTI:map[candidates:0 category:SSTI code:WV-SSTI explanation:Evaluated 3 SSTI arithmetic expressions (0 verified SSTI vulnerabilities) name:Server-Side Template Injection observations:0 status:ACTIVELY_TESTED tests_run:3 verified:0] XSS:map[candidates:0 category:XSS code:WV-XSS explanation:Evaluated 1 reflection tests across input parameters (0 verified XSS vulnerabilities) name:Cross-Site Scripting (XSS) observations:0 status:ACTIVELY_TESTED tests_run:1 verified:0]] inconclusive_count:0 not_vulnerable_count:0 observed_count:2 total_tests:16 verified_count:0]",
-      "executed_at": "2026-10-30T06:05:11.1496059Z"
+      "executed_at": "2026-11-07T16:33:17.2096433Z"
     },
     {
       "test_id": "LAB-WV-SQLI-001",
@@ -354,11 +354,11 @@
       "expected_exit_code": 0,
       "actual_result": "Successfully detected SQLi: verified_count = 1",
       "actual_exit_code": 0,
-      "duration_ms": 139,
+      "duration_ms": 239,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"assessment_id\": \"asm-lab-wv-sqli-vuln\",\n  \"assessment_ref\": \"LAB-WV-SQLI-VULN\",\n  \"results\": [\n    {\n      \"id\": \"0eab3e49-de30-4100-80e2-5c773612f9b5\",\n      \"assessment_id\": \"asm-lab-wv-sqli-vuln\",\n      \"execution_id\": \"exec-02bff774-b43b-4189-866a-cabbf147d9fc\",\n      \"category\": \"SQLI\",\n      \"vuln_code\": \"WV-SQLI\",\n      \"test_name\": \"SQL Syntax Disruption Probe (id)\",\n      \"endpoint\": \"http://127.0.0.1:57783/items?id=101%27\",\n      \"method\": \"GET\",\n      \"verification_state\": \"VERIF... [truncated]",
+      "stdout_snippet": "{\n  \"assessment_id\": \"asm-lab-wv-sqli-vuln\",\n  \"assessment_ref\": \"LAB-WV-SQLI-VULN\",\n  \"results\": [\n    {\n      \"id\": \"85765504-dd51-4573-828e-321569252b86\",\n      \"assessment_id\": \"asm-lab-wv-sqli-vuln\",\n      \"execution_id\": \"exec-80426a70-8b7c-49a8-b7b3-af8c3dd5e90e\",\n      \"category\": \"SQLI\",\n      \"vuln_code\": \"WV-SQLI\",\n      \"test_name\": \"SQL Syntax Disruption Probe (id)\",\n      \"endpoint\": \"http://127.0.0.1:62876/items?id=101%27\",\n      \"method\": \"GET\",\n      \"verification_state\": \"VERIF... [truncated]",
       "evidence": "Verified SQLi finding generated for /items. Summary: map[candidate_count:0 categories_covered:13 coverage_map:map[CMDI:map[candidates:0 category:CMDI code:WV-CMDI explanation:Assessed 0 command execution candidate surfaces (zero live destructive payloads) name:OS Command Injection observations:0 status:PASSIVELY_ASSESSED tests_run:0 verified:0] DESERIALIZATION:map[candidates:0 category:DESERIALIZATION code:WV-DESERIAL explanation:Assessed serialized object signatures (passive static inspection only; zero gadget chains) name:Insecure Deserialization observations:1 status:PASSIVELY_ASSESSED tests_run:1 verified:0] FILE_INCLUSION:map[candidates:0 category:FILE_INCLUSION code:WV-FILEINC explanation:Assessed 0 file inclusion parameter surfaces (zero remote attacker inclusion) name:Local/Remote File Inclusion observations:0 status:PASSIVELY_ASSESSED tests_run:0 verified:0] INFO_DISCLOSURE:map[candidates:0 category:INFO_DISCLOSURE code:WV-INFODISC explanation:Evaluated 3 information disclosure tests (0 verified exposures) name:Information Disclosure observations:0 status:ACTIVELY_TESTED tests_run:3 verified:0] MISCONFIGURATION:map[candidates:0 category:MISCONFIGURATION code:WV-MISCONFIG explanation:Evaluated 5 misconfiguration checks (0 verified issues) name:Security Misconfiguration observations:0 status:ACTIVELY_TESTED tests_run:5 verified:0] NOSQLI:map[candidates:0 category:NOSQLI code:WV-NOSQLI explanation:Evaluated 1 NoSQL operator tests (0 verified NoSQLi vulnerabilities) name:NoSQL Injection observations:0 status:ACTIVELY_TESTED tests_run:1 verified:0] OPEN_REDIRECT:map[candidates:0 category:OPEN_REDIRECT code:WV-REDIRECT explanation:Evaluated 0 redirect parameters (0 verified open redirects) name:Open Redirect observations:0 status:ACTIVELY_TESTED tests_run:0 verified:0] PATH_TRAVERSAL:map[candidates:0 category:PATH_TRAVERSAL code:WV-PATH explanation:Evaluated 0 path traversal parameters (zero sensitive files accessed) name:Path Traversal observations:0 status:ACTIVELY_TESTED tests_run:0 verified:0] REQUEST_ISSUES:map[candidates:0 category:REQUEST_ISSUES code:WV-REQISSUE explanation:Assessed HTTP header normalization (active request smuggling disabled by default) name:HTTP Request Issues / Smuggling observations:1 status:PASSIVELY_ASSESSED tests_run:1 verified:0] SQLI:map[candidates:0 category:SQLI code:WV-SQLI explanation:Evaluated 1 SQL syntax tests (1 verified SQLi vulnerabilities) name:SQL Injection observations:0 status:VERIFIED_ISSUE_FOUND tests_run:1 verified:1] SSRF:map[candidates:0 category:SSRF code:WV-SSRF explanation:Assessed 0 SSRF candidate surfaces (zero internal/metadata addresses probed) name:Server-Side Request Forgery observations:0 status:PASSIVELY_ASSESSED tests_run:0 verified:0] SSTI:map[candidates:0 category:SSTI code:WV-SSTI explanation:Evaluated 3 SSTI arithmetic expressions (0 verified SSTI vulnerabilities) name:Server-Side Template Injection observations:0 status:ACTIVELY_TESTED tests_run:3 verified:0] XSS:map[candidates:0 category:XSS code:WV-XSS explanation:Evaluated 1 reflection tests across input parameters (0 verified XSS vulnerabilities) name:Cross-Site Scripting (XSS) observations:0 status:ACTIVELY_TESTED tests_run:1 verified:0]] inconclusive_count:0 not_vulnerable_count:0 observed_count:2 total_tests:16 verified_count:1]",
-      "executed_at": "2026-10-30T06:05:11.5322153Z"
+      "executed_at": "2026-11-07T16:33:17.8738742Z"
     },
     {
       "test_id": "LAB-WV-SQLI-002",
@@ -372,11 +372,11 @@
       "expected_exit_code": 0,
       "actual_result": "Clean: verified_count = 0, parameterized endpoint generated no false positives",
       "actual_exit_code": 0,
-      "duration_ms": 120,
+      "duration_ms": 126,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"assessment_id\": \"asm-lab-wv-sqli-fixed\",\n  \"assessment_ref\": \"LAB-WV-SQLI-FIXED\",\n  \"results\": [\n    {\n      \"id\": \"59dd1ee2-c8b1-455c-a4b4-455fc6a5e35a\",\n      \"assessment_id\": \"asm-lab-wv-sqli-fixed\",\n      \"execution_id\": \"exec-5f061133-9b77-48d8-9579-887424652796\",\n      \"category\": \"SQLI\",\n      \"vuln_code\": \"WV-SQLI\",\n      \"test_name\": \"SQL Syntax Disruption Probe (id)\",\n      \"endpoint\": \"http://127.0.0.1:57786/items?id=101%27\",\n      \"method\": \"GET\",\n      \"verification_state\": \"NO... [truncated]",
+      "stdout_snippet": "{\n  \"assessment_id\": \"asm-lab-wv-sqli-fixed\",\n  \"assessment_ref\": \"LAB-WV-SQLI-FIXED\",\n  \"results\": [\n    {\n      \"id\": \"ab63282b-f79b-4720-8af8-a214554745e3\",\n      \"assessment_id\": \"asm-lab-wv-sqli-fixed\",\n      \"execution_id\": \"exec-fbe4089a-8ace-4c8b-b064-f425240c7c06\",\n      \"category\": \"SQLI\",\n      \"vuln_code\": \"WV-SQLI\",\n      \"test_name\": \"SQL Syntax Disruption Probe (id)\",\n      \"endpoint\": \"http://127.0.0.1:62879/items?id=101%27\",\n      \"method\": \"GET\",\n      \"verification_state\": \"NO... [truncated]",
       "evidence": "Fixed endpoint confirmed defended. Summary: map[candidate_count:0 categories_covered:13 coverage_map:map[CMDI:map[candidates:0 category:CMDI code:WV-CMDI explanation:Assessed 0 command execution candidate surfaces (zero live destructive payloads) name:OS Command Injection observations:0 status:PASSIVELY_ASSESSED tests_run:0 verified:0] DESERIALIZATION:map[candidates:0 category:DESERIALIZATION code:WV-DESERIAL explanation:Assessed serialized object signatures (passive static inspection only; zero gadget chains) name:Insecure Deserialization observations:1 status:PASSIVELY_ASSESSED tests_run:1 verified:0] FILE_INCLUSION:map[candidates:0 category:FILE_INCLUSION code:WV-FILEINC explanation:Assessed 0 file inclusion parameter surfaces (zero remote attacker inclusion) name:Local/Remote File Inclusion observations:0 status:PASSIVELY_ASSESSED tests_run:0 verified:0] INFO_DISCLOSURE:map[candidates:0 category:INFO_DISCLOSURE code:WV-INFODISC explanation:Evaluated 3 information disclosure tests (0 verified exposures) name:Information Disclosure observations:0 status:ACTIVELY_TESTED tests_run:3 verified:0] MISCONFIGURATION:map[candidates:0 category:MISCONFIGURATION code:WV-MISCONFIG explanation:Evaluated 5 misconfiguration checks (0 verified issues) name:Security Misconfiguration observations:0 status:ACTIVELY_TESTED tests_run:5 verified:0] NOSQLI:map[candidates:0 category:NOSQLI code:WV-NOSQLI explanation:Evaluated 1 NoSQL operator tests (0 verified NoSQLi vulnerabilities) name:NoSQL Injection observations:0 status:ACTIVELY_TESTED tests_run:1 verified:0] OPEN_REDIRECT:map[candidates:0 category:OPEN_REDIRECT code:WV-REDIRECT explanation:Evaluated 0 redirect parameters (0 verified open redirects) name:Open Redirect observations:0 status:ACTIVELY_TESTED tests_run:0 verified:0] PATH_TRAVERSAL:map[candidates:0 category:PATH_TRAVERSAL code:WV-PATH explanation:Evaluated 0 path traversal parameters (zero sensitive files accessed) name:Path Traversal observations:0 status:ACTIVELY_TESTED tests_run:0 verified:0] REQUEST_ISSUES:map[candidates:0 category:REQUEST_ISSUES code:WV-REQISSUE explanation:Assessed HTTP header normalization (active request smuggling disabled by default) name:HTTP Request Issues / Smuggling observations:1 status:PASSIVELY_ASSESSED tests_run:1 verified:0] SQLI:map[candidates:0 category:SQLI code:WV-SQLI explanation:Evaluated 1 SQL syntax tests (0 verified SQLi vulnerabilities) name:SQL Injection observations:0 status:ACTIVELY_TESTED tests_run:1 verified:0] SSRF:map[candidates:0 category:SSRF code:WV-SSRF explanation:Assessed 0 SSRF candidate surfaces (zero internal/metadata addresses probed) name:Server-Side Request Forgery observations:0 status:PASSIVELY_ASSESSED tests_run:0 verified:0] SSTI:map[candidates:0 category:SSTI code:WV-SSTI explanation:Evaluated 3 SSTI arithmetic expressions (0 verified SSTI vulnerabilities) name:Server-Side Template Injection observations:0 status:ACTIVELY_TESTED tests_run:3 verified:0] XSS:map[candidates:0 category:XSS code:WV-XSS explanation:Evaluated 1 reflection tests across input parameters (0 verified XSS vulnerabilities) name:Cross-Site Scripting (XSS) observations:0 status:ACTIVELY_TESTED tests_run:1 verified:0]] inconclusive_count:0 not_vulnerable_count:0 observed_count:2 total_tests:16 verified_count:0]",
-      "executed_at": "2026-10-30T06:05:11.9308223Z"
+      "executed_at": "2026-11-07T16:33:18.3634536Z"
     },
     {
       "test_id": "LAB-WV-SSRF-001",
@@ -392,11 +392,11 @@
       "expected_exit_code": 0,
       "actual_result": "Failsafe confirmed: Cloud metadata canary refused without sending outbound requests",
       "actual_exit_code": 0,
-      "duration_ms": 117,
+      "duration_ms": 257,
       "status": "PASS",
       "stdout_snippet": "{\n  \"assessment_id\": \"asm-lab-wv-ssrf-guard\",\n  \"assessment_ref\": \"LAB-WV-SSRF-GUARD\",\n  \"results\": null,\n  \"summary\": {\n    \"total_tests\": 17,\n    \"categories_covered\": 13,\n    \"verified_count\": 0,\n    \"candidate_count\": 0,\n    \"observed_count\": 2,\n    \"inconclusive_count\": 0,\n    \"not_vulnerable_count\": 0,\n    \"coverage_map\": {\n      \"CMDI\": {\n        \"category\": \"CMDI\",\n        \"code\": \"WV-CMDI\",\n        \"name\": \"OS Command Injection\",\n        \"status\": \"PASSIVELY_ASSESSED\",\n        \"tests_ru... [truncated]",
       "evidence": "Safety guard successfully enforced. Summary: map[candidate_count:0 categories_covered:13 coverage_map:map[CMDI:map[candidates:0 category:CMDI code:WV-CMDI explanation:Assessed 0 command execution candidate surfaces (zero live destructive payloads) name:OS Command Injection observations:0 status:PASSIVELY_ASSESSED tests_run:0 verified:0] DESERIALIZATION:map[candidates:0 category:DESERIALIZATION code:WV-DESERIAL explanation:Assessed serialized object signatures (passive static inspection only; zero gadget chains) name:Insecure Deserialization observations:1 status:PASSIVELY_ASSESSED tests_run:1 verified:0] FILE_INCLUSION:map[candidates:0 category:FILE_INCLUSION code:WV-FILEINC explanation:Assessed 0 file inclusion parameter surfaces (zero remote attacker inclusion) name:Local/Remote File Inclusion observations:0 status:PASSIVELY_ASSESSED tests_run:0 verified:0] INFO_DISCLOSURE:map[candidates:0 category:INFO_DISCLOSURE code:WV-INFODISC explanation:Evaluated 3 information disclosure tests (0 verified exposures) name:Information Disclosure observations:0 status:ACTIVELY_TESTED tests_run:3 verified:0] MISCONFIGURATION:map[candidates:0 category:MISCONFIGURATION code:WV-MISCONFIG explanation:Evaluated 5 misconfiguration checks (0 verified issues) name:Security Misconfiguration observations:0 status:ACTIVELY_TESTED tests_run:5 verified:0] NOSQLI:map[candidates:0 category:NOSQLI code:WV-NOSQLI explanation:Evaluated 1 NoSQL operator tests (0 verified NoSQLi vulnerabilities) name:NoSQL Injection observations:0 status:ACTIVELY_TESTED tests_run:1 verified:0] OPEN_REDIRECT:map[candidates:0 category:OPEN_REDIRECT code:WV-REDIRECT explanation:Evaluated 1 redirect parameters (0 verified open redirects) name:Open Redirect observations:0 status:ACTIVELY_TESTED tests_run:1 verified:0] PATH_TRAVERSAL:map[candidates:0 category:PATH_TRAVERSAL code:WV-PATH explanation:Evaluated 0 path traversal parameters (zero sensitive files accessed) name:Path Traversal observations:0 status:ACTIVELY_TESTED tests_run:0 verified:0] REQUEST_ISSUES:map[candidates:0 category:REQUEST_ISSUES code:WV-REQISSUE explanation:Assessed HTTP header normalization (active request smuggling disabled by default) name:HTTP Request Issues / Smuggling observations:1 status:PASSIVELY_ASSESSED tests_run:1 verified:0] SQLI:map[candidates:0 category:SQLI code:WV-SQLI explanation:Evaluated 1 SQL syntax tests (0 verified SQLi vulnerabilities) name:SQL Injection observations:0 status:ACTIVELY_TESTED tests_run:1 verified:0] SSRF:map[candidates:0 category:SSRF code:WV-SSRF explanation:Assessed 0 SSRF candidate surfaces (zero internal/metadata addresses probed) name:Server-Side Request Forgery observations:0 status:PASSIVELY_ASSESSED tests_run:0 verified:0] SSTI:map[candidates:0 category:SSTI code:WV-SSTI explanation:Evaluated 3 SSTI arithmetic expressions (0 verified SSTI vulnerabilities) name:Server-Side Template Injection observations:0 status:ACTIVELY_TESTED tests_run:3 verified:0] XSS:map[candidates:0 category:XSS code:WV-XSS explanation:Evaluated 1 reflection tests across input parameters (0 verified XSS vulnerabilities) name:Cross-Site Scripting (XSS) observations:0 status:ACTIVELY_TESTED tests_run:1 verified:0]] inconclusive_count:0 not_vulnerable_count:0 observed_count:2 total_tests:17 verified_count:0]",
-      "executed_at": "2026-10-30T06:05:12.2813124Z"
+      "executed_at": "2026-11-07T16:33:18.9587549Z"
     },
     {
       "test_id": "LAB-WV-CLEAN-001",
@@ -410,11 +410,11 @@
       "expected_exit_code": 0,
       "actual_result": "Clean JSON: stdout parsed completely with zero formatting contamination",
       "actual_exit_code": 0,
-      "duration_ms": 161,
+      "duration_ms": 191,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"assessment_id\": \"asm-lab-wv-clean\",\n  \"assessment_ref\": \"LAB-WV-CLEAN\",\n  \"results\": [\n    {\n      \"id\": \"e6260994-17c4-4c56-a0f5-751b231ba72f\",\n      \"assessment_id\": \"asm-lab-wv-clean\",\n      \"execution_id\": \"exec-fc6ac790-343c-4a23-b3ef-be5e2e06df95\",\n      \"category\": \"DESERIALIZATION\",\n      \"vuln_code\": \"WV-DESERIAL\",\n      \"test_name\": \"Passive Serialized Object Marker Detection\",\n      \"endpoint\": \"http://127.0.0.1:65003\",\n      \"method\": \"GET\",\n      \"verification_state\": \"OBSERVED... [truncated]",
+      "stdout_snippet": "{\n  \"assessment_id\": \"asm-lab-wv-clean\",\n  \"assessment_ref\": \"LAB-WV-CLEAN\",\n  \"results\": [\n    {\n      \"id\": \"7601cc9c-c8e2-4f82-abe8-9c76b60f6346\",\n      \"assessment_id\": \"asm-lab-wv-clean\",\n      \"execution_id\": \"exec-63c5660e-82ea-4e92-afd7-a1394072f033\",\n      \"category\": \"DESERIALIZATION\",\n      \"vuln_code\": \"WV-DESERIAL\",\n      \"test_name\": \"Passive Serialized Object Marker Detection\",\n      \"endpoint\": \"http://127.0.0.1:62886\",\n      \"method\": \"GET\",\n      \"verification_state\": \"OBSERVED... [truncated]",
       "evidence": "Assessment ref confirmed: LAB-WV-CLEAN",
-      "executed_at": "2026-10-30T06:05:12.6685008Z"
+      "executed_at": "2026-11-07T16:33:19.4829639Z"
     },
     {
       "test_id": "LAB-APISEC-CORS-001",
@@ -430,16 +430,16 @@
       "expected_exit_code": 0,
       "actual_result": "CORS misconfiguration detected: verified_count = 1",
       "actual_exit_code": 0,
-      "duration_ms": 168,
+      "duration_ms": 216,
       "status": "PASS",
       "stdout_snippet": "{\n  \"assessment_id\": \"asm-lab-api-cors-vuln\",\n  \"assessment_ref\": \"LAB-API-CORS-VULN\",\n  \"results\": null,\n  \"summary\": {\n    \"total_tests\": 3,\n    \"categories_covered\": 10,\n    \"verified_count\": 1,\n    \"candidate_count\": 0,\n    \"observed_count\": 2,\n    \"inconclusive_count\": 0,\n    \"not_vulnerable_count\": 0,\n    \"coverage\": {\n      \"API10_UNSAFE_CONSUMPTION\": {\n        \"category\": \"API10_UNSAFE_CONSUMPTION\",\n        \"code\": \"API10:2023\",\n        \"name\": \"Unsafe Consumption of APIs\",\n        \"stat... [truncated]",
-      "evidence": "Verified API8 credentialed CORS finding generated. Summary: map[candidate_count:0 categories_covered:10 coverage:map[API10_UNSAFE_CONSUMPTION:map[candidate_findings:0 category:API10_UNSAFE_CONSUMPTION code:API10:2023 explanation:No external third-party API integration points identified name:Unsafe Consumption of APIs observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API1_BOLA:map[candidate_findings:0 category:API1_BOLA code:API1:2023 explanation:No object-referencing endpoints discovered in API attack surface name:Broken Object Level Authorization observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API2_BROKEN_AUTHENTICATION:map[candidate_findings:0 category:API2_BROKEN_AUTHENTICATION code:API2:2023 explanation:Analyzed 0 authentication surfaces, 0 session cookies, and 0 token architectures (0 verified, 0 candidates, 0 observations) name:Broken Authentication observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API3_BOPLA:map[candidate_findings:0 category:API3_BOPLA code:API3:2023 explanation:No property-level authorization tests executed; multi-user authorization policy required via --policy name:Broken Object Property Level Authorization observed_findings:0 status:PREREQUISITE_MISSING tests_run:0 verified_findings:0] API4_RESOURCE_CONSUMPTION:map[candidate_findings:0 category:API4_RESOURCE_CONSUMPTION code:API4:2023 explanation:Tested rate limiting headers and pagination controls on /api/v1/users (Rate limit enforced/advertised: false) name:Unrestricted Resource Consumption observed_findings:1 status:ACTIVELY_TESTED tests_run:1 verified_findings:0] API5_BFLA:map[candidate_findings:0 category:API5_BFLA code:API5:2023 explanation:No administrative API routes discovered name:Broken Function Level Authorization observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API6_BUSINESS_FLOWS:map[candidate_findings:0 category:API6_BUSINESS_FLOWS code:API6:2023 explanation:No sensitive business workflow endpoints discovered name:Unrestricted Access to Sensitive Business Flows observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API7_SSRF:map[candidate_findings:0 category:API7_SSRF code:API7:2023 explanation:No URL-fetching parameters discovered in API endpoints name:Server-Side Request Forgery observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API8_MISCONFIGURATION:map[candidate_findings:0 category:API8_MISCONFIGURATION code:API8:2023 explanation:Audited security headers, CORS policies, and error disclosure on http://127.0.0.1:65005/api/v1/users name:Security Misconfiguration observed_findings:1 status:VERIFIED_VULNERABILITY_FOUND tests_run:1 verified_findings:1] API9_IMPROPER_INVENTORY:map[candidate_findings:0 category:API9_IMPROPER_INVENTORY code:API9:2023 explanation:Analyzed 1 discovered endpoints for inventory discrepancies and version coexistence (0 candidate drift, 0 observations) name:Improper Inventory Management observed_findings:0 status:PASSIVELY_ASSESSED tests_run:1 verified_findings:0]] inconclusive_count:0 not_vulnerable_count:0 observed_count:2 total_tests:3 verified_count:1]",
-      "executed_at": "2026-10-30T06:05:13.1507019Z"
+      "evidence": "Verified API8 credentialed CORS finding generated. Summary: map[candidate_count:0 categories_covered:10 coverage:map[API10_UNSAFE_CONSUMPTION:map[candidate_findings:0 category:API10_UNSAFE_CONSUMPTION code:API10:2023 explanation:No external third-party API integration points identified name:Unsafe Consumption of APIs observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API1_BOLA:map[candidate_findings:0 category:API1_BOLA code:API1:2023 explanation:No object-referencing endpoints discovered in API attack surface name:Broken Object Level Authorization observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API2_BROKEN_AUTHENTICATION:map[candidate_findings:0 category:API2_BROKEN_AUTHENTICATION code:API2:2023 explanation:Analyzed 0 authentication surfaces, 0 session cookies, and 0 token architectures (0 verified, 0 candidates, 0 observations) name:Broken Authentication observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API3_BOPLA:map[candidate_findings:0 category:API3_BOPLA code:API3:2023 explanation:No property-level authorization tests executed; multi-user authorization policy required via --policy name:Broken Object Property Level Authorization observed_findings:0 status:PREREQUISITE_MISSING tests_run:0 verified_findings:0] API4_RESOURCE_CONSUMPTION:map[candidate_findings:0 category:API4_RESOURCE_CONSUMPTION code:API4:2023 explanation:Tested rate limiting headers and pagination controls on /api/v1/users (Rate limit enforced/advertised: false) name:Unrestricted Resource Consumption observed_findings:1 status:ACTIVELY_TESTED tests_run:1 verified_findings:0] API5_BFLA:map[candidate_findings:0 category:API5_BFLA code:API5:2023 explanation:No administrative API routes discovered name:Broken Function Level Authorization observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API6_BUSINESS_FLOWS:map[candidate_findings:0 category:API6_BUSINESS_FLOWS code:API6:2023 explanation:No sensitive business workflow endpoints discovered name:Unrestricted Access to Sensitive Business Flows observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API7_SSRF:map[candidate_findings:0 category:API7_SSRF code:API7:2023 explanation:No URL-fetching parameters discovered in API endpoints name:Server-Side Request Forgery observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API8_MISCONFIGURATION:map[candidate_findings:0 category:API8_MISCONFIGURATION code:API8:2023 explanation:Audited security headers, CORS policies, and error disclosure on http://127.0.0.1:62890/api/v1/users name:Security Misconfiguration observed_findings:1 status:VERIFIED_VULNERABILITY_FOUND tests_run:1 verified_findings:1] API9_IMPROPER_INVENTORY:map[candidate_findings:0 category:API9_IMPROPER_INVENTORY code:API9:2023 explanation:Analyzed 1 discovered endpoints for inventory discrepancies and version coexistence (0 candidate drift, 0 observations) name:Improper Inventory Management observed_findings:0 status:PASSIVELY_ASSESSED tests_run:1 verified_findings:0]] inconclusive_count:0 not_vulnerable_count:0 observed_count:2 total_tests:3 verified_count:1]",
+      "executed_at": "2026-11-07T16:33:20.0734585Z"
     },
     {
       "test_id": "LAB-APISEC-SPEC-001",
       "feature": "APISec Spec Reconciliation \u0026 Shadow API Detection (felix assessment apisec --spec)",
-      "command": "felix assessment apisec LAB-API-SPEC-DRIFT --run --spec C:\\Users\\LENOVO\\AppData\\Local\\Temp\\TestLocalLab_APISec_AssessmentLAB-APISEC-SPEC-001_OpenAPI_Spec1913300701\\001\\openapi_declared.json --category API9 --allow-loopback --json",
+      "command": "felix assessment apisec LAB-API-SPEC-DRIFT --run --spec C:\\Users\\LENOVO\\AppData\\Local\\Temp\\TestLocalLab_APISec_AssessmentLAB-APISEC-SPEC-001_OpenAPI_Spec1677806187\\001\\openapi_declared.json --category API9 --allow-loopback --json",
       "target_fixture": "APISecFixture (Loopback)",
       "preconditions": [
         "Declared spec contains /api/v1/users",
@@ -451,11 +451,11 @@
       "expected_exit_code": 0,
       "actual_result": "Shadow endpoint detected: candidate_count = 1",
       "actual_exit_code": 0,
-      "duration_ms": 117,
+      "duration_ms": 147,
       "status": "PASS",
       "stdout_snippet": "{\n  \"assessment_id\": \"asm-lab-api-spec-drift\",\n  \"assessment_ref\": \"LAB-API-SPEC-DRIFT\",\n  \"results\": null,\n  \"summary\": {\n    \"total_tests\": 4,\n    \"categories_covered\": 10,\n    \"verified_count\": 0,\n    \"candidate_count\": 1,\n    \"observed_count\": 3,\n    \"inconclusive_count\": 0,\n    \"not_vulnerable_count\": 0,\n    \"coverage\": {\n      \"API10_UNSAFE_CONSUMPTION\": {\n        \"category\": \"API10_UNSAFE_CONSUMPTION\",\n        \"code\": \"API10:2023\",\n        \"name\": \"Unsafe Consumption of APIs\",\n        \"st... [truncated]",
-      "evidence": "API9 candidate finding generated for undocumented internal_export route. Summary: map[candidate_count:1 categories_covered:10 coverage:map[API10_UNSAFE_CONSUMPTION:map[candidate_findings:0 category:API10_UNSAFE_CONSUMPTION code:API10:2023 explanation:No external third-party API integration points identified name:Unsafe Consumption of APIs observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API1_BOLA:map[candidate_findings:0 category:API1_BOLA code:API1:2023 explanation:No object-referencing endpoints discovered in API attack surface name:Broken Object Level Authorization observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API2_BROKEN_AUTHENTICATION:map[candidate_findings:0 category:API2_BROKEN_AUTHENTICATION code:API2:2023 explanation:Analyzed 0 authentication surfaces, 0 session cookies, and 0 token architectures (0 verified, 0 candidates, 0 observations) name:Broken Authentication observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API3_BOPLA:map[candidate_findings:0 category:API3_BOPLA code:API3:2023 explanation:No property-level authorization tests executed; multi-user authorization policy required via --policy name:Broken Object Property Level Authorization observed_findings:0 status:PREREQUISITE_MISSING tests_run:0 verified_findings:0] API4_RESOURCE_CONSUMPTION:map[candidate_findings:0 category:API4_RESOURCE_CONSUMPTION code:API4:2023 explanation:Tested rate limiting headers and pagination controls on /api/v1/admin/internal_export (Rate limit enforced/advertised: false) name:Unrestricted Resource Consumption observed_findings:1 status:ACTIVELY_TESTED tests_run:1 verified_findings:0] API5_BFLA:map[candidate_findings:0 category:API5_BFLA code:API5:2023 explanation:Discovered 1 administrative/privileged API endpoints; active BFLA verification requires role policy via --policy name:Broken Function Level Authorization observed_findings:1 status:PREREQUISITE_MISSING tests_run:0 verified_findings:0] API6_BUSINESS_FLOWS:map[candidate_findings:0 category:API6_BUSINESS_FLOWS code:API6:2023 explanation:No sensitive business workflow endpoints discovered name:Unrestricted Access to Sensitive Business Flows observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API7_SSRF:map[candidate_findings:0 category:API7_SSRF code:API7:2023 explanation:No URL-fetching parameters discovered in API endpoints name:Server-Side Request Forgery observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API8_MISCONFIGURATION:map[candidate_findings:0 category:API8_MISCONFIGURATION code:API8:2023 explanation:Audited security headers, CORS policies, and error disclosure on http://127.0.0.1:65010/api/v1/admin/internal_export name:Security Misconfiguration observed_findings:1 status:ACTIVELY_TESTED tests_run:1 verified_findings:0] API9_IMPROPER_INVENTORY:map[candidate_findings:1 category:API9_IMPROPER_INVENTORY code:API9:2023 explanation:Analyzed 2 discovered endpoints for inventory discrepancies and version coexistence (1 candidate drift, 0 observations) name:Improper Inventory Management observed_findings:0 status:ACTIVELY_TESTED tests_run:2 verified_findings:0]] inconclusive_count:0 not_vulnerable_count:0 observed_count:3 total_tests:4 verified_count:0]",
-      "executed_at": "2026-10-30T06:05:13.5092577Z"
+      "evidence": "API9 candidate finding generated for undocumented internal_export route. Summary: map[candidate_count:1 categories_covered:10 coverage:map[API10_UNSAFE_CONSUMPTION:map[candidate_findings:0 category:API10_UNSAFE_CONSUMPTION code:API10:2023 explanation:No external third-party API integration points identified name:Unsafe Consumption of APIs observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API1_BOLA:map[candidate_findings:0 category:API1_BOLA code:API1:2023 explanation:No object-referencing endpoints discovered in API attack surface name:Broken Object Level Authorization observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API2_BROKEN_AUTHENTICATION:map[candidate_findings:0 category:API2_BROKEN_AUTHENTICATION code:API2:2023 explanation:Analyzed 0 authentication surfaces, 0 session cookies, and 0 token architectures (0 verified, 0 candidates, 0 observations) name:Broken Authentication observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API3_BOPLA:map[candidate_findings:0 category:API3_BOPLA code:API3:2023 explanation:No property-level authorization tests executed; multi-user authorization policy required via --policy name:Broken Object Property Level Authorization observed_findings:0 status:PREREQUISITE_MISSING tests_run:0 verified_findings:0] API4_RESOURCE_CONSUMPTION:map[candidate_findings:0 category:API4_RESOURCE_CONSUMPTION code:API4:2023 explanation:Tested rate limiting headers and pagination controls on /api/v1/admin/internal_export (Rate limit enforced/advertised: false) name:Unrestricted Resource Consumption observed_findings:1 status:ACTIVELY_TESTED tests_run:1 verified_findings:0] API5_BFLA:map[candidate_findings:0 category:API5_BFLA code:API5:2023 explanation:Discovered 1 administrative/privileged API endpoints; active BFLA verification requires role policy via --policy name:Broken Function Level Authorization observed_findings:1 status:PREREQUISITE_MISSING tests_run:0 verified_findings:0] API6_BUSINESS_FLOWS:map[candidate_findings:0 category:API6_BUSINESS_FLOWS code:API6:2023 explanation:No sensitive business workflow endpoints discovered name:Unrestricted Access to Sensitive Business Flows observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API7_SSRF:map[candidate_findings:0 category:API7_SSRF code:API7:2023 explanation:No URL-fetching parameters discovered in API endpoints name:Server-Side Request Forgery observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API8_MISCONFIGURATION:map[candidate_findings:0 category:API8_MISCONFIGURATION code:API8:2023 explanation:Audited security headers, CORS policies, and error disclosure on http://127.0.0.1:62895/api/v1/admin/internal_export name:Security Misconfiguration observed_findings:1 status:ACTIVELY_TESTED tests_run:1 verified_findings:0] API9_IMPROPER_INVENTORY:map[candidate_findings:1 category:API9_IMPROPER_INVENTORY code:API9:2023 explanation:Analyzed 2 discovered endpoints for inventory discrepancies and version coexistence (1 candidate drift, 0 observations) name:Improper Inventory Management observed_findings:0 status:ACTIVELY_TESTED tests_run:2 verified_findings:0]] inconclusive_count:0 not_vulnerable_count:0 observed_count:3 total_tests:4 verified_count:0]",
+      "executed_at": "2026-11-07T16:33:20.7252595Z"
     },
     {
       "test_id": "LAB-APISEC-ERR-001",
@@ -471,11 +471,11 @@
       "expected_exit_code": 0,
       "actual_result": "Verbose error disclosure detected: verified_count = 1",
       "actual_exit_code": 0,
-      "duration_ms": 151,
+      "duration_ms": 253,
       "status": "PASS",
       "stdout_snippet": "{\n  \"assessment_id\": \"asm-lab-api-err-vuln\",\n  \"assessment_ref\": \"LAB-API-ERR-VULN\",\n  \"results\": null,\n  \"summary\": {\n    \"total_tests\": 3,\n    \"categories_covered\": 10,\n    \"verified_count\": 1,\n    \"candidate_count\": 0,\n    \"observed_count\": 2,\n    \"inconclusive_count\": 0,\n    \"not_vulnerable_count\": 0,\n    \"coverage\": {\n      \"API10_UNSAFE_CONSUMPTION\": {\n        \"category\": \"API10_UNSAFE_CONSUMPTION\",\n        \"code\": \"API10:2023\",\n        \"name\": \"Unsafe Consumption of APIs\",\n        \"status... [truncated]",
-      "evidence": "Verified API8 error disclosure finding generated. Summary: map[candidate_count:0 categories_covered:10 coverage:map[API10_UNSAFE_CONSUMPTION:map[candidate_findings:0 category:API10_UNSAFE_CONSUMPTION code:API10:2023 explanation:No external third-party API integration points identified name:Unsafe Consumption of APIs observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API1_BOLA:map[candidate_findings:0 category:API1_BOLA code:API1:2023 explanation:No object-referencing endpoints discovered in API attack surface name:Broken Object Level Authorization observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API2_BROKEN_AUTHENTICATION:map[candidate_findings:0 category:API2_BROKEN_AUTHENTICATION code:API2:2023 explanation:Analyzed 0 authentication surfaces, 0 session cookies, and 0 token architectures (0 verified, 0 candidates, 0 observations) name:Broken Authentication observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API3_BOPLA:map[candidate_findings:0 category:API3_BOPLA code:API3:2023 explanation:No property-level authorization tests executed; multi-user authorization policy required via --policy name:Broken Object Property Level Authorization observed_findings:0 status:PREREQUISITE_MISSING tests_run:0 verified_findings:0] API4_RESOURCE_CONSUMPTION:map[candidate_findings:0 category:API4_RESOURCE_CONSUMPTION code:API4:2023 explanation:Tested rate limiting headers and pagination controls on /api/v1/debug (Rate limit enforced/advertised: false) name:Unrestricted Resource Consumption observed_findings:1 status:ACTIVELY_TESTED tests_run:1 verified_findings:0] API5_BFLA:map[candidate_findings:0 category:API5_BFLA code:API5:2023 explanation:No administrative API routes discovered name:Broken Function Level Authorization observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API6_BUSINESS_FLOWS:map[candidate_findings:0 category:API6_BUSINESS_FLOWS code:API6:2023 explanation:No sensitive business workflow endpoints discovered name:Unrestricted Access to Sensitive Business Flows observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API7_SSRF:map[candidate_findings:0 category:API7_SSRF code:API7:2023 explanation:No URL-fetching parameters discovered in API endpoints name:Server-Side Request Forgery observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API8_MISCONFIGURATION:map[candidate_findings:0 category:API8_MISCONFIGURATION code:API8:2023 explanation:Audited security headers, CORS policies, and error disclosure on http://127.0.0.1:52475/api/v1/debug name:Security Misconfiguration observed_findings:1 status:VERIFIED_VULNERABILITY_FOUND tests_run:1 verified_findings:1] API9_IMPROPER_INVENTORY:map[candidate_findings:0 category:API9_IMPROPER_INVENTORY code:API9:2023 explanation:Analyzed 1 discovered endpoints for inventory discrepancies and version coexistence (0 candidate drift, 0 observations) name:Improper Inventory Management observed_findings:0 status:PASSIVELY_ASSESSED tests_run:1 verified_findings:0]] inconclusive_count:0 not_vulnerable_count:0 observed_count:2 total_tests:3 verified_count:1]",
-      "executed_at": "2026-10-30T06:05:13.8984647Z"
+      "evidence": "Verified API8 error disclosure finding generated. Summary: map[candidate_count:0 categories_covered:10 coverage:map[API10_UNSAFE_CONSUMPTION:map[candidate_findings:0 category:API10_UNSAFE_CONSUMPTION code:API10:2023 explanation:No external third-party API integration points identified name:Unsafe Consumption of APIs observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API1_BOLA:map[candidate_findings:0 category:API1_BOLA code:API1:2023 explanation:No object-referencing endpoints discovered in API attack surface name:Broken Object Level Authorization observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API2_BROKEN_AUTHENTICATION:map[candidate_findings:0 category:API2_BROKEN_AUTHENTICATION code:API2:2023 explanation:Analyzed 0 authentication surfaces, 0 session cookies, and 0 token architectures (0 verified, 0 candidates, 0 observations) name:Broken Authentication observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API3_BOPLA:map[candidate_findings:0 category:API3_BOPLA code:API3:2023 explanation:No property-level authorization tests executed; multi-user authorization policy required via --policy name:Broken Object Property Level Authorization observed_findings:0 status:PREREQUISITE_MISSING tests_run:0 verified_findings:0] API4_RESOURCE_CONSUMPTION:map[candidate_findings:0 category:API4_RESOURCE_CONSUMPTION code:API4:2023 explanation:Tested rate limiting headers and pagination controls on /api/v1/debug (Rate limit enforced/advertised: false) name:Unrestricted Resource Consumption observed_findings:1 status:ACTIVELY_TESTED tests_run:1 verified_findings:0] API5_BFLA:map[candidate_findings:0 category:API5_BFLA code:API5:2023 explanation:No administrative API routes discovered name:Broken Function Level Authorization observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API6_BUSINESS_FLOWS:map[candidate_findings:0 category:API6_BUSINESS_FLOWS code:API6:2023 explanation:No sensitive business workflow endpoints discovered name:Unrestricted Access to Sensitive Business Flows observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API7_SSRF:map[candidate_findings:0 category:API7_SSRF code:API7:2023 explanation:No URL-fetching parameters discovered in API endpoints name:Server-Side Request Forgery observed_findings:0 status:PASSIVELY_ASSESSED tests_run:0 verified_findings:0] API8_MISCONFIGURATION:map[candidate_findings:0 category:API8_MISCONFIGURATION code:API8:2023 explanation:Audited security headers, CORS policies, and error disclosure on http://127.0.0.1:62897/api/v1/debug name:Security Misconfiguration observed_findings:1 status:VERIFIED_VULNERABILITY_FOUND tests_run:1 verified_findings:1] API9_IMPROPER_INVENTORY:map[candidate_findings:0 category:API9_IMPROPER_INVENTORY code:API9:2023 explanation:Analyzed 1 discovered endpoints for inventory discrepancies and version coexistence (0 candidate drift, 0 observations) name:Improper Inventory Management observed_findings:0 status:PASSIVELY_ASSESSED tests_run:1 verified_findings:0]] inconclusive_count:0 not_vulnerable_count:0 observed_count:2 total_tests:3 verified_count:1]",
+      "executed_at": "2026-11-07T16:33:21.3292741Z"
     },
     {
       "test_id": "LAB-APISEC-CLEAN-001",
@@ -489,16 +489,16 @@
       "expected_exit_code": 0,
       "actual_result": "Clean JSON: stdout parsed completely with zero formatting contamination",
       "actual_exit_code": 0,
-      "duration_ms": 89,
+      "duration_ms": 171,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"assessment_id\": \"asm-lab-api-clean\",\n  \"assessment_ref\": \"LAB-API-CLEAN\",\n  \"results\": [\n    {\n      \"id\": \"b507387a-f8ba-44de-97bc-e25213829c3e\",\n      \"assessment_id\": \"asm-lab-api-clean\",\n      \"execution_id\": \"exec-91c99d88-1672-448e-afa4-30ff2fe04215\",\n      \"category\": \"API4_RESOURCE_CONSUMPTION\",\n      \"owasp_code\": \"API4:2023\",\n      \"test_name\": \"Rate Limiting Telemetry Header Observation\",\n      \"endpoint\": \"http://127.0.0.1:52485/\",\n      \"method\": \"GET\",\n      \"verification_stat... [truncated]",
+      "stdout_snippet": "{\n  \"assessment_id\": \"asm-lab-api-clean\",\n  \"assessment_ref\": \"LAB-API-CLEAN\",\n  \"results\": [\n    {\n      \"id\": \"3ca6801b-45f0-4e93-a3ef-f8ef15415d62\",\n      \"assessment_id\": \"asm-lab-api-clean\",\n      \"execution_id\": \"exec-7febd1c6-f3b4-4e1f-bc7c-f3c2196ed389\",\n      \"category\": \"API4_RESOURCE_CONSUMPTION\",\n      \"owasp_code\": \"API4:2023\",\n      \"test_name\": \"Rate Limiting Telemetry Header Observation\",\n      \"endpoint\": \"http://127.0.0.1:62900/\",\n      \"method\": \"GET\",\n      \"verification_stat... [truncated]",
       "evidence": "Assessment ref confirmed: LAB-API-CLEAN",
-      "executed_at": "2026-10-30T06:05:14.1762846Z"
+      "executed_at": "2026-11-07T16:33:21.8117045Z"
     },
     {
       "test_id": "LAB-API-GQL-001",
       "feature": "GraphQL Schema Introspection Auditing (api.AuditGraphQL)",
-      "command": "api.AuditGraphQL(ctx, client, http://127.0.0.1:52487, [\"/graphql\"])",
+      "command": "api.AuditGraphQL(ctx, client, http://127.0.0.1:62906, [\"/graphql\"])",
       "target_fixture": "APISecFixture (Mode: VULNERABLE, Loopback)",
       "preconditions": [
         "GraphQL endpoint responds to __schema queries with types"
@@ -512,12 +512,12 @@
       "duration_ms": 1,
       "status": "PASS",
       "evidence": "Finding detected: graphql-introspection (Severity: LOW, Description: GraphQL endpoint has public introspection enabled)",
-      "executed_at": "2026-10-30T06:05:14.1812449Z"
+      "executed_at": "2026-11-07T16:33:21.8205094Z"
     },
     {
       "test_id": "LAB-API-GQL-002",
       "feature": "GraphQL Introspection Hardening Verification (api.AuditGraphQL)",
-      "command": "api.AuditGraphQL(ctx, client, http://127.0.0.1:52490, [\"/graphql\"])",
+      "command": "api.AuditGraphQL(ctx, client, http://127.0.0.1:62909, [\"/graphql\"])",
       "target_fixture": "APISecFixture (Mode: FIXED, Loopback)",
       "preconditions": [
         "GraphQL endpoint rejects __schema introspection query with 400 Bad Request"
@@ -526,10 +526,10 @@
       "expected_exit_code": 0,
       "actual_result": "Clean: 0 findings generated on properly hardened GraphQL endpoint",
       "actual_exit_code": 0,
-      "duration_ms": 1,
+      "duration_ms": 2,
       "status": "PASS",
       "evidence": "Verified introspection rejection produces zero false-positive vulnerability findings.",
-      "executed_at": "2026-10-30T06:05:14.1845083Z"
+      "executed_at": "2026-11-07T16:33:21.8244237Z"
     },
     {
       "test_id": "LAB-AUTH-UNAUTH-001",
@@ -543,11 +543,11 @@
       "expected_exit_code": 0,
       "actual_result": "Clean: Authentication correctly enforced (passed: 5, weaknesses: 0)",
       "actual_exit_code": 0,
-      "duration_ms": 606,
+      "duration_ms": 801,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"target_url\": \"http://127.0.0.1:52493\",\n  \"summary\": {\n    \"total_endpoints\": 1,\n    \"total_requests\": 6,\n    \"total_tested\": 1,\n    \"total_passed\": 5,\n    \"total_weaknesses\": 0,\n    \"total_candidates\": 0,\n    \"total_skipped\": 0,\n    \"total_failed\": 0,\n    \"total_inconclusive\": 0,\n    \"total_unsupported\": 0,\n    \"findings_count\": 0,\n    \"duration_ms\": 501\n  },\n  \"budget_exhausted\": false,\n  \"dry_run\": false,\n  \"started_at\": \"2026-10-30T06:05:14.5381286Z\",\n  \"completed_at\": \"2026-10-30T06:05:... [truncated]",
-      "evidence": "Endpoint confirmed protected; rejected unauthenticated requests (duration: 606ms)",
-      "executed_at": "2026-10-30T06:05:15.0634831Z"
+      "stdout_snippet": "{\n  \"target_url\": \"http://127.0.0.1:62912\",\n  \"summary\": {\n    \"total_endpoints\": 1,\n    \"total_requests\": 6,\n    \"total_tested\": 1,\n    \"total_passed\": 5,\n    \"total_weaknesses\": 0,\n    \"total_candidates\": 0,\n    \"total_skipped\": 0,\n    \"total_failed\": 0,\n    \"total_inconclusive\": 0,\n    \"total_unsupported\": 0,\n    \"findings_count\": 0,\n    \"duration_ms\": 502\n  },\n  \"budget_exhausted\": false,\n  \"dry_run\": false,\n  \"started_at\": \"2026-11-07T16:33:22.378331Z\",\n  \"completed_at\": \"2026-11-07T16:33:2... [truncated]",
+      "evidence": "Endpoint confirmed protected; rejected unauthenticated requests (duration: 801ms)",
+      "executed_at": "2026-11-07T16:33:23.0845041Z"
     },
     {
       "test_id": "LAB-AUTH-VALID-001",
@@ -561,11 +561,11 @@
       "expected_exit_code": 0,
       "actual_result": "Verified: Valid credential accepted, baseline probe succeeded (1 checks performed)",
       "actual_exit_code": 0,
-      "duration_ms": 601,
+      "duration_ms": 712,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"target_url\": \"http://127.0.0.1:55259\",\n  \"summary\": {\n    \"total_endpoints\": 1,\n    \"total_requests\": 6,\n    \"total_tested\": 1,\n    \"total_passed\": 5,\n    \"total_weaknesses\": 0,\n    \"total_candidates\": 0,\n    \"total_skipped\": 0,\n    \"total_failed\": 0,\n    \"total_inconclusive\": 0,\n    \"total_unsupported\": 0,\n    \"findings_count\": 0,\n    \"duration_ms\": 500\n  },\n  \"budget_exhausted\": false,\n  \"dry_run\": false,\n  \"started_at\": \"2026-10-30T06:05:15.3822398Z\",\n  \"completed_at\": \"2026-10-30T06:05:... [truncated]",
+      "stdout_snippet": "{\n  \"target_url\": \"http://127.0.0.1:62921\",\n  \"summary\": {\n    \"total_endpoints\": 1,\n    \"total_requests\": 6,\n    \"total_tested\": 1,\n    \"total_passed\": 5,\n    \"total_weaknesses\": 0,\n    \"total_candidates\": 0,\n    \"total_skipped\": 0,\n    \"total_failed\": 0,\n    \"total_inconclusive\": 0,\n    \"total_unsupported\": 0,\n    \"findings_count\": 0,\n    \"duration_ms\": 512\n  },\n  \"budget_exhausted\": false,\n  \"dry_run\": false,\n  \"started_at\": \"2026-11-07T16:33:23.7409929Z\",\n  \"completed_at\": \"2026-11-07T16:33:... [truncated]",
       "evidence": "Positive control verified; total endpoints tested: 1",
-      "executed_at": "2026-10-30T06:05:15.9210277Z"
+      "executed_at": "2026-11-07T16:33:24.323796Z"
     },
     {
       "test_id": "LAB-AUTH-BYPASS-001",
@@ -581,11 +581,11 @@
       "expected_exit_code": 0,
       "actual_result": "Vulnerability confirmed: Authentication bypass detected (1 weaknesses, 1 findings)",
       "actual_exit_code": 0,
-      "duration_ms": 251,
+      "duration_ms": 485,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"target_url\": \"http://127.0.0.1:55262\",\n  \"summary\": {\n    \"total_endpoints\": 1,\n    \"total_requests\": 2,\n    \"total_tested\": 1,\n    \"total_passed\": 0,\n    \"total_weaknesses\": 1,\n    \"total_candidates\": 0,\n    \"total_skipped\": 0,\n    \"total_failed\": 0,\n    \"total_inconclusive\": 0,\n    \"total_unsupported\": 0,\n    \"findings_count\": 1,\n    \"duration_ms\": 101\n  },\n  \"budget_exhausted\": false,\n  \"dry_run\": false,\n  \"started_at\": \"2026-10-30T06:05:16.209974Z\",\n  \"completed_at\": \"2026-10-30T06:05:1... [truncated]",
+      "stdout_snippet": "{\n  \"target_url\": \"http://127.0.0.1:62936\",\n  \"summary\": {\n    \"total_endpoints\": 1,\n    \"total_requests\": 2,\n    \"total_tested\": 1,\n    \"total_passed\": 0,\n    \"total_weaknesses\": 1,\n    \"total_candidates\": 0,\n    \"total_skipped\": 0,\n    \"total_failed\": 0,\n    \"total_inconclusive\": 0,\n    \"total_unsupported\": 0,\n    \"findings_count\": 1,\n    \"duration_ms\": 103\n  },\n  \"budget_exhausted\": false,\n  \"dry_run\": false,\n  \"started_at\": \"2026-11-07T16:33:24.9832306Z\",\n  \"completed_at\": \"2026-11-07T16:33:... [truncated]",
       "evidence": "Detected sensitive unauthenticated access on /api/unprotected; findings count: 1",
-      "executed_at": "2026-10-30T06:05:16.385049Z"
+      "executed_at": "2026-11-07T16:33:25.2283069Z"
     },
     {
       "test_id": "LAB-AUTH-FIXED-001",
@@ -599,11 +599,11 @@
       "expected_exit_code": 0,
       "actual_result": "Clean: 0 weaknesses and 0 findings on hardened route (zero false positives)",
       "actual_exit_code": 0,
-      "duration_ms": 612,
+      "duration_ms": 800,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"target_url\": \"http://127.0.0.1:55265\",\n  \"summary\": {\n    \"total_endpoints\": 1,\n    \"total_requests\": 6,\n    \"total_tested\": 1,\n    \"total_passed\": 5,\n    \"total_weaknesses\": 0,\n    \"total_candidates\": 0,\n    \"total_skipped\": 0,\n    \"total_failed\": 0,\n    \"total_inconclusive\": 0,\n    \"total_unsupported\": 0,\n    \"findings_count\": 0,\n    \"duration_ms\": 502\n  },\n  \"budget_exhausted\": false,\n  \"dry_run\": false,\n  \"started_at\": \"2026-10-30T06:05:16.6960388Z\",\n  \"completed_at\": \"2026-10-30T06:05:... [truncated]",
+      "stdout_snippet": "{\n  \"target_url\": \"http://127.0.0.1:62940\",\n  \"summary\": {\n    \"total_endpoints\": 1,\n    \"total_requests\": 6,\n    \"total_tested\": 1,\n    \"total_passed\": 5,\n    \"total_weaknesses\": 0,\n    \"total_candidates\": 0,\n    \"total_skipped\": 0,\n    \"total_failed\": 0,\n    \"total_inconclusive\": 0,\n    \"total_unsupported\": 0,\n    \"findings_count\": 0,\n    \"duration_ms\": 504\n  },\n  \"budget_exhausted\": false,\n  \"dry_run\": false,\n  \"started_at\": \"2026-11-07T16:33:25.8618431Z\",\n  \"completed_at\": \"2026-11-07T16:33:... [truncated]",
       "evidence": "Authentication properly enforced; all checks verified compliant.",
-      "executed_at": "2026-10-30T06:05:17.2355959Z"
+      "executed_at": "2026-11-07T16:33:26.4126441Z"
     },
     {
       "test_id": "LAB-AUTH-CLEAN-001",
@@ -617,11 +617,11 @@
       "expected_exit_code": 0,
       "actual_result": "Clean: Output is valid pure JSON with zero secret leakage and zero banner pollution",
       "actual_exit_code": 0,
-      "duration_ms": 601,
+      "duration_ms": 906,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"target_url\": \"http://127.0.0.1:51885\",\n  \"summary\": {\n    \"total_endpoints\": 1,\n    \"total_requests\": 6,\n    \"total_tested\": 1,\n    \"total_passed\": 5,\n    \"total_weaknesses\": 0,\n    \"total_candidates\": 0,\n    \"total_skipped\": 0,\n    \"total_failed\": 0,\n    \"total_inconclusive\": 0,\n    \"total_unsupported\": 0,\n    \"findings_count\": 0,\n    \"duration_ms\": 501\n  },\n  \"budget_exhausted\": false,\n  \"dry_run\": false,\n  \"started_at\": \"2026-10-30T06:05:17.5623243Z\",\n  \"completed_at\": \"2026-10-30T06:05:... [truncated]",
+      "stdout_snippet": "{\n  \"target_url\": \"http://127.0.0.1:62956\",\n  \"summary\": {\n    \"total_endpoints\": 1,\n    \"total_requests\": 6,\n    \"total_tested\": 1,\n    \"total_passed\": 5,\n    \"total_weaknesses\": 0,\n    \"total_candidates\": 0,\n    \"total_skipped\": 0,\n    \"total_failed\": 0,\n    \"total_inconclusive\": 0,\n    \"total_unsupported\": 0,\n    \"findings_count\": 0,\n    \"duration_ms\": 527\n  },\n  \"budget_exhausted\": false,\n  \"dry_run\": false,\n  \"started_at\": \"2026-11-07T16:33:27.1518199Z\",\n  \"completed_at\": \"2026-11-07T16:33:... [truncated]",
       "evidence": "JSON cleanly parsed; token verified scrubbed.",
-      "executed_at": "2026-10-30T06:05:18.0806104Z"
+      "executed_at": "2026-11-07T16:33:27.8806816Z"
     },
     {
       "test_id": "LAB-SESS-COOKIE-001",
@@ -637,11 +637,11 @@
       "expected_exit_code": 0,
       "actual_result": "Verified: Insecure cookie attributes identified (verified issues: 1)",
       "actual_exit_code": 0,
-      "duration_ms": 249,
+      "duration_ms": 524,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-SESS-COOKIE-VULN\",\n  \"results\": [\n    {\n      \"id\": \"0925dc41-c229-4428-8c20-388c17bb7184\",\n      \"assessment_id\": \"asm-lab-sess-cookie-vuln\",\n      \"execution_id\": \"exec-81df4d6d-0430-4d08-839a-8c4dbdf1a06b\",\n      \"category\": \"COOKIE_SECURITY\",\n      \"vuln_code\": \"SS-COOKIE\",\n      \"test_id\": \"SS-COOKIE-ATTR-__Host-session\",\n      \"test_name\": \"Cookie Security Attribute Analysis (__Host-session)\",\n      \"wstg_ref\": \"WSTG-SESS-02\",\n      \"endpoint\": \"http://127.0.0.1:... [truncated]",
-      "evidence": "Session cookie attribute defects verified (duration: 249ms)",
-      "executed_at": "2026-10-30T06:05:18.6411507Z"
+      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-SESS-COOKIE-VULN\",\n  \"results\": [\n    {\n      \"id\": \"66a5986e-9854-4ce7-a3cb-513f3d55bc5e\",\n      \"assessment_id\": \"asm-lab-sess-cookie-vuln\",\n      \"execution_id\": \"exec-2c4c55f9-7462-44d5-be6f-9f88c24f7a60\",\n      \"category\": \"COOKIE_SECURITY\",\n      \"vuln_code\": \"SS-COOKIE\",\n      \"test_id\": \"SS-COOKIE-ATTR-__Host-session\",\n      \"test_name\": \"Cookie Security Attribute Analysis (__Host-session)\",\n      \"wstg_ref\": \"WSTG-SESS-02\",\n      \"endpoint\": \"http://127.0.0.1:... [truncated]",
+      "evidence": "Session cookie attribute defects verified (duration: 524ms)",
+      "executed_at": "2026-11-07T16:33:28.9672604Z"
     },
     {
       "test_id": "LAB-SESS-COOKIE-002",
@@ -655,11 +655,11 @@
       "expected_exit_code": 0,
       "actual_result": "Clean: 0 verified issues on properly hardened cookie (zero false positives)",
       "actual_exit_code": 0,
-      "duration_ms": 99,
+      "duration_ms": 413,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-SESS-COOKIE-FIXED\",\n  \"results\": [\n    {\n      \"id\": \"8320399b-0597-42b5-ad67-75a47893732c\",\n      \"assessment_id\": \"asm-lab-sess-cookie-fixed\",\n      \"execution_id\": \"exec-0dfaad8e-a997-484a-93ac-e2ea48fad312\",\n      \"category\": \"COOKIE_SECURITY\",\n      \"vuln_code\": \"SS-COOKIE\",\n      \"test_id\": \"SS-COOKIE-ATTR-__Host-session\",\n      \"test_name\": \"Cookie Security Attribute Analysis (__Host-session)\",\n      \"wstg_ref\": \"WSTG-SESS-02\",\n      \"endpoint\": \"http://127.0.0.... [truncated]",
+      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-SESS-COOKIE-FIXED\",\n  \"results\": [\n    {\n      \"id\": \"1272741c-ee74-458d-ad12-7fed7bfb03ee\",\n      \"assessment_id\": \"asm-lab-sess-cookie-fixed\",\n      \"execution_id\": \"exec-6bcda9c4-2421-49a0-bd25-f0491348eb7f\",\n      \"category\": \"COOKIE_SECURITY\",\n      \"vuln_code\": \"SS-COOKIE\",\n      \"test_id\": \"SS-COOKIE-ATTR-__Host-session\",\n      \"test_name\": \"Cookie Security Attribute Analysis (__Host-session)\",\n      \"wstg_ref\": \"WSTG-SESS-02\",\n      \"endpoint\": \"http://127.0.0.... [truncated]",
       "evidence": "All session cookie attributes verified compliant.",
-      "executed_at": "2026-10-30T06:05:18.9777028Z"
+      "executed_at": "2026-11-07T16:33:29.9845114Z"
     },
     {
       "test_id": "LAB-SESS-LOGOUT-001",
@@ -675,11 +675,11 @@
       "expected_exit_code": 0,
       "actual_result": "Verified: Incomplete logout verified (verified issues: 3)",
       "actual_exit_code": 0,
-      "duration_ms": 429,
+      "duration_ms": 1185,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-SESS-LOGOUT-VULN\",\n  \"results\": [\n    {\n      \"id\": \"a33ddeaa-f9da-4dd6-a08a-b6eb64f09d0c\",\n      \"assessment_id\": \"asm-lab-sess-logout-vuln\",\n      \"execution_id\": \"exec-00a90eea-01ca-4e99-b27b-74596faa1ba1\",\n      \"category\": \"LOGOUT_BEHAVIOR\",\n      \"vuln_code\": \"SS-LOGOUT\",\n      \"test_id\": \"SS-LOGOUT-SERVER-INVALIDATION\",\n      \"test_name\": \"Client and Server Logout Synchronization\",\n      \"wstg_ref\": \"WSTG-SESS-06\",\n      \"endpoint\": \"http://127.0.0.1:51045/logou... [truncated]",
+      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-SESS-LOGOUT-VULN\",\n  \"results\": [\n    {\n      \"id\": \"2304c09c-c943-42b8-ae71-8f66e8c53253\",\n      \"assessment_id\": \"asm-lab-sess-logout-vuln\",\n      \"execution_id\": \"exec-55d18628-0e01-4629-9835-71b664e3b932\",\n      \"category\": \"LOGOUT_BEHAVIOR\",\n      \"vuln_code\": \"SS-LOGOUT\",\n      \"test_id\": \"SS-LOGOUT-SERVER-INVALIDATION\",\n      \"test_name\": \"Client and Server Logout Synchronization\",\n      \"wstg_ref\": \"WSTG-SESS-06\",\n      \"endpoint\": \"http://127.0.0.1:62968/logou... [truncated]",
       "evidence": "Verified post-logout token replay successfully identified server-side invalidation failure.",
-      "executed_at": "2026-10-30T06:05:19.6313245Z"
+      "executed_at": "2026-11-07T16:33:31.7331972Z"
     },
     {
       "test_id": "LAB-SESS-LOGOUT-002",
@@ -693,11 +693,11 @@
       "expected_exit_code": 0,
       "actual_result": "Clean: 0 verified issues on hardened logout (zero false positives)",
       "actual_exit_code": 0,
-      "duration_ms": 122,
+      "duration_ms": 307,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-SESS-LOGOUT-FIXED\",\n  \"results\": [\n    {\n      \"id\": \"91c8d324-41c5-40fa-a755-8a3d515ea11a\",\n      \"assessment_id\": \"asm-lab-sess-logout-fixed\",\n      \"execution_id\": \"exec-2a433012-b843-4a54-b758-1ebb009c39d2\",\n      \"category\": \"LOGOUT_BEHAVIOR\",\n      \"vuln_code\": \"SS-LOGOUT\",\n      \"test_id\": \"SS-LOGOUT-SERVER-INVALIDATION\",\n      \"test_name\": \"Client and Server Logout Synchronization\",\n      \"wstg_ref\": \"WSTG-SESS-06\",\n      \"endpoint\": \"http://127.0.0.1:62160/log... [truncated]",
+      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-SESS-LOGOUT-FIXED\",\n  \"results\": [\n    {\n      \"id\": \"83c216ac-4887-4b58-bcd3-9b28c60c5aa4\",\n      \"assessment_id\": \"asm-lab-sess-logout-fixed\",\n      \"execution_id\": \"exec-584012e5-36b8-4bed-b9d2-a9cb732bb955\",\n      \"category\": \"LOGOUT_BEHAVIOR\",\n      \"vuln_code\": \"SS-LOGOUT\",\n      \"test_id\": \"SS-LOGOUT-SERVER-INVALIDATION\",\n      \"test_name\": \"Client and Server Logout Synchronization\",\n      \"wstg_ref\": \"WSTG-SESS-06\",\n      \"endpoint\": \"http://127.0.0.1:62976/log... [truncated]",
       "evidence": "Logout securely terminated server-side session.",
-      "executed_at": "2026-10-30T06:05:20.2283853Z"
+      "executed_at": "2026-11-07T16:33:32.53419Z"
     },
     {
       "test_id": "LAB-SESS-CLEAN-001",
@@ -711,11 +711,11 @@
       "expected_exit_code": 0,
       "actual_result": "Clean: Output is valid pure JSON with zero secret leakage and zero banner pollution",
       "actual_exit_code": 0,
-      "duration_ms": 188,
+      "duration_ms": 732,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-SESS-CLEAN\",\n  \"results\": [\n    {\n      \"id\": \"bec1ab6e-d325-4d2a-a662-8cf95b319cdf\",\n      \"assessment_id\": \"asm-lab-sess-clean\",\n      \"execution_id\": \"exec-b8a3b887-c75b-44ca-b60d-6ad7faca1e36\",\n      \"category\": \"SESSION_FIXATION\",\n      \"vuln_code\": \"SS-FIXATION\",\n      \"test_id\": \"SS-FIXATION-ROTATION\",\n      \"test_name\": \"Session Identifier Rotation on Authentication\",\n      \"wstg_ref\": \"WSTG-SESS-03\",\n      \"endpoint\": \"http://127.0.0.1:62170/set-cookie/login\",... [truncated]",
+      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-SESS-CLEAN\",\n  \"results\": [\n    {\n      \"id\": \"4aa1e5c9-62df-498b-90c0-c60f91c9da1f\",\n      \"assessment_id\": \"asm-lab-sess-clean\",\n      \"execution_id\": \"exec-a671df0d-c60b-4be1-9ae6-20db45106dbf\",\n      \"category\": \"SESSION_FIXATION\",\n      \"vuln_code\": \"SS-FIXATION\",\n      \"test_id\": \"SS-FIXATION-ROTATION\",\n      \"test_name\": \"Session Identifier Rotation on Authentication\",\n      \"wstg_ref\": \"WSTG-SESS-03\",\n      \"endpoint\": \"http://127.0.0.1:63031/set-cookie/login\",... [truncated]",
       "evidence": "SessionSec JSON cleanly parsed; tokens verified hashed.",
-      "executed_at": "2026-10-30T06:05:20.6784319Z"
+      "executed_at": "2026-11-07T16:33:34.2168739Z"
     },
     {
       "test_id": "LAB-AUTHZ-MATRIX-001",
@@ -731,11 +731,11 @@
       "expected_exit_code": 0,
       "actual_result": "Verified: BFLA violation identified (verified count: 2)",
       "actual_exit_code": 0,
-      "duration_ms": 157,
+      "duration_ms": 358,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"assessment_id\": \"asm-lab-authz-bfla-vuln\",\n  \"assessment_ref\": \"LAB-AUTHZ-BFLA-VULN\",\n  \"results\": [\n    {\n      \"id\": \"6fb3a97f-5cbd-422e-8fce-fafa7ac3f57a\",\n      \"test_case_id\": \"644ea208-c63b-46a9-953a-5d3caef2c99b\",\n      \"assessment_id\": \"asm-lab-authz-bfla-vuln\",\n      \"execution_id\": \"exec-731467b3-68d4-4c00-9b4c-3a484da49e62\",\n      \"category\": \"BFLA\",\n      \"verification_state\": \"VERIFIED\",\n      \"endpoint\": \"http://127.0.0.1:62178/api/admin/system\",\n      \"method\": \"GET\",\n      \"... [truncated]",
-      "evidence": "Authorization matrix detected role escalation on /api/admin/system (duration: 157ms)",
-      "executed_at": "2026-10-30T06:05:21.1063517Z"
+      "stdout_snippet": "{\n  \"assessment_id\": \"asm-lab-authz-bfla-vuln\",\n  \"assessment_ref\": \"LAB-AUTHZ-BFLA-VULN\",\n  \"results\": [\n    {\n      \"id\": \"11ca6ddc-21e6-4930-8f2c-1b8573854e79\",\n      \"test_case_id\": \"fba99b11-550f-40ea-a24d-b61d03fa1478\",\n      \"assessment_id\": \"asm-lab-authz-bfla-vuln\",\n      \"execution_id\": \"exec-40e5ca42-6c6a-46a6-bd75-9387cbd22323\",\n      \"category\": \"BFLA\",\n      \"verification_state\": \"VERIFIED\",\n      \"endpoint\": \"http://127.0.0.1:63037/api/admin/system\",\n      \"method\": \"GET\",\n      \"... [truncated]",
+      "evidence": "Authorization matrix detected role escalation on /api/admin/system (duration: 358ms)",
+      "executed_at": "2026-11-07T16:33:34.9973204Z"
     },
     {
       "test_id": "LAB-AUTHZ-MATRIX-002",
@@ -751,9 +751,9 @@
       "actual_exit_code": 0,
       "duration_ms": 552,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"assessment_id\": \"asm-lab-authz-bfla-fixed\",\n  \"assessment_ref\": \"LAB-AUTHZ-BFLA-FIXED\",\n  \"results\": [\n    {\n      \"id\": \"5423e100-91bc-486e-a113-9bacb40a934a\",\n      \"test_case_id\": \"8c7ffa4c-d93a-468b-9fcc-5a7926c6b960\",\n      \"assessment_id\": \"asm-lab-authz-bfla-fixed\",\n      \"execution_id\": \"exec-4457b79f-5357-4daf-9d28-68d212094d50\",\n      \"category\": \"BFLA\",\n      \"verification_state\": \"NOT_VULNERABLE\",\n      \"endpoint\": \"http://127.0.0.1:58578/api/admin/system\",\n      \"method\": \"GET\"... [truncated]",
+      "stdout_snippet": "{\n  \"assessment_id\": \"asm-lab-authz-bfla-fixed\",\n  \"assessment_ref\": \"LAB-AUTHZ-BFLA-FIXED\",\n  \"results\": [\n    {\n      \"id\": \"4da9b470-7397-48b5-b149-de1b1a93034b\",\n      \"test_case_id\": \"f069b3cc-5314-4610-a0af-d209a5c698ce\",\n      \"assessment_id\": \"asm-lab-authz-bfla-fixed\",\n      \"execution_id\": \"exec-55c48b40-458d-4065-9793-57b9f2a7c8de\",\n      \"category\": \"BFLA\",\n      \"verification_state\": \"NOT_VULNERABLE\",\n      \"endpoint\": \"http://127.0.0.1:63131/api/admin/system\",\n      \"method\": \"GET\"... [truncated]",
       "evidence": "Role-based authorization correctly enforced across matrix.",
-      "executed_at": "2026-10-30T06:05:22.1651644Z"
+      "executed_at": "2026-11-07T16:33:35.9419344Z"
     },
     {
       "test_id": "LAB-AUTHZ-BOLA-001",
@@ -769,11 +769,11 @@
       "expected_exit_code": 0,
       "actual_result": "Verified: Cross-user BOLA violation detected (verified count: 2)",
       "actual_exit_code": 0,
-      "duration_ms": 245,
+      "duration_ms": 986,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"assessment_id\": \"asm-lab-authz-bola-vuln\",\n  \"assessment_ref\": \"LAB-AUTHZ-BOLA-VULN\",\n  \"results\": [\n    {\n      \"id\": \"ac9c3228-d1af-472b-8ee0-66a535a52880\",\n      \"test_case_id\": \"7fca8a5a-a14b-4c15-a1b1-a3cffdd017a6\",\n      \"assessment_id\": \"asm-lab-authz-bola-vuln\",\n      \"execution_id\": \"exec-18083eaf-18dd-472a-979f-14927448fe20\",\n      \"category\": \"BOLA\",\n      \"verification_state\": \"NOT_VULNERABLE\",\n      \"endpoint\": \"http://127.0.0.1:58592/api/orders/order_101\",\n      \"method\": \"GET... [truncated]",
+      "stdout_snippet": "{\n  \"assessment_id\": \"asm-lab-authz-bola-vuln\",\n  \"assessment_ref\": \"LAB-AUTHZ-BOLA-VULN\",\n  \"results\": [\n    {\n      \"id\": \"f4d4e615-1ed4-4d50-bc71-a3205b786ffc\",\n      \"test_case_id\": \"03fbb6a4-0213-4814-80e3-64174004fabe\",\n      \"assessment_id\": \"asm-lab-authz-bola-vuln\",\n      \"execution_id\": \"exec-ee39608f-3577-413f-b6c8-a240c8b6a1c5\",\n      \"category\": \"BOLA\",\n      \"verification_state\": \"NOT_VULNERABLE\",\n      \"endpoint\": \"http://127.0.0.1:63178/api/orders/order_101\",\n      \"method\": \"GET... [truncated]",
       "evidence": "Object-level authorization bypass verified on /api/orders/order_101.",
-      "executed_at": "2026-10-30T06:05:22.7475675Z"
+      "executed_at": "2026-11-07T16:33:38.0672798Z"
     },
     {
       "test_id": "LAB-AUTHZ-BOLA-002",
@@ -787,11 +787,11 @@
       "expected_exit_code": 0,
       "actual_result": "Clean: 0 verified issues on hardened object access (zero false positives)",
       "actual_exit_code": 0,
-      "duration_ms": 122,
+      "duration_ms": 406,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"assessment_id\": \"asm-lab-authz-bola-fixed\",\n  \"assessment_ref\": \"LAB-AUTHZ-BOLA-FIXED\",\n  \"results\": [\n    {\n      \"id\": \"326eff30-59c8-4488-bd4d-e6e1b8adab8d\",\n      \"test_case_id\": \"94311d1e-d7d7-406a-b096-8fa850048595\",\n      \"assessment_id\": \"asm-lab-authz-bola-fixed\",\n      \"execution_id\": \"exec-687f6515-8f57-4a04-8c2f-4910323e2402\",\n      \"category\": \"BOLA\",\n      \"verification_state\": \"NOT_VULNERABLE\",\n      \"endpoint\": \"http://127.0.0.1:60514/api/orders/order_101\",\n      \"method\": \"... [truncated]",
+      "stdout_snippet": "{\n  \"assessment_id\": \"asm-lab-authz-bola-fixed\",\n  \"assessment_ref\": \"LAB-AUTHZ-BOLA-FIXED\",\n  \"results\": [\n    {\n      \"id\": \"3ae7b9a0-f12d-46ff-9758-8219cd676b72\",\n      \"test_case_id\": \"b384d869-be72-4a5f-a889-6a876992ac0e\",\n      \"assessment_id\": \"asm-lab-authz-bola-fixed\",\n      \"execution_id\": \"exec-67b41e2d-2ad0-49a1-a936-9c7a13cf18f4\",\n      \"category\": \"BOLA\",\n      \"verification_state\": \"NOT_VULNERABLE\",\n      \"endpoint\": \"http://127.0.0.1:55429/api/orders/order_101\",\n      \"method\": \"... [truncated]",
       "evidence": "Object-level access correctly restricted to owner.",
-      "executed_at": "2026-10-30T06:05:23.0995963Z"
+      "executed_at": "2026-11-07T16:33:39.3959339Z"
     },
     {
       "test_id": "LAB-AUTHZ-CLEAN-001",
@@ -805,11 +805,11 @@
       "expected_exit_code": 0,
       "actual_result": "Clean: Output is valid pure JSON with zero banner pollution",
       "actual_exit_code": 0,
-      "duration_ms": 205,
+      "duration_ms": 327,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"assessment_id\": \"asm-lab-authz-clean\",\n  \"assessment_ref\": \"LAB-AUTHZ-CLEAN\",\n  \"results\": [\n    {\n      \"id\": \"ea842688-5232-4ec8-b3dd-90a2f78feb0a\",\n      \"test_case_id\": \"70ad8606-01d2-4222-9958-afdedc2cc1b9\",\n      \"assessment_id\": \"asm-lab-authz-clean\",\n      \"execution_id\": \"exec-a1fd5355-841a-4190-a306-8965d4bcd50a\",\n      \"category\": \"BFLA\",\n      \"verification_state\": \"VERIFIED\",\n      \"endpoint\": \"http://127.0.0.1:60517/api/admin/system\",\n      \"method\": \"GET\",\n      \"primary_iden... [truncated]",
+      "stdout_snippet": "{\n  \"assessment_id\": \"asm-lab-authz-clean\",\n  \"assessment_ref\": \"LAB-AUTHZ-CLEAN\",\n  \"results\": [\n    {\n      \"id\": \"dbcda906-d613-4ea9-94fd-785197cd46a3\",\n      \"test_case_id\": \"3a2c7ffe-aa07-4d8d-b96a-d5ca5eba2c7c\",\n      \"assessment_id\": \"asm-lab-authz-clean\",\n      \"execution_id\": \"exec-188d9913-d851-4f04-83ee-56a774dff49e\",\n      \"category\": \"BFLA\",\n      \"verification_state\": \"VERIFIED\",\n      \"endpoint\": \"http://127.0.0.1:55433/api/admin/system\",\n      \"method\": \"GET\",\n      \"primary_iden... [truncated]",
       "evidence": "Authz JSON cleanly parsed; summary and results verified.",
-      "executed_at": "2026-10-30T06:05:23.5585362Z"
+      "executed_at": "2026-11-07T16:33:40.0898687Z"
     },
     {
       "test_id": "LAB-CLOUD-S3-001",
@@ -825,11 +825,11 @@
       "expected_exit_code": 0,
       "actual_result": "VERIFIED: EXT-AWS-S3-ANON confirmed on vulnerable S3 mock",
       "actual_exit_code": 0,
-      "duration_ms": 159,
+      "duration_ms": 226,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-CLOUD-S3-VULN\",\n  \"mode\": \"EXTERNAL\",\n  \"provider\": \"MULTI_CLOUD\",\n  \"results\": [\n    {\n      \"id\": \"63cc9796-f7bd-41c0-bf4c-41ca79582944\",\n      \"assessment_id\": \"asm-lab-cloud-s3-vuln\",\n      \"execution_id\": \"exec-0bd06880-192e-4982-96f7-b5388cdeb09a\",\n      \"provider\": \"AWS\",\n      \"mode\": \"EXTERNAL\",\n      \"service\": \"s3_external\",\n      \"check_id\": \"EXT-AWS-S3-ANON\",\n      \"check_name\": \"External S3 Storage Endpoint \\u0026 Anonymous Exposure Check\",\n      \"resourc... [truncated]",
+      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-CLOUD-S3-VULN\",\n  \"mode\": \"EXTERNAL\",\n  \"provider\": \"MULTI_CLOUD\",\n  \"results\": [\n    {\n      \"id\": \"0aa3e8a2-563d-4e4d-8e1b-b23873113660\",\n      \"assessment_id\": \"asm-lab-cloud-s3-vuln\",\n      \"execution_id\": \"exec-5a20fcb8-ea49-4c0d-b724-bdc7fbaf5e15\",\n      \"provider\": \"AWS\",\n      \"mode\": \"EXTERNAL\",\n      \"service\": \"s3_external\",\n      \"check_id\": \"EXT-AWS-S3-ANON\",\n      \"check_name\": \"External S3 Storage Endpoint \\u0026 Anonymous Exposure Check\",\n      \"resourc... [truncated]",
       "evidence": "CLI confirmed anonymous S3 bucket exposure via safe max-keys=0 probe",
-      "executed_at": "2026-10-30T06:05:23.9805809Z"
+      "executed_at": "2026-11-07T16:33:40.7460752Z"
     },
     {
       "test_id": "LAB-CLOUD-S3-002",
@@ -844,11 +844,11 @@
       "expected_exit_code": 0,
       "actual_result": "OBSERVED: Hardened S3 bucket correctly classified as non-vulnerable",
       "actual_exit_code": 0,
-      "duration_ms": 204,
+      "duration_ms": 132,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-CLOUD-S3-FIXED\",\n  \"mode\": \"EXTERNAL\",\n  \"provider\": \"MULTI_CLOUD\",\n  \"results\": [\n    {\n      \"id\": \"699a4650-00b8-4ece-bd67-75cd982846f7\",\n      \"assessment_id\": \"asm-lab-cloud-s3-fixed\",\n      \"execution_id\": \"exec-8513755a-4bc3-4e2d-93eb-1e131925f35b\",\n      \"provider\": \"AWS\",\n      \"mode\": \"EXTERNAL\",\n      \"service\": \"s3_external\",\n      \"check_id\": \"EXT-AWS-S3-ANON\",\n      \"check_name\": \"External S3 Storage Endpoint \\u0026 Anonymous Exposure Check\",\n      \"resou... [truncated]",
+      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-CLOUD-S3-FIXED\",\n  \"mode\": \"EXTERNAL\",\n  \"provider\": \"MULTI_CLOUD\",\n  \"results\": [\n    {\n      \"id\": \"f575cd0b-0965-49a9-9688-e5dc2796e6b7\",\n      \"assessment_id\": \"asm-lab-cloud-s3-fixed\",\n      \"execution_id\": \"exec-c51a30e4-7625-4132-9bce-11a326eb44f2\",\n      \"provider\": \"AWS\",\n      \"mode\": \"EXTERNAL\",\n      \"service\": \"s3_external\",\n      \"check_id\": \"EXT-AWS-S3-ANON\",\n      \"check_name\": \"External S3 Storage Endpoint \\u0026 Anonymous Exposure Check\",\n      \"resou... [truncated]",
       "evidence": "HTTP 403 recorded as OBSERVED infrastructure only; no verified finding generated",
-      "executed_at": "2026-10-30T06:05:24.3987906Z"
+      "executed_at": "2026-11-07T16:33:41.1367188Z"
     },
     {
       "test_id": "LAB-CLOUD-SSRF-001",
@@ -865,7 +865,7 @@
       "duration_ms": 0,
       "status": "PASS",
       "evidence": "Dial refusal confirmed: Get \"http://169.254.169.254/latest/meta-data/\": SSRF security refusal: destination IP 169.254.169.254 is prohibited (cloud metadata service address (169.254.169.254)) (refused in 0s)",
-      "executed_at": "2026-10-30T06:05:24.425017Z"
+      "executed_at": "2026-11-07T16:33:41.1387425Z"
     },
     {
       "test_id": "LAB-CLOUD-CLEAN-001",
@@ -879,16 +879,16 @@
       "expected_exit_code": 0,
       "actual_result": "Clean: Output is valid pure JSON with zero banner pollution",
       "actual_exit_code": 0,
-      "duration_ms": 1251,
+      "duration_ms": 458,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-CLOUD-CLEAN\",\n  \"mode\": \"EXTERNAL\",\n  \"provider\": \"MULTI_CLOUD\",\n  \"results\": [\n    {\n      \"id\": \"c03a1fe1-36da-4052-b872-b02237f55653\",\n      \"assessment_id\": \"asm-lab-cloud-clean\",\n      \"execution_id\": \"exec-aaa36343-5cdf-47f1-b097-b811fe9f6070\",\n      \"provider\": \"AWS\",\n      \"mode\": \"EXTERNAL\",\n      \"service\": \"s3_external\",\n      \"check_id\": \"EXT-AWS-S3-ANON\",\n      \"check_name\": \"External S3 Storage Endpoint \\u0026 Anonymous Exposure Check\",\n      \"resource_id... [truncated]",
+      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-CLOUD-CLEAN\",\n  \"mode\": \"EXTERNAL\",\n  \"provider\": \"MULTI_CLOUD\",\n  \"results\": [\n    {\n      \"id\": \"611363a1-d1fe-49e4-a924-e41126a49a3d\",\n      \"assessment_id\": \"asm-lab-cloud-clean\",\n      \"execution_id\": \"exec-5c00fd21-c5ad-4c7a-8cc3-6c7fd7472e77\",\n      \"provider\": \"AWS\",\n      \"mode\": \"EXTERNAL\",\n      \"service\": \"s3_external\",\n      \"check_id\": \"EXT-AWS-S3-ANON\",\n      \"check_name\": \"External S3 Storage Endpoint \\u0026 Anonymous Exposure Check\",\n      \"resource_id... [truncated]",
       "evidence": "CloudSec JSON output successfully verified with zero text banners",
-      "executed_at": "2026-10-30T06:05:26.2734311Z"
+      "executed_at": "2026-11-07T16:33:41.8946923Z"
     },
     {
       "test_id": "LAB-OAST-TOKEN-001",
       "feature": "OAST Token Generation \u0026 Interaction Correlation",
-      "command": "GET http://127.0.0.1:53309/c/e1eeb0ad61385a0f3f732769a9a41cb3",
+      "command": "GET http://127.0.0.1:55439/c/58a9d7e51d1fbb114e0b8b1f5d12bf21",
       "target_fixture": "OASTFixture (In-Process Correlator + Simulator)",
       "preconditions": [
         "Active probe registered with 32-char hex token"
@@ -897,15 +897,15 @@
       "expected_exit_code": 200,
       "actual_result": "CORRELATED: Probe token successfully matched and status transitioned to CORRELATED",
       "actual_exit_code": 0,
-      "duration_ms": 3,
+      "duration_ms": 7,
       "status": "PASS",
-      "evidence": "Token e1eeb0ad61385a0f3f732769a9a41cb3 matched; 1 interaction recorded at 2026-10-30 06:05:26.4432111 +0000 UTC",
-      "executed_at": "2026-10-30T06:05:26.4437729Z"
+      "evidence": "Token 58a9d7e51d1fbb114e0b8b1f5d12bf21 matched; 1 interaction recorded at 2026-11-07 16:33:41.9864872 +0000 UTC",
+      "executed_at": "2026-11-07T16:33:41.9864872Z"
     },
     {
       "test_id": "LAB-OAST-DEDUP-001",
       "feature": "OAST Duplicate Callback Deduplication",
-      "command": "GET http://127.0.0.1:53309/c/bcc65f969e52f7c8d52302aa604935ab (repeat invocation)",
+      "command": "GET http://127.0.0.1:55439/c/8c8bdd83830ea368912ee91d523215ca (repeat invocation)",
       "target_fixture": "OASTFixture (Correlator duplicate suppression)",
       "preconditions": [
         "Probe already correlated by preceding callback"
@@ -916,13 +916,13 @@
       "actual_exit_code": 0,
       "duration_ms": 0,
       "status": "PASS",
-      "evidence": "Response correctly indicated duplicate:true; token bcc65f969e52f7c8d52302aa604935ab recorded",
-      "executed_at": "2026-10-30T06:05:26.4455087Z"
+      "evidence": "Response correctly indicated duplicate:true; token 8c8bdd83830ea368912ee91d523215ca recorded",
+      "executed_at": "2026-11-07T16:33:41.9864872Z"
     },
     {
       "test_id": "LAB-OAST-EXPIRE-001",
       "feature": "OAST Probe Expiration Enforcement",
-      "command": "GET http://127.0.0.1:53309/c/ff8c90e6c79b05c6db377760b9af3a8e (expired probe)",
+      "command": "GET http://127.0.0.1:55439/c/05ac434a462c7e8236c1bd6ef2b6eb72 (expired probe)",
       "target_fixture": "OASTFixture (TTL expiration)",
       "preconditions": [
         "Probe TTL expired before callback received"
@@ -931,15 +931,15 @@
       "expected_exit_code": 410,
       "actual_result": "EXPIRED: HTTP 410 Gone returned for expired interaction token",
       "actual_exit_code": 0,
-      "duration_ms": 1,
+      "duration_ms": 0,
       "status": "PASS",
       "evidence": "Correlator successfully enforced probe TTL expiration boundary",
-      "executed_at": "2026-10-30T06:05:26.5094181Z"
+      "executed_at": "2026-11-07T16:33:42.0389834Z"
     },
     {
       "test_id": "LAB-OAST-REDACT-001",
       "feature": "OAST Sensitive Callback Redaction",
-      "command": "POST http://127.0.0.1:53309/c/184c0db8665a192a00ba14a6dea065b8 (payload with API key \u0026 JWT)",
+      "command": "POST http://127.0.0.1:55439/c/435d25c9b9b207b530a90b8553d4c1ef (payload with API key \u0026 JWT)",
       "target_fixture": "OASTFixture (Receiver sanitization)",
       "preconditions": [
         "Callback body and headers contain high-entropy API keys and tokens"
@@ -948,10 +948,10 @@
       "expected_exit_code": 200,
       "actual_result": "REDACTED: Sensitive credentials and tokens scrubbed from interaction records",
       "actual_exit_code": 0,
-      "duration_ms": 0,
+      "duration_ms": 1,
       "status": "PASS",
       "evidence": "Sanitization verified: raw Bearer token and GitHub token replaced with redactions",
-      "executed_at": "2026-10-30T06:05:26.5104036Z"
+      "executed_at": "2026-11-07T16:33:42.0405672Z"
     },
     {
       "test_id": "LAB-OAST-TIMEOUT-001",
@@ -965,10 +965,10 @@
       "expected_exit_code": 0,
       "actual_result": "INCONCLUSIVE: Zero callbacks observed; probe timed out without false positive",
       "actual_exit_code": 0,
-      "duration_ms": 54,
+      "duration_ms": 50,
       "status": "PASS",
       "evidence": "WaitInteraction timed out cleanly as expected: oast: interaction token has expired; zero false findings",
-      "executed_at": "2026-10-30T06:05:26.5653108Z"
+      "executed_at": "2026-11-07T16:33:42.0911579Z"
     },
     {
       "test_id": "LAB-WF-PREREQ-001",
@@ -984,11 +984,11 @@
       "expected_exit_code": 0,
       "actual_result": "VERIFIED: Prerequisite skipping verified via independent read-back",
       "actual_exit_code": 0,
-      "duration_ms": 355,
+      "duration_ms": 576,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-WF-PREREQ-VULN\",\n  \"dispatched\": 5,\n  \"duration_ms\": 17,\n  \"execution_id\": \"exec-b648cda4-3503-4e3b-b07c-f8a6854b55e4\",\n  \"results\": [\n    {\n      \"id\": \"e8e0c079-afc0-4c26-a9c6-c5e9869f88ee\",\n      \"assessment_id\": \"asm-lab-wf-prereq-vuln\",\n      \"execution_id\": \"exec-b648cda4-3503-4e3b-b07c-f8a6854b55e4\",\n      \"category\": \"WORKFLOW-PREREQUISITE-SKIP\",\n      \"vuln_code\": \"WORKFLOW-PREREQUISITE-SKIP\",\n      \"workflow_id\": \"order-fulfillment\",\n      \"workflow_name\": \"O... [truncated]",
+      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-WF-PREREQ-VULN\",\n  \"dispatched\": 5,\n  \"duration_ms\": 9,\n  \"execution_id\": \"exec-16186335-05c1-4609-8752-ce7ea2c2a197\",\n  \"results\": [\n    {\n      \"id\": \"f141e283-753c-4ad2-9f12-41ea38840654\",\n      \"assessment_id\": \"asm-lab-wf-prereq-vuln\",\n      \"execution_id\": \"exec-16186335-05c1-4609-8752-ce7ea2c2a197\",\n      \"category\": \"WORKFLOW-PREREQUISITE-SKIP\",\n      \"vuln_code\": \"WORKFLOW-PREREQUISITE-SKIP\",\n      \"workflow_id\": \"order-fulfillment\",\n      \"workflow_name\": \"Or... [truncated]",
       "evidence": "CLI confirmed step circumvention with confirmed COMPLETED status read-back",
-      "executed_at": "2026-10-30T06:05:27.3733169Z"
+      "executed_at": "2026-11-07T16:33:42.9609741Z"
     },
     {
       "test_id": "LAB-WF-PREREQ-002",
@@ -1003,11 +1003,11 @@
       "expected_exit_code": 0,
       "actual_result": "NOT_VULNERABLE: Server enforced prerequisite order; circumvention rejected",
       "actual_exit_code": 0,
-      "duration_ms": 221,
+      "duration_ms": 510,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-WF-PREREQ-FIXED\",\n  \"dispatched\": 4,\n  \"duration_ms\": 61,\n  \"execution_id\": \"exec-4b4e3206-e36a-4840-b07d-2111bfb71065\",\n  \"results\": [\n    {\n      \"id\": \"eae7076f-45d9-4d15-b20a-179a0d3bcefe\",\n      \"assessment_id\": \"asm-lab-wf-prereq-fixed\",\n      \"execution_id\": \"exec-4b4e3206-e36a-4840-b07d-2111bfb71065\",\n      \"category\": \"WORKFLOW-PREREQUISITE-SKIP\",\n      \"vuln_code\": \"WORKFLOW-PREREQUISITE-SKIP\",\n      \"workflow_id\": \"order-fulfillment\",\n      \"workflow_name\": ... [truncated]",
+      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-WF-PREREQ-FIXED\",\n  \"dispatched\": 4,\n  \"duration_ms\": 16,\n  \"execution_id\": \"exec-759c0090-3b10-4865-850f-abe8cc22a001\",\n  \"results\": [\n    {\n      \"id\": \"cebfdc7d-7407-49d7-a153-3d9619f0a693\",\n      \"assessment_id\": \"asm-lab-wf-prereq-fixed\",\n      \"execution_id\": \"exec-759c0090-3b10-4865-850f-abe8cc22a001\",\n      \"category\": \"WORKFLOW-PREREQUISITE-SKIP\",\n      \"vuln_code\": \"WORKFLOW-PREREQUISITE-SKIP\",\n      \"workflow_id\": \"order-fulfillment\",\n      \"workflow_name\": ... [truncated]",
       "evidence": "HTTP 412 recorded as safe defense; classified as NOT_VULNERABLE",
-      "executed_at": "2026-10-30T06:05:28.4972325Z"
+      "executed_at": "2026-11-07T16:33:45.5556061Z"
     },
     {
       "test_id": "LAB-WF-ISOLATION-001",
@@ -1024,7 +1024,7 @@
       "duration_ms": 0,
       "status": "PASS",
       "evidence": "Decoupled engine instances verified with zero state coupling",
-      "executed_at": "2026-10-30T06:05:28.5268137Z"
+      "executed_at": "2026-11-07T16:33:45.5601089Z"
     },
     {
       "test_id": "LAB-WF-CLEAN-001",
@@ -1038,16 +1038,16 @@
       "expected_exit_code": 0,
       "actual_result": "Clean: Output is valid pure JSON with zero banner pollution",
       "actual_exit_code": 0,
-      "duration_ms": 329,
+      "duration_ms": 434,
       "status": "PASS",
-      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-WF-CLEAN\",\n  \"dispatched\": 5,\n  \"duration_ms\": 31,\n  \"execution_id\": \"exec-7b24e3c0-2a0f-43f7-84ae-77da31d3573d\",\n  \"results\": [\n    {\n      \"id\": \"77c0d5e6-ad38-437d-8235-022cd87c1356\",\n      \"assessment_id\": \"asm-lab-wf-clean\",\n      \"execution_id\": \"exec-7b24e3c0-2a0f-43f7-84ae-77da31d3573d\",\n      \"category\": \"WORKFLOW-PREREQUISITE-SKIP\",\n      \"vuln_code\": \"WORKFLOW-PREREQUISITE-SKIP\",\n      \"workflow_id\": \"order-fulfillment\",\n      \"workflow_name\": \"Order Lifecyc... [truncated]",
+      "stdout_snippet": "{\n  \"assessment_ref\": \"LAB-WF-CLEAN\",\n  \"dispatched\": 5,\n  \"duration_ms\": 12,\n  \"execution_id\": \"exec-a7b85249-a657-40bc-a07b-2d23da36529f\",\n  \"results\": [\n    {\n      \"id\": \"710323f6-56cc-44d6-89b4-60284f44d5b5\",\n      \"assessment_id\": \"asm-lab-wf-clean\",\n      \"execution_id\": \"exec-a7b85249-a657-40bc-a07b-2d23da36529f\",\n      \"category\": \"WORKFLOW-PREREQUISITE-SKIP\",\n      \"vuln_code\": \"WORKFLOW-PREREQUISITE-SKIP\",\n      \"workflow_id\": \"order-fulfillment\",\n      \"workflow_name\": \"Order Lifecyc... [truncated]",
       "evidence": "Workflow JSON output successfully verified with zero text banners",
-      "executed_at": "2026-10-30T06:05:29.4916514Z"
+      "executed_at": "2026-11-07T16:33:46.3342985Z"
     },
     {
       "test_id": "LAB-SEC-DETECT-001",
       "feature": "Static Credential \u0026 Secret Detection",
-      "command": "felix scan http://127.0.0.1:57465 --allow-loopback --quiet --json detect_report.json",
+      "command": "felix scan http://127.0.0.1:51010 --allow-loopback --quiet --json detect_report.json",
       "target_fixture": "SecretsFixture (Mode: CANARIES)",
       "preconditions": [
         "Client JS bundle embeds AWS, GitHub, Stripe, Slack, OpenAI, Supabase, and PEM keys"
@@ -1058,15 +1058,15 @@
       "expected_exit_code": 1,
       "actual_result": "Detected all 7 supported secret canary categories with correct suspected status",
       "actual_exit_code": 1,
-      "duration_ms": 695,
+      "duration_ms": 883,
       "status": "PASS",
       "evidence": "Total findings: 14 (Critical: 3, High: 5)",
-      "executed_at": "2026-10-30T06:05:30.3610027Z"
+      "executed_at": "2026-11-07T16:33:47.285615Z"
     },
     {
       "test_id": "LAB-SEC-BENIGN-002",
       "feature": "Secret Scanner False Positive Prevention",
-      "command": "felix scan http://127.0.0.1:57465 --allow-loopback --quiet --json benign_report.json",
+      "command": "felix scan http://127.0.0.1:51010 --allow-loopback --quiet --json benign_report.json",
       "target_fixture": "SecretsFixture (Mode: BENIGN)",
       "preconditions": [
         "Bundle contains UUIDs, commit SHAs, test keys, publishable keys, CSS rules, placeholders"
@@ -1077,15 +1077,15 @@
       "expected_exit_code": 1,
       "actual_result": "Clean: 0 false positive secret findings detected across all benign controls",
       "actual_exit_code": 1,
-      "duration_ms": 677,
+      "duration_ms": 471,
       "status": "PASS",
       "evidence": "UUIDs, git SHAs, stripe test keys, supabase publishable keys, and CSS values cleanly ignored",
-      "executed_at": "2026-10-30T06:05:31.0578135Z"
+      "executed_at": "2026-11-07T16:33:47.7849991Z"
     },
     {
       "test_id": "LAB-SEC-AMBIG-003",
       "feature": "Ambiguous Token \u0026 Heuristic Confidence Grading",
-      "command": "felix scan http://127.0.0.1:57465 --allow-loopback --quiet --json ambig_report.json",
+      "command": "felix scan http://127.0.0.1:51010 --allow-loopback --quiet --json ambig_report.json",
       "target_fixture": "SecretsFixture (Mode: AMBIGUOUS)",
       "preconditions": [
         "Bundle contains high-entropy string near keyword and unprivileged generic JWT"
@@ -1096,15 +1096,15 @@
       "expected_exit_code": 1,
       "actual_result": "Graded: Heuristic candidate correctly classified with conservative confidence/severity",
       "actual_exit_code": 1,
-      "duration_ms": 1110,
+      "duration_ms": 545,
       "status": "PASS",
       "evidence": "High-entropy evaluated: true, Generic JWT evaluated: true",
-      "executed_at": "2026-10-30T06:05:32.1870748Z"
+      "executed_at": "2026-11-07T16:33:48.3601893Z"
     },
     {
       "test_id": "LAB-SEC-REDACT-004",
       "feature": "Zero-Leakage Multi-Format Redaction Boundary",
-      "command": "felix scan http://127.0.0.1:57465 --json audit.json --html audit.html --sarif audit.sarif \u0026\u0026 felix report --commercial",
+      "command": "felix scan http://127.0.0.1:51010 --json audit.json --html audit.html --sarif audit.sarif \u0026\u0026 felix report --commercial",
       "target_fixture": "SecretsFixture (Mode: CANARIES)",
       "preconditions": [
         "Unique synthetic canaries embedded across client bundle assets"
@@ -1115,15 +1115,15 @@
       "expected_exit_code": 1,
       "actual_result": "PASSED: Exactly 0 raw canary leaks across stdout, stderr, JSON, HTML, SARIF, and Commercial reports",
       "actual_exit_code": 1,
-      "duration_ms": 1203,
+      "duration_ms": 1744,
       "status": "PASS",
       "evidence": "Checked 7 canaries across 7 output channels; all values masked with safe redactions",
-      "executed_at": "2026-10-30T06:05:35.3453585Z"
+      "executed_at": "2026-11-07T16:33:52.1395647Z"
     },
     {
       "test_id": "LAB-SEC-PROVENANCE-005",
       "feature": "Evidence Provenance, Finding Deduplication \u0026 Severity Consistency",
-      "command": "felix scan http://127.0.0.1:57465 --allow-loopback --quiet --json prov_scan.json",
+      "command": "felix scan http://127.0.0.1:51010 --allow-loopback --quiet --json prov_scan.json",
       "target_fixture": "SecretsFixture (Mode: CANARIES)",
       "preconditions": [
         "Scan executed and structured findings ingested into unified model"
@@ -1134,15 +1134,15 @@
       "expected_exit_code": 1,
       "actual_result": "Verified: Total findings (14) and severity breakdown (C:3, H:5, M:0, L:3, I:3) perfectly match individual findings",
       "actual_exit_code": 1,
-      "duration_ms": 641,
+      "duration_ms": 1619,
       "status": "PASS",
       "evidence": "Full evidence provenance attached; status and analysis method consistent",
-      "executed_at": "2026-10-30T06:05:36.0114851Z"
+      "executed_at": "2026-11-07T16:33:54.0446262Z"
     },
     {
       "test_id": "LAB-SEC-CROSSFMT-006",
       "feature": "Cross-Format Consistency \u0026 SARIF 2.1.0 Validation",
-      "command": "felix scan http://127.0.0.1:57465 --json cross.json --html cross.html --sarif cross.sarif \u0026\u0026 felix report --commercial",
+      "command": "felix scan http://127.0.0.1:51010 --json cross.json --html cross.html --sarif cross.sarif \u0026\u0026 felix report --commercial",
       "target_fixture": "SecretsFixture (Mode: CANARIES)",
       "preconditions": [
         "Reports rendered across JSON, HTML, SARIF 2.1.0, and Commercial specifications"
@@ -1153,15 +1153,15 @@
       "expected_exit_code": 1,
       "actual_result": "Verified: SARIF 2.1.0 schema 100% valid; JSON, HTML, SARIF, and Commercial report facts consistent",
       "actual_exit_code": 1,
-      "duration_ms": 986,
+      "duration_ms": 3399,
       "status": "PASS",
-      "evidence": "SARIF runs: 1, results: 14, Commercial report ID: REP-ASM-f597be00",
-      "executed_at": "2026-10-30T06:05:38.7014253Z"
+      "evidence": "SARIF runs: 1, results: 14, Commercial report ID: REP-ASM-15d33ae6",
+      "executed_at": "2026-11-07T16:33:58.5556756Z"
     },
     {
       "test_id": "LAB-SEC-HTML-XSS-007",
       "feature": "HTML Report XSS Sanitization \u0026 Escaping",
-      "command": "felix scan http://127.0.0.1:57465 --allow-loopback --quiet --html xss_report.html",
+      "command": "felix scan http://127.0.0.1:51010 --allow-loopback --quiet --html xss_report.html",
       "target_fixture": "SecretsFixture (Mode: ADVERSARIAL, XSS canary on secret line)",
       "preconditions": [
         "Evidence line contains \u003cscript\u003ealert('XSS_CANARY_P15_6')\u003c/script\u003e"
@@ -1172,10 +1172,10 @@
       "expected_exit_code": 1,
       "actual_result": "Secure: HTML injection payload strictly escaped to \u0026lt;script\u0026gt; without DOM execution",
       "actual_exit_code": 1,
-      "duration_ms": 374,
+      "duration_ms": 815,
       "status": "PASS",
       "evidence": "No raw script tags rendered; HTML template contextual auto-escaping verified",
-      "executed_at": "2026-10-30T06:05:39.5017035Z"
+      "executed_at": "2026-11-07T16:33:59.6374547Z"
     },
     {
       "test_id": "LAB-SEC-ROBUST-008",
@@ -1194,7 +1194,7 @@
       "duration_ms": 0,
       "status": "PASS",
       "evidence": "Error A: [-] Error: failed to parse scan result C:\\Users\\LENOVO\\AppData\\Local\\Temp\\TestLocalLab_Secrets_Asses... [truncated] | Error B: [-] Failed to write HTML report to C:\\Users\\LENOVO\\AppData\\Local\\Temp\\TestLocalLab_Secrets_Assessmen... [truncated] | Error C: [-] Failed to write HTML report to C:\\Users\\LENOVO\\AppData\\Local\\Temp\\TestLocalLab_Secrets_Assessmen... [truncated]",
-      "executed_at": "2026-10-30T06:05:40.2645898Z"
+      "executed_at": "2026-11-07T16:34:00.5191705Z"
     },
     {
       "test_id": "LAB-COMP-MAP-001",
@@ -1210,11 +1210,11 @@
       "expected_exit_code": 0,
       "actual_result": "Success: 1-to-1, 1-to-many, category mapping, unmapped finding isolation, and empty baseline verified across NIST, OWASP, and SOC 2",
       "actual_exit_code": 0,
-      "duration_ms": 134,
+      "duration_ms": 138,
       "status": "PASS",
       "stdout_snippet": "{\n  \"mappings\": [\n    {\n      \"mapping_id\": \"map:F-BOLA-01:AC-1:RULE-NIST-BOLA-AC1\",\n      \"rule_id\": \"RULE-NIST-BOLA-AC1\",\n      \"finding_id\": \"F-BOLA-01\",\n      \"finding_rule_id\": \"BOLA-USER-READ\",\n      \"finding_severity\": \"CRITICAL\",\n      \"finding_location\": \"/api/users/1002\",\n      \"catalog_id... [truncated]",
       "evidence": "NIST mappings: 2, Unmapped: 1 | OWASP API1: true | SOC2 CC6.1: true | Empty baseline clean: true",
-      "executed_at": "2026-10-30T06:05:40.8586618Z"
+      "executed_at": "2026-11-07T16:34:01.7632612Z"
     },
     {
       "test_id": "LAB-COMP-CAT-002",
@@ -1230,10 +1230,10 @@
       "expected_exit_code": 0,
       "actual_result": "Success: Minimal and NIST catalogs validated (5 controls). All 7 invalid catalogs safely rejected (exit 2)",
       "actual_exit_code": 0,
-      "duration_ms": 97,
+      "duration_ms": 86,
       "status": "PASS",
       "evidence": "Minimal valid: true | NIST controls: 5 | Negative rejections: 7/7 (100% rejected with exit 2)",
-      "executed_at": "2026-10-30T06:05:41.8994247Z"
+      "executed_at": "2026-11-07T16:34:03.0954498Z"
     },
     {
       "test_id": "LAB-COMP-EVAL-003",
@@ -1249,11 +1249,11 @@
       "expected_exit_code": 1,
       "actual_result": "Success: 7 canonical compliance states verified. Summary arithmetic strictly consistent (5 total: 1 compliant, 2 non_compliant, 2 not_assessed). Absence of findings correctly evaluated as not_assessed.",
       "actual_exit_code": 1,
-      "duration_ms": 197,
+      "duration_ms": 752,
       "status": "PASS",
       "stdout_snippet": "{\n  \"catalog_identity\": \"nist-sp-800-53:5.1.0\",\n  \"catalog_digest\": \"sha256:df7d79c3aff229171d69e22793faf389923b1db8e7aa9aa0f534383837a318df\",\n  \"mapping_ruleset_identity\": \"map-nist-sp800-53:1.0.0\",\n  \"mapping_ruleset_digest\": \"sha256:a139e94511807f80696e71c2187d93805cad039a8a8e5df6db842eac090c2858... [truncated]",
       "evidence": "AC-3: non_compliant | AC-1: non_compliant | SC-8: compliant | SC-28: not_assessed | Summary total: 5 | Arithmetic consistent: true",
-      "executed_at": "2026-10-30T06:05:42.1104683Z"
+      "executed_at": "2026-11-07T16:34:03.8594962Z"
     },
     {
       "test_id": "LAB-COMP-MTTR-007",
@@ -1269,11 +1269,11 @@
       "expected_exit_code": 0,
       "actual_result": "Success: Deterministic MTTR calculations verified. 4 episodes aggregated: Mean=36h, Median=30h, Min=12h, Max=72h. Invalid timestamps excluded (1). OnTimeRate=75.0%. Empty population correctly returns NO_DATA.",
       "actual_exit_code": 0,
-      "duration_ms": 885,
+      "duration_ms": 568,
       "status": "PASS",
       "stdout_snippet": "{\n  \"has_data\": true,\n  \"mttr\": 129600000000000,\n  \"mttr_string\": \"1d 12h\",\n  \"completed_episodes\": 4,\n  \"unique_findings\": 4,\n  \"total_duration\": 518400000000000,\n  \"total_duration_string\": \"6d\",\n  \"min_duration\": 43200000000000,\n  \"min_duration_string\": \"12h\",\n  \"max_duration\": 259200000000000,\n  ... [truncated]",
       "evidence": "MTTR: 1d 12h | Total: 6d | Median: 1d 6h | Min: 12h | Max: 3d | Invalid excluded: 1 | On-time: 3/4 (75.0%) | Empty dataset has_data: false",
-      "executed_at": "2026-10-30T06:05:47.7059089Z"
+      "executed_at": "2026-11-07T16:34:09.4016104Z"
     },
     {
       "test_id": "LAB-COMP-ROBUST-008",
@@ -1289,10 +1289,10 @@
       "expected_exit_code": 2,
       "actual_result": "Robust: Path traversal safely rejected with exit 2. Missing arguments return exit 2 without panic. Repeated gate evaluations produce bit-identical decisions. Secret canaries processed safely.",
       "actual_exit_code": 2,
-      "duration_ms": 395,
+      "duration_ms": 406,
       "status": "PASS",
       "evidence": "Traversal exit: 2 (error: [-] Error: catalog validation failed: failed accessing catalog file \"C:\\\\etc\\\\pa... [truncated]) | Missing args exit: 2 (error: [-] Error: --assessment \u003cid\u003e is required\n) | Gate determinism: true (code: 1 == 1, decision: POLICY_FAILED == POLICY_FAILED)",
-      "executed_at": "2026-10-30T06:05:48.101412Z"
+      "executed_at": "2026-11-07T16:34:09.8084015Z"
     },
     {
       "test_id": "LAB-COMP-OSCAL-005",
@@ -1308,10 +1308,10 @@
       "expected_exit_code": 1,
       "actual_result": "Success: Exported OSCAL Assessment Results JSON 100% satisfies official NIST schema. Benign assessment export cleanly exits 0. Semantic fidelity and status mappings ('satisfied' / 'not-satisfied') verified.",
       "actual_exit_code": 1,
-      "duration_ms": 554,
+      "duration_ms": 222,
       "status": "PASS",
       "evidence": "Official schema valid: true | CLI validator: true (format: oscal_assessment_results) | Benign export exit: 0 | Benign schema valid: true",
-      "executed_at": "2026-10-30T06:05:45.8719143Z"
+      "executed_at": "2026-11-07T16:34:06.9386948Z"
     },
     {
       "test_id": "LAB-COMP-DOSSIER-006",
@@ -1327,10 +1327,10 @@
       "expected_exit_code": 0,
       "actual_result": "Success: Dossier generated, validated, and viewed. Cryptographic HMAC authenticity verified (exit 0). Database record tampering reliably detected and blocked (exit 1).",
       "actual_exit_code": 0,
-      "duration_ms": 99,
+      "duration_ms": 171,
       "status": "PASS",
       "evidence": "Untampered: status=VERIFIED, digest=true, hmac=true (exit 0) | Tampered: status=INTEGRITY_MISMATCH, digest=false (exit 1)",
-      "executed_at": "2026-10-30T06:05:46.5107824Z"
+      "executed_at": "2026-11-07T16:34:07.8002054Z"
     },
     {
       "test_id": "LAB-COMP-GATE-004",
@@ -1346,10 +1346,10 @@
       "expected_exit_code": 1,
       "actual_result": "Success: All 5 compliance gate scenarios match documented exit codes (Pass=0, PolicyFail=1, OperationalFail=2). JSON output strictly clean.",
       "actual_exit_code": 1,
-      "duration_ms": 149,
+      "duration_ms": 649,
       "status": "PASS",
       "evidence": "Strict: exit 1 (POLICY_FAILED) | Enforced AC-3: exit 1 (POLICY_FAILED) | Threshold max=2: exit 0 (PASSED) | Threshold max=1: exit 1 (POLICY_FAILED) | Fail-closed: exit 1 | Bad policy: exit 2",
-      "executed_at": "2026-10-30T06:05:43.6731681Z"
+      "executed_at": "2026-11-07T16:34:05.8180006Z"
     },
     {
       "test_id": "LAB-REAL-JUICE-001",
@@ -1364,12 +1364,12 @@
       "expected_finding": "missing-csp, missing-permissions-policy, api-docs-exposure, metrics-exposure",
       "expected_severity": "LOW / INFO",
       "expected_exit_code": 1,
-      "actual_result": "Discovered 23 findings across live Juice Shop attack surface in 8245 ms; JSON and standalone HTML reports verified",
+      "actual_result": "Discovered 23 findings across live Juice Shop attack surface in 4370 ms; JSON and standalone HTML reports verified",
       "actual_exit_code": 1,
-      "duration_ms": 8245,
+      "duration_ms": 4370,
       "status": "PASS",
       "evidence": "Findings: 23 | HTML report: 153326 bytes | Target: http://127.0.0.1:3000 (v20.2.0) | Exit: 1",
-      "executed_at": "2026-10-28T18:37:30.3388949Z"
+      "executed_at": "2026-10-31T10:14:27.3338435Z"
     },
     {
       "test_id": "LAB-REAL-BOLA-002",
@@ -1387,10 +1387,10 @@
       "expected_exit_code": 0,
       "actual_result": "BOLA verified on live OWASP Juice Shop: User A successfully accessed User B's basket object with verified payload disclosure.",
       "actual_exit_code": 0,
-      "duration_ms": 365,
+      "duration_ms": 184,
       "status": "PASS",
-      "evidence": "Exit: 0 | Duration: 365 ms | Target object: 7 | Finding: BOLA-USER-READ (HIGH)",
-      "executed_at": "2026-10-28T18:37:31.6677771Z"
+      "evidence": "Exit: 0 | Duration: 184 ms | Target object: 20 | Finding: BOLA-USER-READ (HIGH)",
+      "executed_at": "2026-10-31T10:14:27.8333687Z"
     },
     {
       "test_id": "LAB-REAL-SQLI-003",
@@ -1407,10 +1407,10 @@
       "expected_exit_code": 0,
       "actual_result": "SQL injection vulnerability detected on live Juice Shop: SQLite error signature correctly matched across HTML entity-escaped response.",
       "actual_exit_code": 0,
-      "duration_ms": 1663,
+      "duration_ms": 431,
       "status": "PASS",
-      "evidence": "Exit: 0 | Duration: 1663 ms | Signature matched: SQLITE_ERROR | Category: WV-SQLI",
-      "executed_at": "2026-10-28T18:37:33.695918Z"
+      "evidence": "Exit: 0 | Duration: 431 ms | Signature matched: SQLITE_ERROR | Category: WV-SQLI",
+      "executed_at": "2026-10-31T10:14:28.4494044Z"
     },
     {
       "test_id": "LAB-REAL-CTRL-004",
@@ -1447,10 +1447,10 @@
       "expected_exit_code": 1,
       "actual_result": "Scope enforcement strictly blocked execution against unauthorized host: 'assessment target http://127.0.0.1:4002 is out of authorized scope'",
       "actual_exit_code": 1,
-      "duration_ms": 114,
+      "duration_ms": 180,
       "status": "PASS",
-      "evidence": "Exit: 1 | Refusal: [-] Execution error: assessment target http://192.168.100.200:8080 is out of authorized scope\n | Duration: 114 ms",
-      "executed_at": "2026-10-30T06:05:48.7733169Z"
+      "evidence": "Exit: 1 | Refusal: [-] Execution error: assessment target http://192.168.100.200:8080 is out of authorized scope\n | Duration: 180 ms",
+      "executed_at": "2026-11-07T16:34:10.2755824Z"
     },
     {
       "test_id": "LAB-REAL-READINESS-007",
@@ -1470,7 +1470,7 @@
       "duration_ms": 0,
       "status": "PASS",
       "evidence": "Total verified cases: 79 | Real target tests: 7 | Historical lab suites: P15.1-P15.7 green",
-      "executed_at": "2026-10-30T06:05:49.0824457Z"
+      "executed_at": "2026-11-07T16:34:10.7272531Z"
     },
     {
       "test_id": "LAB-REAL-REPORT-006",
@@ -1486,10 +1486,10 @@
       "expected_exit_code": 0,
       "actual_result": "Reports generated successfully: SARIF conforms to 2.1.0 schema, HTML safely escapes XSS payload, exit code 0.",
       "actual_exit_code": 0,
-      "duration_ms": 175,
+      "duration_ms": 276,
       "status": "PASS",
       "evidence": "SARIF version: 2.1.0 | HTML size: 61263 bytes | XSS neutralized: true | Exit: 0",
-      "executed_at": "2026-10-30T06:05:49.079142Z"
+      "executed_at": "2026-11-07T16:34:10.7242586Z"
     }
   ]
 }

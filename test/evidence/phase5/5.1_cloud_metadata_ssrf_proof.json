@@ -1,0 +1,77 @@
+{
+  "canonical_payload_sha256": "93f3029347d58fcb30865dc4ace3721cc80be4f4b3abe5f3529c3fdbc8d514c6",
+  "conclusive_status": "PROVEN_VERIFIED",
+  "environment": {
+    "arch": "amd64",
+    "go_version": "go1.27.0",
+    "logical_cpus": 8,
+    "os": "windows"
+  },
+  "executor": "Antigravity Engineering / FELIX Core Team",
+  "exit_code": 0,
+  "git_commit": "08a93188fa02cca45795f88207c36206e1fb1eb6",
+  "metrics": {
+    "acceptance_criteria": {
+      "aws_imdsv1_detection_verified": true,
+      "aws_imdsv2_token_workflow_verified": true,
+      "aws_token_enforcement_detected": true,
+      "azure_metadata_header_enforced": true,
+      "gcp_metadata_header_enforced": true,
+      "response_size_limits_enforced": true,
+      "safedialer_protection_active": true,
+      "scope_enforcement_active": true,
+      "secret_redaction_verified": true,
+      "ssrf_integration_verified": true,
+      "synthetic_aws_sts_parsed": true,
+      "synthetic_azure_token_parsed": true,
+      "synthetic_gcp_token_parsed": true,
+      "unsafe_redirects_rejected": true,
+      "zero_external_metadata_leaks": true,
+      "zero_real_credentials_accessed": true
+    },
+    "aws_results": {
+      "classification": "SYNTHETIC_CREDENTIALS_VERIFIED",
+      "has_access_key_id": true,
+      "has_secret_access_key": true,
+      "has_session_token": true,
+      "is_synthetic": true,
+      "role_name": "felix-synthetic-role"
+    },
+    "azure_results": {
+      "classification": "SYNTHETIC_CREDENTIALS_VERIFIED",
+      "has_msi_token": true,
+      "is_synthetic": true,
+      "vm_id": "11111111-2222-3333-4444-555555555555",
+      "vm_name": "felix-synthetic-vm-01"
+    },
+    "benchmark_duration_ms": {
+      "aws_assessment_ms": 1.5205,
+      "azure_assessment_ms": 0.9847,
+      "gcp_assessment_ms": 0.5057
+    },
+    "gcp_results": {
+      "classification": "SYNTHETIC_CREDENTIALS_VERIFIED",
+      "has_token": true,
+      "is_synthetic": true,
+      "service_account": "synthetic-vm-sa@felix-synthetic-project.iam.gserviceaccount.com"
+    },
+    "ssrf_results": {
+      "classification": "IMDSV1_EXPOSED",
+      "is_ssrf_verified": true,
+      "vulnerable_param": "url"
+    },
+    "test_counts": {
+      "failed": 0,
+      "passed": 30,
+      "total_test_suites": 30
+    }
+  },
+  "phase_id": "phase5",
+  "receipt_version": "3.0.0",
+  "sha256_hash": "93f3029347d58fcb30865dc4ace3721cc80be4f4b3abe5f3529c3fdbc8d514c6",
+  "subphase_id": "5.1",
+  "target_repo": "Cloud Metadata Engine (pkg/cloudsec/metadata.go)",
+  "test_command": "go test -v -count=1 ./pkg/cloudsec -run TestLive_Phase51_CloudMetadataSSRFBenchmarkAndReceipt",
+  "timestamp": "2026-10-31T06:46:12Z",
+  "title": "Cloud Metadata Exploitation Engine Proof"
+}

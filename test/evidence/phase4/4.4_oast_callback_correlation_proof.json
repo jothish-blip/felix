@@ -1,0 +1,78 @@
+{
+  "conclusive_status": "PROVEN_VERIFIED",
+  "environment": {
+    "arch": "amd64",
+    "go_version": "go1.27.0",
+    "logical_cpus": 8,
+    "os": "windows"
+  },
+  "executor": "Antigravity Engineering / FELIX Core Team",
+  "exit_code": 0,
+  "git_commit": "08a93188fa02cca45795f88207c36206e1fb1eb6",
+  "metrics": {
+    "acceptance_criteria": {
+      "bounded_storage_enforced": true,
+      "dns_callback_supported": true,
+      "exact_finding_association": true,
+      "http_callback_supported": true,
+      "size_limits_enforced": true,
+      "subsecond_matching": true,
+      "zero_false_correlations": true
+    },
+    "benchmark_duration_ms": 1936.6594,
+    "benchmark_iterations": 2000,
+    "benchmark_throughput_ops_sec": 1032.7061123912652,
+    "concurrency_goroutines": 50,
+    "concurrency_race_free": true,
+    "correctly_correlated_count": 2000,
+    "correlation_processing_latency": {
+      "count": 2000,
+      "max_us": 1388.8,
+      "min_us": 1.7,
+      "p50_ns": 7000,
+      "p50_us": 7,
+      "p90_ns": 14500,
+      "p90_us": 14.5,
+      "p95_ns": 21000,
+      "p95_us": 21,
+      "p99_ns": 48400,
+      "p99_us": 48.4
+    },
+    "dns_callbacks_received": 1000,
+    "duplicate_replayed_count": 0,
+    "expired_token_count": 0,
+    "http_callbacks_received": 1000,
+    "incorrect_correlation_count": 0,
+    "listener_lifecycle": {
+      "dns_started": true,
+      "graceful_shutdown_success": true,
+      "http_started": true,
+      "zero_goroutine_leak": true
+    },
+    "measurement_breakdown": {
+      "description": "Explicit mathematical separation of end-to-end socket round-trip, network transport overhead, and core correlation matching latency",
+      "end_to_end_latency_us": {
+        "avg": 968.3297,
+        "max": 21146.7,
+        "min": 0,
+        "p50": 576.8,
+        "p90": 2018.5,
+        "p95": 2637.7,
+        "p99": 6699.6
+      },
+      "network_transport_overhead_avg_us": 961.3297
+    },
+    "probes_generated": 2000,
+    "storage_capacity": 10000,
+    "test_environment": "Loopback-based isolated local DNS/HTTP mock",
+    "unknown_token_count": 0
+  },
+  "phase_id": "phase4",
+  "receipt_version": "3.0.0",
+  "sha256_hash": "7d3c46fceea652a030e1c2c2b86fe3ce1fda1b8380dc546987083cd646010d16",
+  "subphase_id": "4.4",
+  "target_repo": "Out-of-Band (OAST) DNS/HTTP Callback Listener (pkg/oast/listener.go)",
+  "test_command": "go test -v -count=1 ./pkg/oast -run TestLive_Phase44_OASTCorrelationBenchmarkAndReceipt",
+  "timestamp": "2026-11-07T16:31:48Z",
+  "title": "Out-of-Band (OAST) DNS/HTTP Callback Correlation Proof"
+}

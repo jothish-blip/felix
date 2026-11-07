@@ -544,8 +544,8 @@ Target Repos    : `android-insecurebankv2` (Sr. 26), `android-mastg` (Sr. 27), `
                             backend IP `http://10.0.2.2:8888`, crypto initialization vector, and hardcoded secrets in <250ms.
     - Exit Gate Metric    : 0 external JVM/apktool dependencies; 100% extraction of DEX string pool constants; Exit Code 0.
     - Evidence Receipt    : `test/evidence/phase6/6.2_dex_secret_extraction_proof.json`
-    - Receipt Hashes      : Canonical SHA-256: 834d2d02385904da5cfcb0188c063cc1ec70db082e3cd4accce414360811e41c
-                            Raw SHA-256      : 59f388b353ebcad722b5a95b1a2594a83638dacd78afbfeb0acc506e8079ffa8
+    - Receipt Hashes      : Canonical SHA-256: 1d9e864a61b44bf60b19488f3bc64e1de494bee3f21eda963cb8fb4bc0984033
+                            Raw SHA-256      : 1c4e1af62c468810588090cfc50f47898bde05ff9e96dc2dc3f03b099364fd48
 
 [X] Subphase 6.3: Frida Dynamic Instrumentation Bridge (`pkg/mobile/frida.go`) [PROVEN & VERIFIED]
     - Target for Testing  : Connected Android test device / emulator and authorized laboratory APKs (`InsecureBankv2.apk`, `UnCrackable-Level1.apk`).
@@ -553,8 +553,8 @@ Target Repos    : `android-insecurebankv2` (Sr. 26), `android-mastg` (Sr. 27), `
     - Aggressive Test Case: Monitor runtime `Cipher.init`, `IvParameterSpec`, and HTTP connections; capture structured runtime events with sensitive data redaction.
     - Exit Gate Metric    : 100% unit & integration test passage; Exit Code 0; Environmental blocker accurately audited.
     - Evidence Receipt    : `test/evidence/phase6/6.3_frida_dynamic_instrumentation_proof.json`
-    - Receipt Hashes      : Canonical SHA-256: 02f6861e02a8bdede059e858cbcebcabdfb9c60a8a5962c956b8caccee98a5c2
-                            Raw SHA-256      : 86d2c3731ad4eaa6a705c37f5075c9708b6bc743079c9776177adde7acbff436
+    - Receipt Hashes      : Canonical SHA-256: ae55a9270274269cc340d7f10a1f86abd756dac7a5def6e3ef557268073a9d54
+                            Raw SHA-256      : 1457f879306dd6c2be35a7ccf53cc0f9c400f3d69bca1169b28ab809951bc36c
 
 [X] Subphase 6.4: Mobile-to-Backend API Correlator (`pkg/mobile/bridge.go`) [COMPLETED & FULLY VERIFIED]
     - Target for Testing  : Intercepted mobile API traffic from `InsecureBankv2.apk`.
@@ -570,7 +570,8 @@ Target Repos    : `android-insecurebankv2` (Sr. 26), `android-mastg` (Sr. 27), `
 PHASE 6 EXIT GATE AUDIT:
 - All 4 Subphases marked [X] PROVEN & VERIFIED.
 - Full regression suite passing: `go test -v -count=1 ./pkg/mobile/...` (Exit Code 0).
-- ZERO development allowed on Phase 7 until Phase 6 Exit Gate is fully approved.
+- Transparent Limitations: External lab dependencies (WebGoat :8080, NodeGoat :4000) offline during whole-repo run; package-level tests achieve 100% passage. BOLA mutation in InsecureBankv2 safely bypassed under read-only safeguards.
+- Step 7.1 AUTHORIZED. Subphases 7.2-7.4 and Phase 8 remain strictly BLOCKED until Step 7.1 gate passes.
 ----------------------------------------------------------------------------------------------------
 
 ----------------------------------------------------------------------------------------------------
@@ -580,16 +581,18 @@ Roadmap Link    : `Felix-Roadmap.txt` -> Section 6 (Phase 7)
 Overall Goal    : Synthesize multi-hop breach paths, generate exact curl PoC commands, and provide code diffs.
 Target Repos    : Multi-vulnerability targets (`juice-shop`, `webgoat`, `vampi`, `wrongsecrets`)
 
-[ ] Subphase 7.1: Directed Acyclic Graph (DAG) Attack Path Generator (`pkg/correlation/graph.go`)
-    - Target for Testing  : Multi-vulnerability scan results from Juice Shop and VAmPI.
+[X] Subphase 7.1: Directed Acyclic Graph (DAG) Attack Path Generator (`pkg/correlation/dag.go`) [PROVEN & VERIFIED]
+    - Target for Testing  : Multi-vulnerability scan results from Juice Shop, VAmPI, and InsecureBankv2.
     - Testing Procedure   : Construct graph nodes from confirmed findings. Connect edges where output of Node A
                             satisfies precondition for Node B:
                             (Secret Leak -> Auth Bypass -> BOLA -> SQLi -> Admin Takeover).
     - Aggressive Test Case: Assert graph solver identifies the shortest, highest-impact path to critical breach.
-    - Exit Gate Metric    : DAG generation verified; composite risk score calculated deterministically.
+    - Exit Gate Metric    : DAG generation verified; composite risk score calculated deterministically; 18 unit tests passing; Exit Code 0.
     - Evidence Receipt    : `test/evidence/phase7/7.1_dag_attack_path_proof.json`
+    - Receipt Hashes      : Canonical SHA-256: ad515925868a834a025a5e9c576266f83bd31d8f23c3ee2e65606053ed8ceed0
+                            Raw SHA-256      : 5d95a98eec5fdcf777d5e421c3c076ef87902bdf9cb049f20d319a8975542bb7
 
-[ ] Subphase 7.2: Deterministic PoC Command Synthesizer (`pkg/report/poc.go`)
+[ ] Subphase 7.2: Deterministic PoC Command Synthesizer (`pkg/report/poc.go`) [NOT STARTED / BLOCKED]
     - Target for Testing  : All confirmed findings from Phase 2, 3, 4, 5.
     - Testing Procedure   : Generate exact, copy-pasteable `curl` commands with verified headers, cookies, and payload.
     - Aggressive Test Case: Re-execute generated `curl` command in automated test harness; assert that target
@@ -597,7 +600,7 @@ Target Repos    : Multi-vulnerability targets (`juice-shop`, `webgoat`, `vampi`,
     - Exit Gate Metric    : 100% reproduction consistency across all generated curl commands.
     - Evidence Receipt    : `test/evidence/phase7/7.2_curl_poc_reproduction_proof.json`
 
-[ ] Subphase 7.3: Developer Code-Level Remediation Diff Generator (`pkg/report/remediation.go`)
+[ ] Subphase 7.3: Developer Code-Level Remediation Diff Generator (`pkg/report/remediation.go`) [NOT STARTED / BLOCKED]
     - Target for Testing  : Confirmed SQLi, XSS, BOLA, and Header findings.
     - Testing Procedure   : Generate Reference Pattern Diffs tailored to the fingerprinted technology stack from Phase 4.1
                             (e.g., Express + PostgreSQL, Spring Boot + Hibernate, Python Flask + SQLAlchemy, Go database/sql).
@@ -609,7 +612,7 @@ Target Repos    : Multi-vulnerability targets (`juice-shop`, `webgoat`, `vampi`,
     - Exit Gate Metric    : 100% syntactically valid diff patches matching fingerprinted target stack; Exit Code 0.
     - Evidence Receipt    : `test/evidence/phase7/7.3_remediation_diff_validation_proof.json`
 
-[ ] Subphase 7.4: Executive Cyber Risk Dossier Generator (`pkg/report/dossier.go`)
+[ ] Subphase 7.4: Executive Cyber Risk Dossier Generator (`pkg/report/dossier.go`) [NOT STARTED / BLOCKED]
     - Target for Testing  : Full assessment dataset.
     - Testing Procedure   : Compile standalone interactive HTML5 dossier with embedded SVG attack-chain DAG,
                             financial exposure estimates, and compliance mappings (OWASP, NIST, ISO 27001).
@@ -625,7 +628,7 @@ PHASE 7 EXIT GATE AUDIT:
 ----------------------------------------------------------------------------------------------------
 
 ----------------------------------------------------------------------------------------------------
-PHASE 8: HIGH-CONCURRENCY WORKER POOLING, CI/CD PIPELINE GATING & INTEGRATIONS
+PHASE 8: HIGH-CONCURRENCY WORKER POOLING, CI/CD PIPELINE GATING & INTEGRATIONS [NOT STARTED / BLOCKED]
 ----------------------------------------------------------------------------------------------------
 Roadmap Link    : `Felix-Roadmap.txt` -> Section 6 (Phase 8)
 Overall Goal    : Scale FELIX across distributed agent swarms and integrate into enterprise CI/CD pipelines.

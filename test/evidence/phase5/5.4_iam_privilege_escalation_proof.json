@@ -1,0 +1,58 @@
+{
+  "canonical_payload_sha256": "b2c3f12e659e8473c2d1fc9a94492cd1cddb1080bd49da5cbf1d566c1c0a54d1",
+  "conclusive_status": "PROVEN_VERIFIED",
+  "environment": {
+    "arch": "amd64",
+    "go_version": "go1.27.0",
+    "logical_cpus": 8,
+    "os": "windows"
+  },
+  "executor": "Antigravity Engineering / FELIX Core Team",
+  "exit_code": 0,
+  "git_commit": "08a93188fa02cca45795f88207c36206e1fb1eb6",
+  "metrics": {
+    "acceptance_criteria": {
+      "cycle_detection_infinite_loop_prevented": true,
+      "direct_privilege_escalation_detected": true,
+      "effective_permission_explicit_deny_applied": true,
+      "finding_integration_deterministic": true,
+      "indirect_role_assumption_detected": true,
+      "pass_role_privilege_vector_detected": true,
+      "permission_boundary_constraint_applied": true,
+      "risk_scoring_severity_distinguished": true,
+      "service_account_impersonation_detected": true,
+      "universal_iam_data_model_verified": true,
+      "zero_credentials_or_tokens_exposed": true,
+      "zero_live_mutations_executed": true
+    },
+    "benchmark_duration_ms": {
+      "aws_iam_analysis_ms": 0.12207,
+      "azure_rbac_analysis_ms": 0.07114,
+      "gcp_iam_analysis_ms": 0.087185,
+      "graph_traversal_1000_ms": 1.334635,
+      "total_pipeline_ms": 1.61503
+    },
+    "benchmark_iterations": 20,
+    "latency_note": "Metrics represent synthetic in-memory graph construction and path discovery measurements averaged over 20 iterations.",
+    "provider_coverage": {
+      "aws_iam_supported": true,
+      "azure_rbac_supported": true,
+      "gcp_iam_supported": true
+    },
+    "synthetic_mock_fixture_latency_ms": {
+      "aws_iam_analysis_avg_ms": 0.12207,
+      "azure_rbac_analysis_avg_ms": 0.07114,
+      "gcp_iam_analysis_avg_ms": 0.087185,
+      "graph_traversal_1000_avg_ms": 1.334635,
+      "total_pipeline_avg_ms": 1.61503
+    }
+  },
+  "phase_id": "phase5",
+  "receipt_version": "3.0.0",
+  "sha256_hash": "b2c3f12e659e8473c2d1fc9a94492cd1cddb1080bd49da5cbf1d566c1c0a54d1",
+  "subphase_id": "5.4",
+  "target_repo": "IAM Privilege Graph Analyzer (pkg/cloudsec/iam.go)",
+  "test_command": "go test -v -count=1 ./pkg/cloudsec -run TestLive_Phase54_IAMPrivilegeGraphBenchmarkAndReceipt",
+  "timestamp": "2026-10-31T11:10:37Z",
+  "title": "IAM Privilege Graph Analyzer Proof"
+}

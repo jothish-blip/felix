@@ -10,7 +10,7 @@ Target Scope       : Web Applications (SPAs, REST, GraphQL, WebSockets), Cloud N
 Development Horizon: 2026 – 2028 (24-Month Phased Implementation and Empirical Validation)
 Design Principle   : Zero Marketing Hype. Ground-Truth Empirical Verification. Zero False Positives.
 Tracking Document  : C:\Jothish\Felix-Roadmap.txt
-Last Updated       : 2026-10-27
+Last Updated       : 2026-11-07
 ====================================================================================================
 
 ----------------------------------------------------------------------------------------------------
@@ -915,14 +915,18 @@ Status:
   * Canonical Payload SHA-256: 3bcebafb7169e64e9f594eafb55aff920d88d6a759839b2d1d290519a2754b9f
   * Raw File SHA-256         : 1b9fbfd56a264bf6a1746b46fc35097f8e3a36d42ebb0972a2038d0caf87192d
 - [X] 6.2 Bytecode Secret Extractor (`secrets.go`) -> Proof: `test/evidence/phase6/6.2_dex_secret_extraction_proof.json` [COMPLETED & FORMALLY APPROVED]
-  * Canonical Payload SHA-256: 834d2d02385904da5cfcb0188c063cc1ec70db082e3cd4accce414360811e41c
-  * Raw File SHA-256         : 59f388b353ebcad722b5a95b1a2594a83638dacd78afbfeb0acc506e8079ffa8
+  * Canonical Payload SHA-256: 1d9e864a61b44bf60b19488f3bc64e1de494bee3f21eda963cb8fb4bc0984033
+  * Raw File SHA-256         : 1c4e1af62c468810588090cfc50f47898bde05ff9e96dc2dc3f03b099364fd48
 - [X] 6.3 Frida Dynamic Instrumentation Bridge (`frida.go`) -> Proof: `test/evidence/phase6/6.3_frida_dynamic_instrumentation_proof.json` [COMPLETED & FORMALLY APPROVED]
-  * Canonical Payload SHA-256: 02f6861e02a8bdede059e858cbcebcabdfb9c60a8a5962c956b8caccee98a5c2
-  * Raw File SHA-256         : 86d2c3731ad4eaa6a705c37f5075c9708b6bc743079c9776177adde7acbff436
+  * Canonical Payload SHA-256: ae55a9270274269cc340d7f10a1f86abd756dac7a5def6e3ef557268073a9d54
+  * Raw File SHA-256         : 1457f879306dd6c2be35a7ccf53cc0f9c400f3d69bca1169b28ab809951bc36c
 - [X] 6.4 Mobile-to-Backend API Correlator (`bridge.go`) -> Proof: `test/evidence/phase6/6.4_mobile_api_correlation_proof.json` [COMPLETED & FULLY VERIFIED]
   * Canonical Payload SHA-256: 6814e97db245756848724a9dfafd2166715c42317ffe6d26045490ee1faab3ad
   * Raw File SHA-256         : d8edefac50b7c79670a12d702335b7bc00f21e9544c27ba72906cf2352830cc7
+
+Phase 6 Transparent Limitations & Environment Status:
+- Full repository regression (`go test ./...`) encounters offline local benchmark containers (WebGoat :8080, NodeGoat :4000) failing network reachability assertions in `pkg/auth`. Mobile subsystem (`pkg/mobile`), correlation (`pkg/correlation`), and assessment packages achieve 100% test passage in isolation.
+- Live InsecureBankv2 BOLA mutation was safely bypassed under read-only test safeguards; fixture verification was utilized for BOLA payload structure and is not represented as live server mutation.
 
 Expected Outcomes:
 - Comprehensive static vulnerability analysis of mobile packages.
@@ -934,7 +938,7 @@ Exit Gate Criteria:
 - Extraction of exported activities and hardcoded API tokens from test APK with 100% precision.
 - Successful interception of backend API requests from an instrumented mobile runtime.
 - Full regression suite passing: `go test -v -count=1 ./pkg/mobile/...` (Exit Code 0).
-- ZERO development allowed on Phase 7 until Phase 6 Exit Gate is fully approved.
+- Phase 7.1 authorized; Subphases 7.2-7.4 and Phase 8 remain strictly BLOCKED until subsequent gates pass.
 
 ----------------------------------------------------------------------------------------------------
 PHASE 7: AUTONOMOUS MULTI-HOP ATTACK-CHAIN & DETERMINISTIC PROOF SYNTHESIZER
@@ -1013,10 +1017,12 @@ Testing & Validation:
 - Unit Tests: `go test -v -count=1 ./pkg/correlation/... ./pkg/report/...`
 
 Status:
-- [ ] 7.1 DAG Attack Path Generator (`graph.go`) -> Proof: `test/evidence/phase7/7.1_dag_attack_path_proof.json`
-- [ ] 7.2 PoC Command Synthesizer (`poc.go`) -> Proof: `test/evidence/phase7/7.2_curl_poc_reproduction_proof.json`
-- [ ] 7.3 Remediation Code Diff Generator (`remediation.go`) -> Proof: `test/evidence/phase7/7.3_remediation_diff_validation_proof.json`
-- [ ] 7.4 Executive Dossier Generator (`dossier.go`) -> Proof: `test/evidence/phase7/7.4_executive_dossier_proof.json`
+- [X] 7.1 DAG Attack Path Generator (`dag.go`) -> Proof: `test/evidence/phase7/7.1_dag_attack_path_proof.json` [PROVEN & EMPIRICALLY VERIFIED]
+  * Canonical Payload SHA-256: ad515925868a834a025a5e9c576266f83bd31d8f23c3ee2e65606053ed8ceed0
+  * Raw File SHA-256         : 5d95a98eec5fdcf777d5e421c3c076ef87902bdf9cb049f20d319a8975542bb7
+- [ ] 7.2 PoC Command Synthesizer (`poc.go`) -> Proof: `test/evidence/phase7/7.2_curl_poc_reproduction_proof.json` [NOT STARTED / BLOCKED]
+- [ ] 7.3 Remediation Code Diff Generator (`remediation.go`) -> Proof: `test/evidence/phase7/7.3_remediation_diff_validation_proof.json` [NOT STARTED / BLOCKED]
+- [ ] 7.4 Executive Dossier Generator (`dossier.go`) -> Proof: `test/evidence/phase7/7.4_executive_dossier_proof.json` [NOT STARTED / BLOCKED]
 
 Expected Outcomes:
 - Automated synthesis of end-to-end breach scenarios showing full attacker impact.
@@ -1354,17 +1360,17 @@ PHASE / SUBPHASE MILESTONE                     ASSIGNED BENCHMARK TARGET        
     - [X] 5.3 Container & K8s Auditor          Mock Kubelet & Docker Sockets    5.3_container_kubernetes_audit_proof.json[X]
     - [X] 5.4 IAM Privilege Escalation Grapher TerraGoat & CloudGoat Policies   5.4_iam_privilege_graph_proof.json  [X]
 
-[ ] Phase 6: Mobile (Android / iOS) Subsystem  InsecureBankv2, MASTG (16 APKs)  test/evidence/phase6/               [IN PROGRESS - STEP 6.1 APPROVED]
+[X] Phase 6: Mobile (Android / iOS) Subsystem  InsecureBankv2, MASTG (16 APKs)  test/evidence/phase6/               [COMPLETED & FORMALLY CLOSED]
     - [X] 6.1 Package Decompiler & Manifest    InsecureBankv2 & UnCrackable-1   6.1_apk_manifest_extraction_proof.json[X]
-    - [ ] 6.2 Bytecode Secret Extractor        InsecureBankv2 & MSTG Playground 6.2_dex_secret_extraction_proof.json[ ]
-    - [ ] 6.3 Frida Instrumentation Bridge     Android Runtime (Frida Dynamic)  6.3_frida_dynamic_instrumentation_proof.json[ ]
-    - [ ] 6.4 Mobile-to-Backend API Correlator Intercepted InsecureBankv2 APIs  6.4_mobile_api_correlation_proof.json[ ]
+    - [X] 6.2 Bytecode Secret Extractor        InsecureBankv2 & MSTG Playground 6.2_dex_secret_extraction_proof.json[X]
+    - [X] 6.3 Frida Instrumentation Bridge     Android Runtime (Frida Dynamic)  6.3_frida_dynamic_instrumentation_proof.json[X]
+    - [X] 6.4 Mobile-to-Backend API Correlator Intercepted InsecureBankv2 APIs  6.4_mobile_api_correlation_proof.json[X]
 
-[ ] Phase 7: Multi-Hop Attack-Chain Engine     Juice Shop, WebGoat, VAmPI Labs  test/evidence/phase7/               [NOT STARTED]
-    - [ ] 7.1 DAG Attack Path Generator        Multi-Vulnerability Lab Results  7.1_dag_attack_path_proof.json      [ ]
-    - [ ] 7.2 PoC Command Synthesizer          Confirmed Flaws (Phase 2-5)      7.2_curl_poc_reproduction_proof.json[ ]
-    - [ ] 7.3 Remediation Code Diff Generator  SQLi, XSS, BOLA Findings         7.3_remediation_diff_validation_proof.json[ ]
-    - [ ] 7.4 Executive Dossier Generator      Full Multi-Target Benchmark Set  7.4_executive_dossier_proof.json    [ ]
+[ ] Phase 7: Multi-Hop Attack-Chain Engine     Juice Shop, WebGoat, VAmPI Labs  test/evidence/phase7/               [IN PROGRESS - STEP 7.1 APPROVED]
+    - [X] 7.1 DAG Attack Path Generator        Multi-Vulnerability Lab Results  7.1_dag_attack_path_proof.json      [X]
+    - [ ] 7.2 PoC Command Synthesizer          Confirmed Flaws (Phase 2-5)      7.2_curl_poc_reproduction_proof.json[BLOCKED]
+    - [ ] 7.3 Remediation Code Diff Generator  SQLi, XSS, BOLA Findings         7.3_remediation_diff_validation_proof.json[BLOCKED]
+    - [ ] 7.4 Executive Dossier Generator      Full Multi-Target Benchmark Set  7.4_executive_dossier_proof.json    [BLOCKED]
 
 [ ] Phase 8: High-Concurrency Swarm & CI/CD    Local Cluster, GitHub/GitLab CI  test/evidence/phase8/               [NOT STARTED]
     - [ ] 8.1 Distributed Agent Coordinator    5 Local Loopback Worker Nodes    8.1_swarm_fault_tolerance_proof.json[ ]

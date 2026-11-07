@@ -1,0 +1,85 @@
+{
+  "canonical_payload_sha256": "01f09904bd8850198eda4b53313e295c50cee70c3767bfa7bc8ccabe843f190a",
+  "conclusive_status": "PROVEN_VERIFIED",
+  "environment": {
+    "arch": "amd64",
+    "go_version": "go1.27.0",
+    "logical_cpus": 8,
+    "os": "windows"
+  },
+  "executor": "Antigravity Engineering / FELIX Core Team",
+  "exit_code": 0,
+  "git_commit": "08a93188fa02cca45795f88207c36206e1fb1eb6",
+  "metrics": {
+    "acceptance_criteria": {
+      "anonymous_healthz_not_overclassified": true,
+      "dashboard_unauthenticated_view_verified": true,
+      "docker_ping_reachability_not_overclassified": true,
+      "docker_protected_api_verified": true,
+      "docker_unauthenticated_api_verified": true,
+      "docker_version_disclosure_classified": true,
+      "etcd_datastore_not_queried": true,
+      "etcd_unauthenticated_service_verified": true,
+      "generic_html_classified_inconclusive": true,
+      "k8s_anonymous_api_discovery_distinguished": true,
+      "k8s_api_unauthenticated_access_verified": true,
+      "k8s_api_version_disclosure_verified": true,
+      "kubelet_admin_exec_not_inferred_from_pods": true,
+      "kubelet_unauthenticated_pods_verified": true,
+      "portainer_status_vs_endpoints_distinguished": true,
+      "safedialer_ssrf_rejection_verified": true,
+      "scope_enforcement_active": true,
+      "zero_cluster_secrets_retrieved": true,
+      "zero_destructive_actions_executed": true
+    },
+    "benchmark_duration_ms": {
+      "dashboard_audit_ms": 0.1196,
+      "docker_audit_ms": 0.542715,
+      "etcd_audit_ms": 0.293595,
+      "k8s_api_audit_ms": 0.729675,
+      "kubelet_audit_ms": 0.30276,
+      "total_pipeline_ms": 1.9883449999999998
+    },
+    "benchmark_iterations": 20,
+    "dashboard_results": {
+      "classification": "EXPOSED_MANAGEMENT_INTERFACE",
+      "service_identified": true
+    },
+    "docker_results": {
+      "classification": "UNAUTHENTICATED_MANAGEMENT_ACCESS",
+      "service_identified": true,
+      "version_disclosed": "24.0.5"
+    },
+    "etcd_results": {
+      "classification": "ETCD_EXPOSED",
+      "service_identified": true,
+      "version_disclosed": "3.5.9"
+    },
+    "k8s_api_results": {
+      "classification": "KUBERNETES_API_EXPOSED",
+      "service_identified": true,
+      "version_disclosed": "v1.28.2"
+    },
+    "kubelet_results": {
+      "classification": "KUBELET_EXPOSED",
+      "service_identified": true
+    },
+    "latency_note": "Metrics represent synthetic in-memory loopback mock fixture measurements averaged over 20 iterations; real cloud infrastructure latencies are subject to WAN and network jitter.",
+    "synthetic_mock_fixture_latency_ms": {
+      "dashboard_audit_avg_ms": 0.1196,
+      "docker_audit_avg_ms": 0.542715,
+      "etcd_audit_avg_ms": 0.293595,
+      "k8s_api_audit_avg_ms": 0.729675,
+      "kubelet_audit_avg_ms": 0.30276,
+      "total_pipeline_avg_ms": 1.9883449999999998
+    }
+  },
+  "phase_id": "phase5",
+  "receipt_version": "3.0.0",
+  "sha256_hash": "01f09904bd8850198eda4b53313e295c50cee70c3767bfa7bc8ccabe843f190a",
+  "subphase_id": "5.3",
+  "target_repo": "Container & Kubernetes Exposure Auditor (pkg/cloudsec/k8s.go)",
+  "test_command": "go test -v -count=1 ./pkg/cloudsec -run TestLive_Phase53_ContainerKubernetesAuditBenchmarkAndReceipt",
+  "timestamp": "2026-10-31T10:44:30Z",
+  "title": "Container & Kubernetes Exposure Auditor Proof"
+}

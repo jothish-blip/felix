@@ -1,0 +1,33 @@
+{
+  "conclusive_status": "PROVEN_VERIFIED",
+  "executor": "Antigravity Engineering / FELIX Core Team",
+  "exit_code": 0,
+  "metrics": {
+    "benchmark_vectors_tested": 10,
+    "defended_vectors_rejected": 6,
+    "encoded_traversal_detection_rate": 100.0,
+    "false_negatives": 0,
+    "false_positives": 0,
+    "non_target_preservation_rate": 100.0,
+    "os_marker_verification_rate": 100.0,
+    "path_traversal_precision": 100.0,
+    "path_traversal_recall": 100.0,
+    "target_reachability": {
+      "MockTraversalFixture": true,
+      "WebGoat (Port 8082)": true
+    },
+    "true_negatives": 6,
+    "true_positives": 4,
+    "vulnerable_vectors_detected": 4,
+    "zero_panics_verified": true
+  },
+  "phase_id": "phase2",
+  "receipt_version": "3.0.0",
+  "sha256_hash": "55d3c19bd9c9ddc8a2203780cab827384fbdcf24434c8464a2e9c8d7f85bde8e",
+  "subphase_id": "2.4",
+  "target_repo": "webgoat, test/lab/traversal_mock",
+  "target_url": "http://127.0.0.1:8082/WebGoat/PathTraversal/, mock://localhost",
+  "test_command": "go test -v -count=1 ./pkg/fuzzer -run TestBenchmark_PathTraversalEngine",
+  "timestamp": "2026-10-29T10:40:00Z",
+  "title": "Path Traversal & Arbitrary File Read Engine Verification"
+}

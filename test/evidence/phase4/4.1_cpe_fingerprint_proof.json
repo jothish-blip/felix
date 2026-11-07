@@ -1,0 +1,381 @@
+{
+  "conclusive_status": "PROVEN_VERIFIED",
+  "executor": "Antigravity Engineering / FELIX Core Team",
+  "exit_code": 0,
+  "metrics": {
+    "benchmarks": {
+      "Damn Vulnerable GraphQL Application": {
+        "component_list": [
+          {
+            "component_name": "Damn Vulnerable GraphQL Application",
+            "confidence": "CONFIRMED",
+            "cpe_23": "cpe:2.3:a:dolevf:damn_vulnerable_graphql_application:2.2.0:*:*:*:*:*:*:*",
+            "evidence": [
+              "Cookie env: graphiql:disable",
+              "Meta description: Damn Vulnerable GraphQL Application",
+              "HTML title: Damn Vulnerable GraphQL Application",
+              "HTML version block: 2.2.0"
+            ],
+            "part": "a",
+            "product": "damn_vulnerable_graphql_application",
+            "sources": [
+              "COOKIE",
+              "META_TAG",
+              "DOM_MARKER"
+            ],
+            "vendor": "dolevf",
+            "version": "2.2.0"
+          },
+          {
+            "component_name": "Express.js Session",
+            "confidence": "CONFIRMED_UNKNOWN_VERSION",
+            "cpe_23": "cpe:2.3:a:expressjs:express-session:*:*:*:*:*:*:*:*",
+            "evidence": [
+              "Cookie name: connect.sid"
+            ],
+            "part": "a",
+            "product": "express-session",
+            "sources": [
+              "COOKIE"
+            ],
+            "vendor": "expressjs"
+          },
+          {
+            "asset_url": "http://127.0.0.1:5013/static/bootstrap/css/bootstrap.min.css",
+            "component_name": "Bootstrap",
+            "confidence": "CONFIRMED",
+            "cpe_23": "cpe:2.3:a:getbootstrap:bootstrap:4.5.3:*:*:*:*:*:*:*",
+            "evidence": [
+              "Asset header banner Bootstrap v4.5.3: http://127.0.0.1:5013/static/bootstrap/css/bootstrap.min.css",
+              "Asset header banner Bootstrap v4.5.3: http://127.0.0.1:5013/static/bootstrap/js/bootstrap.bundle.min.js"
+            ],
+            "part": "a",
+            "product": "bootstrap",
+            "sources": [
+              "JAVASCRIPT_ASSET"
+            ],
+            "vendor": "getbootstrap",
+            "version": "4.5.3"
+          },
+          {
+            "asset_url": "http://127.0.0.1:5013/static/jquery/jquery.min.js",
+            "component_name": "Jquery",
+            "confidence": "CONFIRMED",
+            "cpe_23": "cpe:2.3:a:jquery:jquery:3.5.1:*:*:*:*:*:*:*",
+            "evidence": [
+              "SHA-256 match f36844906ad2309877aae3121b87fb15b9e09803cb4c333adc7e1e35ac92e14b (jQuery v3.5.1 Official Release): http://127.0.0.1:5013/static/jquery/jquery.min.js"
+            ],
+            "part": "a",
+            "product": "jquery",
+            "sources": [
+              "JAVASCRIPT_ASSET"
+            ],
+            "vendor": "jquery",
+            "version": "3.5.1"
+          }
+        ],
+        "components_found": 4,
+        "confirmed_versions_found": 3,
+        "cpe_assigned": 4,
+        "target_url": "http://127.0.0.1:5013/"
+      },
+      "OWASP Juice Shop": {
+        "component_list": [
+          {
+            "component_name": "Angular Framework",
+            "confidence": "CONFIRMED_UNKNOWN_VERSION",
+            "cpe_23": "cpe:2.3:a:angular:angular:*:*:*:*:*:*:*:*",
+            "evidence": [
+              "DOM custom element: \u003capp-root\u003e"
+            ],
+            "part": "a",
+            "product": "angular",
+            "sources": [
+              "DOM_MARKER"
+            ],
+            "vendor": "angular"
+          },
+          {
+            "component_name": "OWASP Juice Shop",
+            "confidence": "CONFIRMED",
+            "cpe_23": "cpe:2.3:a:owasp:juice-shop:20.2.0:*:*:*:*:*:*:*",
+            "evidence": [
+              "Header X-Recruiting: /#/jobs",
+              "HTML title: OWASP Juice Shop",
+              "Meta description: Probably the most modern and sophisticated insecure web application",
+              "API disclosure at http://127.0.0.1:3000/rest/admin/application-version: version 20.2.0"
+            ],
+            "part": "a",
+            "product": "juice-shop",
+            "sources": [
+              "HEADER",
+              "DOM_MARKER",
+              "META_TAG",
+              "API_ENDPOINT"
+            ],
+            "vendor": "owasp",
+            "version": "20.2.0"
+          }
+        ],
+        "components_found": 2,
+        "confirmed_versions_found": 1,
+        "cpe_assigned": 2,
+        "target_url": "http://127.0.0.1:3000/"
+      },
+      "OWASP NodeGoat": {
+        "component_list": [
+          {
+            "component_name": "Express.js",
+            "confidence": "CONFIRMED_UNKNOWN_VERSION",
+            "cpe_23": "cpe:2.3:a:expressjs:express:*:*:*:*:*:*:*:*",
+            "evidence": [
+              "Header X-Powered-By: Express"
+            ],
+            "part": "a",
+            "product": "express",
+            "sources": [
+              "HEADER"
+            ],
+            "vendor": "expressjs"
+          },
+          {
+            "component_name": "Express.js Session",
+            "confidence": "CONFIRMED_UNKNOWN_VERSION",
+            "cpe_23": "cpe:2.3:a:expressjs:express-session:*:*:*:*:*:*:*:*",
+            "evidence": [
+              "Cookie name: connect.sid"
+            ],
+            "part": "a",
+            "product": "express-session",
+            "sources": [
+              "COOKIE"
+            ],
+            "vendor": "expressjs"
+          },
+          {
+            "asset_url": "http://127.0.0.1:4000/vendor/bootstrap/bootstrap.css",
+            "component_name": "Bootstrap",
+            "confidence": "CONFIRMED",
+            "cpe_23": "cpe:2.3:a:getbootstrap:bootstrap:3.0.0:*:*:*:*:*:*:*",
+            "evidence": [
+              "Asset header banner Bootstrap v3.0.0: http://127.0.0.1:4000/vendor/bootstrap/bootstrap.css",
+              "Asset header banner Bootstrap v3.0.0: http://127.0.0.1:4000/vendor/bootstrap/bootstrap.js"
+            ],
+            "part": "a",
+            "product": "bootstrap",
+            "sources": [
+              "JAVASCRIPT_ASSET"
+            ],
+            "vendor": "getbootstrap",
+            "version": "3.0.0"
+          },
+          {
+            "asset_url": "http://127.0.0.1:4000/vendor/jquery.min.js",
+            "component_name": "Jquery",
+            "confidence": "CONFIRMED",
+            "cpe_23": "cpe:2.3:a:jquery:jquery:1.10.2:*:*:*:*:*:*:*",
+            "evidence": [
+              "SHA-256 match fa411409e767595b83bf12f7204d69a856031ec9466998358316f6cbbfedd8a6 (jQuery v1.10.2 Official Release): http://127.0.0.1:4000/vendor/jquery.min.js"
+            ],
+            "part": "a",
+            "product": "jquery",
+            "sources": [
+              "JAVASCRIPT_ASSET"
+            ],
+            "vendor": "jquery",
+            "version": "1.10.2"
+          },
+          {
+            "component_name": "OWASP NodeGoat",
+            "confidence": "CONFIRMED",
+            "cpe_23": "cpe:2.3:a:owasp:nodegoat:1.2:*:*:*:*:*:*:*",
+            "evidence": [
+              "Meta description: OWASP NodeGoat Project: Insecure App",
+              "Meta version: v1.2",
+              "HTML title: OWASP Node Goat"
+            ],
+            "part": "a",
+            "product": "nodegoat",
+            "sources": [
+              "META_TAG",
+              "DOM_MARKER"
+            ],
+            "vendor": "owasp",
+            "version": "1.2"
+          }
+        ],
+        "components_found": 5,
+        "confirmed_versions_found": 3,
+        "cpe_assigned": 5,
+        "target_url": "http://127.0.0.1:4000/login"
+      },
+      "OWASP WebGoat": {
+        "component_list": [
+          {
+            "asset_url": "http://127.0.0.1:8080/WebGoat/plugins/bootstrap/css/bootstrap.min.css",
+            "component_name": "Bootstrap",
+            "confidence": "CONFIRMED",
+            "cpe_23": "cpe:2.3:a:getbootstrap:bootstrap:3.1.1:*:*:*:*:*:*:*",
+            "evidence": [
+              "Asset header banner Bootstrap v3.1.1: http://127.0.0.1:8080/WebGoat/plugins/bootstrap/css/bootstrap.min.css"
+            ],
+            "part": "a",
+            "product": "bootstrap",
+            "sources": [
+              "JAVASCRIPT_ASSET"
+            ],
+            "vendor": "getbootstrap",
+            "version": "3.1.1"
+          },
+          {
+            "component_name": "Java Servlet / Container Session",
+            "confidence": "CONFIRMED_UNKNOWN_VERSION",
+            "cpe_23": "cpe:2.3:a:oracle:java_servlet:*:*:*:*:*:*:*:*",
+            "evidence": [
+              "Cookie name: JSESSIONID"
+            ],
+            "part": "a",
+            "product": "java_servlet",
+            "sources": [
+              "COOKIE"
+            ],
+            "vendor": "oracle"
+          },
+          {
+            "component_name": "OWASP WebGoat",
+            "confidence": "CONFIRMED_UNKNOWN_VERSION",
+            "cpe_23": "cpe:2.3:a:owasp:webgoat:*:*:*:*:*:*:*:*",
+            "evidence": [
+              "WebGoat route pattern in a: /WebGoat/start.mvc",
+              "WebGoat route pattern in form: /WebGoat/login",
+              "WebGoat route pattern in a: /WebGoat/registration"
+            ],
+            "part": "a",
+            "product": "webgoat",
+            "sources": [
+              "DOM_MARKER"
+            ],
+            "vendor": "owasp"
+          },
+          {
+            "component_name": "Thymeleaf Template Engine",
+            "confidence": "CONFIRMED_UNKNOWN_VERSION",
+            "cpe_23": "cpe:2.3:a:thymeleaf:thymeleaf:*:*:*:*:*:*:*:*",
+            "evidence": [
+              "DOM attribute dummy_for_thymeleaf_parser in \u003cinput\u003e"
+            ],
+            "part": "a",
+            "product": "thymeleaf",
+            "sources": [
+              "DOM_MARKER"
+            ],
+            "vendor": "thymeleaf"
+          },
+          {
+            "component_name": "Spring Framework MVC",
+            "confidence": "CONFIRMED_UNKNOWN_VERSION",
+            "cpe_23": "cpe:2.3:a:vmware:spring_framework:*:*:*:*:*:*:*:*",
+            "evidence": [
+              "Spring MVC endpoint pattern in a: /WebGoat/start.mvc",
+              "Spring MVC endpoint pattern in form: /WebGoat/login",
+              "Spring MVC endpoint pattern in a: /WebGoat/registration"
+            ],
+            "part": "a",
+            "product": "spring_framework",
+            "sources": [
+              "DOM_MARKER"
+            ],
+            "vendor": "vmware"
+          }
+        ],
+        "components_found": 5,
+        "confirmed_versions_found": 1,
+        "cpe_assigned": 5,
+        "target_url": "http://127.0.0.1:8080/WebGoat/"
+      },
+      "VAmPI Vulnerable API": {
+        "component_list": [
+          {
+            "component_name": "Express.js Session",
+            "confidence": "CONFIRMED_UNKNOWN_VERSION",
+            "cpe_23": "cpe:2.3:a:expressjs:express-session:*:*:*:*:*:*:*:*",
+            "evidence": [
+              "Cookie name: connect.sid"
+            ],
+            "part": "a",
+            "product": "express-session",
+            "sources": [
+              "COOKIE"
+            ],
+            "vendor": "expressjs"
+          },
+          {
+            "component_name": "Werkzeug",
+            "confidence": "CONFIRMED",
+            "cpe_23": "cpe:2.3:a:palletsprojects:werkzeug:2.2.3:*:*:*:*:*:*:*",
+            "evidence": [
+              "Header Server: Werkzeug/2.2.3 Python/3.12.10"
+            ],
+            "part": "a",
+            "product": "werkzeug",
+            "sources": [
+              "HEADER"
+            ],
+            "vendor": "palletsprojects",
+            "version": "2.2.3"
+          },
+          {
+            "component_name": "Python",
+            "confidence": "CONFIRMED",
+            "cpe_23": "cpe:2.3:a:python:python:3.12.10:*:*:*:*:*:*:*",
+            "evidence": [
+              "Header Server: Werkzeug/2.2.3 Python/3.12.10"
+            ],
+            "part": "a",
+            "product": "python",
+            "sources": [
+              "HEADER"
+            ],
+            "vendor": "python",
+            "version": "3.12.10"
+          },
+          {
+            "component_name": "VAmPI Vulnerable API",
+            "confidence": "CONFIRMED_UNKNOWN_VERSION",
+            "cpe_23": "cpe:2.3:a:vampi_project:vampi:*:*:*:*:*:*:*:*",
+            "evidence": [
+              "Body signature: 'VAmPI the Vulnerable API'"
+            ],
+            "part": "a",
+            "product": "vampi",
+            "sources": [
+              "DOM_MARKER"
+            ],
+            "vendor": "vampi_project"
+          }
+        ],
+        "components_found": 4,
+        "confirmed_versions_found": 2,
+        "cpe_assigned": 4,
+        "target_url": "http://127.0.0.1:5000/"
+      }
+    },
+    "cpe_precision_rate": 100,
+    "expected_cpes_verified": 14,
+    "false_positive_rate": 0,
+    "scope_ssrf_enforcement": true,
+    "targets_tested": 5,
+    "total_components_identified": 20,
+    "total_versions_confirmed": 10,
+    "zero_speculative_guesses": true
+  },
+  "phase_id": "phase4",
+  "receipt_version": "3.0.0",
+  "sha256_hash": "e845c36634133968a99791956fcc3d20a2a99eee8dc8f3cbd97267d63c8b7659",
+  "subphase_id": "4.1",
+  "target_repo": "juice-shop, webgoat, nodegoat, dvga, vampi",
+  "target_url": "http://127.0.0.1:3000, http://127.0.0.1:8080, http://127.0.0.1:4000, http://127.0.0.1:5013, http://127.0.0.1:5000",
+  "test_command": "go test -v -count=1 ./pkg/cve -run TestLive_Phase41_ComponentFingerprinting",
+  "timestamp": "2026-10-30T17:32:15Z",
+  "title": "Component and Version Fingerprinter CPE 2.3 Proof"
+}

@@ -1,0 +1,29 @@
+{
+  "conclusive_status": "PROVEN_VERIFIED",
+  "executor": "Antigravity Engineering / FELIX Core Team",
+  "exit_code": 0,
+  "metrics": {
+    "controlled_fixture_verified": true,
+    "false_403_count": 0,
+    "live_target_limitation": "DVWA requires local MySQL service which is unavailable; verified via controlled single-use nonce fixture",
+    "live_target_verified": false,
+    "session_isolation_verified": true,
+    "single_use_rotation_verified": true,
+    "stale_token_rejections": 1,
+    "sync_success_rate": 100,
+    "tokens_extracted": 21,
+    "tokens_injected": 20,
+    "tokens_rotated": 20,
+    "valid_requests": 20,
+    "zero_false_403s_verified": true
+  },
+  "phase_id": "phase3",
+  "receipt_version": "3.0.0",
+  "sha256_hash": "f42b221a5e2319d43c2b1544bcabcc7721b52c3896dd36fe310fa2742683c018",
+  "subphase_id": "3.3",
+  "target_repo": "dvwa_controlled_fixture",
+  "target_url": "http://127.0.0.1/vulnerabilities/csrf",
+  "test_command": "go test -v -count=1 ./pkg/auth -run TestBenchmark_CSRFSynchronizer_ControlledFixture",
+  "timestamp": "2026-10-30T04:52:48Z",
+  "title": "Dynamic Anti-CSRF Synchronizer Verification Proof"
+}

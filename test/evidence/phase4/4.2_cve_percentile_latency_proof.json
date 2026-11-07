@@ -1,0 +1,52 @@
+{
+  "conclusive_status": "PROVEN_VERIFIED",
+  "environment": {
+    "arch": "amd64",
+    "go_version": "go1.27.0",
+    "logical_cpus": 8,
+    "os": "windows"
+  },
+  "executor": "Antigravity Engineering / FELIX Core Team",
+  "exit_code": 0,
+  "git_commit": "08a93188fa02cca45795f88207c36206e1fb1eb6",
+  "metrics": {
+    "all_measurements_below_50ms": true,
+    "dataset_records": 300000,
+    "e2e_latency": {
+      "max_ms": 2.1807,
+      "max_us": 2180.7,
+      "median_p50_ms": 0,
+      "median_p50_us": 0,
+      "min_ms": 0,
+      "min_us": 0,
+      "p90_ms": 0.9763,
+      "p90_us": 976.3,
+      "p95_ms": 0.9967,
+      "p95_us": 996.7,
+      "p99_ms": 1.5953,
+      "p99_us": 1595.3
+    },
+    "iterations_tested": 500,
+    "original_receipt_hash": "f0495a6b82e03aaa13c12eb30849d1278bb8acb1965843461ed8290197078c42",
+    "original_receipt_reference": "test/evidence/phase4/4.2_cve_sqlite_query_benchmark_proof.json",
+    "performance_ceiling_requirement_ms": 50,
+    "stage1_sqlite_fetch": {
+      "median_p50_ms": 0,
+      "p95_ms": 0.987,
+      "p99_ms": 1.5154
+    },
+    "stage2_semver_eval": {
+      "median_p50_ms": 0,
+      "p95_ms": 0.5883,
+      "p99_ms": 0.9862
+    }
+  },
+  "phase_id": "phase4",
+  "receipt_version": "3.0.0",
+  "sha256_hash": "6fae9a180c061244bb42171df14faa6e3de8d0b656234aa9b8622fc5c085ad24",
+  "subphase_id": "4.2",
+  "target_repo": "NVD, OSV, GHSA Normalized CVE Feeds (~/.felix/cve.db)",
+  "test_command": "go test -v -count=1 ./pkg/cve -run TestLive_Phase42_PercentileLatencyVerification",
+  "timestamp": "2026-10-30T18:19:29Z",
+  "title": "Subphase 4.2 Supplemental Percentile Latency \u0026 Performance Acceptance Proof"
+}

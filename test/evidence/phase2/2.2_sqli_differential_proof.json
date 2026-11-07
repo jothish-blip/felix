@@ -1,0 +1,35 @@
+{
+  "conclusive_status": "PROVEN_VERIFIED",
+  "executor": "Antigravity Engineering / FELIX Core Team",
+  "exit_code": 0,
+  "metrics": {
+    "benchmark_tests_run": 6,
+    "database_dialects_supported": 7,
+    "dialect_signature_coverage": 100,
+    "dynamic_noise_masking_accuracy": 100,
+    "false_positive_count": 0,
+    "generic_500_candidate_isolation": true,
+    "mutation_isolation_failures": 0,
+    "mutillidae_blocker": "Target unavailable: C:\\SecurityLabs\\mutillidae requires MySQL/MariaDB on port 3306, which is not installed on the Windows host. Real endpoint C:\\SecurityLabs\\mutillidae\\src\\user-info.php identified but database is offline. No synthetic fixture substituted for live evidence.",
+    "non_target_preservation_rate": 100,
+    "sqli_detection_accuracy": 100,
+    "stable_dom_skeleton_differential": true,
+    "target_reachability": {
+      "Mutillidae (Port 8081)": false,
+      "NodeGoat (Port 4000)": true,
+      "WebGoat (Port 8082)": true
+    },
+    "time_based_fluke_rejections": 1,
+    "time_based_linear_scaling_verified": true,
+    "zero_panics_verified": true
+  },
+  "phase_id": "phase2",
+  "receipt_version": "3.0.0",
+  "sha256_hash": "9cb45dc5f65062a2500e2ff4befb22c1784a22a5dfb9e8cc8998f4833669a313",
+  "subphase_id": "2.2",
+  "target_repo": "webgoat, nodegoat, mutillidae",
+  "target_url": "http://127.0.0.1:8082/, http://127.0.0.1:4000/",
+  "test_command": "go test -v -count=1 ./pkg/fuzzer -run TestBenchmark_SQLiDifferentialAnalyzer",
+  "timestamp": "2026-10-29T07:30:00Z",
+  "title": "SQL Injection Differential Response Analyzer & Dynamic Masking Verification"
+}

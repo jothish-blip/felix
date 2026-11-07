@@ -30,6 +30,7 @@ type Correlator struct {
 	probesByToken      map[string]*Probe
 	probesByID         map[string]*Probe
 	probesByAssessment map[string][]*Probe
+	probesByFinding    map[string][]*Probe
 	waiters            map[string][]chan *Interaction
 	closed             bool
 }
@@ -41,6 +42,9 @@ func NewCorrelator(cfg Config) (*Correlator, error) {
 			return nil, err
 		}
 	}
+	if cfg.OASTDomain == "" {
+		cfg.OASTDomain = "oast.felix.internal"
+	}
 	if cfg.DefaultTTL <= 0 {
 		cfg.DefaultTTL = 30 * time.Second
 	}
@@ -50,12 +54,16 @@ func NewCorrelator(cfg Config) (*Correlator, error) {
 	if cfg.MaxBodyBytes <= 0 {
 		cfg.MaxBodyBytes = 64 * 1024
 	}
+	if cfg.MaxProbes <= 0 {
+		cfg.MaxProbes = 10000
+	}
 
 	return &Correlator{
 		cfg:                cfg,
 		probesByToken:      make(map[string]*Probe),
 		probesByID:         make(map[string]*Probe),
 		probesByAssessment: make(map[string][]*Probe),
+		probesByFinding:    make(map[string][]*Probe),
 		waiters:            make(map[string][]chan *Interaction),
 	}, nil
 }
@@ -83,6 +91,13 @@ func (c *Correlator) SetAllowLoopback(allow bool) {
 	c.cfg.AllowLoopback = allow
 }
 
+// SetOASTDomain updates the OAST domain used for callback probes.
+func (c *Correlator) SetOASTDomain(domain string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cfg.OASTDomain = domain
+}
+
 // Config returns a copy of the current configuration.
 func (c *Correlator) Config() Config {
 	c.mu.RLock()
@@ -90,8 +105,8 @@ func (c *Correlator) Config() Config {
 	return c.cfg
 }
 
-// GenerateProbe creates and registers a new out-of-band probe with a unique cryptographic token.
-func (c *Correlator) GenerateProbe(assessmentID, executionID, targetURL, endpoint, parameter string, proto Protocol, ttl time.Duration) (*Probe, error) {
+// RegisterProbe registers a new out-of-band probe with a unique cryptographic token and metadata.
+func (c *Correlator) RegisterProbe(opts ProbeOptions) (*Probe, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -99,14 +114,33 @@ func (c *Correlator) GenerateProbe(assessmentID, executionID, targetURL, endpoin
 		return nil, ErrCorrelatorClosed
 	}
 
+	// Enforce bounded storage capacity
+	if c.cfg.MaxProbes > 0 && len(c.probesByToken) >= c.cfg.MaxProbes {
+		c.pruneExpiredLocked()
+		if len(c.probesByToken) >= c.cfg.MaxProbes {
+			return nil, ErrMaxProbesReached
+		}
+	}
+
 	token, err := GenerateInteractionToken()
 	if err != nil {
 		return nil, err
 	}
 
+	ttl := opts.TTL
 	if ttl <= 0 {
 		ttl = c.cfg.DefaultTTL
 	}
+
+	oastDomain := opts.OASTDomain
+	if oastDomain == "" {
+		oastDomain = c.cfg.OASTDomain
+	}
+	if oastDomain == "" {
+		oastDomain = "oast.felix.internal"
+	}
+
+	callbackDomain := fmt.Sprintf("probe-%s.%s", token, oastDomain)
 
 	callbackURL := c.cfg.BaseURL
 	if callbackURL != "" {
@@ -115,31 +149,58 @@ func (c *Correlator) GenerateProbe(assessmentID, executionID, targetURL, endpoin
 		} else {
 			callbackURL = strings.TrimRight(callbackURL, "/") + "/c/" + token
 		}
+	} else {
+		callbackURL = fmt.Sprintf("http://%s/c/%s", callbackDomain, token)
+	}
+
+	proto := opts.Protocol
+	if proto == "" {
+		proto = ProtocolHTTP
 	}
 
 	probe := &Probe{
-		ID:           uuid.New().String(),
-		Token:        token,
+		ID:             uuid.New().String(),
+		Token:          token,
+		FindingID:      opts.FindingID,
+		TemplateID:     opts.TemplateID,
+		ProbeType:      opts.ProbeType,
+		CallbackDomain: callbackDomain,
+		AssessmentID:   opts.AssessmentID,
+		ExecutionID:    opts.ExecutionID,
+		TargetURL:      opts.TargetURL,
+		Endpoint:       opts.Endpoint,
+		Parameter:      opts.Parameter,
+		Protocol:       proto,
+		CallbackURL:    callbackURL,
+		CreatedAt:      time.Now().UTC(),
+		ExpiresAt:      time.Now().UTC().Add(ttl),
+		Status:         ProbeStatusPending,
+		Interactions:   make([]Interaction, 0),
+	}
+
+	c.probesByToken[token] = probe
+	c.probesByID[probe.ID] = probe
+	if opts.AssessmentID != "" {
+		c.probesByAssessment[opts.AssessmentID] = append(c.probesByAssessment[opts.AssessmentID], probe)
+	}
+	if opts.FindingID != "" {
+		c.probesByFinding[opts.FindingID] = append(c.probesByFinding[opts.FindingID], probe)
+	}
+
+	return probe, nil
+}
+
+// GenerateProbe creates and registers a new out-of-band probe with a unique cryptographic token.
+func (c *Correlator) GenerateProbe(assessmentID, executionID, targetURL, endpoint, parameter string, proto Protocol, ttl time.Duration) (*Probe, error) {
+	return c.RegisterProbe(ProbeOptions{
 		AssessmentID: assessmentID,
 		ExecutionID:  executionID,
 		TargetURL:    targetURL,
 		Endpoint:     endpoint,
 		Parameter:    parameter,
 		Protocol:     proto,
-		CallbackURL:  callbackURL,
-		CreatedAt:    time.Now().UTC(),
-		ExpiresAt:    time.Now().UTC().Add(ttl),
-		Status:       ProbeStatusPending,
-		Interactions: make([]Interaction, 0),
-	}
-
-	c.probesByToken[token] = probe
-	c.probesByID[probe.ID] = probe
-	if assessmentID != "" {
-		c.probesByAssessment[assessmentID] = append(c.probesByAssessment[assessmentID], probe)
-	}
-
-	return probe, nil
+		TTL:          ttl,
+	})
 }
 
 // RecordInteraction matches an incoming interaction against registered probes.
@@ -193,11 +254,13 @@ func (c *Correlator) RecordInteraction(ctx context.Context, interaction Interact
 		if len(probe.Interactions) < c.cfg.MaxInteractionsPerProbe {
 			probe.Interactions = append(probe.Interactions, interaction)
 		}
+		probeCopy := cloneProbeLocked(probe)
+		interCopy := interaction
 		return &CorrelationResult{
 			Matched:     true,
 			IsDuplicate: true,
-			Probe:       probe,
-			Interaction: &interaction,
+			Probe:       probeCopy,
+			Interaction: &interCopy,
 		}, ErrDuplicateCallback
 	}
 
@@ -205,11 +268,13 @@ func (c *Correlator) RecordInteraction(ctx context.Context, interaction Interact
 	probe.Status = ProbeStatusCorrelated
 	probe.Interactions = append(probe.Interactions, interaction)
 
+	probeCopy := cloneProbeLocked(probe)
+	interCopy := interaction
 	res := &CorrelationResult{
 		Matched:     true,
 		IsDuplicate: false,
-		Probe:       probe,
-		Interaction: &interaction,
+		Probe:       probeCopy,
+		Interaction: &interCopy,
 	}
 
 	// Notify active waiters for this token
@@ -242,8 +307,9 @@ func (c *Correlator) WaitForInteraction(ctx context.Context, token string, timeo
 	}
 
 	if len(probe.Interactions) > 0 {
+		interCopy := probe.Interactions[0]
 		c.mu.Unlock()
-		return &probe.Interactions[0], nil
+		return &interCopy, nil
 	}
 
 	if time.Now().UTC().After(probe.ExpiresAt) || probe.Status == ProbeStatusExpired {
@@ -275,7 +341,8 @@ func (c *Correlator) WaitForInteraction(ctx context.Context, token string, timeo
 		if !ok || interaction == nil {
 			return nil, ErrProbeCancelled
 		}
-		return interaction, nil
+		interCopy := *interaction
+		return &interCopy, nil
 	}
 }
 
@@ -314,6 +381,18 @@ func (c *Correlator) CancelAssessmentProbes(assessmentID string) {
 	}
 }
 
+func cloneProbeLocked(p *Probe) *Probe {
+	if p == nil {
+		return nil
+	}
+	cp := *p
+	if len(p.Interactions) > 0 {
+		cp.Interactions = make([]Interaction, len(p.Interactions))
+		copy(cp.Interactions, p.Interactions)
+	}
+	return &cp
+}
+
 // GetProbe retrieves a probe by token.
 func (c *Correlator) GetProbe(token string) (*Probe, bool) {
 	c.mu.RLock()
@@ -322,8 +401,7 @@ func (c *Correlator) GetProbe(token string) (*Probe, bool) {
 	if !exists {
 		return nil, false
 	}
-	cp := *probe
-	return &cp, true
+	return cloneProbeLocked(probe), true
 }
 
 // GetProbesForAssessment returns all probes generated for a given assessment.
@@ -333,10 +411,115 @@ func (c *Correlator) GetProbesForAssessment(assessmentID string) []*Probe {
 	probes := c.probesByAssessment[assessmentID]
 	out := make([]*Probe, len(probes))
 	for i, p := range probes {
-		cp := *p
-		out[i] = &cp
+		out[i] = cloneProbeLocked(p)
 	}
 	return out
+}
+
+// GetProbesForFinding returns all probes registered for a given finding ID.
+func (c *Correlator) GetProbesForFinding(findingID string) []*Probe {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	probes := c.probesByFinding[findingID]
+	out := make([]*Probe, len(probes))
+	for i, p := range probes {
+		out[i] = cloneProbeLocked(p)
+	}
+	return out
+}
+
+// PruneExpired purges expired probes that have no verified interaction evidence.
+// Active probes and valid callback evidence are strictly preserved.
+func (c *Correlator) PruneExpired() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.pruneExpiredLocked()
+}
+
+func (c *Correlator) pruneExpiredLocked() int {
+	now := time.Now().UTC()
+	var toDelete []string
+
+	for token, probe := range c.probesByToken {
+		// Never remove active pending probes
+		if probe.Status == ProbeStatusPending && now.Before(probe.ExpiresAt) {
+			continue
+		}
+		// Never remove valid callback evidence
+		if len(probe.Interactions) > 0 || probe.Status == ProbeStatusCorrelated {
+			continue
+		}
+		// Expired or cancelled probe without interactions is eligible for cleanup
+		if now.After(probe.ExpiresAt) || probe.Status == ProbeStatusExpired || probe.Status == ProbeStatusCancelled {
+			toDelete = append(toDelete, token)
+		}
+	}
+
+	for _, token := range toDelete {
+		c.deleteProbeLocked(token)
+	}
+
+	return len(toDelete)
+}
+
+func (c *Correlator) deleteProbeLocked(token string) {
+	probe, exists := c.probesByToken[token]
+	if !exists {
+		return
+	}
+
+	delete(c.probesByToken, token)
+	delete(c.probesByID, probe.ID)
+
+	// Remove from probesByAssessment
+	if probe.AssessmentID != "" {
+		probes := c.probesByAssessment[probe.AssessmentID]
+		for i, p := range probes {
+			if p.ID == probe.ID {
+				c.probesByAssessment[probe.AssessmentID] = append(probes[:i], probes[i+1:]...)
+				break
+			}
+		}
+		if len(c.probesByAssessment[probe.AssessmentID]) == 0 {
+			delete(c.probesByAssessment, probe.AssessmentID)
+		}
+	}
+
+	// Remove from probesByFinding
+	if probe.FindingID != "" {
+		probes := c.probesByFinding[probe.FindingID]
+		for i, p := range probes {
+			if p.ID == probe.ID {
+				c.probesByFinding[probe.FindingID] = append(probes[:i], probes[i+1:]...)
+				break
+			}
+		}
+		if len(c.probesByFinding[probe.FindingID]) == 0 {
+			delete(c.probesByFinding, probe.FindingID)
+		}
+	}
+
+	// Close and remove any lingering waiters
+	if waiters, ok := c.waiters[token]; ok {
+		for _, ch := range waiters {
+			close(ch)
+		}
+		delete(c.waiters, token)
+	}
+}
+
+// ProbeCount returns the current count of active and retained probes.
+func (c *Correlator) ProbeCount() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.probesByToken)
+}
+
+// Capacity returns the maximum probe storage boundary.
+func (c *Correlator) Capacity() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cfg.MaxProbes
 }
 
 // Close closes the correlator and cancels all pending waiters.

@@ -1,0 +1,52 @@
+{
+  "conclusive_status": "PROVEN_VERIFIED",
+  "environment": {
+    "arch": "amd64",
+    "go_version": "go1.27.0",
+    "logical_cpus": 8,
+    "os": "windows"
+  },
+  "executor": "Antigravity Engineering / FELIX Core Team",
+  "exit_code": 0,
+  "git_commit": "08a93188fa02cca45795f88207c36206e1fb1eb6",
+  "metrics": {
+    "acceptance_criteria": {
+      "benchmark_300k_records_tested": true,
+      "cpe_prefix_indexed_retrieval": true,
+      "hybrid_semver_evaluation_correct": true,
+      "persistence_integrity_verified": true,
+      "query_latency_under_1ms": true,
+      "regression_9_0_9_resolved": true,
+      "sqlite_database_implemented": true
+    },
+    "benchmark_iterations": 50,
+    "candidates_per_query": 30,
+    "database_file_size_mb": 107.02734375,
+    "database_integrity_status": "ok",
+    "dataset_provenance": "Synthetic deterministic enterprise CVE feed (NVD/OSV/GHSA schemas)",
+    "dataset_total_records": 300000,
+    "dataset_unique_cpe_prefixes": 10000,
+    "dataset_unique_cves": 300000,
+    "indexed_retrieval_ms": 0.183,
+    "schema_version": "cve_index_v1",
+    "semver_boundary_validation": {
+      "cve_id": "CVE-2020-1938",
+      "target_cpe": "cpe:2.3:a:apache:tomcat",
+      "version_9_0_43_cleared": true,
+      "version_9_0_9_vulnerable": true,
+      "vulnerable_range": "\u003e= 9.0.0, \u003c 9.0.43",
+      "zero_ascii_sort_errors": true
+    },
+    "semver_eval_ms": 0.058,
+    "threshold_total_query_ms": 1,
+    "total_hybrid_query_ms": 0.242
+  },
+  "phase_id": "phase4",
+  "receipt_version": "3.0.0",
+  "sha256_hash": "f0495a6b82e03aaa13c12eb30849d1278bb8acb1965843461ed8290197078c42",
+  "subphase_id": "4.2",
+  "target_repo": "NVD, OSV, GHSA Normalized CVE Feeds (~/.felix/cve.db)",
+  "test_command": "go test -v -count=1 ./pkg/cve -run TestLive_Phase42_300kBenchmarkAndReceipt",
+  "timestamp": "2026-10-30T18:00:56Z",
+  "title": "Embedded Local SQLite CVE Index \u0026 Hybrid SemVer Query Engine Proof"
+}

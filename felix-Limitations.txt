@@ -1,0 +1,625 @@
+====================================================================================================
+FELIX v3.0 — MASTER ARCHITECTURAL LIMITATIONS, EDGE-CASE BOTTLENECKS & TEST MATRIX LEDGER
+====================================================================================================
+Document Version            : 3.0.0
+Canonical File Path         : C:\Jothish\felix-Limitations.txt
+Companion Master Documents  : C:\Jothish\Felix-Roadmap.txt (Implementation Roadmap)
+                              C:\Jothish\felix-testing-cloned.txt (Empirical Testing Ledger)
+Repository Target Root      : C:\Jothish\felix
+Benchmark Security Labs     : C:\SecurityLabs (50 Local Benchmark Vulnerability Targets)
+Current Implementation State: Phase 1 CLOSED [X] | Phase 2 CLOSED [X] | Phase 3 CLOSED & LIVE VERIFIED [X]
+====================================================================================================
+
+----------------------------------------------------------------------------------------------------
+MANDATORY CONTINUOUS MAINTENANCE PROTOCOL (POST-SUBPHASE AUDIT HOOK)
+----------------------------------------------------------------------------------------------------
+INSTRUCTION FOR ALL AGENTS AND CORE ENGINEERS:
+This document is a LIVING ARCHITECTURAL LEDGER. It is not static documentation.
+At the conclusion of EVERY phase or subphase acceptance verification:
+1. REVIEW: Read every active limitation in this ledger to assess whether the newly implemented 
+   engine resolves, mitigates, or exposes an existing limitation.
+2. RESOLVE: If the subphase directly fixes an active limitation, mark its status as 
+   `[RESOLVED IN SUBPHASE X.Y]`, link the code commit/file path, document the empirical verification 
+   command, and cite the cryptographic Evidence Receipt from `test/evidence/`.
+3. REGISTER: If the subphase implementation exposes a new architectural edge case, downstream 
+   bottleneck, or real-world scanning limitation (e.g. Memory bloat, WAF challenge walls, session dropouts), 
+   immediately append it under the corresponding phase section with:
+   - Clear technical root cause (no vague generalities).
+   - Upstream impact on subsequent phases (Phases 2 through 8).
+   - Planned roadmap resolution subphase.
+   - Prescribed benchmark application from `C:\SecurityLabs\` with port and exact testing procedure.
+   - Concrete, measurable pass/fail exit metric.
+4. GATE CHECK: Progression to the next phase is STRICTLY BLOCKED if any unresolved limitation in 
+   the current phase is unmarked or lacks an explicit upstream mitigation plan.
+
+====================================================================================================
+TABLE OF CONTENTS: PHASE-BY-PHASE ARCHITECTURAL LIMITATIONS & TESTING MATRIX
+====================================================================================================
+1. PHASE 1 LIMITATIONS: Headless Chromium Dynamic Execution & SPA Deep-Crawl Subsystem
+   - [L1.1] Anti-Bot WAF & Browser Fingerprint Detection Wall (Cloudflare / Akamai / Turnstile)
+   - [L1.2] Decoupled Session Lifecycle & Accidental Logout State Loss During Traversal
+   - [L1.3] Closed Shadow DOM & Canvas/WebGL Virtual DOM Traversal Blindspot
+   - [L1.4] Infinite Feeds, Calendar Traps & Boundless SPA State Graph Explosions
+   - [L1.5] High-Concurrency Memory Consumption (OS Process Bloat vs. Context Pooling)
+   - [L1.6] WebSockets & Server-Sent Events (SSE) Bidirectional State Fuzzing Blindspot
+   - [L1.7] Neutral-Label Destructive Action Risk in Staging and Production Crawls
+   - [L1.8] Cross-Origin iframe Isolation & Sandboxed CSP Hooking Boundary
+
+2. PHASE 2 LIMITATIONS: Context-Aware Active Parameter Fuzzer & Injection Engine
+   - [L2.1] Dynamic Content DOM Jitter in Boolean Differential SQL Verification [RESOLVED IN SUBPHASE 2.2]
+   - [L2.2] Downstream Concurrency-Induced Latency False Positives in Time-Based SQLi [RESOLVED IN SUBPHASE 2.2]
+   - [L2.3] Multi-Parameter Dependency Deadlock in Deep JSON / GraphQL Payloads
+   - [L2.4] Target Rate-Limiter Exhaustion & WAF IP Ban Without Adaptive Backoff [RESOLVED IN SUBPHASE 2.6]
+
+3. PHASE 3 LIMITATIONS: Stateful Authentication, Dynamic Nonce & Multi-Persona BOLA Engine
+   - [L3.1] Dynamic Anti-CSRF Synchronizer Desynchronization Under Parallel Threads [RESOLVED IN SUBPHASE 3.3]
+   - [L3.2] Multi-Tenant Identity Cross-Pollination in Shared Browser Profiles [RESOLVED IN SUBPHASE 3.4 & 3.5]
+   - [L3.3] Complex Multi-Step Business Logic State Corruption (E-Commerce Cart State) [RESOLVED IN SUBPHASE 3.6]
+   - [L3.4] Multi-Container crAPI Target Spawning Prerequisite in Non-Docker Windows Environments [RESOLVED IN SUBPHASE 3.5]
+
+4. PHASE 4 LIMITATIONS: 300,000+ CVE Intelligence, Deep OAST & Supply Chain Engine
+   - [L4.1] Air-Gapped Network Isolation Deadlock on External OAST DNS/HTTP Pingbacks
+   - [L4.2] SQLite CVE Lookup Index Degradation Under High-Throughput Scans
+
+5. PHASE 5 LIMITATIONS: Cloud-Native, Kubernetes & Serverless Security Architecture
+   - [L5.1] IMDSv2 Session Token Extraction Blindspot in Browser-Initiated Redirects
+   - [L5.2] Multi-Cloud IAM Policy Read-Only Simulation Without Destructive API Calls
+
+6. PHASE 6 LIMITATIONS: Native Mobile Security Engine (Android APK & iOS Inspection)
+   - [L6.1] Hardware-Enforced TLS Certificate Pinning Bypass in Non-Rooted Test Environments
+   - [L6.2] Obfuscated Native JNI Code Reverse Engineering Gaps
+
+7. PHASE 7 LIMITATIONS: Enterprise Compliance Mapping & Multi-Framework Reporting Engine
+   - [L7.1] Regional Jurisdiction Regulatory Divergence (CERT-In 6-Hour vs. GDPR vs. DPDP)
+   - [L7.2] High-Volume Finding Dossier Rendering Bottlenecks in Single-Page HTML Reports
+
+8. PHASE 8 LIMITATIONS: High-Performance Distributed Autonomous Fleet Architecture
+   - [L8.1] Cross-Node SQLite Write Locking Under Distributed Fleet Worker Writes
+   - [L8.2] Network Boundary Flapping & Ephemeral Target Container Readiness Latency
+
+====================================================================================================
+1. PHASE 1: HEADLESS CHROMIUM DYNAMIC EXECUTION & SPA DEEP-CRAWL SUBSYSTEM
+====================================================================================================
+
+----------------------------------------------------------------------------------------------------
+[L1.1] Anti-Bot WAF & Browser Fingerprint Detection Wall (Cloudflare / Akamai / Turnstile)
+----------------------------------------------------------------------------------------------------
+Subsystem Component : `pkg/crawler/browser/launcher.go` (Chromium Launch Flags)
+Current Behavior    : Launches headless Microsoft Edge or Google Chrome using standard CLI flags:
+                      `--headless`, `--disable-gpu`, `--no-sandbox`, `--disable-dev-shm-usage`.
+The Limitation      : Chromium in default `--headless` mode exposes obvious automation artifacts:
+                      - `navigator.webdriver === true` in JavaScript global window context.
+                      - Missing `window.chrome.runtime` and empty `navigator.plugins` array.
+                      - WebGL vendor strings report `Google SwiftShader` or `Mesa OffScreen`.
+                      - Anomalous User-Agent and CDP `Runtime.enable` leak hooks.
+Upstream Impact     : In Phases 2 and 8, when FELIX targets enterprise applications or modern SaaS
+                      protected by Cloudflare Bot Management, Akamai Bot Manager, Cloudflare Turnstile,
+                      or AWS WAF Captcha, the browser is instantly greeted with an HTTP 403 Forbidden
+                      or an interactive JavaScript challenge wall. The crawler is completely blocked
+                      at the gateway, preventing all downstream parameter extraction, active fuzzing,
+                      and vulnerability discovery.
+Planned Fix Phase   : Phase 8.3 / Subphase 1.1 Maintenance (Stealth CDP Profile Injection)
+Remediation Design  : Inject pure Go CDP overrides via `Page.addScriptToEvaluateOnNewDocument`:
+                      - Redefine `Object.defineProperty(navigator, 'webdriver', {get: () => undefined})`.
+                      - Mock realistic `navigator.plugins`, `navigator.languages`, and hardware concurrency.
+                      - Spoof WebGL vendor/renderer strings to match native host GPU drivers.
+                      - Route CDP commands through a stealth WebSocket proxy that strips automation markers.
+Testing Verification:
+- Designated Target : `C:\SecurityLabs\juice-shop` (Port 3000) behind simulated WAF challenge fixture:
+                      `test/lab/waf_challenge.html` & online benchmark `https://bot.sannysoft.com`.
+- Testing Procedure : Direct `pkg/crawler/browser` launcher to `waf_challenge.html`. Evaluate whether
+                      the bot detection script identifies automation flags.
+- Pass Exit Metric  : 100% of bot detection checks report "PASS" (`navigator.webdriver` undetected);
+                      crawler successfully navigates past challenge wall without manual intervention.
+
+----------------------------------------------------------------------------------------------------
+[L1.2] Decoupled Session Lifecycle & Accidental Logout State Loss During Traversal
+----------------------------------------------------------------------------------------------------
+Subsystem Component : `pkg/crawler/browser/monkey.go`, `pkg/crawler/browser/spa.go`
+Current Behavior    : DOM Monkey clicks links, buttons, and form submits across the DOM tree. While it
+                      avoids explicit destructive keywords ("delete", "remove"), it does not understand
+                      session semantics.
+The Limitation      : In modern authenticated SPAs, navigation menus frequently contain "Log Out",
+                      "Sign Out", "Switch Account", or idle session expiration timeouts (e.g. 15-minute JWTs).
+                      If the crawler clicks a logout trigger or the session token expires mid-crawl:
+                      - The browser state transitions back to the unauthenticated login screen.
+                      - The browser crawler continues traversing, but all discovered endpoints are now public.
+Upstream Impact     : In Phase 2 (Active Parameter Fuzzing) and Phase 3 (Multi-Persona BOLA), if the session
+                      drops out, all subsequent active injection probes execute unauthenticated. The scanner
+                      silently registers false negatives, assuming protected endpoints are properly secured,
+                      when in reality the session was simply lost.
+Planned Fix Phase   : Phase 3 (Subphases 3.1 & 3.2: Stateful Login Macro Engine & Active Keep-Alive Loop)
+Remediation Design  : 
+                      1. Semantic Action Blacklist: Extend `pkg/crawler/browser/monkey.go` to explicitly
+                         reject elements containing "logout", "signout", "exit", "disconnect", "invalidate".
+                      2. Session Canary Polling: Register an active session health check URL (e.g. `/api/whoami`).
+                         Every 10 interaction steps, poll the canary. If HTTP 401/403 or login redirect occurs,
+                         pause the crawler, trigger the Phase 3 login macro to obtain a fresh token, update
+                         `localStorage`/cookies, and resume crawl seamlessly.
+Testing Verification:
+- Designated Target : `C:\SecurityLabs\webgoat` (Port 8080 - Spring Boot session keep-alive) &
+                      `C:\SecurityLabs\juice-shop` (Port 3000 - authenticated session `jim@juice-sh.op`).
+- Testing Procedure : Crawl Juice Shop while logged in. Simulate intentional token revocation or force a
+                      logout trigger; assert that the crawler detects session loss, automatically executes
+                      re-authentication macro, and restores authenticated crawling without aborting.
+- Pass Exit Metric  : 0 unauthenticated crawl dropouts; automatic session restoration < 1500ms;
+                      100% authenticated route continuity.
+
+----------------------------------------------------------------------------------------------------
+[L1.3] Closed Shadow DOM & Canvas/WebGL Virtual DOM Traversal Blindspot
+----------------------------------------------------------------------------------------------------
+Subsystem Component : `pkg/crawler/browser/monkey.go` (DOM Selector Engine)
+Current Behavior    : Evaluates interactive targets using standard DOM query selectors:
+                      `document.querySelectorAll('a, button, input, select, textarea, [onclick]')`.
+The Limitation      : Modern web frameworks using Web Components with closed Shadow Roots
+                      (`element.attachShadow({mode: 'closed'})`) or Canvas/WebGL rendering (such as
+                      Flutter for Web, Google Docs UI, or fintech charting dashboards) hide interactive
+                      elements from the standard DOM tree.
+                      `querySelectorAll` returns 0 elements for components buried inside closed shadow roots.
+Upstream Impact     : In Phase 2 and Phase 8 enterprise scans, modern micro-frontends and Flutter-based web
+                      applications appear completely empty. FELIX discovers 0 interactive elements, missing
+                      critical administrative buttons, search fields, and authenticated workflows.
+Planned Fix Phase   : Phase 8.2 (Deep Shadow DOM Piercing Engine & Visual Coordinate Heuristics)
+Remediation Design  : 
+                      1. Use CDP `DOM.describeNode` with `pierce: true` and `DOM.resolveNode` to inspect
+                         closed shadow roots directly from the Chrome engine level, bypassing JavaScript
+                         DOM boundary protections.
+                      2. For canvas-based apps, implement visual coordinate OCR and layout heuristic grid
+                         clicking to interact with canvas-drawn controls.
+Testing Verification:
+- Designated Target : `C:\SecurityLabs\secure-coding-dojo` (Port 4005) & Synthetic Web Components Fixture:
+                      `test/lab/shadow_dom.html` (containing nested closed shadow roots and custom elements).
+- Testing Procedure : Execute crawler against `shadow_dom.html`; assert that monkey discovers and clicks
+                      hidden buttons nested 3 layers deep inside closed shadow boundaries.
+- Pass Exit Metric  : 100% extraction and interaction depth across closed shadow roots; zero missing child buttons.
+
+----------------------------------------------------------------------------------------------------
+[L1.4] Infinite Feeds, Calendar Traps & Boundless SPA State Graph Explosions
+----------------------------------------------------------------------------------------------------
+Subsystem Component : `pkg/crawler/browser/spa.go` (SPA State Transition Engine)
+Current Behavior    : Records explored states using URL paths/hashes and a structural DOM hash.
+The Limitation      : Modern applications frequently include unbounded dynamic content generators:
+                      - Infinite scroll feeds (e.g. social posts, product review feeds loading page 1..N).
+                      - Interactive date pickers / calendars (generating endless `/#/events?date=YYYY-MM-DD`).
+                      - Dynamically sorted tables with infinite permutation parameters (`?sort=asc&col=1`).
+                      FELIX tracks these as new distinct states, causing exponential state explosions.
+Upstream Impact     : In Phase 2 parameter fuzzing and Phase 8 large-scale scanning, the crawler enters
+                      an infinite discovery loop. It burns through the safety request quota (MaxRequestsPerTarget),
+                      allocates gigabytes of state data in memory, and stalls scans for hours while probing
+                      structurally identical pagination screens.
+Planned Fix Phase   : Subphase 2.6 / 1.6+ (Structural DOM Clustering & State Equivalence Hashing)
+Remediation Design  : Implement DOM Skeleton Normalization:
+                      - Strip dynamic text, numeric IDs, and timestamps before computing the state signature.
+                      - If 3 consecutive states share an identical DOM skeleton with only list-item pagination
+                        or query string date permutations, classify the view as an "Infinite Feed Pattern".
+                      - Cap pagination exploration to a configurable threshold (e.g. MaxPaginationDepth = 3)
+                        and prune subsequent permutations from the state graph.
+Testing Verification:
+- Designated Target : `C:\SecurityLabs\juice-shop` (Port 3000 - infinite review pagination) &
+                      `C:\SecurityLabs\wackopicko` (Port 8085 - pagination catalog).
+- Testing Procedure : Direct crawler to Juice Shop reviews or WackoPicko catalog; verify crawler caps
+                      pagination traversal at 3 iterations and avoids infinite crawling loops.
+- Pass Exit Metric  : Maximum pagination depth strictly bounded; zero runaway state generation;
+                      memory footprint maintained < 200 MB.
+
+----------------------------------------------------------------------------------------------------
+[L1.5] High-Concurrency Memory Consumption (OS Process Bloat vs. Context Pooling)
+----------------------------------------------------------------------------------------------------
+Subsystem Component : `pkg/crawler/browser/launcher.go` (Process Management)
+Current Behavior    : Spawns an isolated OS-level browser process (`msedge.exe`/`chrome.exe`) per instance
+                      with its own temporary `--user-data-dir`.
+The Limitation      : Each Chromium OS process tree (main process + GPU process + network service + renderers)
+                      consumes between 80 MB and 150 MB of resident RAM. Launching 10 parallel browser sessions
+                      consumes ~1.5 GB of RAM.
+Upstream Impact     : In Phase 8 (Fleet-Scale Autonomous Auditing), FELIX is designed to audit dozens of
+                      microservices simultaneously. Launching 50 to 100 concurrent browser processes would demand
+                      8 GB to 15 GB of RAM, causing intense Windows memory paging, disk thrashing, high latency,
+                      or OS Out-Of-Memory (OOM) crashes.
+Planned Fix Phase   : Phase 8.1 (Lightweight Target Context Multiplexing via CDP `Target.createBrowserContext`)
+Remediation Design  : Maintain a persistent, warm Chromium daemon process. Instead of spawning new OS processes
+                      for concurrent workers, invoke CDP `Target.createBrowserContext`. Each browser context provides
+                      complete cookie, cache, and storage isolation with zero OS process overhead, reducing memory
+                      consumption from ~120 MB down to ~15 MB per concurrent session (>85% memory reduction).
+Testing Verification:
+- Designated Target : Stress benchmark against `C:\SecurityLabs\juice-shop` (Port 3000) under 50 concurrent sessions.
+- Testing Procedure : Run launcher benchmark spawning 50 parallel crawling sessions concurrently using BrowserContext
+                      multiplexing; track total RAM usage via Windows Performance Counters.
+- Pass Exit Metric  : 50 concurrent sessions complete with total memory footprint < 1.8 GB (vs >7 GB previously);
+                      zero zombie processes and 0 crashed workers.
+
+----------------------------------------------------------------------------------------------------
+[L1.6] WebSockets & Server-Sent Events (SSE) Bidirectional State Fuzzing Blindspot
+----------------------------------------------------------------------------------------------------
+Subsystem Component : `pkg/crawler/browser/network.go` (CDP Network Sniffer)
+Current Behavior    : Sniffs and logs HTTP/HTTPS fetch and XHR requests. For WebSockets, it observes the
+                      HTTP 101 Switching Protocols handshake, but ignores subsequent bi-directional frames.
+The Limitation      : Modern interactive web applications (real-time chat, collaborative documents, live financial
+                      trading systems) execute business logic and data exchanges over WebSocket message frames
+                      (`ws://` and `wss://`) or Server-Sent Events (`text/event-stream`).
+                      FELIX does not capture, catalog, or manipulate the contents of individual WS frames.
+Upstream Impact     : In Phase 2, the Active Parameter Fuzzer operates strictly over HTTP request parameters.
+                      Any application parameter transmitted over a live WebSocket connection is completely
+                      invisible and immune to fuzzing. SQL injection, command injection, or authorization bypasses
+                      residing in WebSocket handlers cannot be discovered.
+Planned Fix Phase   : Phase 2.7 / Phase 8.4 (CDP WebSocket Frame Interceptor & Message Tampering Engine)
+Remediation Design  : Enable CDP `Network.webSocketFrameReceived` and `Network.webSocketFrameSent` listeners.
+                      - Parse JSON-RPC, text, and binary message frames into the parameter cataloger.
+                      - Implement active message injection via CDP `Network.sendWebSocketMessage` to fuzz
+                        WebSocket parameters with Phase 2 injection payloads.
+Testing Verification:
+- Designated Target : `C:\SecurityLabs\dvws-node` (Port 4004 - Node.js Damn Vulnerable Web Services - WebSockets).
+- Testing Procedure : Connect crawler to DVWS WebSocket chat service; intercept outgoing message frames;
+                      inject SQLi and command injection payloads (`' OR 1=1--`) via WebSocket protocol;
+                      assert detection of reflected error responses.
+- Pass Exit Metric  : 100% capture of WS frames; successful injection and verified flaw capture over live WebSockets.
+
+----------------------------------------------------------------------------------------------------
+[L1.7] Neutral-Label Destructive Action Risk in Staging and Production Crawls
+----------------------------------------------------------------------------------------------------
+Subsystem Component : `pkg/crawler/browser/monkey.go` (Destructive Action Filter)
+Current Behavior    : Checks button and link text against a static keyword blacklist: "delete", "purge",
+                      "remove", "drop", "destroy", "wipe".
+The Limitation      : Real-world enterprise applications frequently execute irreversible, state-corrupting
+                      actions via neutrally labeled UI elements:
+                      - Buttons labeled simply "Confirm", "Proceed", "Authorize", "Apply Changes", "Save".
+                      - Icon-only buttons (e.g. an SVG trash can or FontAwesome `<i class="fa fa-trash"></i>`
+                        with zero inner text).
+                      - Financial actions like "Place Order", "Transfer Funds", "Debit Account".
+Upstream Impact     : In Phase 3 (Business Logic Auditing) and Phase 8 (Enterprise Production Scans), running
+                      the Phase 1 DOM monkey against staging or production systems risks triggering catastrophic
+                      side-effects: placing unauthorized purchases, clearing test database configurations, or
+                      revoking administrative user privileges.
+Planned Fix Phase   : Phase 3.6 (Business Logic State Machine & Non-Destructive Safe Mutation Sandbox)
+Remediation Design  : 
+                      1. Contextual Action Analyzer: Inspect CSS classes, `aria-label`, parent form `action`,
+                         and destination HTTP methods (`DELETE`, `PUT`, `POST /api/v1/orders`).
+                      2. Dry-Run / Read-Only Policy Mode: In production scan mode, enforce a strict policy
+                         that disallows form submissions and state-mutating HTTP methods unless an explicit
+                         `--allow-mutations` flag is passed.
+Testing Verification:
+- Designated Target : `C:\SecurityLabs\juice-shop` (Port 3000 - Cart Checkout `/rest/basket/.../checkout` &
+                      Address Deletion `/api/Addresss/1`).
+- Testing Procedure : Crawl authenticated Juice Shop session containing pre-seeded basket and address.
+                      Assert that DOM monkey identifies icon-only delete buttons and checkout actions,
+                      and safely avoids triggering them under default safe-mode audit policy.
+- Pass Exit Metric  : Zero unintended database state mutations; 0 unwanted checkout orders executed;
+                      100% safe exploration of read-only UI states.
+
+----------------------------------------------------------------------------------------------------
+[L1.8] Cross-Origin iframe Isolation & Sandboxed CSP Hooking Boundary
+----------------------------------------------------------------------------------------------------
+Subsystem Component : `pkg/crawler/browser/dom_xss.go`, `pkg/crawler/browser/storage.go`
+Current Behavior    : Injects DOM XSS instrumentation hooks via `Page.addScriptToEvaluateOnNewDocument`.
+The Limitation      : When a web page embeds third-party frames from different domains or subdomains
+                      (e.g., payment portals, third-party authentication widgets) or iframes with strict
+                      `sandbox` attributes, Chromium enforces Cross-Origin Isolation (Site Isolation).
+                      Hooks injected at the top-level page do not automatically propagate into child frames
+                      running in isolated renderer processes.
+Upstream Impact     : In Phase 2 active fuzzing and Phase 8 compliance testing, vulnerable DOM sinks
+                      (e.g., `window.addEventListener('message', ...)`) and client secrets residing inside
+                      embedded cross-origin iframes are completely hidden from FELIX.
+Planned Fix Phase   : Subphase 1.4+ / Phase 8 (CDP `Target.setAutoAttach` Frame Hierarchy Engine)
+Remediation Design  : Enable CDP `Target.setAutoAttach` with `autoAttach: true` and `waitForDebuggerOnStart: false`.
+                      When child iframes or web workers are spawned, Chromium notifies FELIX via target
+                      events, allowing FELIX to attach to child sessions and inject DOM XSS hooks into every
+                      individual execution frame.
+Testing Verification:
+- Designated Target : Synthetic Cross-Origin Fixture `test/lab/cross_origin_frame.html` &
+                      `C:\SecurityLabs\secure-coding-dojo` (Port 4005).
+- Testing Procedure : Load parent page embedding cross-origin iframe with vulnerable DOM sink; verify
+                      FELIX attaches to child target and traps unescaped canary payloads executed within iframe.
+- Pass Exit Metric  : 100% sink detection across both parent and child iframe renderer contexts.
+
+====================================================================================================
+2. PHASE 2: CONTEXT-AWARE ACTIVE PARAMETER FUZZER & INJECTION ENGINE
+====================================================================================================
+
+----------------------------------------------------------------------------------------------------
+[L2.1] Dynamic Content DOM Jitter in Boolean Differential SQL Verification
+----------------------------------------------------------------------------------------------------
+Status              : [RESOLVED IN SUBPHASE 2.2]
+Subsystem Target    : `pkg/fuzzer/sqli.go`, `pkg/apisec/differential.go`
+The Limitation      : Comparing raw HTTP response bodies or Levenshtein edit distance between `1=1` and
+                      `1=2` payloads produces false positive SQLi alerts on modern web pages that embed dynamic
+                      timestamps, rotating CSRF nonces, personalized session greetings, or randomized advertisement IDs.
+Upstream Impact     : Corrupts verification precision below 100%, violating the Zero False-Positive mandate.
+Resolution Impl     : Implemented `DynamicMasker` in `pkg/fuzzer/sqli.go` using dual-baseline pre-comparison diffing
+                      and static regex masking to neutralize volatile tokens prior to Levenshtein DOM skeleton diffing.
+Testing Website/Lab : `C:\SecurityLabs\webgoat` (Port 8082 - SQL Injection Lessons) &
+                      `test/lab/` high dynamic noise fixtures.
+Testing Procedure   : Issue dual baseline requests (`Baseline_1` and `Baseline_2`) without payloads; compute
+                      an exclusion mask of fluctuating dynamic fields; compare fuzzing responses exclusively
+                      against the masked stable DOM skeleton.
+Verification Command: `go test -v -count=1 ./pkg/fuzzer -run TestBenchmark_SQLiDifferentialAnalyzer`
+Evidence Receipt    : `test/evidence/phase2/2.2_sqli_differential_proof.json`
+Pass Exit Metric    : 100% detection of SQLi flaws with zero false positives caused by dynamic timestamps.
+
+----------------------------------------------------------------------------------------------------
+[L2.2] Downstream Concurrency-Induced Latency False Positives in Time-Based SQLi
+----------------------------------------------------------------------------------------------------
+Status              : [RESOLVED IN SUBPHASE 2.2]
+Subsystem Target    : `pkg/fuzzer/sqli.go`
+The Limitation      : Injecting time-based blind payloads (`SLEEP(5)` or `pg_sleep(5)`) while executing
+                      parallel scanner threads causes server-side CPU queuing, causing normal requests to
+                      take >5000ms and producing false positive SQL injection findings.
+Upstream Impact     : Fails verification in CI/CD pipelines under concurrent testing load.
+Resolution Impl     : Implemented `AnalyzeTimeBased` with sequential mathematical latency progression:
+                      `1s` probe -> `3s` probe -> `0s` control probe, asserting linear scaling (T(3s)-T(1s) >= 1500ms)
+                      and control baseline return (T(0s) <= baseline + 500ms). Rejects queuing jitter.
+Testing Website/Lab : `C:\SecurityLabs\nodegoat` (Port 4000 - Server-Side JS Injection & Mongo Latency).
+Testing Procedure   : When an initial latency spike is detected, execute a strict 3-step verification progression:
+                      Step 1: Test with Delay = 1s (assert elapsed >= 850ms).
+                      Step 2: Test with Delay = 3s (assert elapsed >= 2500ms, Delta >= 1500ms).
+                      Step 3: Test with Delay = 0s control probe (assert elapsed <= baseline + 500ms).
+Verification Command: `go test -v -count=1 ./pkg/fuzzer -run TestTimeBasedLatencyProgression_LinearScaling`
+Evidence Receipt    : `test/evidence/phase2/2.2_sqli_differential_proof.json`
+Pass Exit Metric    : Zero false positive time-based findings under parallel multi-threaded load.
+
+----------------------------------------------------------------------------------------------------
+[L2.4] Target Rate-Limiter Exhaustion & WAF IP Ban Without Adaptive Backoff
+----------------------------------------------------------------------------------------------------
+Status              : [RESOLVED IN SUBPHASE 2.6]
+Subsystem Target    : pkg/fuzzer/pool.go
+The Limitation      : Fuzzing target applications at full unbounded concurrency exhausts target connection pools,
+                      triggers HTTP 429 Too Many Requests rate-limiting, and can lead to WAF IP bans or dropped
+                      requests without adaptive backoff and concurrency control.
+Upstream Impact     : Fuzzing campaigns drop requests, corrupt test integrity, or get banned during live audits.
+Resolution Impl     : Implemented FuzzingPool and AdaptiveRateLimitedTransport with dynamic concurrency slot permits,
+                      lock-free rate pacing, exponential AIMD backoff on HTTP 429 / connection drops, MaxBackoff-capped
+                      Retry-After parsing (integer & HTTP-date), request-body replay across retries, panic-free shutdown
+                      synchronization, dial-time SSRF metadata protection, and additive recovery upon consecutive successes.
+Testing Website/Lab : C:\SecurityLabs\webgoat (Port 8082 / 8080) & Local Rate Limiter Mock (test/lab/rate_limit_mock).
+Testing Procedure   : Dispatch 500 fuzzing requests through worker pool with 25 concurrent goroutines; simulate target
+                      returning HTTP 429; assert rate limiter dynamically backs off, halves concurrency, retries throttled
+                      requests, and recovers without dropping requests.
+Verification Command: go test -v -count=1 ./pkg/fuzzer -run TestBenchmark_FuzzingConcurrencyAndAdaptiveRateLimiter
+Evidence Receipt    : test/evidence/phase2/2.6_rate_limiter_recovery_proof.json
+Supplemental Receipt: test/evidence/phase2/2.6_rate_limiter_correctness_proof.json
+Pass Exit Metric    : 0 lost requests; 0 unhandled connection dropouts; throughput >100 req/s on loopback.
+Remaining Boundaries: 1. Live target WebGoat does not throttle login route; 429 backoff is proven via local HTTP testbed.
+                      2. Cloud metadata SSRF guard blocks literal IP/IPv6, link-local 169.254.0.0/16, well-known hostnames,
+                         DNS rebinding at DialContext, and redirects; external reverse proxy SSRF requires Phase 5 auditing.
+                      3. Host Windows OS lacks Cgo/GCC compiler, precluding dynamic -race execution.
+
+
+====================================================================================================
+3. PHASE 3: STATEFUL AUTHENTICATION, DYNAMIC NONCE & MULTI-PERSONA BOLA ENGINE
+====================================================================================================
+
+----------------------------------------------------------------------------------------------------
+[L3.1] Dynamic Anti-CSRF Synchronizer Desynchronization Under Parallel Threads [RESOLVED IN SUBPHASE 3.3]
+----------------------------------------------------------------------------------------------------
+Subsystem Target    : `pkg/auth/csrf.go`
+Status              : RESOLVED IN SUBPHASE 3.3
+Resolution Proof    : `test/evidence/phase3/3.3_csrf_synchronization_proof.json`
+Verification        : Atomic single-use nonce synchronization verified with zero HTTP 403 rejections.
+
+----------------------------------------------------------------------------------------------------
+[L3.2] Multi-Tenant Identity Cross-Pollination in Shared Browser Profiles [RESOLVED IN SUBPHASE 3.4 & 3.5]
+----------------------------------------------------------------------------------------------------
+Subsystem Target    : `pkg/auth/persona.go` & `pkg/auth/bola.go`
+Status              : RESOLVED IN SUBPHASE 3.4 & 3.5
+Resolution Proof    : `test/evidence/phase3/3.4_multi_persona_isolation_proof.json` & `3.5_bola_cross_user_proof.json`
+Verification        : Full multi-persona isolation verified with zero cross-contamination between victim/attacker
+                      sessions; live BOLA verified on VAmPI (`/users/v1/{username}`) with 100% precision.
+
+----------------------------------------------------------------------------------------------------
+[L3.3] Complex Multi-Step Business Logic State Corruption (E-Commerce Cart State) [RESOLVED IN SUBPHASE 3.6]
+----------------------------------------------------------------------------------------------------
+Subsystem Target    : `pkg/workflow/logic.go`
+Status              : RESOLVED IN SUBPHASE 3.6
+Resolution Proof    : `test/evidence/phase3/3.6_business_logic_tampering_proof.json`
+Verification        : Verified live against OWASP Juice Shop on loopback (Port 3000): negative quantity parameter
+                      tampering (VERIFIED_DEFECT), direct checkout step skipping (VERIFIED_DEFECT), unauthenticated
+                      checkout refusal (DEFENDED_BARRIER: HTTP 401), invalid coupon rejection (DEFENDED_BARRIER: HTTP 404).
+
+----------------------------------------------------------------------------------------------------
+[L3.4] Multi-Container crAPI Target Spawning Prerequisite in Non-Docker Windows Environments [RESOLVED IN SUBPHASE 3.5]
+----------------------------------------------------------------------------------------------------
+Subsystem Target    : Benchmark Target Execution Infrastructure (C:\SecurityLabs\crapi)
+Status              : [RESOLVED IN SUBPHASE 3.5] (Proof: test/evidence/phase3/3.5_crapi_bola_proof.json)
+Resolution Detail   : crAPI 10-container stack hosted in isolated local VirtualBox Linux runtime
+                      (kali-linux-2026.2-virtualbox-amd64 with 4GB RAM / 4 CPUs) and bridged to host
+                      via loopback NAT port forward (127.0.0.1:8888 -> 8888). Autonomous multi-persona
+                      BOLA validation executed by FELIX against live Workshop service (/workshop/api/shop/orders/{id}),
+                      confirming VERIFIED_DEFECT on unauthorized cross-user order extraction and DEFENDED_BARRIER
+                      on anonymous access controls.
+Receipt Hashes      : Canonical SHA-256: 28f3d3538307126a1fc73594152abc6f0b7228d43edf55ef3b9f580f759832f4
+                      Raw Disk SHA-256:  5d0a5fb40512636b8a90ee9f739b06f05e82055cc6e75d00c5cee25bddd96c58
+
+====================================================================================================
+4. PHASE 4: 300,000+ CVE INTELLIGENCE, DEEP OAST & SUPPLY CHAIN ENGINE
+====================================================================================================
+
+----------------------------------------------------------------------------------------------------
+[L4.1] Air-Gapped Network Isolation Deadlock on External OAST DNS/HTTP Pingbacks
+----------------------------------------------------------------------------------------------------
+Subsystem Target    : `pkg/oast/interceptor.go`
+The Limitation      : Out-of-Band Application Security Testing (OAST) relies on public DNS/HTTP interaction
+                      servers (e.g. `*.oast.live`). In private VPCs, air-gapped financial networks, or local
+                      security lab environments without public Internet access, target apps cannot resolve
+                      public DNS, causing blind vulnerability detection (Blind SSRF, Log4Shell) to fail completely.
+Upstream Impact     : 100% false negative rate for blind vulnerabilities in isolated enterprise test environments.
+Planned Fix Phase   : Subphase 4.4 (Self-Hosted Ephemeral Loopback OAST Listener & DNS Mock)
+Testing Website/Lab : `C:\SecurityLabs\wrongsecrets` (Port 8083) & Local OAST Mock (`test/lab/oast_listener.go`).
+Testing Procedure   : Bind an in-process local UDP DNS and HTTP listener on loopback; configure target to route
+                      lookups through local mock; verify real-time trigger capture with 0 external network dependencies.
+Pass Exit Metric    : 100% detection of blind callbacks in zero-Internet isolated testing environments.
+
+----------------------------------------------------------------------------------------------------
+[L4.2] SQLite CVE Lookup Index Degradation Under High-Throughput Scans
+----------------------------------------------------------------------------------------------------
+Subsystem Target    : pkg/cve/store.go, pkg/cve/matcher.go
+The Limitation      : Standard SQL database lookups over 300,000+ CVE records suffer from two critical flaws:
+                      1. SQL ASCII string comparisons fail semantic version evaluation (e.g. evaluating
+                         '9.0.9' > '9.0.43' as TRUE due to ASCII collation).
+                      2. Unindexed or full-table scans under rapid multi-worker crawling cause latency spikes (>50ms).
+Upstream Impact     : False positives / false negatives in CVE detection and scanning bottlenecks.
+Planned Fix Phase   : Subphase 4.2 (Embedded Local SQLite Index & Hybrid SemVer Query Engine)
+Testing Website/Lab : Local embedded SQLite benchmark store (~/.felix/cve.db) with 300,000+ records.
+Testing Procedure   : Ingest 300,000+ normalized CVE records into local SQLite with WAL mode and dedicated B-Tree
+                      prefix index (idx_cve_cpe_prefix). Execute hybrid query: Stage 1 indexed retrieval
+                      fetches candidate rows in pure SQLite (<0.5ms); Stage 2 evaluates exact SemVer ranges
+                      using Masterminds/semver in Go memory (<0.1ms). Assert 9.0.9 is flagged vulnerable and
+                      9.0.43 is cleared for >= 9.0.0, < 9.0.43.
+Pass Exit Metric    : Total query + SemVer evaluation time <1.0ms; 0 SemVer ASCII collation errors; Exit Code 0.
+Resolution Status   : RESOLVED & VERIFIED in Subphase 4.2. Ingestion throughput: 24,993 rec/s (300,000 records).
+                      Stage 1 SQLite fetch: 0.150ms (<0.5ms); Stage 2 SemVer eval: 0.033ms (<0.1ms); Combined latency: 0.183ms (<1.0ms).
+                      Evidence receipt: 	est/evidence/phase4/4.2_cve_sqlite_query_benchmark_proof.json.
+
+====================================================================================================
+5. PHASE 5: CLOUD-NATIVE, KUBERNETES & SERVERLESS SECURITY ARCHITECTURE
+====================================================================================================
+
+----------------------------------------------------------------------------------------------------
+[L5.1] IMDSv2 Session Token Extraction Blindspot in Browser-Initiated Redirects
+----------------------------------------------------------------------------------------------------
+Subsystem Target    : `pkg/cloud/ssrf.go`, `pkg/crawler/browser/network.go`
+The Limitation      : AWS Cloud Metadata IMDSv2 requires a `PUT` request with header `X-aws-ec2-metadata-token-ttl-seconds`
+                      to acquire a session token before metadata can be read. Browser-initiated requests (e.g. via
+                      `fetch` or `<img src=...>`) cannot issue arbitrary custom headers to loopback/metadata
+                      without being blocked or failing CORS preflight.
+Upstream Impact     : In cloud audits, scanners often test only IMDSv1 (`GET /latest/meta-data/`), missing
+                      modern cloud configurations that enforce IMDSv2 token validation.
+Planned Fix Phase   : Subphase 5.1 (Two-Stage Cloud Metadata Protocol Evaluator)
+Testing Website/Lab : `C:\SecurityLabs\cloudgoat` & `C:\SecurityLabs\serverless-goat`.
+Testing Procedure   : Simulate cloud environment enforcing IMDSv2; verify FELIX tests both IMDSv1 direct access
+                      and IMDSv2 token acquisition, correctly distinguishing defended vs exposed states.
+Pass Exit Metric    : Accurate identification of IMDSv1 vs IMDSv2 enforcement with zero false alarms.
+
+====================================================================================================
+6. PHASE 6: NATIVE MOBILE SECURITY ENGINE (ANDROID APK & iOS INSPECTION)
+====================================================================================================
+
+----------------------------------------------------------------------------------------------------
+[L6.1] Hardware-Enforced TLS Certificate Pinning Bypass in Non-Rooted Test Environments
+----------------------------------------------------------------------------------------------------
+Subsystem Target    : `pkg/apk/dynamic.go`
+The Limitation      : Modern Android applications implement strict TLS Certificate Pinning via OkHttp or
+                      native C++ libraries. Static APK analysis can decompile code, but dynamic traffic interception
+                      fails if the device/emulator lacks Frida runtime hooks to disable pinning.
+Upstream Impact     : In mobile assessments, operators are blinded to API calls made by compiled native apps.
+Planned Fix Phase   : Subphase 6.2 (Automated Frida Dynamic Instrumentation & Pinning Stripper)
+Testing Website/Lab : `C:\SecurityLabs\mstg-hacking-playground` & `C:\SecurityLabs\android-androgoat`.
+Testing Procedure   : Connect to Android emulator running target APK; inject Frida Gadget hook into app process;
+                      verify interception of pinned HTTPS traffic in the proxy cataloger.
+Pass Exit Metric    : 100% dynamic API traffic captured from certificate-pinned Android application.
+
+====================================================================================================
+7. PHASE 7: ENTERPRISE COMPLIANCE MAPPING & MULTI-FRAMEWORK REPORTING ENGINE
+====================================================================================================
+
+----------------------------------------------------------------------------------------------------
+[L7.1] Regional Jurisdiction Regulatory Divergence (CERT-In 6-Hour vs. GDPR vs. DPDP)
+----------------------------------------------------------------------------------------------------
+Subsystem Target    : `pkg/compliance/dossier_service.go`
+The Limitation      : Global security standards (OWASP, NIST CSF) lack specific legal evidence requirements
+                      mandated by regional regulators:
+                      - CERT-In Directions (India 2022): Mandatory 6-hour incident disclosure requirement and
+                        strict NTP-synchronized log format requirements.
+                      - DPDP Act 2023: Specific personal data identifier classification in API response payloads.
+Upstream Impact     : Commercial audit reports cannot be delivered to Indian enterprise clients (Banks, NBFCs,
+                      Govt agencies) without extensive manual post-processing.
+Planned Fix Phase   : Subphase 7.4 (Jurisdiction-Specific Regulatory Dossier Generators)
+Testing Website/Lab : `C:\SecurityLabs\owasp-top10`, `owasp-asvs`, `owasp-opencre`.
+Testing Procedure   : Run assessment against benchmark target; generate compliance dossier with `--profile=certin-in`
+                      and `--profile=dpdp-2023`; verify automated generation of required regulatory matrices.
+Pass Exit Metric    : 100% compliance alignment with zero missing statutory reporting sections.
+
+====================================================================================================
+8. PHASE 8: HIGH-PERFORMANCE DISTRIBUTED AUTONOMOUS FLEET ARCHITECTURE
+====================================================================================================
+
+----------------------------------------------------------------------------------------------------
+[L8.1] Cross-Node SQLite Write Locking Under Distributed Fleet Worker Writes
+----------------------------------------------------------------------------------------------------
+Subsystem Target    : `pkg/assessment/store.go`
+The Limitation      : SQLite enforces single-writer database locking (`SQLITE_BUSY`). When distributed fleet
+                      workers on multiple machines attempt to write finding evidence simultaneously across a
+                      shared network mount, database lock contention causes timeouts and transaction aborts.
+Upstream Impact     : Fleet scaling bottlenecks at >10 simultaneous distributed scanner nodes.
+Planned Fix Phase   : Subphase 8.5 (Append-Only WAL Queue & Event Sourcing Architecture)
+Testing Website/Lab : Full 50-target concurrent stress suite across `C:\SecurityLabs`.
+Testing Procedure   : Launch 20 concurrent scanner workers writing to a single shared WAL database; assert that
+                      the in-memory write buffer batches transactions cleanly without `SQLITE_BUSY` errors.
+Pass Exit Metric    : Zero database lock exceptions under 1000 findings/sec sustained write load.
+
+====================================================================================================
+9. PHASE 9: AUDIT ATTESTATION, CRYPTOGRAPHIC COMPLIANCE & CONTINUOUS RETEST ENGINE
+====================================================================================================
+
+----------------------------------------------------------------------------------------------------
+[L9.1] False Attestation Liability on Non-Reproducible Transient Network Flaws
+----------------------------------------------------------------------------------------------------
+Subsystem Target    : `pkg/report/attestation.go` & `pkg/assessment/retest.go`
+The Limitation      : In cloud environments, transient gateway timeouts (HTTP 504) or network blips may cause
+                      a retest probe to fail to reach the server. If interpreted naively as "vulnerability resolved",
+                      Felix could issue a false Attestation of Remediation, creating severe legal liability.
+Upstream Impact     : An enterprise client could present a clean attestation to SOC 2 auditors while the flaw
+                      remains exploitable in production.
+Planned Fix Phase   : Subphase 9.2 (Tri-Pass Positive Defended Assertion Verification)
+Testing Website/Lab : `C:\SecurityLabs\juice-shop` with induced 10% packet drop proxy.
+Testing Procedure   : Simulate upstream dropouts during `felix assessment retest`; assert engine requires 3
+                      consecutive affirmative defended status codes (e.g., 200 sanitized, 401, or 403) before
+                      approving transition to `REMEDIATED_VERIFIED`.
+Pass Exit Metric    : Zero false-remediation attestation transitions under simulated 20% network packet drop.
+
+----------------------------------------------------------------------------------------------------
+[L9.2] Compliance Vendor API Schema Drift (Vanta / Drata Dynamic Ingest Models)
+----------------------------------------------------------------------------------------------------
+Subsystem Target    : `pkg/compliance/auditor_sync.go`
+The Limitation      : Compliance automation vendors (Vanta, Drata, Secureframe) frequently update their JSON schemas
+                      and authentication tokens without extended backward-compatibility deprecation windows.
+Upstream Impact     : Automated API evidence synchronization could fail silently during client audit season,
+                      blocking compliance sign-offs.
+Planned Fix Phase   : Subphase 9.3 (Self-Validating Schema Fallback & Signed Offline Dossier Generation)
+Testing Website/Lab : Local mock Vanta/Drata server with simulated API schema changes.
+Testing Procedure   : Transmit assessment evidence to mutated API schema; assert engine falls back to local
+                      cryptographically watermarked PDF/HTML export and logs structured remediation instructions.
+Pass Exit Metric    : 100% graceful fallback to verifiable offline artifacts without scan abortion.
+
+====================================================================================================
+10. PHASE 10: ENTERPRISE PROCUREMENT ENGINE, M&A AUDIT & CONTINUOUS PENTESTING (CPaaS)
+====================================================================================================
+
+----------------------------------------------------------------------------------------------------
+[L10.1] Production Drift False-Alert Noise Fatigue in High-Frequency Deployment Pipelines
+----------------------------------------------------------------------------------------------------
+Subsystem Target    : `pkg/commercial/cpaas.go`
+The Limitation      : In modern agile environments with multiple deployments per day, dynamic frontend builds
+                      regenerate random chunk hashes (e.g. `main.a9f4b.js`), causing static crawlers to trigger
+                      hundreds of false "New Route / New Attack Surface" alerts.
+Upstream Impact     : Enterprise security teams suffer from Slack alert fatigue and disable continuous pentest notifications.
+Planned Fix Phase   : Subphase 10.1 (Semantic Route Normalization & Chunk-Hash Deduplication)
+Testing Website/Lab : Multi-version Next.js / Angular benchmark builds in `C:\SecurityLabs\juice-shop`.
+Testing Procedure   : Trigger 10 automated builds with changing asset hashes; assert CPaaS drift engine detects
+                      zero false route anomalies when underlying API parameter schema remains unchanged.
+Pass Exit Metric    : Zero false-positive drift alerts across 20 simulated webpack build cycles.
+
+----------------------------------------------------------------------------------------------------
+[L10.2] Air-Gapped License Token Clock Drift and Anti-Tampering Replay Protection
+----------------------------------------------------------------------------------------------------
+Subsystem Target    : `pkg/commercial/licensing.go`
+The Limitation      : Air-gapped enterprise environments lack NTP synchronization. Users could tamper with the
+                      operating system clock to indefinitely extend trial or annual license expirations.
+Upstream Impact     : Loss of enterprise software license control on self-hosted on-premise installations.
+Planned Fix Phase   : Subphase 10.3 (Monotonic Assessment Ledger Timestamp Validation)
+Testing Website/Lab : Air-gapped local VM with modified system clock.
+Testing Procedure   : Roll system clock back by 30 days and execute `felix scan`; assert engine compares current
+                      time against monotonic timestamps recorded in the immutable SQLite store and fails closed.
+Pass Exit Metric    : 100% tamper detection upon system clock rollback; Exit Code 2.
+
+====================================================================================================
+SUMMARY OF CURRENT STATUS & IMMEDIATE ACTION ITEMS
+====================================================================================================
+Phase 1 Status      : [X] CLOSED & EMPIRICALLY VERIFIED
+Subphase 2.1 Status : [X] PROVEN & VERIFIED (Proof: test/evidence/phase2/2.1_param_extraction_proof.json)
+Subphase 2.2 Status : [X] PROVEN & VERIFIED (Proof: test/evidence/phase2/2.2_sqli_differential_proof.json)
+Subphase 2.3 Status : [X] PROVEN & VERIFIED (Proof: test/evidence/phase2/2.3_xss_context_reflection_proof.json)
+Subphase 2.4 Status : [X] PROVEN & VERIFIED (Proof: test/evidence/phase2/2.4_path_traversal_proof.json)
+Subphase 2.5 Status : [X] PROVEN & VERIFIED (Proof: test/evidence/phase2/2.5_rce_ssti_evaluation_proof.json)
+Subphase 2.6 Status : [X] PROVEN & VERIFIED (Proof: test/evidence/phase2/2.6_rate_limiter_recovery_proof.json)
+Active Limitations  : 8 Architectural Limitations in Phase 1 (L1.1-L1.8); Phase 2 Limitations L2.1, L2.2 & L2.4 RESOLVED.
+Mitigation Strategy : Every limitation has an assigned resolution phase and designated benchmark test lab.
+Next Step           : Phase 2 COMPLETE (all 6 subphases verified). Awaiting user audit and authorization before initiating Phase 3 (Stateful Authentication & Multi-Persona Engine).
+====================================================================================================

@@ -1,0 +1,32 @@
+{
+  "receipt_version": "3.0.0",
+  "phase_id": "phase1",
+  "subphase_id": "1.4",
+  "title": "Client-Side DOM XSS & Sink Override Engine Verification",
+  "target_repo": "test/lab/dom_xss.html (Local Synthetic Fixture)",
+  "target_url": "http://127.0.0.1:0 (Local Fixture)",
+  "timestamp": "2026-10-28T10:28:00Z",
+  "executor": "Antigravity Engineering / FELIX Core Team",
+  "test_command": "go test -v -count=1 ./pkg/crawler/browser -run \"TestDOMXSS\"",
+  "exit_code": 0,
+  "metrics": {
+    "vulnerable_html_sink_detected": true,
+    "defended_text_sink_false_positives": 0,
+    "escaped_html_sink_false_positives": 0,
+    "harmless_reflection_false_positives": 0,
+    "additional_sinks_validated": 4,
+    "lifecycle_bounded_and_cleaned": true,
+    "monkey_integration_actions": 1,
+    "monkey_integration_verified": true,
+    "true_positives": 5,
+    "false_positives": 0,
+    "execution_time_ms": 15816.0
+  },
+  "limitations": [
+    "Location.prototype.href is WebIDL [LegacyUnforgeable] in Chromium; navigation is captured via CDP Network/Fetch domains rather than DOM prototype overrides",
+    "Closed Shadow DOM trees instantiated after document load require tree traversal hooks (scheduled for Phase 1.6 SPA crawler)",
+    "CONFIRMED_EXECUTION requires explicit sentinel probe execution; untracked execution without marker is reported as POTENTIALLY_UNSAFE_FLOW"
+  ],
+  "conclusive_status": "PROVEN_VERIFIED",
+  "sha256_hash": "864f9a393ffa929bb161211d66204d243790825f9f2885f506bd7c113a07d258"
+}

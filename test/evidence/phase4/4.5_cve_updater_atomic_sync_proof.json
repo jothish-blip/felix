@@ -1,0 +1,101 @@
+{
+  "canonical_payload_sha256": "147b85d511d6e08cd3bb534aa6dcf76f2fff5f753b3e81ac08ed7ada1fd5e0b2",
+  "conclusive_status": "PROVEN_VERIFIED",
+  "environment": {
+    "arch": "amd64",
+    "go_version": "go1.27.0",
+    "logical_cpus": 8,
+    "os": "windows"
+  },
+  "executor": "Antigravity Engineering / FELIX Core Team",
+  "exit_code": 0,
+  "git_commit": "08a93188fa02cca45795f88207c36206e1fb1eb6",
+  "metrics": {
+    "acceptance_criteria": {
+      "atomic_sqlite_transactions": true,
+      "concurrent_readers_isolation_proven": true,
+      "coordinated_atomicity_proven": true,
+      "cross_component_atomicity_proven": true,
+      "database_preservation_proven": true,
+      "deterministic_pause_consistency_proven": true,
+      "incremental_sync_supported": true,
+      "offline_archive_import_supported": true,
+      "oversized_decompression_blocked": true,
+      "rollback_on_failure_proven": true,
+      "sha256_integrity_verified": true,
+      "sidecar_consistency_only_enforced": true,
+      "template_registry_synced": true,
+      "trust_classification_enforced": true,
+      "trusted_archive_integrity_verified": true,
+      "versioned_publication_enforced": true,
+      "zip_slip_protection_verified": true
+    },
+    "atomic_updates": {
+      "dedup_duration_ms": 5.3157,
+      "duplicate_skipped_count": 200,
+      "mutation_count": 200,
+      "records_per_sec": 12577.429802219916,
+      "update_duration_ms": 15.9015,
+      "updated_count": 200
+    },
+    "integrity_and_recovery": {
+      "active_database_integrity": "ok",
+      "baseline_records_retained": 1000,
+      "database_preserved": true,
+      "injected_failure_caught": true,
+      "rollback_successful": true,
+      "sha256_verification_passed": true
+    },
+    "offline_archive": {
+      "archive_sha256": "71de7c9d9861c5fe51c4f69e6e0b1214b6d4b22f80810b40aa44ae66d96ba993",
+      "creation_duration_ms": 18.6357,
+      "import_duration_ms": 320.3844,
+      "inserted_records": 1000,
+      "manifest_version": "1.0",
+      "skipped_records": 0,
+      "total_records_processed": 1000,
+      "updated_records": 0,
+      "validated_templates": 10
+    },
+    "synchronization_sources": [
+      "NVD",
+      "OSV",
+      "GHSA",
+      "OFFLINE_ARCHIVE"
+    ],
+    "test_suite_coverage": {
+      "atomic_sqlite_commit": "PASS",
+      "content_tampering_rejection": "PASS",
+      "coordinated_atomicity_all_failure_points": "PASS",
+      "coordinated_atomicity_under_concurrency": "PASS",
+      "corrupted_archive_rejection": "PASS",
+      "cross_component_concurrent_queries": "PASS",
+      "cross_component_deterministic_pause_atomicity": "PASS",
+      "cross_component_failure_rollback_and_commit_failure": "PASS",
+      "duplicate_record_prevention": "PASS",
+      "duplicate_template_id_handling": "PASS",
+      "existing_database_preservation": "PASS",
+      "existing_record_updates": "PASS",
+      "incremental_osv_sync": "PASS",
+      "interrupted_sync_recovery": "PASS",
+      "invalid_sha256_rejection": "PASS",
+      "invalid_trusted_material_rejection": "PASS",
+      "manifest_tampering_rejection": "PASS",
+      "missing_manifest_rejection": "PASS",
+      "new_record_ingestion": "PASS",
+      "offline_airgapped_operation": "PASS",
+      "oversized_decompression_guard": "PASS",
+      "path_traversal_protection": "PASS",
+      "sidecar_and_archive_modified_rejection": "PASS",
+      "sidecar_checksum_consistency_only": "PASS",
+      "sidecar_mismatch_fails_closed": "PASS",
+      "template_registry_discovery": "PASS",
+      "template_validation_active": "PASS",
+      "transaction_rollback": "PASS",
+      "trusted_checksum_verification": "PASS",
+      "valid_archive_import": "PASS"
+    }
+  },
+  "sha256_hash": "147b85d511d6e08cd3bb534aa6dcf76f2fff5f753b3e81ac08ed7ada1fd5e0b2",
+  "timestamp": "2026-11-07T16:35:53Z"
+}

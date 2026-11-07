@@ -1,0 +1,120 @@
+{
+  "canonical_payload_sha256": "31a25850eaf0a7288ac210524b15b9c0f5aca7acada634cc77dcf3e18a2df381",
+  "conclusive_status": "PROVEN_VERIFIED",
+  "environment": {
+    "arch": "amd64",
+    "go_version": "go1.27.0",
+    "logical_cpus": 8,
+    "os": "windows"
+  },
+  "executor": "Antigravity Engineering / FELIX Core Team",
+  "exit_code": 0,
+  "git_commit": "08a93188fa02cca45795f88207c36206e1fb1eb6",
+  "metrics": {
+    "acceptance_criteria": {
+      "cycle_detection_infinite_loop_prevented": true,
+      "direct_privilege_escalation_detected": true,
+      "effective_permission_explicit_deny_applied": true,
+      "finding_integration_deterministic": true,
+      "indirect_role_assumption_detected": true,
+      "pass_role_privilege_vector_detected": true,
+      "permission_boundary_constraint_applied": true,
+      "risk_scoring_severity_distinguished": true,
+      "service_account_impersonation_detected": true,
+      "universal_iam_data_model_verified": true,
+      "zero_credentials_or_tokens_exposed": true,
+      "zero_live_mutations_executed": true
+    },
+    "benchmark_duration_ms": {
+      "aws_iam_analysis_ms": 0.05654,
+      "azure_rbac_analysis_ms": 0.055275,
+      "gcp_iam_analysis_ms": 0.026235,
+      "graph_traversal_1000_ms": 0.461075,
+      "total_pipeline_ms": 0.599125
+    },
+    "benchmark_iterations": 20,
+    "latency_note": "Metrics represent synthetic in-memory graph construction and path discovery measurements averaged over 20 iterations.",
+    "path_feasibility_semantics": {
+      "BLOCKED": "Path explicitly denied, boundaried, or condition constraints not satisfied",
+      "CONFIRMED": "All requisite criteria, service operations, permissions, and conditions verified",
+      "INCONCLUSIVE": "Essential trust policy or context missing from the graph",
+      "POTENTIAL": "Path feasible but dependent on unresolved conditions, compute launch permissions, or incomplete scope data"
+    },
+    "provider_coverage": {
+      "aws_iam_supported": true,
+      "azure_rbac_supported": true,
+      "gcp_iam_supported": true
+    },
+    "provider_coverage_and_limitations": {
+      "aws": "IAM policies, trust policies, boundary policies, PassRole 6-factor validation",
+      "azure": "RBAC role definitions and assignments, BuiltIn vs Custom assignableScopes, ABAC conditions",
+      "gcp": "Resource IAM policies, Service Account Impersonation vs Workload User, bounded CEL",
+      "limitations": [
+        "Static graph analysis only; zero live mutation or token exchange",
+        "CEL evaluation bounded to temporal, resource, and identity predicates",
+        "Arbitrary external identity provider claims unresolved without supplied context"
+      ]
+    },
+    "supported_condition_semantics": {
+      "aws": {
+        "modifiers": [
+          "IfExists",
+          "IgnoreCase"
+        ],
+        "supported_operators": [
+          "StringEquals",
+          "StringNotEquals",
+          "StringLike",
+          "StringNotLike",
+          "ArnEquals",
+          "ArnLike",
+          "ArnNotEquals",
+          "ArnNotLike",
+          "IpAddress",
+          "NotIpAddress",
+          "Bool",
+          "Null",
+          "NumericEquals",
+          "NumericNotEquals",
+          "NumericLessThan",
+          "NumericGreaterThan"
+        ],
+        "unsupported_behavior": "CONDITION_UNRESOLVED"
+      },
+      "azure": {
+        "supported_abac_predicates": [
+          "@Resource[...] StringEquals/StringNotEquals",
+          "@Principal[...] StringEquals/StringNotEquals",
+          "compound expressions with && / AND"
+        ],
+        "unsupported_behavior": "CONDITION_UNRESOLVED"
+      },
+      "gcp": {
+        "supported_cel_patterns": [
+          "request.time < timestamp(...)",
+          "request.time > timestamp(...)",
+          "resource.name.startsWith(...)",
+          "resource.type == ...",
+          "request.auth.claims.email == ...",
+          "compound expressions with &&"
+        ],
+        "unsupported_behavior": "CONDITION_UNRESOLVED"
+      }
+    },
+    "synthetic_mock_fixture_latency_ms": {
+      "aws_iam_analysis_avg_ms": 0.05654,
+      "azure_rbac_analysis_avg_ms": 0.055275,
+      "gcp_iam_analysis_avg_ms": 0.026235,
+      "graph_traversal_1000_avg_ms": 0.461075,
+      "total_pipeline_avg_ms": 0.599125
+    }
+  },
+  "phase_id": "phase5",
+  "receipt_version": "3.0.0",
+  "sha256_hash": "31a25850eaf0a7288ac210524b15b9c0f5aca7acada634cc77dcf3e18a2df381",
+  "subphase_id": "5.4",
+  "target_repo": "IAM Privilege Graph Analyzer (pkg/cloudsec/iam.go)",
+  "test_command": "go test -v -count=1 ./pkg/cloudsec -run TestLive_Phase54_IAMPrivilegeGraphBenchmarkAndReceipt",
+  "timestamp": "2026-11-02T08:21:29Z",
+  "title": "IAM Privilege Graph Analyzer Proof"
+}

@@ -1,0 +1,35 @@
+{
+  "conclusive_status": "PROVEN_VERIFIED",
+  "executor": "Antigravity Engineering / FELIX Core Team",
+  "exit_code": 0,
+  "metrics": {
+    "attribute_breakout_detection_rate": 100,
+    "benchmark_vectors_tested": 10,
+    "defended_vectors_rejected": 6,
+    "encoded_reflection_false_positives": 0,
+    "false_negative_count": 0,
+    "false_positive_count": 0,
+    "html_comment_detection_rate": 100,
+    "inert_context_false_positives": 0,
+    "non_target_preservation_rate": 100,
+    "reflected_xss_precision": 100,
+    "reflected_xss_recall": 100,
+    "script_context_detection_rate": 100,
+    "target_reachability": {
+      "WebGoat (Port 8082)": true,
+      "XSSContextsFixture": true
+    },
+    "unencoded_body_detection_rate": 100,
+    "vulnerable_vectors_detected": 4,
+    "zero_panics_verified": true
+  },
+  "phase_id": "phase2",
+  "receipt_version": "3.0.0",
+  "sha256_hash": "9715b3899ba122763554b9e0371fe454724ec21727ad7934d1eb5169dfea9e65",
+  "subphase_id": "2.3",
+  "target_repo": "webgoat, test/lab/xss_contexts.html",
+  "target_url": "http://127.0.0.1:8082/, file://test/lab/xss_contexts.html",
+  "test_command": "go test -v -count=1 ./pkg/fuzzer -run TestBenchmark_XSSReflectionEngine",
+  "timestamp": "2026-10-29T08:45:00Z",
+  "title": "Cross-Site Scripting (XSS) Context-Aware Reflection Engine Verification"
+}

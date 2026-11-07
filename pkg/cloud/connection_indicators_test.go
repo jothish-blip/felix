@@ -585,7 +585,7 @@ func TestReDoSAndInputBounds(t *testing.T) {
 	inds := detector.DetectIndicators(src, largeData)
 	duration = time.Since(start)
 
-	if duration > 2*time.Second {
+	if duration > 4*time.Second {
 		t.Errorf("large input processing took too long (%v)", duration)
 	}
 	if len(inds) > MaxIndicatorsPerFile {

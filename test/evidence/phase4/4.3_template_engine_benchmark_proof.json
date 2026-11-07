@@ -1,0 +1,57 @@
+{
+  "conclusive_status": "PROVEN_VERIFIED",
+  "environment": {
+    "arch": "amd64",
+    "go_version": "go1.27.0",
+    "logical_cpus": 8,
+    "os": "windows"
+  },
+  "executor": "Antigravity Engineering / FELIX Core Team",
+  "exit_code": 0,
+  "git_commit": "08a93188fa02cca45795f88207c36206e1fb1eb6",
+  "metrics": {
+    "acceptance_criteria": {
+      "all_matcher_types_supported": true,
+      "and_or_conditions_supported": true,
+      "dynamic_extractors_supported": true,
+      "embedded_templates_shipped": true,
+      "execution_under_500ms": true,
+      "in_memory_closure_compilation": true,
+      "negative_matchers_supported": true,
+      "throughput_above_200_per_sec": true,
+      "yaml_declarative_parser_implemented": true,
+      "zero_false_positives_verified": true,
+      "zero_syntax_parsing_panics": true
+    },
+    "benchmark_execution_ms": 13.0821,
+    "benchmark_execution_throughput": 7644.032685883765,
+    "benchmark_matches_confirmed": 100,
+    "benchmark_template_count": 100,
+    "builtin_templates_verified": [
+      "CVE-2021-44228 (Log4Shell)",
+      "CVE-2022-22965 (Spring4Shell)",
+      "CVE-2022-26134 (Confluence OGNL)",
+      "CVE-2017-5638 (Struts2 Jakarta)"
+    ],
+    "compilation_avg_us": 10.39,
+    "compilation_total_ms": 1.0399,
+    "supported_matchers": [
+      "status",
+      "word",
+      "words",
+      "regex",
+      "binary",
+      "hex"
+    ],
+    "throughput_ceiling_ms": 500,
+    "throughput_floor_templates_sec": 200
+  },
+  "phase_id": "phase4",
+  "receipt_version": "3.0.0",
+  "sha256_hash": "294d7304111373bf8f4eb491e3dc1be2e4f9c308621e565d1a3d7222929844df",
+  "subphase_id": "4.3",
+  "target_repo": "Nuclei-Compatible Declarative YAML Engine (pkg/cve/template.go)",
+  "test_command": "go test -v -count=1 ./pkg/cve -run TestLive_Phase43_100TemplateBenchmarkAndReceipt",
+  "timestamp": "2026-10-30T19:27:31Z",
+  "title": "High-Performance YAML Vulnerability Template Engine Benchmark Proof"
+}

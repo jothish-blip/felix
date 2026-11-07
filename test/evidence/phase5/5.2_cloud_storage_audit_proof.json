@@ -1,0 +1,71 @@
+{
+  "canonical_payload_sha256": "e19f653f39cb7ab1ad44ed99753c5870e34d2c052dafeaca7344930bb87a1e84",
+  "conclusive_status": "PROVEN_VERIFIED",
+  "environment": {
+    "arch": "amd64",
+    "go_version": "go1.27.0",
+    "logical_cpus": 8,
+    "os": "windows"
+  },
+  "executor": "Antigravity Engineering / FELIX Core Team",
+  "exit_code": 0,
+  "git_commit": "08a93188fa02cca45795f88207c36206e1fb1eb6",
+  "metrics": {
+    "acceptance_criteria": {
+      "aws_s3_access_denied_verified": true,
+      "aws_s3_public_bucket_list_verified": true,
+      "aws_s3_public_object_read_verified": true,
+      "aws_s3_write_indicator_verified": true,
+      "azure_public_blob_read_verified": true,
+      "azure_public_config_indicator_verified": true,
+      "azure_public_container_list_verified": true,
+      "false_positive_cdn_cache_blocked": true,
+      "false_positive_html_200_blocked": true,
+      "gcs_allusers_iam_verified": true,
+      "gcs_public_bucket_list_verified": true,
+      "gcs_public_object_read_verified": true,
+      "non_destructive_read_only_enforced": true,
+      "safedialer_protection_active": true,
+      "scope_enforcement_active": true,
+      "zero_raw_object_contents_retained": true,
+      "zero_unauthorized_external_writes": true
+    },
+    "aws_results": {
+      "can_list": true,
+      "classification": "PUBLIC_BUCKET_LIST",
+      "has_write_indicator": true,
+      "object_count": 2,
+      "sample_key": "audit_report.pdf"
+    },
+    "azure_results": {
+      "can_list": true,
+      "classification": "PUBLIC_CONTAINER_LIST",
+      "object_count": 1,
+      "sample_key": "diagnostics.log"
+    },
+    "benchmark_duration_ms": {
+      "aws_audit_ms": 2.9017,
+      "azure_audit_ms": 1.0604,
+      "gcs_audit_ms": 0.5287
+    },
+    "gcs_results": {
+      "can_list": true,
+      "classification": "PUBLIC_BUCKET_LIST",
+      "object_count": 1,
+      "sample_key": "dataset.parquet"
+    },
+    "test_counts": {
+      "failed": 0,
+      "passed": 21,
+      "total_test_suites": 21
+    }
+  },
+  "phase_id": "phase5",
+  "receipt_version": "3.0.0",
+  "sha256_hash": "e19f653f39cb7ab1ad44ed99753c5870e34d2c052dafeaca7344930bb87a1e84",
+  "subphase_id": "5.2",
+  "target_repo": "Public Cloud Storage Auditor (pkg/cloudsec/storage.go)",
+  "test_command": "go test -v -count=1 ./pkg/cloudsec -run TestLive_Phase52_CloudStorageAuditBenchmarkAndReceipt",
+  "timestamp": "2026-10-31T09:19:21Z",
+  "title": "Public Cloud Storage \u0026 Bucket Misconfiguration Auditor Proof"
+}

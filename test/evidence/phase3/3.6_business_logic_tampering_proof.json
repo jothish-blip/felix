@@ -1,0 +1,52 @@
+{
+  "conclusive_status": "PROVEN_VERIFIED",
+  "executor": "Antigravity Engineering / FELIX Core Team",
+  "exit_code": 0,
+  "metrics": {
+    "aggregate_evaluation_summary": {
+      "business_logic_precision_rate": 100,
+      "false_positive_rate_in_test_corpus": 0,
+      "total_defended_barriers": 16,
+      "total_filtered_false_positives": 2,
+      "total_inconclusive_results": 1,
+      "total_logic_probes_dispatched": 40,
+      "total_verified_defects": 6
+    },
+    "concurrency_race_evaluations": {
+      "barrier_sync_dispatches": 20,
+      "concurrency_level": 20,
+      "defended_atomic_barriers": 1,
+      "verified_race_defects": 1
+    },
+    "live_juice_shop_evaluations": {
+      "defended_auth_barriers": 1,
+      "defended_coupon_barriers": 1,
+      "live_target_verified": true,
+      "target_url": "http://127.0.0.1:3000",
+      "verified_skip_defects": 1,
+      "verified_tampering_defects": 1
+    },
+    "parameter_tampering_evaluations": {
+      "defended_tampering_barriers": 12,
+      "inconclusive_results": 0,
+      "total_mutations_tested": 14,
+      "verified_tampering_defects": 2
+    },
+    "receipt_immutability_verified": true,
+    "sanitized_poc_generation_verified": true,
+    "workflow_step_skipping_evaluations": {
+      "defended_step_skipping_barriers": 1,
+      "filtered_inconclusive_results": 1,
+      "verified_step_skipping_defects": 1
+    }
+  },
+  "phase_id": "phase3",
+  "receipt_version": "3.0.0",
+  "sha256_hash": "5facf8228ec7980c428a0bd9793f2e6935cb6b0c9aa0f6a02f2f91c7ad5ac1b9",
+  "subphase_id": "3.6",
+  "target_repo": "juice-shop (live loopback), controlled_business_logic_fixtures",
+  "target_url": "http://127.0.0.1:3000, http://127.0.0.1:\u003cmock_workflow_fixture\u003e",
+  "test_command": "go test -v -count=1 ./pkg/workflow -run TestBenchmark_BusinessLogic_ControlledFixture",
+  "timestamp": "2026-10-30T07:37:36Z",
+  "title": "Multi-Step Business Logic \u0026 Workflow State Machine Proof"
+}

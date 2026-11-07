@@ -175,19 +175,26 @@ func (s *LocalSimulator) Handler() http.Handler {
 
 func extractToken(r *http.Request) string {
 	if q := r.URL.Query().Get("token"); q != "" {
-		return strings.TrimSpace(q)
+		return strings.ToLower(strings.TrimSpace(q))
 	}
 
 	cleanPath := strings.Trim(r.URL.Path, "/")
 	parts := strings.Split(cleanPath, "/")
 	if len(parts) >= 2 {
-		switch parts[0] {
+		switch strings.ToLower(parts[0]) {
 		case "c", "callback", "notify":
-			return strings.TrimSpace(parts[1])
+			return strings.ToLower(strings.TrimSpace(parts[1]))
 		}
 	} else if len(parts) == 1 && len(parts[0]) == 32 {
-		return strings.TrimSpace(parts[0])
+		return strings.ToLower(strings.TrimSpace(parts[0]))
 	}
+
+	if r.Host != "" {
+		if tok := ExtractTokenFromHost(r.Host); tok != "" {
+			return tok
+		}
+	}
+
 	return ""
 }
 

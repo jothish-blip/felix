@@ -1,0 +1,29 @@
+{
+  "conclusive_status": "PROVEN_VERIFIED",
+  "executor": "Antigravity Engineering / FELIX Core Team",
+  "exit_code": 0,
+  "metrics": {
+    "anonymous_refusal_verified": true,
+    "attacker_persona": "crapi_attacker_live@felix.local",
+    "conclusive_status": "PROVEN_VERIFIED",
+    "cross_persona_leak_proof": "Victim email crapi_victim_live@felix.local accessed by unauthorized assessor crapi_attacker_live@felix.local",
+    "deployment_topology": "VirtualBox NAT Headless Containerized Cluster (10 Microservices)",
+    "resource_tested": "Order ID #7 (Workshop Service)",
+    "server_side_state_verified": true,
+    "target_application": "OWASP crAPI v1.0 (Completely Ridiculous API)",
+    "target_url": "http://127.0.0.1:8888",
+    "verified_bola_defects": 1,
+    "verified_defended_barriers": 1,
+    "victim_persona": "crapi_victim_live@felix.local",
+    "zero_cookie_contamination": true
+  },
+  "phase_id": "phase3",
+  "receipt_version": "3.0.0",
+  "sha256_hash": "28f3d3538307126a1fc73594152abc6f0b7228d43edf55ef3b9f580f759832f4",
+  "subphase_id": "3.5",
+  "target_repo": "crapi (live loopback via VirtualBox NAT)",
+  "target_url": "http://127.0.0.1:8888",
+  "test_command": "go test -v -count=1 ./pkg/auth -run TestLive_crAPI_BOLA",
+  "timestamp": "2026-10-30T08:53:52Z",
+  "title": "crAPI Autonomous Multi-Persona BOLA Empirical Proof"
+}

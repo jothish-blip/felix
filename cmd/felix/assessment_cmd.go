@@ -3263,7 +3263,8 @@ func runAssessmentWebVuln(args []string) int {
 	seenEndpoints := make(map[string]bool)
 
 	for _, a := range assets {
-		if a.Type == "ENDPOINT" || a.Type == "endpoint" {
+		lowerType := strings.ToLower(string(a.Type))
+		if strings.Contains(lowerType, "endpoint") || strings.Contains(lowerType, "page") || strings.Contains(lowerType, "route") {
 			method := "GET"
 			if m, ok := a.Metadata["method"].(string); ok && m != "" {
 				method = strings.ToUpper(m)
@@ -3307,6 +3308,30 @@ func runAssessmentWebVuln(args []string) int {
 					Parameters: params,
 					Source:     "inventory",
 				})
+			}
+		}
+	}
+
+	// Also ingest all approved assessment targets into webvuln endpoints
+	if approvedTgts, err := store.GetTargets(asm.ID); err == nil {
+		for _, t := range approvedTgts {
+			if t.TargetURL != "" {
+				if u, err := url.Parse(t.TargetURL); err == nil && u.Path != "" && u.Path != "/" {
+					key := "GET " + u.Path
+					if !seenEndpoints[key] {
+						seenEndpoints[key] = true
+						var params []string
+						for p := range u.Query() {
+							params = append(params, p)
+						}
+						targetEndpoints = append(targetEndpoints, webvuln.TargetEndpoint{
+							Method:     "GET",
+							Path:       u.Path,
+							Parameters: params,
+							Source:     "target_approved",
+						})
+					}
+				}
 			}
 		}
 	}

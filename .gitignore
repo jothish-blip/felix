@@ -30,12 +30,7 @@ certs/
 *.log
 coverage.*
 
-# Roadmap & local testing ledgers
-Felix-Roadmap.txt
-felix-testing-cloned.txt
-
-# Evidence receipts & local test reports
-test/evidence/
+# Local test reports & scratch
 *.html
 *.sarif
 scratch/

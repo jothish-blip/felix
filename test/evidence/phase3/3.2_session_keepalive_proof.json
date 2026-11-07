@@ -1,0 +1,30 @@
+{
+  "conclusive_status": "PROVEN_VERIFIED",
+  "executor": "Antigravity Engineering / FELIX Core Team",
+  "exit_code": 0,
+  "metrics": {
+    "authenticated_followup_verified": true,
+    "concurrent_workers": 20,
+    "continuous_probes_dispatched": 1000,
+    "continuous_probes_failed": 0,
+    "continuous_probes_successful": 1000,
+    "duplicate_logins": 0,
+    "elapsed_time_ms": 13511,
+    "live_target_verified": true,
+    "refresh_events_count": 2,
+    "session_cookie_captured": "JSESSIONID",
+    "session_drops": 0,
+    "target_url": "http://127.0.0.1:8080/WebGoat/login",
+    "total_macro_logins": 3,
+    "zero_race_collisions_verified": true
+  },
+  "phase_id": "phase3",
+  "receipt_version": "3.0.0",
+  "sha256_hash": "e93717a8689a318b88a310a382e3fcf0df543425c9f1d28ec34bb267774a0f2c",
+  "subphase_id": "3.2",
+  "target_repo": "webgoat",
+  "target_url": "http://127.0.0.1:8080/WebGoat/login",
+  "test_command": "go test -v -count=1 ./pkg/auth -run TestBenchmark_SessionKeepAlive_WebGoat",
+  "timestamp": "2026-10-30T07:28:57Z",
+  "title": "Session Keep-Alive and Auto-Refresh Singleflight Monitor Proof"
+}

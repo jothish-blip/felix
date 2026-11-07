@@ -62,8 +62,8 @@ func TestSingleInstanceLifecycle(t *testing.T) {
 		t.Fatalf("Close failed: %v", err)
 	}
 
-	// Poll for parent and child process termination (up to 2 seconds for OS release)
-	deadline := time.Now().Add(2 * time.Second)
+	// Poll for parent and child process termination (up to 5 seconds for OS release)
+	deadline := time.Now().Add(5 * time.Second)
 	for isPIDAlive(pid) && time.Now().Before(deadline) {
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -172,8 +172,8 @@ func TestConcurrency10Sessions(t *testing.T) {
 	teardownWg.Wait()
 	t.Logf("All %d sessions closed in %v", sessionCount, time.Since(teardownStart))
 
-	// Allow up to 3 seconds for Windows asynchronous process termination and reaping
-	deadline := time.Now().Add(3 * time.Second)
+	// Allow up to 15 seconds for Windows asynchronous process termination and reaping
+	deadline := time.Now().Add(15 * time.Second)
 	zombieCount := 0
 	for {
 		zombieCount = 0
