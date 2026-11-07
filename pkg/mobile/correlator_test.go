@@ -1472,7 +1472,7 @@ func TestLive_InsecureBankv2_MobileBackendCorrelation(t *testing.T) {
 				"target_host":         "10.0.2.2:8888",
 				"original_finding_id": "RUNTIME-CLEARTEXT-HTTP",
 				"original_engine":     "Phase 6.3 Frida Dynamic Instrumentation Engine (pkg/mobile)",
-				"original_evidence":   "Intercepted HttpURLConnection.connect to http://10.0.2.2:8888/login transmitting plaintext user credentials (username=dinesh, password=Dinesh@123$); android:usesCleartextTraffic=\"true\" enabled.",
+				"original_evidence":   "Intercepted HttpURLConnection.connect to http://10.0.2.2:8888/login transmitting plaintext user credentials (username=dinesh, password=[REDACTED]); android:usesCleartextTraffic=\"true\" enabled.",
 				"verification_status": "CONFIRMED",
 				"correlation_mechanism": "Exact canonical route match between static DEX string pool and live intercepted network event (cleartext=true, method=POST).",
 			},
