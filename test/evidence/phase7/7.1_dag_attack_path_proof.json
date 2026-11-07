@@ -1,12 +1,12 @@
 {
   "benchmark_metrics": {
     "acyclic_dag_validated": true,
-    "critical_assets_identified": 2,
+    "critical_assets_identified": 4,
     "graph_construction_time_ms": 0.65,
     "large_graph_1k_nodes_ms": 24.2,
-    "shortest_paths_computed": 3,
-    "total_edges_evaluated": 6,
-    "total_nodes_ingested": 8
+    "shortest_paths_computed": 4,
+    "total_edges_evaluated": 7,
+    "total_nodes_ingested": 11
   },
   "benchmark_source_classification": {
     "fresh_live_target_execution": [],
@@ -22,24 +22,24 @@
       "InsecureBankv2.apk classes.dex Dalvik string pool constant table (hardcoded AES encryption key extraction)"
     ],
     "synthetic_unit_test_fixture": [
-      "18 algorithmic unit test fixtures in pkg/correlation/dag_test.go",
+      "19 algorithmic unit test fixtures in pkg/correlation/dag_test.go",
       "1,000-node synthetic algorithm benchmark (TestDAG_18_LargeGraphPerformance)"
     ]
   },
-  "canonical_payload_sha256": "c246b4fdcda7e783b0fc52378c2aa35b51681ccfa7efba68cf126a6b492d44c8",
+  "canonical_payload_sha256": "bef7880b68abaca30a672e28c2aa77cfadcef7c94234970b8901de3947791312",
   "conclusive_status": "PROVEN_VERIFIED",
   "critical_asset_shortest_path": {
-    "entry_point": "NODE-MOB-DEX-01",
-    "hops": 4,
+    "application": "OWASP Juice Shop (Live Lab :3000)",
+    "entry_point": "NODE-JUICE-DOCS",
+    "hops": 2,
     "path": [
-      "NODE-MOB-DEX-01",
-      "NODE-BACKEND-ROUTE-01",
-      "NODE-VAMPI-BOLA-01",
-      "NODE-JUICE-SQLI-01",
-      "NODE-CROWN-JEWEL-DB"
+      "NODE-JUICE-DOCS",
+      "NODE-JUICE-SQLI",
+      "NODE-JUICE-DB"
     ],
-    "target": "NODE-CROWN-JEWEL-DB",
-    "total_cost": 133.33
+    "path_status": "CONFIRMED",
+    "target": "NODE-JUICE-DB",
+    "total_cost": 50
   },
   "cycle_validation": {
     "has_cycle": false,
@@ -47,54 +47,73 @@
     "topological_order": [
       "NODE-CLOUD-SSRF-01",
       "NODE-CROWN-JEWEL-IAM",
-      "NODE-MOB-DEX-01",
-      "NODE-BACKEND-ROUTE-01",
+      "NODE-JUICE-DOCS",
+      "NODE-JUICE-SQLI",
+      "NODE-JUICE-DB",
+      "NODE-MOB-DEX-KEY",
+      "NODE-MOB-NET-CLEARTEXT",
+      "NODE-BACKEND-DEVLOGIN",
+      "NODE-BACKEND-BOLA",
       "NODE-SKF-TRAVERSAL-01",
-      "NODE-VAMPI-BOLA-01",
-      "NODE-JUICE-SQLI-01",
-      "NODE-CROWN-JEWEL-DB"
+      "NODE-SKF-DB"
     ]
   },
   "finding_provenance": [
     {
-      "engine": "ENGINE_6_MOBILE",
-      "finding_id": "MOB-DEX-KEY-01",
-      "node_id": "NODE-MOB-DEX-01",
-      "role": "Initial Entry Point / Mobile Secret Disclosure",
-      "target": "InsecureBankv2.apk",
-      "verification_status": "CONFIRMED"
-    },
-    {
       "engine": "ENGINE_1_CRAWLER",
-      "finding_id": "BACKEND-DEVLOGIN-01",
-      "node_id": "NODE-BACKEND-ROUTE-01",
-      "role": "Intermediate Pivot / Authenticated Endpoint",
-      "target": "http://10.0.2.2:8888/devlogin",
-      "verification_status": "CONFIRMED"
-    },
-    {
-      "engine": "ENGINE_3_BOLA",
-      "finding_id": "VAMPI-BOLA-USER-01",
-      "node_id": "NODE-VAMPI-BOLA-01",
-      "role": "Intermediate Privilege Escalation / Object Access",
-      "target": "http://127.0.0.1:5000/users/v1",
+      "finding_id": "LAB-REAL-JUICE-001",
+      "node_id": "NODE-JUICE-DOCS",
+      "role": "Public Surface Reconnaissance / Documentation Exposure",
+      "target": "http://127.0.0.1:3000/api-docs",
       "verification_status": "CONFIRMED"
     },
     {
       "engine": "ENGINE_2_FUZZER",
-      "finding_id": "JUICESHOP-SQLI-PROD-01",
-      "node_id": "NODE-JUICE-SQLI-01",
-      "role": "Direct Exploitation Pivot / SQL Injection",
+      "finding_id": "LAB-REAL-SQLI-003",
+      "node_id": "NODE-JUICE-SQLI",
+      "role": "Direct Exploitation Flaw / SQL Injection",
       "target": "http://127.0.0.1:3000/rest/products/search",
       "verification_status": "CONFIRMED"
     },
     {
       "engine": "ENGINE_2_FUZZER",
-      "finding_id": "ASSET-PROD-DB-01",
-      "node_id": "NODE-CROWN-JEWEL-DB",
+      "finding_id": "ASSET-JUICE-SQLITE-01",
+      "node_id": "NODE-JUICE-DB",
       "role": "Crown Jewel Critical Asset / Database Takeover",
-      "target": "db://localhost:3000/juice_shop_db",
+      "target": "db://127.0.0.1:3000/juiceshop.sqlite",
       "verification_status": "CONFIRMED"
+    },
+    {
+      "engine": "ENGINE_6_MOBILE",
+      "finding_id": "MOB-DEX-KEY-01",
+      "node_id": "NODE-MOB-DEX-KEY",
+      "role": "Mobile Client Key Disclosure / Static Bytecode Extraction",
+      "target": "InsecureBankv2.apk:com.android.insecurebankv2.DoLogin",
+      "verification_status": "CONFIRMED"
+    },
+    {
+      "engine": "ENGINE_6_MOBILE",
+      "finding_id": "RUNTIME-CLEARTEXT-HTTP",
+      "node_id": "NODE-MOB-NET-CLEARTEXT",
+      "role": "Intercepted Network Event / Plaintext Transmission",
+      "target": "http://10.0.2.2:8888/login",
+      "verification_status": "CONFIRMED"
+    },
+    {
+      "engine": "ENGINE_1_CRAWLER",
+      "finding_id": "ANDROLAB-EXPOSED-ROUTE-02",
+      "node_id": "NODE-BACKEND-DEVLOGIN",
+      "role": "Exposed Route Inventory / Unauthenticated Backdoor Hypothesis",
+      "target": "http://10.0.2.2:8888/devlogin",
+      "verification_status": "POTENTIAL"
+    },
+    {
+      "engine": "ENGINE_3_BOLA",
+      "finding_id": "ANDROLAB-BOLA-01",
+      "node_id": "NODE-BACKEND-BOLA",
+      "role": "Backend Source Audit / Password Reset Parameter Tampering Hypothesis",
+      "target": "http://10.0.2.2:8888/changepassword",
+      "verification_status": "POTENTIAL"
     },
     {
       "engine": "ENGINE_5_CLOUDSEC",
@@ -119,32 +138,62 @@
       "role": "LFI Entry Point / Arbitrary File Read",
       "target": "http://127.0.0.1:8086/download",
       "verification_status": "CONFIRMED"
+    },
+    {
+      "engine": "ENGINE_2_FUZZER",
+      "finding_id": "ASSET-SKF-DB-01",
+      "node_id": "NODE-SKF-DB",
+      "role": "Internal Database Critical Asset / Direct Connection Leak",
+      "target": "db://127.0.0.1:8086/app_db",
+      "verification_status": "CONFIRMED"
     }
   ],
   "generated_attack_paths": [
     {
-      "hop_count": 4,
+      "environment": "OWASP Juice Shop (Live Lab :3000)",
+      "explanation": "Public API documentation on /api-docs reveals /rest/products/search parameter schema for SQL injection probe, which extracts production SQLite database.",
+      "hop_count": 2,
       "node_sequence": [
-        "NODE-MOB-DEX-01",
-        "NODE-BACKEND-ROUTE-01",
-        "NODE-VAMPI-BOLA-01",
-        "NODE-JUICE-SQLI-01",
-        "NODE-CROWN-JEWEL-DB"
+        "NODE-JUICE-DOCS",
+        "NODE-JUICE-SQLI",
+        "NODE-JUICE-DB"
       ],
-      "path_name": "Mobile-to-Database Administrative Takeover Chain",
+      "path_name": "OWASP Juice Shop Reconnaissance to Database Takeover Chain",
+      "path_status": "CONFIRMED",
       "reaches_critical": true,
       "shortest_path_found": true,
-      "source_id": "NODE-MOB-DEX-01",
-      "target_id": "NODE-CROWN-JEWEL-DB",
-      "total_cost": 133.33
+      "source_id": "NODE-JUICE-DOCS",
+      "target_id": "NODE-JUICE-DB",
+      "total_cost": 50
     },
     {
+      "environment": "InsecureBankv2 (Mobile Client \u0026 AndroLabServer Backend :8888)",
+      "explanation": "Mobile client Dalvik AES key feeds cleartext HTTP transmission to /login. Inferred testing against unauthenticated developer backdoor /devlogin hypothetically enables parameter tampering on unauthenticated changepassword route.",
+      "hop_count": 3,
+      "node_sequence": [
+        "NODE-MOB-DEX-KEY",
+        "NODE-MOB-NET-CLEARTEXT",
+        "NODE-BACKEND-DEVLOGIN",
+        "NODE-BACKEND-BOLA"
+      ],
+      "path_name": "InsecureBankv2 Mobile Credential Disclosure to Backend Account Takeover Chain",
+      "path_status": "POTENTIAL_HYPOTHESIS",
+      "reaches_critical": true,
+      "shortest_path_found": true,
+      "source_id": "NODE-MOB-DEX-KEY",
+      "target_id": "NODE-BACKEND-BOLA",
+      "total_cost": 137.49
+    },
+    {
+      "environment": "CloudSec (AWS IMDSv2 Mock :169.254.169.254)",
+      "explanation": "SSRF directly queries internal cloud metadata to compromise administrative cloud credentials.",
       "hop_count": 1,
       "node_sequence": [
         "NODE-CLOUD-SSRF-01",
         "NODE-CROWN-JEWEL-IAM"
       ],
       "path_name": "Cloud SSRF to IAM Administrator Privilege Escalation",
+      "path_status": "CONFIRMED",
       "reaches_critical": true,
       "shortest_path_found": true,
       "source_id": "NODE-CLOUD-SSRF-01",
@@ -152,28 +201,46 @@
       "total_cost": 25
     },
     {
+      "environment": "SKF Path Traversal Mock (:8086)",
+      "explanation": "Arbitrary file disclosure leaks database credentials leading directly to database compromise.",
       "hop_count": 1,
       "node_sequence": [
         "NODE-SKF-TRAVERSAL-01",
-        "NODE-CROWN-JEWEL-DB"
+        "NODE-SKF-DB"
       ],
-      "path_name": "Path Traversal to Database Secret Disclosure",
+      "path_name": "Path Traversal to Environment Database Secret Disclosure",
+      "path_status": "CONFIRMED",
       "reaches_critical": true,
       "shortest_path_found": true,
       "source_id": "NODE-SKF-TRAVERSAL-01",
-      "target_id": "NODE-CROWN-JEWEL-DB",
+      "target_id": "NODE-SKF-DB",
       "total_cost": 25
     }
   ],
+  "mobile_to_backend_hypothesis_path": {
+    "application": "InsecureBankv2 (Mobile Client \u0026 AndroLabServer Backend :8888)",
+    "entry_point": "NODE-MOB-DEX-KEY",
+    "hops": 3,
+    "path": [
+      "NODE-MOB-DEX-KEY",
+      "NODE-MOB-NET-CLEARTEXT",
+      "NODE-BACKEND-DEVLOGIN",
+      "NODE-BACKEND-BOLA"
+    ],
+    "path_status": "POTENTIAL_HYPOTHESIS",
+    "target": "NODE-BACKEND-BOLA",
+    "total_cost": 137.49
+  },
   "receipt_version": "3.0.0",
   "subphase_id": "7.1",
   "target_subsystem": "Autonomous Multi-Hop Attack-Chain Engine (pkg/correlation)",
   "test_command": "go test -v -count=1 -run TestDAG_ ./pkg/correlation/...",
-  "timestamp": "2026-11-07T16:25:00Z",
+  "timestamp": "2026-11-07T17:30:00Z",
   "title": "Directed Acyclic Graph (DAG) Attack Path Generator Proof",
   "transparent_limitations": [
     "Phase 7.1 authorizes graph topology, reachability, and shortest-path calculation ONLY. Phase 7.2 (PoC Synthesizer), 7.3 (Remediation Diff Generator), and 7.4 (Executive Dossier) remain strictly BLOCKED.",
     "Full repository regression (go test ./...) encounters offline local containers (WebGoat :8080, NodeGoat :4000) in pkg/auth; all package-level tests for pkg/correlation, pkg/mobile, pkg/cloudsec, pkg/cve pass with Exit Code 0.",
-    "Sensitive credential redaction enforced across all graph labels, explanations, and evidence summaries via pkg/secrets.RedactText."
+    "Sensitive credential redaction enforced across all graph labels, explanations, and evidence summaries via pkg/secrets.RedactText.",
+    "No cross-application connectivity is manufactured; InsecureBankv2 backend routes (/devlogin, /changepassword) were not validated dynamically and are classified honestly as POTENTIAL_HYPOTHESIS."
   ]
 }

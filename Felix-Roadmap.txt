@@ -1018,8 +1018,8 @@ Testing & Validation:
 
 Status:
 - [X] 7.1 DAG Attack Path Generator (`dag.go`) -> Proof: `test/evidence/phase7/7.1_dag_attack_path_proof.json` [PROVEN & EMPIRICALLY VERIFIED]
-  * Canonical Payload SHA-256: c246b4fdcda7e783b0fc52378c2aa35b51681ccfa7efba68cf126a6b492d44c8
-  * Raw File SHA-256         : ed41ee947e8fbd62719817c49807e77a6b91ef4b1f291cb25471b049b7023445
+  * Canonical Payload SHA-256: bef7880b68abaca30a672e28c2aa77cfadcef7c94234970b8901de3947791312
+  * Raw File SHA-256         : b451eb6f85c2d6971a5731ebe4b69367bcb54a74d93ea6336a1ad370c90300a7
 - [ ] 7.2 PoC Command Synthesizer (`poc.go`) -> Proof: `test/evidence/phase7/7.2_curl_poc_reproduction_proof.json` [NOT STARTED / BLOCKED]
 - [ ] 7.3 Remediation Code Diff Generator (`remediation.go`) -> Proof: `test/evidence/phase7/7.3_remediation_diff_validation_proof.json` [NOT STARTED / BLOCKED]
 - [ ] 7.4 Executive Dossier Generator (`dossier.go`) -> Proof: `test/evidence/phase7/7.4_executive_dossier_proof.json` [NOT STARTED / BLOCKED]

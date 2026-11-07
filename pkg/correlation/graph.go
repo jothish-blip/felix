@@ -514,12 +514,6 @@ func (g *AttackGraph) ToDAG(rejectCycles bool) (*DAGAttackGraph, error) {
 		_ = dag.AddEdge(dagEdge)
 	}
 
-	// Also infer domain-specific transitions
-	inferredEdges := InferDAGEdges(dag.Nodes)
-	for _, edge := range inferredEdges {
-		_ = dag.AddEdge(edge)
-	}
-
 	dag.Validation = dag.Validate()
 	if rejectCycles && dag.Validation.HasCycle {
 		return dag, fmt.Errorf("cycle detected in attack graph: %s", strings.Join(dag.Validation.CycleNodes, ", "))

@@ -261,8 +261,8 @@ func (g *DAGAttackGraph) AddEdge(edge *DAGEdge) error {
 		}
 	}
 
-	// Ensure edge weight is calculated
-	if edge.Weight <= 0 {
+	// Ensure edge weight is calculated and valid
+	if edge.Weight <= 0 || math.IsNaN(edge.Weight) || math.IsInf(edge.Weight, 0) {
 		edge.Weight = CalculateEdgeCost(srcNode, tgtNode, edge.Confidence)
 	}
 
@@ -969,6 +969,22 @@ func (g *DAGAttackGraph) ToAttackGraph() *AttackGraph {
 	}
 
 	for _, e := range g.Edges {
+		relType := RelEnables
+		switch e.RuleCode {
+		case RuleCOR01:
+			relType = RelReaches
+		case RuleCOR02:
+			relType = RelEnables
+		case RuleCOR03:
+			relType = RelExposes
+		case RuleCOR04:
+			relType = RelExposes
+		case RuleCOR08:
+			relType = RelEnables
+		default:
+			relType = RelEnables
+		}
+
 		ge := &GraphEdge{
 			ID:                 e.ID,
 			SourceID:           e.SourceID,
@@ -982,6 +998,7 @@ func (g *DAGAttackGraph) ToAttackGraph() *AttackGraph {
 				ID:                 e.ID,
 				SourceFindingID:   e.SourceID,
 				TargetFindingID:   e.TargetID,
+				Type:               relType,
 				RuleCode:           e.RuleCode,
 				Confidence:         e.Confidence,
 				ValidationStatus:   e.ValidationStatus,
