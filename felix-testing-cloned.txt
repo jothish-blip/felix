@@ -589,8 +589,8 @@ Target Repos    : Multi-vulnerability targets (`juice-shop`, `webgoat`, `vampi`,
     - Aggressive Test Case: Assert graph solver identifies the shortest, highest-impact path to critical breach.
     - Exit Gate Metric    : DAG generation verified; composite risk score calculated deterministically; 18 unit tests passing; Exit Code 0.
     - Evidence Receipt    : `test/evidence/phase7/7.1_dag_attack_path_proof.json`
-    - Receipt Hashes      : Canonical SHA-256: bef7880b68abaca30a672e28c2aa77cfadcef7c94234970b8901de3947791312
-                            Raw SHA-256      : b451eb6f85c2d6971a5731ebe4b69367bcb54a74d93ea6336a1ad370c90300a7
+    - Receipt Hashes      : Canonical SHA-256: f653408e5b38104dd7afa1f7a10e654712e93176710ceba81ee23b580d078ada
+                            Raw SHA-256      : 1c419214dfca56612ad9b57fe613cdcc4156889b24282a61b06413f5e6544a0e
 
 [ ] Subphase 7.2: Deterministic PoC Command Synthesizer (`pkg/report/poc.go`) [NOT STARTED / BLOCKED]
     - Target for Testing  : All confirmed findings from Phase 2, 3, 4, 5.

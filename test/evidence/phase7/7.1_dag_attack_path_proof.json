@@ -11,22 +11,24 @@
   "benchmark_source_classification": {
     "fresh_live_target_execution": [],
     "mock_or_simulated_input": [
-      "AWS IMDSv2 Mock (:169.254.169.254 - token-based metadata access)",
-      "SKF Path Traversal Mock (:8086 - sensitive file read)"
+      "AWS IMDSv2 Mock (:169.254.169.254 - token-based metadata access simulation)",
+      "SKF Path Traversal Mock (:8086 - sensitive file read simulation)"
     ],
     "persisted_prior_laboratory_evidence": [
       "test/lab/lab_results.json (78 ground-truth findings across OWASP Juice Shop, WebGoat, and VAmPI)",
-      "test/evidence/phase6/6.4_mobile_api_correlation_proof.json (Phase 6.4 mobile-to-backend correlated targets)"
+      "test/evidence/phase6/6.4_mobile_api_correlation_proof.json (Phase 6.4 mobile-to-backend correlated targets)",
+      "OWASP Juice Shop live lab execution findings (LAB-REAL-JUICE-001, LAB-REAL-SQLI-003, ASSET-JUICE-SQLITE-01 on :3000)"
     ],
     "static_analysis_evidence": [
-      "InsecureBankv2.apk classes.dex Dalvik string pool constant table (hardcoded AES encryption key extraction)"
+      "InsecureBankv2.apk classes.dex Dalvik string pool constant table (hardcoded AES encryption key extraction)",
+      "InsecureBankv2 backend source inspection (AndroLabServer/app.py unauthenticated /devlogin and /changepassword routes)"
     ],
     "synthetic_unit_test_fixture": [
-      "19 algorithmic unit test fixtures in pkg/correlation/dag_test.go",
+      "22 algorithmic unit test fixtures in pkg/correlation/dag_test.go",
       "1,000-node synthetic algorithm benchmark (TestDAG_18_LargeGraphPerformance)"
     ]
   },
-  "canonical_payload_sha256": "bef7880b68abaca30a672e28c2aa77cfadcef7c94234970b8901de3947791312",
+  "canonical_payload_sha256": "f653408e5b38104dd7afa1f7a10e654712e93176710ceba81ee23b580d078ada",
   "conclusive_status": "PROVEN_VERIFIED",
   "critical_asset_shortest_path": {
     "application": "OWASP Juice Shop (Live Lab :3000)",
@@ -61,6 +63,7 @@
   "finding_provenance": [
     {
       "engine": "ENGINE_1_CRAWLER",
+      "execution_environment": "LIVE_LAB_TARGET",
       "finding_id": "LAB-REAL-JUICE-001",
       "node_id": "NODE-JUICE-DOCS",
       "role": "Public Surface Reconnaissance / Documentation Exposure",
@@ -69,6 +72,7 @@
     },
     {
       "engine": "ENGINE_2_FUZZER",
+      "execution_environment": "LIVE_LAB_TARGET",
       "finding_id": "LAB-REAL-SQLI-003",
       "node_id": "NODE-JUICE-SQLI",
       "role": "Direct Exploitation Flaw / SQL Injection",
@@ -77,6 +81,7 @@
     },
     {
       "engine": "ENGINE_2_FUZZER",
+      "execution_environment": "LIVE_LAB_TARGET",
       "finding_id": "ASSET-JUICE-SQLITE-01",
       "node_id": "NODE-JUICE-DB",
       "role": "Crown Jewel Critical Asset / Database Takeover",
@@ -85,6 +90,7 @@
     },
     {
       "engine": "ENGINE_6_MOBILE",
+      "execution_environment": "STATIC_BYTECODE_ANALYSIS",
       "finding_id": "MOB-DEX-KEY-01",
       "node_id": "NODE-MOB-DEX-KEY",
       "role": "Mobile Client Key Disclosure / Static Bytecode Extraction",
@@ -93,6 +99,7 @@
     },
     {
       "engine": "ENGINE_6_MOBILE",
+      "execution_environment": "OBSERVED_NETWORK_TRAFFIC",
       "finding_id": "RUNTIME-CLEARTEXT-HTTP",
       "node_id": "NODE-MOB-NET-CLEARTEXT",
       "role": "Intercepted Network Event / Plaintext Transmission",
@@ -101,6 +108,7 @@
     },
     {
       "engine": "ENGINE_1_CRAWLER",
+      "execution_environment": "POTENTIAL_HYPOTHESIS",
       "finding_id": "ANDROLAB-EXPOSED-ROUTE-02",
       "node_id": "NODE-BACKEND-DEVLOGIN",
       "role": "Exposed Route Inventory / Unauthenticated Backdoor Hypothesis",
@@ -109,6 +117,7 @@
     },
     {
       "engine": "ENGINE_3_BOLA",
+      "execution_environment": "POTENTIAL_HYPOTHESIS",
       "finding_id": "ANDROLAB-BOLA-01",
       "node_id": "NODE-BACKEND-BOLA",
       "role": "Backend Source Audit / Password Reset Parameter Tampering Hypothesis",
@@ -117,33 +126,37 @@
     },
     {
       "engine": "ENGINE_5_CLOUDSEC",
+      "execution_environment": "MOCK_SIMULATION",
       "finding_id": "CLOUD-SSRF-IMDS-01",
       "node_id": "NODE-CLOUD-SSRF-01",
-      "role": "Cloud Entry Point / SSRF to Metadata",
+      "role": "Mock Test Fixture / SSRF to Simulated Metadata",
       "target": "http://169.254.169.254/latest/meta-data/",
       "verification_status": "CONFIRMED"
     },
     {
       "engine": "ENGINE_5_CLOUDSEC",
+      "execution_environment": "MOCK_SIMULATION",
       "finding_id": "ASSET-CLOUD-IAM-01",
       "node_id": "NODE-CROWN-JEWEL-IAM",
-      "role": "Cloud Crown Jewel Asset / IAM Admin Role",
+      "role": "Mock Test Fixture / Simulated IAM Admin Role (Not a live cloud compromise)",
       "target": "arn:aws:iam::123456789012:role/AdminInstanceRole",
       "verification_status": "CONFIRMED"
     },
     {
       "engine": "ENGINE_2_FUZZER",
+      "execution_environment": "MOCK_SIMULATION",
       "finding_id": "SKF-TRAVERSAL-01",
       "node_id": "NODE-SKF-TRAVERSAL-01",
-      "role": "LFI Entry Point / Arbitrary File Read",
+      "role": "Mock Test Fixture / Simulated LFI Arbitrary File Read",
       "target": "http://127.0.0.1:8086/download",
       "verification_status": "CONFIRMED"
     },
     {
       "engine": "ENGINE_2_FUZZER",
+      "execution_environment": "MOCK_SIMULATION",
       "finding_id": "ASSET-SKF-DB-01",
       "node_id": "NODE-SKF-DB",
-      "role": "Internal Database Critical Asset / Direct Connection Leak",
+      "role": "Mock Test Fixture / Simulated Database Connection Secret (Not a live database compromise)",
       "target": "db://127.0.0.1:8086/app_db",
       "verification_status": "CONFIRMED"
     }
@@ -163,12 +176,13 @@
       "reaches_critical": true,
       "shortest_path_found": true,
       "source_id": "NODE-JUICE-DOCS",
+      "target_execution_type": "LIVE_LAB_TARGET",
       "target_id": "NODE-JUICE-DB",
       "total_cost": 50
     },
     {
       "environment": "InsecureBankv2 (Mobile Client \u0026 AndroLabServer Backend :8888)",
-      "explanation": "Mobile client Dalvik AES key feeds cleartext HTTP transmission to /login. Inferred testing against unauthenticated developer backdoor /devlogin hypothetically enables parameter tampering on unauthenticated changepassword route.",
+      "explanation": "Potential hypothesis: Mobile client Dalvik AES key and cleartext HTTP transmission to /login are co-located without proven data-flow coupling. Inferred testing against unauthenticated developer backdoor /devlogin hypothetically enables parameter tampering on unauthenticated changepassword route.",
       "hop_count": 3,
       "node_sequence": [
         "NODE-MOB-DEX-KEY",
@@ -181,38 +195,41 @@
       "reaches_critical": true,
       "shortest_path_found": true,
       "source_id": "NODE-MOB-DEX-KEY",
+      "target_execution_type": "HYPOTHESIS_HYBRID",
       "target_id": "NODE-BACKEND-BOLA",
-      "total_cost": 137.49
+      "total_cost": 145.83
     },
     {
-      "environment": "CloudSec (AWS IMDSv2 Mock :169.254.169.254)",
-      "explanation": "SSRF directly queries internal cloud metadata to compromise administrative cloud credentials.",
+      "environment": "CloudSec (AWS IMDSv2 Mock Test Harness :169.254.169.254)",
+      "explanation": "Mock test validation: SSRF queries local simulated IMDS metadata service in a test harness. Validates attack-chain logic without claiming compromise of a live production AWS IAM role.",
       "hop_count": 1,
       "node_sequence": [
         "NODE-CLOUD-SSRF-01",
         "NODE-CROWN-JEWEL-IAM"
       ],
-      "path_name": "Cloud SSRF to IAM Administrator Privilege Escalation",
+      "path_name": "Cloud SSRF to IAM Administrator Privilege Escalation (Mock Simulation)",
       "path_status": "CONFIRMED",
       "reaches_critical": true,
       "shortest_path_found": true,
       "source_id": "NODE-CLOUD-SSRF-01",
+      "target_execution_type": "MOCK_SIMULATION",
       "target_id": "NODE-CROWN-JEWEL-IAM",
       "total_cost": 25
     },
     {
-      "environment": "SKF Path Traversal Mock (:8086)",
-      "explanation": "Arbitrary file disclosure leaks database credentials leading directly to database compromise.",
+      "environment": "OWASP SKF (Path Traversal Mock Test Harness :8086)",
+      "explanation": "Mock test validation: Arbitrary file disclosure leaks simulated credentials in a test harness. Validates attack-chain logic without claiming compromise of a live production database.",
       "hop_count": 1,
       "node_sequence": [
         "NODE-SKF-TRAVERSAL-01",
         "NODE-SKF-DB"
       ],
-      "path_name": "Path Traversal to Environment Database Secret Disclosure",
+      "path_name": "Path Traversal to Environment Database Secret Disclosure (Mock Simulation)",
       "path_status": "CONFIRMED",
       "reaches_critical": true,
       "shortest_path_found": true,
       "source_id": "NODE-SKF-TRAVERSAL-01",
+      "target_execution_type": "MOCK_SIMULATION",
       "target_id": "NODE-SKF-DB",
       "total_cost": 25
     }
@@ -229,18 +246,20 @@
     ],
     "path_status": "POTENTIAL_HYPOTHESIS",
     "target": "NODE-BACKEND-BOLA",
-    "total_cost": 137.49
+    "total_cost": 145.83
   },
   "receipt_version": "3.0.0",
   "subphase_id": "7.1",
   "target_subsystem": "Autonomous Multi-Hop Attack-Chain Engine (pkg/correlation)",
   "test_command": "go test -v -count=1 -run TestDAG_ ./pkg/correlation/...",
-  "timestamp": "2026-11-07T17:30:00Z",
+  "timestamp": "2026-11-07T18:00:00Z",
   "title": "Directed Acyclic Graph (DAG) Attack Path Generator Proof",
   "transparent_limitations": [
     "Phase 7.1 authorizes graph topology, reachability, and shortest-path calculation ONLY. Phase 7.2 (PoC Synthesizer), 7.3 (Remediation Diff Generator), and 7.4 (Executive Dossier) remain strictly BLOCKED.",
-    "Full repository regression (go test ./...) encounters offline local containers (WebGoat :8080, NodeGoat :4000) in pkg/auth; all package-level tests for pkg/correlation, pkg/mobile, pkg/cloudsec, pkg/cve pass with Exit Code 0.",
-    "Sensitive credential redaction enforced across all graph labels, explanations, and evidence summaries via pkg/secrets.RedactText.",
-    "No cross-application connectivity is manufactured; InsecureBankv2 backend routes (/devlogin, /changepassword) were not validated dynamically and are classified honestly as POTENTIAL_HYPOTHESIS."
+    "Mock validation vs real-target exploitation: CloudSec and SKF attack chains are verified in isolated mock test harnesses. Node verification status is retained as VERIFIED and edge validation as CONFIRMED per existing type system constraints (report.VerificationStatus and correlation.ValidationStatus do not define a separate MOCK_VERIFIED status). Mock status is explicitly documented via target_execution_type without claiming live cloud IAM or database compromise.",
+    "InsecureBankv2 edge classification: EDGE-MOB-01 (DEX Key -\u003e Cleartext HTTP) is classified as PLAUSIBLE (inferred) because the AES key does not participate in the /login HTTP request data flow; no live session coupling exists.",
+    "Adapter conversion lossy boundaries: Converting DAGAttackGraph to AttackGraph drops custom DAGNode.Attributes, collapses multiple DAGNode.EvidenceReferences to a single EvidenceSummary string when Finding is unpopulated, and maps DAGEdgeType to standard RelationshipType via RuleCode.",
+    "Full repository regression (go test ./...) encounters offline local containers (WebGoat :8080, NodeGoat :4000) in pkg/auth; all package-level tests for pkg/correlation, pkg/mobile, pkg/assessment, pkg/cloudsec, pkg/cve, pkg/fuzzer, and pkg/bola pass with Exit Code 0.",
+    "Sensitive credential redaction enforced across all graph labels, explanations, and evidence summaries via pkg/secrets.RedactText."
   ]
 }

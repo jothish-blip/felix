@@ -431,6 +431,13 @@ func (g *AttackGraph) Sinks() []*GraphNode {
 
 // ToDAG converts an AttackGraph into an enriched DAGAttackGraph, mapping nodes and edges
 // into the heterogeneous entity model and computing edge traversal costs.
+//
+// Documented Adapter Semantics & Lossy Boundaries (AttackGraph -> DAGAttackGraph):
+// 1. Attributes: AttackGraph GraphNode/NormalizedFinding has no attributes map; DAGNode.Attributes is initialized empty/nil.
+// 2. Node Evidence: AttackGraph NormalizedFinding has a single EvidenceSummary string, mapped to a 1-element slice DAGNode.EvidenceReferences.
+// 3. Entity Types: Heuristically classified from NormalizedFinding flags; discrete types (e.g. NodeTypeRoute) default to NodeTypeFinding.
+// 4. Edge Types: DAGEdge.Type defaults to DAGEdgeSequenceTransition; original Relationship.Type (RelReaches, RelEnables, etc.) is mediated via RuleCode.
+// 5. Preserved Semantics: Node IDs, Finding IDs, Severity, Confidence, VerificationStatus, AssetAssociation, Edge direction (SourceID -> TargetID), Weights, and Edge EvidenceReferences are preserved.
 func (g *AttackGraph) ToDAG(rejectCycles bool) (*DAGAttackGraph, error) {
 	dag := NewDAGAttackGraph(rejectCycles)
 

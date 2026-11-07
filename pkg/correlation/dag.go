@@ -933,6 +933,13 @@ func (g *DAGAttackGraph) ToCanonicalJSON() ([]byte, string, error) {
 
 // ToAttackGraph converts a DAGAttackGraph into an AttackGraph for backwards compatibility
 // with existing correlation reporting and visualization pipelines.
+//
+// Documented Adapter Semantics & Lossy Boundaries (DAGAttackGraph -> AttackGraph):
+// 1. Attributes: DAGNode.Attributes cannot be represented because AttackGraph GraphNode and NormalizedFinding lack an attributes map.
+// 2. Node Evidence: When DAGNode.Finding is nil, only EvidenceReferences[0] is copied into NormalizedFinding.EvidenceSummary; additional references are dropped.
+// 3. Discrete Node Types: Specialized types (NodeTypeRoute, NodeTypeCriticalAsset) lack discrete type enums in AttackGraph and map to Severity/IsEntrypoint flags.
+// 4. Discrete Edge Types: Specialized DAGEdgeType values (e.g. DAGEdgeSQLiToDatabase) map to standard RelationshipType (RelReaches, RelEnables, RelExposes) via RuleCode.
+// 5. Preserved Semantics: Node IDs, Finding IDs, Severity, Confidence, VerificationStatus, AssetAssociation, Edge direction, Weights, ValidationStatus, RuleCode, and Edge EvidenceReferences are preserved.
 func (g *DAGAttackGraph) ToAttackGraph() *AttackGraph {
 	nodes := make(map[string]*GraphNode, len(g.Nodes))
 	adj := make(map[string][]*GraphEdge)

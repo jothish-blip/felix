@@ -987,128 +987,313 @@ func TestDAG_21_MathematicalWeightModel(t *testing.T) {
 	}
 }
 
-// 22. Adapter Semantics Preservation Test
-func TestDAG_22_AdapterSemanticsPreservation(t *testing.T) {
-	findings := []NormalizedFinding{
-		{
-			ID:                 "FID-01",
-			Title:              "Client Credential Leak",
-			NormalizedCategory: "CREDENTIAL",
+// 22. Adapter Semantics & Lossy Boundaries Verification Test
+func TestDAG_22_AdapterSemanticsAndLossyBoundaries(t *testing.T) {
+	t.Run("AttackGraph_ToDAG_Direction_And_Semantics", func(t *testing.T) {
+		findings := []NormalizedFinding{
+			{
+				ID:                 "FID-01",
+				Title:              "Client Credential Leak",
+				NormalizedCategory: "CREDENTIAL",
+				Severity:           report.SeverityHigh,
+				Confidence:         "HIGH",
+				VerificationStatus: report.VerificationVerified,
+				Source:             "ENGINE_6_MOBILE",
+				EvidenceSummary:    "Hardcoded secret in mobile bytecode",
+				CanonicalAssetKey:  "apk:com.example.app",
+				IsEntrypoint:       true,
+				IsSensitiveData:    true,
+			},
+			{
+				ID:                 "FID-02",
+				Title:              "Unauthenticated Route",
+				NormalizedCategory: "ROUTE",
+				Severity:           report.SeverityMedium,
+				Confidence:         "MEDIUM",
+				VerificationStatus: report.VerificationDetected,
+				Source:             "ENGINE_1_CRAWLER",
+				EvidenceSummary:    "Management endpoint /admin exposed",
+				CanonicalAssetKey:  "http://api.example.com/admin",
+			},
+			{
+				ID:                 "FID-03",
+				Title:              "Database Storage",
+				NormalizedCategory: "SQLI",
+				Severity:           report.SeverityCritical,
+				Confidence:         "HIGH",
+				VerificationStatus: report.VerificationVerified,
+				Source:             "ENGINE_2_FUZZER",
+				EvidenceSummary:    "SQL injection extracts root users table",
+				CanonicalAssetKey:  "db://prod-sql",
+				IsCloudResource:    true,
+			},
+		}
+
+		relationships := []Relationship{
+			{
+				ID:                 "REL-01",
+				SourceFindingID:   "FID-01",
+				TargetFindingID:   "FID-02",
+				Type:               RelReaches,
+				RuleCode:           RuleCOR01,
+				Confidence:         "HIGH",
+				ValidationStatus:   ValidationConfirmed,
+				EvidenceReferences: []string{"EV-01-A", "EV-01-B"},
+				Explanation:        "Credential reaches endpoint",
+			},
+			{
+				ID:                 "REL-02",
+				SourceFindingID:   "FID-02",
+				TargetFindingID:   "FID-03",
+				Type:               RelExposes,
+				RuleCode:           RuleCOR03,
+				Confidence:         "MEDIUM",
+				ValidationStatus:   ValidationPlausible,
+				EvidenceReferences: []string{"EV-02-A", "EV-02-B"},
+				Explanation:        "Route exposes database vulnerability",
+			},
+		}
+
+		ag := NewAttackGraph(findings, relationships)
+		ag.Edges[0].Weight = 25.5
+		ag.Edges[1].Weight = 42.0
+
+		// Convert to DAG
+		dag, err := ag.ToDAG(true)
+		if err != nil {
+			t.Fatalf("ToDAG failed: %v", err)
+		}
+
+		// Verify Node preservation
+		for _, f := range findings {
+			dn, ok := dag.Nodes[f.ID]
+			if !ok {
+				t.Fatalf("node %s missing in DAG", f.ID)
+			}
+			if dn.FindingID != f.ID {
+				t.Errorf("FindingID mismatch: expected %s, got %s", f.ID, dn.FindingID)
+			}
+			if dn.Severity != f.Severity {
+				t.Errorf("Severity mismatch for %s: expected %s, got %s", f.ID, f.Severity, dn.Severity)
+			}
+			if dn.Confidence != f.Confidence {
+				t.Errorf("Confidence mismatch for %s: expected %s, got %s", f.ID, f.Confidence, dn.Confidence)
+			}
+			if dn.VerificationStatus != f.VerificationStatus {
+				t.Errorf("VerificationStatus mismatch for %s: expected %s, got %s", f.ID, f.VerificationStatus, dn.VerificationStatus)
+			}
+			if dn.SourceEngine != f.Source {
+				t.Errorf("SourceEngine mismatch for %s: expected %s, got %s", f.ID, f.Source, dn.SourceEngine)
+			}
+			if dn.AssetAssociation != f.CanonicalAssetKey {
+				t.Errorf("AssetAssociation mismatch: expected %s, got %s", f.CanonicalAssetKey, dn.AssetAssociation)
+			}
+			if dn.IsEntrypoint != f.IsEntrypoint {
+				t.Errorf("IsEntrypoint mismatch for %s", f.ID)
+			}
+			// Documented lossy boundary: GraphNode lacks Attributes; DAGNode.Attributes is nil/empty
+			if len(dn.Attributes) != 0 {
+				t.Errorf("expected empty Attributes on DAGNode converted from AttackGraph, got %v", dn.Attributes)
+			}
+		}
+
+		// Verify Edge direction, weights, multiple evidence references, and rule codes
+		if len(dag.Edges) != 2 {
+			t.Fatalf("expected 2 edges in DAG, got %d", len(dag.Edges))
+		}
+		// Edge 0: FID-01 -> FID-02
+		e0 := dag.Edges[0]
+		if e0.SourceID != "FID-01" || e0.TargetID != "FID-02" {
+			t.Errorf("Edge 0 direction error: Source=%s, Target=%s", e0.SourceID, e0.TargetID)
+		}
+		if e0.Weight != 25.5 {
+			t.Errorf("Edge 0 weight error: expected 25.5, got %.2f", e0.Weight)
+		}
+		if len(e0.EvidenceReferences) != 2 || e0.EvidenceReferences[0] != "EV-01-A" || e0.EvidenceReferences[1] != "EV-01-B" {
+			t.Errorf("Edge 0 multiple evidence references error: %v", e0.EvidenceReferences)
+		}
+		if e0.RuleCode != RuleCOR01 || e0.ValidationStatus != ValidationConfirmed {
+			t.Errorf("Edge 0 RuleCode/ValidationStatus mismatch: %+v", e0)
+		}
+
+		// Edge 1: FID-02 -> FID-03
+		e1 := dag.Edges[1]
+		if e1.SourceID != "FID-02" || e1.TargetID != "FID-03" {
+			t.Errorf("Edge 1 direction error: Source=%s, Target=%s", e1.SourceID, e1.TargetID)
+		}
+		if e1.Weight != 42.0 {
+			t.Errorf("Edge 1 weight error: expected 42.0, got %.2f", e1.Weight)
+		}
+		if len(e1.EvidenceReferences) != 2 || e1.EvidenceReferences[0] != "EV-02-A" || e1.EvidenceReferences[1] != "EV-02-B" {
+			t.Errorf("Edge 1 multiple evidence references error: %v", e1.EvidenceReferences)
+		}
+		if e1.RuleCode != RuleCOR03 || e1.ValidationStatus != ValidationPlausible {
+			t.Errorf("Edge 1 RuleCode/ValidationStatus mismatch: %+v", e1)
+		}
+
+		// Documented lossy boundary: DAGEdge.Type defaults to DAGEdgeSequenceTransition
+		if e0.Type != DAGEdgeSequenceTransition || e1.Type != DAGEdgeSequenceTransition {
+			t.Errorf("expected DAGEdgeSequenceTransition on ToDAG converted edges")
+		}
+	})
+
+	t.Run("DAG_ToAttackGraph_Direction_And_LossyBoundaries", func(t *testing.T) {
+		dag := NewDAGAttackGraph(true)
+
+		// Create DAGNodes with attributes, discrete types, and multiple evidence references
+		n1 := &DAGNode{
+			ID:                 "DNODE-01",
+			Type:               NodeTypeCredential,
+			FindingID:          "DFIND-01",
+			Title:              "Hardcoded API Token",
 			Severity:           report.SeverityHigh,
 			Confidence:         "HIGH",
 			VerificationStatus: report.VerificationVerified,
-			Source:             "ENGINE_6_MOBILE",
-			EvidenceSummary:    "Hardcoded secret in mobile bytecode",
-			CanonicalAssetKey:  "apk:com.example.app",
+			SourceEngine:       "ENGINE_6_MOBILE",
+			EvidenceReferences: []string{
+				"Ref 1: Dalvik constant pool string",
+				"Ref 2: Intercepted auth bearer header",
+				"Ref 3: Memory dump at 0x7fff0010",
+			},
+			AssetAssociation:   "apk:com.mobile.test",
 			IsEntrypoint:       true,
-		},
-		{
-			ID:                 "FID-02",
-			Title:              "Unauthenticated Route",
-			NormalizedCategory: "ROUTE",
-			Severity:           report.SeverityMedium,
-			Confidence:         "MEDIUM",
-			VerificationStatus: report.VerificationDetected,
-			Source:             "ENGINE_1_CRAWLER",
-			EvidenceSummary:    "Management endpoint /admin exposed",
-			CanonicalAssetKey:  "http://api.example.com/admin",
-		},
-		{
-			ID:                 "FID-03",
-			Title:              "Database Storage",
-			NormalizedCategory: "SQLI",
+			Attributes: map[string]string{
+				"cluster":     "prod-us-east",
+				"framework":   "android-native",
+				"data_source": "static_dex",
+			},
+		}
+
+		n2 := &DAGNode{
+			ID:                 "DNODE-02",
+			Type:               NodeTypeCriticalAsset,
+			FindingID:          "DFIND-02",
+			Title:              "Cloud Database Asset",
 			Severity:           report.SeverityCritical,
 			Confidence:         "HIGH",
 			VerificationStatus: report.VerificationVerified,
-			Source:             "ENGINE_2_FUZZER",
-			EvidenceSummary:    "SQL injection extracts root users table",
-			CanonicalAssetKey:  "db://prod-sql",
-		},
-	}
+			SourceEngine:       "ENGINE_5_CLOUDSEC",
+			EvidenceReferences: []string{
+				"Ref A: IAM role security credentials",
+				"Ref B: RDS admin connection endpoint",
+			},
+			AssetAssociation:   "arn:aws:rds:us-east-1:123456789012:db:prod",
+			IsCriticalAsset:    true,
+			Attributes: map[string]string{
+				"cloud_provider": "AWS",
+				"tier":           "crown_jewel",
+			},
+		}
 
-	relationships := []Relationship{
-		{
-			ID:                 "REL-01",
-			SourceFindingID:   "FID-01",
-			TargetFindingID:   "FID-02",
-			Type:               RelReaches,
-			RuleCode:           RuleCOR01,
-			Confidence:         "HIGH",
-			ValidationStatus:   ValidationConfirmed,
-			EvidenceReferences: []string{"EV-01"},
-			Explanation:        "Credential reaches endpoint",
-		},
-		{
-			ID:                 "REL-02",
-			SourceFindingID:   "FID-02",
-			TargetFindingID:   "FID-03",
-			Type:               RelEnables,
+		if err := dag.AddNode(n1); err != nil {
+			t.Fatalf("AddNode n1 failed: %v", err)
+		}
+		if err := dag.AddNode(n2); err != nil {
+			t.Fatalf("AddNode n2 failed: %v", err)
+		}
+
+		edge := &DAGEdge{
+			ID:                 "DEDGE-01",
+			SourceID:           "DNODE-01",
+			TargetID:           "DNODE-02",
+			Type:               DAGEdgeSQLiToDatabase,
 			RuleCode:           RuleCOR03,
-			Confidence:         "MEDIUM",
-			ValidationStatus:   ValidationPlausible,
-			EvidenceReferences: []string{"EV-02"},
-			Explanation:        "Route exposes database vulnerability",
-		},
-	}
+			Confidence:         "HIGH",
+			Weight:             37.5,
+			ValidationStatus:   ValidationConfirmed,
+			EvidenceReferences: []string{
+				"EdgeProof 1: Token grants direct RDS access",
+				"EdgeProof 2: Verified SELECT 1 response",
+			},
+			Explanation:        "Compromised credential enables direct database connection",
+		}
+		if err := dag.AddEdge(edge); err != nil {
+			t.Fatalf("AddEdge edge failed: %v", err)
+		}
 
-	ag := NewAttackGraph(findings, relationships)
-	ag.Edges[0].Weight = 25.5
-	ag.Edges[1].Weight = 42.0
+		// Convert to AttackGraph
+		ag := dag.ToAttackGraph()
 
-	// 1. Convert to DAG
-	dag, err := ag.ToDAG(true)
-	if err != nil {
-		t.Fatalf("ToDAG failed: %v", err)
-	}
+		// 1. Verify Preserved Semantics
+		if len(ag.Nodes) != 2 {
+			t.Fatalf("expected 2 nodes in AttackGraph, got %d", len(ag.Nodes))
+		}
+		gn1, ok1 := ag.Nodes["DNODE-01"]
+		if !ok1 {
+			t.Fatalf("DNODE-01 missing in AttackGraph")
+		}
+		if gn1.Finding.ID != "DNODE-01" || gn1.Finding.Title != "Hardcoded API Token" {
+			t.Errorf("Finding ID/Title mismatch: %+v", gn1.Finding)
+		}
+		if gn1.Finding.Severity != report.SeverityHigh || gn1.Finding.Confidence != "HIGH" {
+			t.Errorf("Finding Severity/Confidence mismatch: %+v", gn1.Finding)
+		}
+		if gn1.Finding.VerificationStatus != report.VerificationVerified {
+			t.Errorf("Finding VerificationStatus mismatch: %+v", gn1.Finding)
+		}
+		if gn1.Finding.Source != "ENGINE_6_MOBILE" || gn1.Finding.CanonicalAssetKey != "apk:com.mobile.test" {
+			t.Errorf("Finding Source/Asset mismatch: %+v", gn1.Finding)
+		}
+		if !gn1.Finding.IsEntrypoint {
+			t.Errorf("expected IsEntrypoint to be true")
+		}
 
-	// Verify Node preservation
-	for _, f := range findings {
-		dn, ok := dag.Nodes[f.ID]
-		if !ok {
-			t.Fatalf("node %s missing in DAG", f.ID)
+		// Verify Edge direction and properties
+		if len(ag.Edges) != 1 {
+			t.Fatalf("expected 1 edge in AttackGraph, got %d", len(ag.Edges))
 		}
-		if dn.FindingID != f.ID {
-			t.Errorf("FindingID mismatch: expected %s, got %s", f.ID, dn.FindingID)
+		ge := ag.Edges[0]
+		if ge.SourceID != "DNODE-01" || ge.TargetID != "DNODE-02" {
+			t.Errorf("Edge direction mismatch: Source=%s, Target=%s (expected DNODE-01 -> DNODE-02)", ge.SourceID, ge.TargetID)
 		}
-		if dn.Severity != f.Severity {
-			t.Errorf("Severity mismatch for %s: expected %s, got %s", f.ID, f.Severity, dn.Severity)
+		if ge.Weight != 37.5 {
+			t.Errorf("Edge weight mismatch: expected 37.5, got %.2f", ge.Weight)
 		}
-		if dn.Confidence != f.Confidence {
-			t.Errorf("Confidence mismatch for %s: expected %s, got %s", f.ID, f.Confidence, dn.Confidence)
+		if ge.RuleCode != RuleCOR03 || ge.ValidationStatus != ValidationConfirmed {
+			t.Errorf("Edge RuleCode/ValidationStatus mismatch: %+v", ge)
 		}
-		if dn.VerificationStatus != f.VerificationStatus {
-			t.Errorf("VerificationStatus mismatch for %s: expected %s, got %s", f.ID, f.VerificationStatus, dn.VerificationStatus)
+		// Edge multiple evidence references ARE preserved
+		if len(ge.EvidenceReferences) != 2 || ge.EvidenceReferences[0] != "EdgeProof 1: Token grants direct RDS access" {
+			t.Errorf("Edge EvidenceReferences mismatch: %v", ge.EvidenceReferences)
 		}
-		if dn.SourceEngine != f.Source {
-			t.Errorf("SourceEngine mismatch for %s: expected %s, got %s", f.ID, f.Source, dn.SourceEngine)
+		// RelationshipType is mapped from RuleCOR03 -> RelExposes
+		if ge.Relationship.Type != RelExposes {
+			t.Errorf("expected Relationship.Type RelExposes, got %s", ge.Relationship.Type)
 		}
-	}
 
-	// Verify Edge preservation
-	if len(dag.Edges) != 2 {
-		t.Fatalf("expected 2 edges in DAG, got %d", len(dag.Edges))
-	}
-	if dag.Edges[0].SourceID != "FID-01" || dag.Edges[0].TargetID != "FID-02" || dag.Edges[0].Weight != 25.5 {
-		t.Errorf("Edge 0 preservation failure: %+v", dag.Edges[0])
-	}
-	if dag.Edges[1].SourceID != "FID-02" || dag.Edges[1].TargetID != "FID-03" || dag.Edges[1].Weight != 42.0 {
-		t.Errorf("Edge 1 preservation failure: %+v", dag.Edges[1])
-	}
+		// Adjacency verification (Directionality)
+		if len(ag.Adjacency["DNODE-01"]) != 1 || ag.Adjacency["DNODE-01"][0].TargetID != "DNODE-02" {
+			t.Errorf("Adjacency out-edge from DNODE-01 missing or corrupted")
+		}
+		if len(ag.InEdges["DNODE-02"]) != 1 || ag.InEdges["DNODE-02"][0].SourceID != "DNODE-01" {
+			t.Errorf("InEdges in-edge to DNODE-02 missing or corrupted")
+		}
+		// Ensure reverse direction does NOT exist
+		if len(ag.Adjacency["DNODE-02"]) != 0 {
+			t.Errorf("expected 0 out-edges from DNODE-02, got %d (direction was corrupted)", len(ag.Adjacency["DNODE-02"]))
+		}
 
-	// 2. Round-trip convert back to AttackGraph
-	ag2 := dag.ToAttackGraph()
-	if len(ag2.Nodes) != 3 {
-		t.Fatalf("expected 3 nodes in round-tripped graph, got %d", len(ag2.Nodes))
-	}
-	if len(ag2.Edges) != 2 {
-		t.Fatalf("expected 2 edges in round-tripped graph, got %d", len(ag2.Edges))
-	}
-	if ag2.Edges[0].SourceID != "FID-01" || ag2.Edges[0].TargetID != "FID-02" || ag2.Edges[0].Weight != 25.5 {
-		t.Errorf("Round-trip Edge 0 preservation failure: %+v", ag2.Edges[0])
-	}
-	if ag2.Edges[1].SourceID != "FID-02" || ag2.Edges[1].TargetID != "FID-03" || ag2.Edges[1].Weight != 42.0 {
-		t.Errorf("Round-trip Edge 1 preservation failure: %+v", ag2.Edges[1])
-	}
+		// 2. Explicitly Assert & Document Lossy Boundaries:
+		// Lossy Boundary 1: Attributes map cannot be represented in GraphNode / NormalizedFinding
+		// (NormalizedFinding has no Attributes field, so custom key-values are not stored in AttackGraph)
+
+		// Lossy Boundary 2: Multiple node evidence references collapse to EvidenceSummary (first element)
+		// when Finding pointer is unpopulated
+		if gn1.Finding.EvidenceSummary != "Ref 1: Dalvik constant pool string" {
+			t.Errorf("expected EvidenceSummary to preserve primary reference, got %s", gn1.Finding.EvidenceSummary)
+		}
+		// Additional references ("Ref 2", "Ref 3") cannot be represented in NormalizedFinding.EvidenceSummary string
+
+		// Lossy Boundary 3: Discrete DAGEdgeType (DAGEdgeSQLiToDatabase) is mapped to standard RelationshipType (RelExposes)
+		if ge.Relationship.Type != RelExposes {
+			t.Errorf("expected DAGEdgeSQLiToDatabase to map to RelExposes via RuleCOR03, got %s", ge.Relationship.Type)
+		}
+	})
+}
+
+// Backward compatibility alias for TestDAG_22
+func TestDAG_22_AdapterSemanticsPreservation(t *testing.T) {
+	TestDAG_22_AdapterSemanticsAndLossyBoundaries(t)
 }
 
 // TestDAG_Phase7_1_EvidenceReceiptGeneration constructs an evidence-supported, multi-target attack
@@ -1232,7 +1417,7 @@ func TestDAG_Phase7_1_EvidenceReceiptGeneration(t *testing.T) {
 			Confidence:         "HIGH",
 			VerificationStatus: report.VerificationVerified,
 			SourceEngine:       "ENGINE_5_CLOUDSEC",
-			EvidenceReferences: []string{"SSRF redirect to http://169.254.169.254/latest/meta-data/ returned HTTP 200"},
+			EvidenceReferences: []string{"Mock test verification: SSRF test fixture redirect to simulated IMDS http://169.254.169.254/latest/meta-data/ returned HTTP 200 (simulated test environment; does not access a production AWS cloud)"},
 			AssetAssociation:   "http://169.254.169.254/latest/meta-data/",
 			IsEntrypoint:       true,
 		},
@@ -1245,7 +1430,7 @@ func TestDAG_Phase7_1_EvidenceReceiptGeneration(t *testing.T) {
 			Confidence:         "HIGH",
 			VerificationStatus: report.VerificationVerified,
 			SourceEngine:       "ENGINE_5_CLOUDSEC",
-			EvidenceReferences: []string{"IMDS security-credentials returned temporary AWS_ACCESS_KEY_ID and session token"},
+			EvidenceReferences: []string{"Mock test verification: simulated IMDS security-credentials returned synthetic AWS_ACCESS_KEY_ID in local mock harness; does not represent a compromise of a live production AWS IAM role"},
 			AssetAssociation:   "arn:aws:iam::123456789012:role/AdminInstanceRole",
 			IsCriticalAsset:    true,
 		},
@@ -1260,7 +1445,7 @@ func TestDAG_Phase7_1_EvidenceReceiptGeneration(t *testing.T) {
 			Confidence:         "HIGH",
 			VerificationStatus: report.VerificationVerified,
 			SourceEngine:       "ENGINE_2_FUZZER",
-			EvidenceReferences: []string{"Parameter ../../.env retrieved application secrets and database passwords"},
+			EvidenceReferences: []string{"Mock test verification: simulated parameter ../../.env retrieved synthetic database credentials from local test harness (simulated test environment; does not access a live production server)"},
 			AssetAssociation:   "http://127.0.0.1:8086/download",
 			IsEntrypoint:       true,
 		},
@@ -1273,7 +1458,7 @@ func TestDAG_Phase7_1_EvidenceReceiptGeneration(t *testing.T) {
 			Confidence:         "HIGH",
 			VerificationStatus: report.VerificationVerified,
 			SourceEngine:       "ENGINE_2_FUZZER",
-			EvidenceReferences: []string{"Connection string leaked from .env grants access to internal application database"},
+			EvidenceReferences: []string{"Mock test verification: connection string from simulated .env file verified in local test harness; does not represent exploitation of a live production application database"},
 			AssetAssociation:   "db://127.0.0.1:8086/app_db",
 			IsCriticalAsset:    true,
 		},
@@ -1318,10 +1503,10 @@ func TestDAG_Phase7_1_EvidenceReceiptGeneration(t *testing.T) {
 			TargetID:           "NODE-MOB-NET-CLEARTEXT",
 			Type:               DAGEdgeMobileSecretToBackend,
 			RuleCode:           RuleCOR01,
-			Confidence:         "HIGH",
-			EvidenceReferences: []string{"Mobile client passes statically decrypted parameters into cleartext HTTP request"},
-			Explanation:        "Client bytecode encryption routine feeds plaintext parameters into cleartext network transmission",
-			ValidationStatus:   ValidationConfirmed,
+			Confidence:         "MEDIUM",
+			EvidenceReferences: []string{"Static bytecode inspection reveals hardcoded AES key; network interception observes cleartext /login HTTP traffic. No cryptographic or parameter data-flow connects the two."},
+			Explanation:        "Inferred potential relationship: hardcoded AES key and cleartext HTTP request are co-located in InsecureBankv2, but no data flow or crypto coupling connects the AES key to the observed /login HTTP payload.",
+			ValidationStatus:   ValidationPlausible,
 		},
 		{
 			ID:                 "EDGE-MOB-02",
@@ -1346,7 +1531,7 @@ func TestDAG_Phase7_1_EvidenceReceiptGeneration(t *testing.T) {
 			ValidationStatus:   ValidationPlausible,
 		},
 
-		// CloudSec Edge (Confirmed)
+		// CloudSec Edge (Mock Test Validation)
 		{
 			ID:                 "EDGE-CLOUD-01",
 			SourceID:           "NODE-CLOUD-SSRF-01",
@@ -1354,12 +1539,12 @@ func TestDAG_Phase7_1_EvidenceReceiptGeneration(t *testing.T) {
 			Type:               DAGEdgeSSRFToMetadata,
 			RuleCode:           RuleCOR08,
 			Confidence:         "HIGH",
-			EvidenceReferences: []string{"SSRF loopback query to IMDS extracted IAM instance profile security credentials"},
-			Explanation:        "SSRF directly queries internal cloud metadata to compromise administrative cloud credentials",
+			EvidenceReferences: []string{"Mock test verification: simulated loopback query to IMDS mock fixture returned synthetic IAM role credentials."},
+			Explanation:        "Mock test validation: SSRF queries local simulated IMDS metadata service to verify cloud credential extraction logic in a test harness.",
 			ValidationStatus:   ValidationConfirmed,
 		},
 
-		// SKF Lab Edge (Confirmed)
+		// SKF Lab Edge (Mock Test Validation)
 		{
 			ID:                 "EDGE-SKF-01",
 			SourceID:           "NODE-SKF-TRAVERSAL-01",
@@ -1367,8 +1552,8 @@ func TestDAG_Phase7_1_EvidenceReceiptGeneration(t *testing.T) {
 			Type:               DAGEdgeTraversalToDisclosure,
 			RuleCode:           RuleCOR04,
 			Confidence:         "HIGH",
-			EvidenceReferences: []string{"Path traversal read .env containing internal database credentials"},
-			Explanation:        "Arbitrary file disclosure leaks database credentials leading directly to database compromise",
+			EvidenceReferences: []string{"Mock test verification: simulated path traversal read mock .env file containing test database credentials."},
+			Explanation:        "Mock test validation: Arbitrary file read leaks database credentials in local test harness to verify traversal-to-disclosure path logic.",
 			ValidationStatus:   ValidationConfirmed,
 		},
 	}
@@ -1418,153 +1603,168 @@ func TestDAG_Phase7_1_EvidenceReceiptGeneration(t *testing.T) {
 	provenance := []map[string]any{
 		// Juice Shop
 		{
-			"node_id":             "NODE-JUICE-DOCS",
-			"finding_id":          "LAB-REAL-JUICE-001",
-			"engine":              "ENGINE_1_CRAWLER",
-			"target":              "http://127.0.0.1:3000/api-docs",
-			"verification_status": "CONFIRMED",
-			"role":                "Public Surface Reconnaissance / Documentation Exposure",
+			"node_id":               "NODE-JUICE-DOCS",
+			"finding_id":            "LAB-REAL-JUICE-001",
+			"engine":                "ENGINE_1_CRAWLER",
+			"target":                "http://127.0.0.1:3000/api-docs",
+			"verification_status":   "CONFIRMED",
+			"execution_environment": "LIVE_LAB_TARGET",
+			"role":                  "Public Surface Reconnaissance / Documentation Exposure",
 		},
 		{
-			"node_id":             "NODE-JUICE-SQLI",
-			"finding_id":          "LAB-REAL-SQLI-003",
-			"engine":              "ENGINE_2_FUZZER",
-			"target":              "http://127.0.0.1:3000/rest/products/search",
-			"verification_status": "CONFIRMED",
-			"role":                "Direct Exploitation Flaw / SQL Injection",
+			"node_id":               "NODE-JUICE-SQLI",
+			"finding_id":            "LAB-REAL-SQLI-003",
+			"engine":                "ENGINE_2_FUZZER",
+			"target":                "http://127.0.0.1:3000/rest/products/search",
+			"verification_status":   "CONFIRMED",
+			"execution_environment": "LIVE_LAB_TARGET",
+			"role":                  "Direct Exploitation Flaw / SQL Injection",
 		},
 		{
-			"node_id":             "NODE-JUICE-DB",
-			"finding_id":          "ASSET-JUICE-SQLITE-01",
-			"engine":              "ENGINE_2_FUZZER",
-			"target":              "db://127.0.0.1:3000/juiceshop.sqlite",
-			"verification_status": "CONFIRMED",
-			"role":                "Crown Jewel Critical Asset / Database Takeover",
+			"node_id":               "NODE-JUICE-DB",
+			"finding_id":            "ASSET-JUICE-SQLITE-01",
+			"engine":                "ENGINE_2_FUZZER",
+			"target":                "db://127.0.0.1:3000/juiceshop.sqlite",
+			"verification_status":   "CONFIRMED",
+			"execution_environment": "LIVE_LAB_TARGET",
+			"role":                  "Crown Jewel Critical Asset / Database Takeover",
 		},
 
 		// InsecureBankv2
 		{
-			"node_id":             "NODE-MOB-DEX-KEY",
-			"finding_id":          "MOB-DEX-KEY-01",
-			"engine":              "ENGINE_6_MOBILE",
-			"target":              "InsecureBankv2.apk:com.android.insecurebankv2.DoLogin",
-			"verification_status": "CONFIRMED",
-			"role":                "Mobile Client Key Disclosure / Static Bytecode Extraction",
+			"node_id":               "NODE-MOB-DEX-KEY",
+			"finding_id":            "MOB-DEX-KEY-01",
+			"engine":                "ENGINE_6_MOBILE",
+			"target":                "InsecureBankv2.apk:com.android.insecurebankv2.DoLogin",
+			"verification_status":   "CONFIRMED",
+			"execution_environment": "STATIC_BYTECODE_ANALYSIS",
+			"role":                  "Mobile Client Key Disclosure / Static Bytecode Extraction",
 		},
 		{
-			"node_id":             "NODE-MOB-NET-CLEARTEXT",
-			"finding_id":          "RUNTIME-CLEARTEXT-HTTP",
-			"engine":              "ENGINE_6_MOBILE",
-			"target":              "http://10.0.2.2:8888/login",
-			"verification_status": "CONFIRMED",
-			"role":                "Intercepted Network Event / Plaintext Transmission",
+			"node_id":               "NODE-MOB-NET-CLEARTEXT",
+			"finding_id":            "RUNTIME-CLEARTEXT-HTTP",
+			"engine":                "ENGINE_6_MOBILE",
+			"target":                "http://10.0.2.2:8888/login",
+			"verification_status":   "CONFIRMED",
+			"execution_environment": "OBSERVED_NETWORK_TRAFFIC",
+			"role":                  "Intercepted Network Event / Plaintext Transmission",
 		},
 		{
-			"node_id":             "NODE-BACKEND-DEVLOGIN",
-			"finding_id":          "ANDROLAB-EXPOSED-ROUTE-02",
-			"engine":              "ENGINE_1_CRAWLER",
-			"target":              "http://10.0.2.2:8888/devlogin",
-			"verification_status": "POTENTIAL",
-			"role":                "Exposed Route Inventory / Unauthenticated Backdoor Hypothesis",
+			"node_id":               "NODE-BACKEND-DEVLOGIN",
+			"finding_id":            "ANDROLAB-EXPOSED-ROUTE-02",
+			"engine":                "ENGINE_1_CRAWLER",
+			"target":                "http://10.0.2.2:8888/devlogin",
+			"verification_status":   "POTENTIAL",
+			"execution_environment": "POTENTIAL_HYPOTHESIS",
+			"role":                  "Exposed Route Inventory / Unauthenticated Backdoor Hypothesis",
 		},
 		{
-			"node_id":             "NODE-BACKEND-BOLA",
-			"finding_id":          "ANDROLAB-BOLA-01",
-			"engine":              "ENGINE_3_BOLA",
-			"target":              "http://10.0.2.2:8888/changepassword",
-			"verification_status": "POTENTIAL",
-			"role":                "Backend Source Audit / Password Reset Parameter Tampering Hypothesis",
+			"node_id":               "NODE-BACKEND-BOLA",
+			"finding_id":            "ANDROLAB-BOLA-01",
+			"engine":                "ENGINE_3_BOLA",
+			"target":                "http://10.0.2.2:8888/changepassword",
+			"verification_status":   "POTENTIAL",
+			"execution_environment": "POTENTIAL_HYPOTHESIS",
+			"role":                  "Backend Source Audit / Password Reset Parameter Tampering Hypothesis",
 		},
 
 		// CloudSec
 		{
-			"node_id":             "NODE-CLOUD-SSRF-01",
-			"finding_id":          "CLOUD-SSRF-IMDS-01",
-			"engine":              "ENGINE_5_CLOUDSEC",
-			"target":              "http://169.254.169.254/latest/meta-data/",
-			"verification_status": "CONFIRMED",
-			"role":                "Cloud Entry Point / SSRF to Metadata",
+			"node_id":               "NODE-CLOUD-SSRF-01",
+			"finding_id":            "CLOUD-SSRF-IMDS-01",
+			"engine":                "ENGINE_5_CLOUDSEC",
+			"target":                "http://169.254.169.254/latest/meta-data/",
+			"verification_status":   "CONFIRMED",
+			"execution_environment": "MOCK_SIMULATION",
+			"role":                  "Mock Test Fixture / SSRF to Simulated Metadata",
 		},
 		{
-			"node_id":             "NODE-CROWN-JEWEL-IAM",
-			"finding_id":          "ASSET-CLOUD-IAM-01",
-			"engine":              "ENGINE_5_CLOUDSEC",
-			"target":              "arn:aws:iam::123456789012:role/AdminInstanceRole",
-			"verification_status": "CONFIRMED",
-			"role":                "Cloud Crown Jewel Asset / IAM Admin Role",
+			"node_id":               "NODE-CROWN-JEWEL-IAM",
+			"finding_id":            "ASSET-CLOUD-IAM-01",
+			"engine":                "ENGINE_5_CLOUDSEC",
+			"target":                "arn:aws:iam::123456789012:role/AdminInstanceRole",
+			"verification_status":   "CONFIRMED",
+			"execution_environment": "MOCK_SIMULATION",
+			"role":                  "Mock Test Fixture / Simulated IAM Admin Role (Not a live cloud compromise)",
 		},
 
 		// SKF Lab
 		{
-			"node_id":             "NODE-SKF-TRAVERSAL-01",
-			"finding_id":          "SKF-TRAVERSAL-01",
-			"engine":              "ENGINE_2_FUZZER",
-			"target":              "http://127.0.0.1:8086/download",
-			"verification_status": "CONFIRMED",
-			"role":                "LFI Entry Point / Arbitrary File Read",
+			"node_id":               "NODE-SKF-TRAVERSAL-01",
+			"finding_id":            "SKF-TRAVERSAL-01",
+			"engine":                "ENGINE_2_FUZZER",
+			"target":                "http://127.0.0.1:8086/download",
+			"verification_status":   "CONFIRMED",
+			"execution_environment": "MOCK_SIMULATION",
+			"role":                  "Mock Test Fixture / Simulated LFI Arbitrary File Read",
 		},
 		{
-			"node_id":             "NODE-SKF-DB",
-			"finding_id":          "ASSET-SKF-DB-01",
-			"engine":              "ENGINE_2_FUZZER",
-			"target":              "db://127.0.0.1:8086/app_db",
-			"verification_status": "CONFIRMED",
-			"role":                "Internal Database Critical Asset / Direct Connection Leak",
+			"node_id":               "NODE-SKF-DB",
+			"finding_id":            "ASSET-SKF-DB-01",
+			"engine":                "ENGINE_2_FUZZER",
+			"target":                "db://127.0.0.1:8086/app_db",
+			"verification_status":   "CONFIRMED",
+			"execution_environment": "MOCK_SIMULATION",
+			"role":                  "Mock Test Fixture / Simulated Database Connection Secret (Not a live database compromise)",
 		},
 	}
 
 	generatedPaths := []map[string]any{
 		{
-			"path_name":           "OWASP Juice Shop Reconnaissance to Database Takeover Chain",
-			"environment":         "OWASP Juice Shop (Live Lab :3000)",
-			"path_status":         "CONFIRMED",
-			"source_id":           juicePath.SourceID,
-			"target_id":           juicePath.TargetID,
-			"hop_count":           juicePath.HopCount,
-			"total_cost":          juicePath.TotalCost,
-			"node_sequence":       juicePath.NodePath,
-			"reaches_critical":    juicePath.ReachableCritical,
-			"shortest_path_found": true,
-			"explanation":         "Public API documentation on /api-docs reveals /rest/products/search parameter schema for SQL injection probe, which extracts production SQLite database.",
+			"path_name":             "OWASP Juice Shop Reconnaissance to Database Takeover Chain",
+			"environment":           "OWASP Juice Shop (Live Lab :3000)",
+			"target_execution_type": "LIVE_LAB_TARGET",
+			"path_status":           "CONFIRMED",
+			"source_id":             juicePath.SourceID,
+			"target_id":             juicePath.TargetID,
+			"hop_count":             juicePath.HopCount,
+			"total_cost":            juicePath.TotalCost,
+			"node_sequence":         juicePath.NodePath,
+			"reaches_critical":      juicePath.ReachableCritical,
+			"shortest_path_found":   true,
+			"explanation":           "Public API documentation on /api-docs reveals /rest/products/search parameter schema for SQL injection probe, which extracts production SQLite database.",
 		},
 		{
-			"path_name":           "InsecureBankv2 Mobile Credential Disclosure to Backend Account Takeover Chain",
-			"environment":         "InsecureBankv2 (Mobile Client & AndroLabServer Backend :8888)",
-			"path_status":         "POTENTIAL_HYPOTHESIS",
-			"source_id":           mobPath.SourceID,
-			"target_id":           mobPath.TargetID,
-			"hop_count":           mobPath.HopCount,
-			"total_cost":          mobPath.TotalCost,
-			"node_sequence":       mobPath.NodePath,
-			"reaches_critical":    mobPath.ReachableCritical,
-			"shortest_path_found": true,
-			"explanation":         "Mobile client Dalvik AES key feeds cleartext HTTP transmission to /login. Inferred testing against unauthenticated developer backdoor /devlogin hypothetically enables parameter tampering on unauthenticated changepassword route.",
+			"path_name":             "InsecureBankv2 Mobile Credential Disclosure to Backend Account Takeover Chain",
+			"environment":           "InsecureBankv2 (Mobile Client & AndroLabServer Backend :8888)",
+			"target_execution_type": "HYPOTHESIS_HYBRID",
+			"path_status":           "POTENTIAL_HYPOTHESIS",
+			"source_id":             mobPath.SourceID,
+			"target_id":             mobPath.TargetID,
+			"hop_count":             mobPath.HopCount,
+			"total_cost":            mobPath.TotalCost,
+			"node_sequence":         mobPath.NodePath,
+			"reaches_critical":      mobPath.ReachableCritical,
+			"shortest_path_found":   true,
+			"explanation":           "Potential hypothesis: Mobile client Dalvik AES key and cleartext HTTP transmission to /login are co-located without proven data-flow coupling. Inferred testing against unauthenticated developer backdoor /devlogin hypothetically enables parameter tampering on unauthenticated changepassword route.",
 		},
 		{
-			"path_name":           "Cloud SSRF to IAM Administrator Privilege Escalation",
-			"environment":         "CloudSec (AWS IMDSv2 Mock :169.254.169.254)",
-			"path_status":         "CONFIRMED",
-			"source_id":           cloudPath.SourceID,
-			"target_id":           cloudPath.TargetID,
-			"hop_count":           cloudPath.HopCount,
-			"total_cost":          cloudPath.TotalCost,
-			"node_sequence":       cloudPath.NodePath,
-			"reaches_critical":    cloudPath.ReachableCritical,
-			"shortest_path_found": true,
-			"explanation":         "SSRF directly queries internal cloud metadata to compromise administrative cloud credentials.",
+			"path_name":             "Cloud SSRF to IAM Administrator Privilege Escalation (Mock Simulation)",
+			"environment":           "CloudSec (AWS IMDSv2 Mock Test Harness :169.254.169.254)",
+			"target_execution_type": "MOCK_SIMULATION",
+			"path_status":           "CONFIRMED",
+			"source_id":             cloudPath.SourceID,
+			"target_id":             cloudPath.TargetID,
+			"hop_count":             cloudPath.HopCount,
+			"total_cost":            cloudPath.TotalCost,
+			"node_sequence":         cloudPath.NodePath,
+			"reaches_critical":      cloudPath.ReachableCritical,
+			"shortest_path_found":   true,
+			"explanation":           "Mock test validation: SSRF queries local simulated IMDS metadata service in a test harness. Validates attack-chain logic without claiming compromise of a live production AWS IAM role.",
 		},
 		{
-			"path_name":           "Path Traversal to Environment Database Secret Disclosure",
-			"environment":         "SKF Path Traversal Mock (:8086)",
-			"path_status":         "CONFIRMED",
-			"source_id":           skfPath.SourceID,
-			"target_id":           skfPath.TargetID,
-			"hop_count":           skfPath.HopCount,
-			"total_cost":          skfPath.TotalCost,
-			"node_sequence":       skfPath.NodePath,
-			"reaches_critical":    skfPath.ReachableCritical,
-			"shortest_path_found": true,
-			"explanation":         "Arbitrary file disclosure leaks database credentials leading directly to database compromise.",
+			"path_name":             "Path Traversal to Environment Database Secret Disclosure (Mock Simulation)",
+			"environment":           "OWASP SKF (Path Traversal Mock Test Harness :8086)",
+			"target_execution_type": "MOCK_SIMULATION",
+			"path_status":           "CONFIRMED",
+			"source_id":             skfPath.SourceID,
+			"target_id":             skfPath.TargetID,
+			"hop_count":             skfPath.HopCount,
+			"total_cost":            skfPath.TotalCost,
+			"node_sequence":         skfPath.NodePath,
+			"reaches_critical":      skfPath.ReachableCritical,
+			"shortest_path_found":   true,
+			"explanation":           "Mock test validation: Arbitrary file disclosure leaks simulated credentials in a test harness. Validates attack-chain logic without claiming compromise of a live production database.",
 		},
 	}
 
@@ -1574,7 +1774,7 @@ func TestDAG_Phase7_1_EvidenceReceiptGeneration(t *testing.T) {
 		"title":                     "Directed Acyclic Graph (DAG) Attack Path Generator Proof",
 		"target_subsystem":          "Autonomous Multi-Hop Attack-Chain Engine (pkg/correlation)",
 		"conclusive_status":         "PROVEN_VERIFIED",
-		"timestamp":                 "2026-11-07T17:30:00Z",
+		"timestamp":                 "2026-11-07T18:00:00Z",
 		"test_command":              "go test -v -count=1 -run TestDAG_ ./pkg/correlation/...",
 		"benchmark_metrics": map[string]any{
 			"total_nodes_ingested":      len(dag.Nodes),
@@ -1590,16 +1790,18 @@ func TestDAG_Phase7_1_EvidenceReceiptGeneration(t *testing.T) {
 			"persisted_prior_laboratory_evidence": []string{
 				"test/lab/lab_results.json (78 ground-truth findings across OWASP Juice Shop, WebGoat, and VAmPI)",
 				"test/evidence/phase6/6.4_mobile_api_correlation_proof.json (Phase 6.4 mobile-to-backend correlated targets)",
+				"OWASP Juice Shop live lab execution findings (LAB-REAL-JUICE-001, LAB-REAL-SQLI-003, ASSET-JUICE-SQLITE-01 on :3000)",
 			},
 			"static_analysis_evidence": []string{
 				"InsecureBankv2.apk classes.dex Dalvik string pool constant table (hardcoded AES encryption key extraction)",
+				"InsecureBankv2 backend source inspection (AndroLabServer/app.py unauthenticated /devlogin and /changepassword routes)",
 			},
 			"mock_or_simulated_input": []string{
-				"AWS IMDSv2 Mock (:169.254.169.254 - token-based metadata access)",
-				"SKF Path Traversal Mock (:8086 - sensitive file read)",
+				"AWS IMDSv2 Mock (:169.254.169.254 - token-based metadata access simulation)",
+				"SKF Path Traversal Mock (:8086 - sensitive file read simulation)",
 			},
 			"synthetic_unit_test_fixture": []string{
-				"19 algorithmic unit test fixtures in pkg/correlation/dag_test.go",
+				"22 algorithmic unit test fixtures in pkg/correlation/dag_test.go",
 				"1,000-node synthetic algorithm benchmark (TestDAG_18_LargeGraphPerformance)",
 			},
 		},
@@ -1630,9 +1832,11 @@ func TestDAG_Phase7_1_EvidenceReceiptGeneration(t *testing.T) {
 		},
 		"transparent_limitations": []string{
 			"Phase 7.1 authorizes graph topology, reachability, and shortest-path calculation ONLY. Phase 7.2 (PoC Synthesizer), 7.3 (Remediation Diff Generator), and 7.4 (Executive Dossier) remain strictly BLOCKED.",
-			"Full repository regression (go test ./...) encounters offline local containers (WebGoat :8080, NodeGoat :4000) in pkg/auth; all package-level tests for pkg/correlation, pkg/mobile, pkg/cloudsec, pkg/cve pass with Exit Code 0.",
+			"Mock validation vs real-target exploitation: CloudSec and SKF attack chains are verified in isolated mock test harnesses. Node verification status is retained as VERIFIED and edge validation as CONFIRMED per existing type system constraints (report.VerificationStatus and correlation.ValidationStatus do not define a separate MOCK_VERIFIED status). Mock status is explicitly documented via target_execution_type without claiming live cloud IAM or database compromise.",
+			"InsecureBankv2 edge classification: EDGE-MOB-01 (DEX Key -> Cleartext HTTP) is classified as PLAUSIBLE (inferred) because the AES key does not participate in the /login HTTP request data flow; no live session coupling exists.",
+			"Adapter conversion lossy boundaries: Converting DAGAttackGraph to AttackGraph drops custom DAGNode.Attributes, collapses multiple DAGNode.EvidenceReferences to a single EvidenceSummary string when Finding is unpopulated, and maps DAGEdgeType to standard RelationshipType via RuleCode.",
+			"Full repository regression (go test ./...) encounters offline local containers (WebGoat :8080, NodeGoat :4000) in pkg/auth; all package-level tests for pkg/correlation, pkg/mobile, pkg/assessment, pkg/cloudsec, pkg/cve, pkg/fuzzer, and pkg/bola pass with Exit Code 0.",
 			"Sensitive credential redaction enforced across all graph labels, explanations, and evidence summaries via pkg/secrets.RedactText.",
-			"No cross-application connectivity is manufactured; InsecureBankv2 backend routes (/devlogin, /changepassword) were not validated dynamically and are classified honestly as POTENTIAL_HYPOTHESIS.",
 		},
 	}
 
