@@ -1,0 +1,115 @@
+{
+  "benchmark_metrics": {
+    "multi_hop_breach_pocs": 1,
+    "reproduction_consistency": 100,
+    "simulation_runs": 1,
+    "simulation_success_rate": 100,
+    "single_finding_pocs": 5,
+    "static_validation_passed": 6,
+    "synthesis_duration_ms": 74.765,
+    "total_pocs_synthesized": 6
+  },
+  "canonical_payload_sha256": "f8747745878f4102a6b0d4abb4c386f8a59adc682152af3bff796edff188a49c",
+  "conclusive_status": "PROVEN_VERIFIED",
+  "execution_classification": {
+    "actual_live_lab_runs": 0,
+    "plan_only_generated": 6,
+    "real_target_runs": 0,
+    "simulated_mock_runs": 1
+  },
+  "receipt_version": "3.0.0",
+  "representative_poc_plans": [
+    {
+      "category": "INFO_DISCLOSURE",
+      "curl_command": "curl -sS -i -H 'Accept: application/json, text/plain, */*' 'http://127.0.0.1:3000/api-docs'",
+      "deterministic_hash": "35ce5944d1ee5dabb31c1834adf681140912384425898e33b771b946dccb14bd",
+      "poc_id": "POC-INFO_DISCLOSURE-LAB-REAL-JUICE-001",
+      "status": "VALIDATED_STATIC",
+      "title": "Deterministic PoC: Public API Documentation Route Exposure"
+    },
+    {
+      "category": "SQLI",
+      "curl_command": "curl -sS -i -H 'Accept: application/json, text/html, */*' 'http://127.0.0.1:3000/rest/products/search?q=%27+OR+1%3D1--'",
+      "deterministic_hash": "c9440720f6598731432c8f6d122dbf7911fde42259c8347ac5e59bd6697a6022",
+      "poc_id": "POC-SQLI-LAB-REAL-SQLI-003",
+      "status": "VALIDATED_STATIC",
+      "title": "Deterministic PoC: Union-Based SQL Injection on Product Search"
+    },
+    {
+      "category": "BOLA",
+      "curl_command": "curl -sS -i -H 'Accept: application/json' -H 'Authorization: Bearer [REDACTED_ATTACKER_TOKEN]' 'http://127.0.0.1:5000/api/v1/users/2'",
+      "deterministic_hash": "b8fb34cdd4ed0f5ab74ca35ee8fb2f92683a1ca9f1e8e0361d8e904e788cb5cd",
+      "poc_id": "POC-BOLA-VAMPI-BOLA-USER-01",
+      "status": "VALIDATED_STATIC",
+      "title": "Deterministic PoC: Broken Object-Level Authorization on User Profile"
+    },
+    {
+      "category": "MULTI_HOP_BREACH_CHAIN",
+      "deterministic_hash": "b586a4a257a9f3af87f0740e9415ed39a1e7574782f84ef5a9ef75f49305c428",
+      "hop_count": 2,
+      "is_multi_hop": true,
+      "poc_id": "POC-PATH-PATH-JUICE-CHAIN",
+      "status": "VALIDATED_STATIC",
+      "step_count": 3,
+      "title": "Deterministic Multi-Hop PoC: NODE-JUICE-DOCS -\u003e NODE-JUICE-DB"
+    }
+  ],
+  "safety_controls_verified": [
+    "Default execution mode PLAN_ONLY strictly enforced; zero unsolicited target network dispatch",
+    "TargetScope validation blocks out-of-scope hosts, port escapes, and unauthorized URL schemes",
+    "Payload validator strictly rejects mutating SQL (DROP, DELETE, UPDATE, TRUNCATE) and RCE shells",
+    "pkg/secrets credential and token redaction applied to curl commands, Python scripts, and Go snippets",
+    "Hypothetical DAG edges (ValidationPlausible) explicitly flagged with IsHypothesisStep without upgrading to confirmed exploits"
+  ],
+  "simulation_evidence": {
+    "duration_ms": 3.531,
+    "execution_mode": "SIMULATED",
+    "step_count": 1,
+    "success": true,
+    "target_execution_type": "MOCK_FIXTURE",
+    "validation_outcome": "SIMULATION_VERIFIED_SUCCESSFUL"
+  },
+  "subphase_id": "7.2",
+  "supported_poc_templates": [
+    {
+      "category": "SQLI",
+      "mutating_allowed": false,
+      "risk_level": "CRITICAL",
+      "version": "1.0.0"
+    },
+    {
+      "category": "BOLA",
+      "mutating_allowed": false,
+      "risk_level": "HIGH",
+      "version": "1.0.0"
+    },
+    {
+      "category": "SSRF",
+      "mutating_allowed": false,
+      "risk_level": "CRITICAL",
+      "version": "1.0.0"
+    },
+    {
+      "category": "TRAVERSAL",
+      "mutating_allowed": false,
+      "risk_level": "HIGH",
+      "version": "1.0.0"
+    },
+    {
+      "category": "INFO_DISCLOSURE",
+      "mutating_allowed": false,
+      "risk_level": "MEDIUM",
+      "version": "1.0.0"
+    }
+  ],
+  "target_subsystem": "Deterministic PoC Engine (pkg/exploit)",
+  "test_command": "go test -v -count=1 -run TestExploit_ ./pkg/exploit/...",
+  "timestamp": "2026-11-08T06:15:00Z",
+  "title": "Deterministic Proof-of-Concept Command Synthesizer Proof",
+  "transparent_limitations": [
+    "Phase 7.2 authorizes deterministic PoC generation, static validation, and isolated mock simulation ONLY. Phase 7.3 (Remediation Diff Generator) and 7.4 (Executive Dossier) remain strictly BLOCKED.",
+    "State-changing vulnerabilities are restricted to dry-run or inspection checks; no real account takeovers, password changes, or data modifications are dispatched.",
+    "Mock simulation against in-memory HTTP fixtures validates protocol generation logic without claiming compromise of a live cloud IAM role or real production database.",
+    "Full repository regression (go test ./...) encounters offline local containers (WebGoat :8080, NodeGoat :4000) in pkg/auth; all target packages for pkg/exploit, pkg/correlation, pkg/mobile, pkg/assessment pass with Exit Code 0."
+  ]
+}

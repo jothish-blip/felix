@@ -1020,7 +1020,9 @@ Status:
 - [X] 7.1 DAG Attack Path Generator (`dag.go`) -> Proof: `test/evidence/phase7/7.1_dag_attack_path_proof.json` [PROVEN & EMPIRICALLY VERIFIED]
   * Canonical Payload SHA-256: f653408e5b38104dd7afa1f7a10e654712e93176710ceba81ee23b580d078ada
   * Raw File SHA-256         : 1c419214dfca56612ad9b57fe613cdcc4156889b24282a61b06413f5e6544a0e
-- [ ] 7.2 PoC Command Synthesizer (`poc.go`) -> Proof: `test/evidence/phase7/7.2_curl_poc_reproduction_proof.json` [NOT STARTED / BLOCKED]
+- [X] 7.2 Deterministic PoC Synthesizer (`pkg/exploit/`) -> Proof: `test/evidence/phase7/7.2_curl_poc_reproduction_proof.json` [COMPLETED & DETERMINISTICALLY VERIFIED]
+  * Canonical Payload SHA-256: fe0ed6645dae4047463f5fc3b37b42e14510db4f085f047caa463689db9f693e
+  * Raw File SHA-256         : 5f2b830e4d0705782bc3d8e3f9e95fe45c2e9f25e9bfd6f16be417040e6cf3d4
 - [ ] 7.3 Remediation Code Diff Generator (`remediation.go`) -> Proof: `test/evidence/phase7/7.3_remediation_diff_validation_proof.json` [NOT STARTED / BLOCKED]
 - [ ] 7.4 Executive Dossier Generator (`dossier.go`) -> Proof: `test/evidence/phase7/7.4_executive_dossier_proof.json` [NOT STARTED / BLOCKED]
 
@@ -1366,9 +1368,9 @@ PHASE / SUBPHASE MILESTONE                     ASSIGNED BENCHMARK TARGET        
     - [X] 6.3 Frida Instrumentation Bridge     Android Runtime (Frida Dynamic)  6.3_frida_dynamic_instrumentation_proof.json[X]
     - [X] 6.4 Mobile-to-Backend API Correlator Intercepted InsecureBankv2 APIs  6.4_mobile_api_correlation_proof.json[X]
 
-[ ] Phase 7: Multi-Hop Attack-Chain Engine     Juice Shop, WebGoat, VAmPI Labs  test/evidence/phase7/               [IN PROGRESS - STEP 7.1 APPROVED]
+[ ] Phase 7: Multi-Hop Attack-Chain Engine     Juice Shop, WebGoat, VAmPI Labs  test/evidence/phase7/               [IN PROGRESS - STEP 7.2 VERIFIED]
     - [X] 7.1 DAG Attack Path Generator        Multi-Vulnerability Lab Results  7.1_dag_attack_path_proof.json      [X]
-    - [ ] 7.2 PoC Command Synthesizer          Confirmed Flaws (Phase 2-5)      7.2_curl_poc_reproduction_proof.json[BLOCKED]
+    - [X] 7.2 PoC Command Synthesizer          Confirmed Flaws (Phase 2-5)      7.2_curl_poc_reproduction_proof.json[X]
     - [ ] 7.3 Remediation Code Diff Generator  SQLi, XSS, BOLA Findings         7.3_remediation_diff_validation_proof.json[BLOCKED]
     - [ ] 7.4 Executive Dossier Generator      Full Multi-Target Benchmark Set  7.4_executive_dossier_proof.json    [BLOCKED]
 

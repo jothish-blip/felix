@@ -592,13 +592,15 @@ Target Repos    : Multi-vulnerability targets (`juice-shop`, `webgoat`, `vampi`,
     - Receipt Hashes      : Canonical SHA-256: f653408e5b38104dd7afa1f7a10e654712e93176710ceba81ee23b580d078ada
                             Raw SHA-256      : 1c419214dfca56612ad9b57fe613cdcc4156889b24282a61b06413f5e6544a0e
 
-[ ] Subphase 7.2: Deterministic PoC Command Synthesizer (`pkg/report/poc.go`) [NOT STARTED / BLOCKED]
+[X] Subphase 7.2: Deterministic PoC Command Synthesizer (`pkg/exploit/`) [COMPLETED & DETERMINISTICALLY VERIFIED]
     - Target for Testing  : All confirmed findings from Phase 2, 3, 4, 5.
     - Testing Procedure   : Generate exact, copy-pasteable `curl` commands with verified headers, cookies, and payload.
     - Aggressive Test Case: Re-execute generated `curl` command in automated test harness; assert that target
                             reproduces the exact vulnerability status code and evidence marker.
     - Exit Gate Metric    : 100% reproduction consistency across all generated curl commands.
     - Evidence Receipt    : `test/evidence/phase7/7.2_curl_poc_reproduction_proof.json`
+    - Receipt Hashes      : Canonical SHA-256: fe0ed6645dae4047463f5fc3b37b42e14510db4f085f047caa463689db9f693e
+                            Raw SHA-256      : 5f2b830e4d0705782bc3d8e3f9e95fe45c2e9f25e9bfd6f16be417040e6cf3d4
 
 [ ] Subphase 7.3: Developer Code-Level Remediation Diff Generator (`pkg/report/remediation.go`) [NOT STARTED / BLOCKED]
     - Target for Testing  : Confirmed SQLi, XSS, BOLA, and Header findings.
