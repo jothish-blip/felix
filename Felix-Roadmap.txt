@@ -1021,8 +1021,8 @@ Status:
   * Canonical Payload SHA-256: f653408e5b38104dd7afa1f7a10e654712e93176710ceba81ee23b580d078ada
   * Raw File SHA-256         : 1c419214dfca56612ad9b57fe613cdcc4156889b24282a61b06413f5e6544a0e
 - [X] 7.2 Deterministic PoC Synthesizer (`pkg/exploit/`) -> Proof: `test/evidence/phase7/7.2_curl_poc_reproduction_proof.json` [COMPLETED & DETERMINISTICALLY VERIFIED]
-  * Canonical Payload SHA-256: fe0ed6645dae4047463f5fc3b37b42e14510db4f085f047caa463689db9f693e
-  * Raw File SHA-256         : 5f2b830e4d0705782bc3d8e3f9e95fe45c2e9f25e9bfd6f16be417040e6cf3d4
+  * Canonical Payload SHA-256: fbd093f33459c3b6625ceed7edec90df237ce39f4194f1d2df7823d4cc386fe7
+  * Raw File SHA-256         : 5e03b6a08ad69d38e002513cf9398dd405ea5b3a9ef508200de138d8bb34137f
 - [ ] 7.3 Remediation Code Diff Generator (`remediation.go`) -> Proof: `test/evidence/phase7/7.3_remediation_diff_validation_proof.json` [NOT STARTED / BLOCKED]
 - [ ] 7.4 Executive Dossier Generator (`dossier.go`) -> Proof: `test/evidence/phase7/7.4_executive_dossier_proof.json` [NOT STARTED / BLOCKED]
 

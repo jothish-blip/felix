@@ -6,10 +6,10 @@
     "simulation_success_rate": 100,
     "single_finding_pocs": 5,
     "static_validation_passed": 6,
-    "synthesis_duration_ms": 74.765,
+    "synthesis_duration_ms": 12.5,
     "total_pocs_synthesized": 6
   },
-  "canonical_payload_sha256": "f8747745878f4102a6b0d4abb4c386f8a59adc682152af3bff796edff188a49c",
+  "canonical_payload_sha256": "fbd093f33459c3b6625ceed7edec90df237ce39f4194f1d2df7823d4cc386fe7",
   "conclusive_status": "PROVEN_VERIFIED",
   "execution_classification": {
     "actual_live_lab_runs": 0,
@@ -21,31 +21,31 @@
   "representative_poc_plans": [
     {
       "category": "INFO_DISCLOSURE",
-      "curl_command": "curl -sS -i -H 'Accept: application/json, text/plain, */*' 'http://127.0.0.1:3000/api-docs'",
-      "deterministic_hash": "35ce5944d1ee5dabb31c1834adf681140912384425898e33b771b946dccb14bd",
+      "curl_command": "# NOTICE: Explicit target authorization and scope validation required before execution.\ncurl -sS -i --proto =http,https --max-time 10 -H 'Accept: application/json, text/plain, */*' 'http://127.0.0.1:3000/api-docs'",
+      "deterministic_hash": "88b992757c3b2aa35ddd433f0947407d4c9cb5418208a4a0b04ac5786e7bb44a",
       "poc_id": "POC-INFO_DISCLOSURE-LAB-REAL-JUICE-001",
       "status": "VALIDATED_STATIC",
       "title": "Deterministic PoC: Public API Documentation Route Exposure"
     },
     {
       "category": "SQLI",
-      "curl_command": "curl -sS -i -H 'Accept: application/json, text/html, */*' 'http://127.0.0.1:3000/rest/products/search?q=%27+OR+1%3D1--'",
-      "deterministic_hash": "c9440720f6598731432c8f6d122dbf7911fde42259c8347ac5e59bd6697a6022",
+      "curl_command": "# NOTICE: Explicit target authorization and scope validation required before execution.\ncurl -sS -i --proto =http,https --max-time 10 -H 'Accept: application/json, text/html, */*' 'http://127.0.0.1:3000/rest/products/search?q=%27+OR+1%3D1--'",
+      "deterministic_hash": "d5b4cdd8d7740f3c562200eea3e422a150a49685608d816b619e9c4153e09c4a",
       "poc_id": "POC-SQLI-LAB-REAL-SQLI-003",
       "status": "VALIDATED_STATIC",
       "title": "Deterministic PoC: Union-Based SQL Injection on Product Search"
     },
     {
       "category": "BOLA",
-      "curl_command": "curl -sS -i -H 'Accept: application/json' -H 'Authorization: Bearer [REDACTED_ATTACKER_TOKEN]' 'http://127.0.0.1:5000/api/v1/users/2'",
-      "deterministic_hash": "b8fb34cdd4ed0f5ab74ca35ee8fb2f92683a1ca9f1e8e0361d8e904e788cb5cd",
+      "curl_command": "# NOTICE: Explicit target authorization and scope validation required before execution.\ncurl -sS -i --proto =http,https --max-time 10 -H 'Accept: application/json' -H 'Authorization: Bearer [REDACTED_ATTACKER_TOKEN]' 'http://127.0.0.1:5000/api/v1/users/2'",
+      "deterministic_hash": "71d54d2977def8847bc1d01202ede1bc9e75dbe0fe8796446dcc27104732c1bc",
       "poc_id": "POC-BOLA-VAMPI-BOLA-USER-01",
       "status": "VALIDATED_STATIC",
       "title": "Deterministic PoC: Broken Object-Level Authorization on User Profile"
     },
     {
       "category": "MULTI_HOP_BREACH_CHAIN",
-      "deterministic_hash": "b586a4a257a9f3af87f0740e9415ed39a1e7574782f84ef5a9ef75f49305c428",
+      "deterministic_hash": "23d0c758d61b4e602c51b6120f3fe73e85e9a3aa57a37f3cbe84ba996db8f6f2",
       "hop_count": 2,
       "is_multi_hop": true,
       "poc_id": "POC-PATH-PATH-JUICE-CHAIN",
@@ -56,13 +56,17 @@
   ],
   "safety_controls_verified": [
     "Default execution mode PLAN_ONLY strictly enforced; zero unsolicited target network dispatch",
-    "TargetScope validation blocks out-of-scope hosts, port escapes, and unauthorized URL schemes",
+    "TargetScope validation blocks out-of-scope hosts, port escapes, embedded URL credentials, and unauthorized schemes",
+    "DNS rebinding protection enforces TargetScope IP verification at dial time and pins connection directly to validated IP",
+    "Redirect policy strictly prohibits HTTPS-to-HTTP downgrade and enforces TargetScope on all redirect destinations",
     "Payload validator strictly rejects mutating SQL (DROP, DELETE, UPDATE, TRUNCATE) and RCE shells",
+    "Generated reproduction snippets (curl, Python, Go) include mandatory explicit target authorization disclaimers and CRLF sanitization",
     "pkg/secrets credential and token redaction applied to curl commands, Python scripts, and Go snippets",
-    "Hypothetical DAG edges (ValidationPlausible) explicitly flagged with IsHypothesisStep without upgrading to confirmed exploits"
+    "Hypothetical DAG edges (ValidationPlausible) explicitly flagged with IsHypothesisStep without upgrading to confirmed exploits",
+    "Sensitive read operations (SSRF, Traversal, BOLA) explicitly flagged with IsDisclosive and default credential retrieval prohibited"
   ],
   "simulation_evidence": {
-    "duration_ms": 3.531,
+    "duration_ms": 1.25,
     "execution_mode": "SIMULATED",
     "step_count": 1,
     "success": true,

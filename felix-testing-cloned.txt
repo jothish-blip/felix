@@ -599,8 +599,8 @@ Target Repos    : Multi-vulnerability targets (`juice-shop`, `webgoat`, `vampi`,
                             reproduces the exact vulnerability status code and evidence marker.
     - Exit Gate Metric    : 100% reproduction consistency across all generated curl commands.
     - Evidence Receipt    : `test/evidence/phase7/7.2_curl_poc_reproduction_proof.json`
-    - Receipt Hashes      : Canonical SHA-256: fe0ed6645dae4047463f5fc3b37b42e14510db4f085f047caa463689db9f693e
-                            Raw SHA-256      : 5f2b830e4d0705782bc3d8e3f9e95fe45c2e9f25e9bfd6f16be417040e6cf3d4
+    - Receipt Hashes      : Canonical SHA-256: fbd093f33459c3b6625ceed7edec90df237ce39f4194f1d2df7823d4cc386fe7
+                            Raw SHA-256      : 5e03b6a08ad69d38e002513cf9398dd405ea5b3a9ef508200de138d8bb34137f
 
 [ ] Subphase 7.3: Developer Code-Level Remediation Diff Generator (`pkg/report/remediation.go`) [NOT STARTED / BLOCKED]
     - Target for Testing  : Confirmed SQLi, XSS, BOLA, and Header findings.
