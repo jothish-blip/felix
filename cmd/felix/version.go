@@ -6,8 +6,8 @@ import (
 )
 
 var (
-	Version   = "2.0.0"
-	Release   = "GA Release"
+	Version   = "1.0.0"
+	Release   = "FELIX 1.0 — First MVP"
 	GitCommit = "dev"
 	BuildTime = "unknown"
 )

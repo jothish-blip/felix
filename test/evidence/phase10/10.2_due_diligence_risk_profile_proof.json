@@ -1,0 +1,368 @@
+{
+  "acquisition_risk_scoring": {
+    "acquisition_recommendation": "UNFAVORABLE_HIGH_LIABILITY",
+    "composite_risk_score": 76,
+    "coverage_normalization": "Composite risk score is normalized over evaluated dimensions so unassessed domains do not dilute risk",
+    "recommended_escrow_usd": 1143600,
+    "regulatory_escrow_multiplier_default": 0.5,
+    "regulatory_escrow_multiplier_rationale": "Illustrative contractual deal assumption, not statutory law",
+    "risk_grade": "D (HIGH_RISK)",
+    "risk_tier": "CRITICAL_LIABILITY",
+    "verified_critical_defects": 2,
+    "verified_high_defects": 1
+  },
+  "benchmark_metrics": {
+    "acquisition_risk_scoring_verified": true,
+    "baas_exposure_classification_verified": true,
+    "baas_public_config_non_vulnerability_verified": true,
+    "deterministic_output_and_digest_verified": true,
+    "dpdp_post_commencement_enforceability_verified": true,
+    "dpdp_pre_commencement_zero_liability_verified": true,
+    "dpdp_schedule_itemization_verified": true,
+    "dpdp_staged_commencement_boundaries_verified": true,
+    "dpdp_statutory_ceilings_and_scenarios_verified": true,
+    "escrow_multiplier_configurability_verified": true,
+    "executive_dossier_15_sections_verified": true,
+    "exit_code": 0,
+    "finding_provenance_preservation_verified": true,
+    "gdpr_art83_turnover_ceilings_verified": true,
+    "gdpr_statutory_ceilings_and_scenarios_verified": true,
+    "html_and_markdown_export_verified": true,
+    "incomplete_coverage_risk_scoring_verified": true,
+    "invalid_regulatory_input_handling_verified": true,
+    "mobile_apk_assessment_verified": true,
+    "multi_asset_lab_simulation_verified": true,
+    "perimeter_reconnaissance_verified": true,
+    "phase74_dossier_compatibility_verified": true,
+    "public_storage_classification_verified": true,
+    "scope_guardrail_enforcement_verified": true,
+    "secret_redaction_verified": true,
+    "ssrf_and_hostile_destination_defense_verified": true,
+    "storage_access_denied_classification_verified": true,
+    "storage_not_found_classification_verified": true,
+    "technical_debt_hours_and_cost_verified": true,
+    "total_tests_executed": 31,
+    "total_tests_passed": 31
+  },
+  "canonical_payload_sha256": "11c85123f689287d8c20542ac21b91677df3883565871269115685ea7fa6cde3",
+  "cloud_and_baas_exposure": {
+    "firebase_rtdb_status": "BENIGN_PUBLIC_KEY (PUBLIC_SAFE_INTENDED, INFO - NOT A VULNERABILITY)",
+    "s3_bucket_status": "PUBLIC_LIST_OPEN (CONFIRMED_MISCONFIGURATION, CRITICAL)",
+    "storage_access_denied_status": "ANONYMOUS_ACCESS_RESTRICTED (INFO - Anonymous access restricted; authenticated controls require IAM review)",
+    "storage_not_found_status": "RESOURCE_NOT_FOUND_ABSENT (INFO - Resource absent; does not demonstrate affirmative security controls)",
+    "unauthenticated_data_extraction": "NONE - ZERO PRIVATE CUSTOMER RECORDS HARVESTED"
+  },
+  "conclusive_status": "COMPLETED_AND_VERIFIED",
+  "dpdp_statutory_modeling": {
+    "act_overall_status_pre_commencement": "PARTIALLY_COMMENCED",
+    "applicable_schedule_clauses": [
+      "Schedule Item 1: Section 8(5) reasonable security safeguards (May extend to ₹250 Crore)",
+      "Schedule Item 2: Section 8(6) intimation of personal data breach (May extend to ₹200 Crore)",
+      "Schedule Item 3: Section 9 additional obligations for children (May extend to ₹200 Crore)",
+      "Schedule Item 4: Section 10 Significant Data Fiduciary obligations (May extend to ₹150 Crore)"
+    ],
+    "commencement_notification_ref": "Ministry of Electronics and Information Technology Notification G.S.R. 843(E) dated 13 November 2025",
+    "conservative_scenario_inr": 10000000,
+    "currently_enforceable_liability_inr": 0,
+    "future_statutory_max_ceiling_inr": 8000000000,
+    "high_impact_scenario_inr": 1000000000,
+    "jurisdiction": "India (The Digital Personal Data Protection Act, 2023)",
+    "legal_commencement_status_pre_commencement": "SCHEDULED_TO_COMMENCE",
+    "penalty_determination_factors": [
+      "Nature, gravity, and duration of the breach (Section 33(2)(a)).",
+      "Type and nature of the personal data affected by the breach (Section 33(2)(b)).",
+      "Repetitive nature of the breach (Section 33(2)(c)).",
+      "Whether the data fiduciary realized any gain or avoided any loss as a result of the breach (Section 33(2)(d)).",
+      "Mitigation actions taken to reduce consequences and timeliness/effectiveness of such action (Section 33(2)(e)).",
+      "Proportionality and effectiveness of the proposed monetary penalty (Section 33(2)(f)).",
+      "Likely financial impact on the entity being penalized (Section 33(2)(g))."
+    ],
+    "penalty_framework_status_pre_commencement": "SCHEDULED_TO_COMMENCE",
+    "pre_commencement_liability_clarification": "Section 33 monetary penalty framework and The Schedule are not in force before scheduled commencement (13 May 2027); this reflects that Section 33 statutory fines are not currently enforceable, but does not imply all DPDP legal exposure or all other statutory liability is zero as Clause (a) governance and preliminary provisions are in force.",
+    "probable_scenario_inr": 150000000,
+    "provision_stages": [
+      {
+        "commencement_date": "2025-11-13",
+        "provision_group": "Clause (a): Preliminary, Definitions, Board Constitution \u0026 Powers",
+        "provisions_covered": "Section 1(2), Section 2, Sections 18–26, Section 35, Sections 38–43, and Section 44(1) and (3)",
+        "status_as_of_assessment": "IN_FORCE"
+      },
+      {
+        "commencement_date": "2026-11-13",
+        "provision_group": "Clause (b): Redressal Access \u0026 Information Requests",
+        "provisions_covered": "Section 6(9) and Section 27(1)(d)",
+        "status_as_of_assessment": "SCHEDULED_TO_COMMENCE"
+      },
+      {
+        "commencement_date": "2027-05-13",
+        "provision_group": "Clause (c): Substantive Obligations, Penalties \u0026 Remaining Provisions",
+        "provisions_covered": "Sections 3–5, Section 6(1)–(8) and (10), Sections 7–17, Section 27 except clause (d), Sections 28–34, Sections 36–37, and Section 44(2)",
+        "status_as_of_assessment": "SCHEDULED_TO_COMMENCE"
+      }
+    ],
+    "schedule_categories": [
+      {
+        "obligation_subject": "Failure to take reasonable security safeguards to prevent personal data breach",
+        "provision_ref": "Section 8(5)",
+        "schedule_item_number": 1,
+        "statutory_ceiling_inr": 2500000000,
+        "statutory_wording": "May extend to two hundred and fifty crore rupees (₹250 crore)"
+      },
+      {
+        "obligation_subject": "Failure to give Board or affected Data Principal intimation of personal data breach",
+        "provision_ref": "Section 8(6)",
+        "schedule_item_number": 2,
+        "statutory_ceiling_inr": 2000000000,
+        "statutory_wording": "May extend to two hundred crore rupees (₹200 crore)"
+      },
+      {
+        "obligation_subject": "Breach of additional obligations in relation to children",
+        "provision_ref": "Section 9",
+        "schedule_item_number": 3,
+        "statutory_ceiling_inr": 2000000000,
+        "statutory_wording": "May extend to two hundred crore rupees (₹200 crore)"
+      },
+      {
+        "obligation_subject": "Breach of additional obligations of Significant Data Fiduciary",
+        "provision_ref": "Section 10",
+        "schedule_item_number": 4,
+        "statutory_ceiling_inr": 1500000000,
+        "statutory_wording": "May extend to one hundred and fifty crore rupees (₹150 crore)"
+      },
+      {
+        "obligation_subject": "Breach in observance of duties of Data Principal",
+        "provision_ref": "Section 15",
+        "schedule_item_number": 5,
+        "statutory_ceiling_inr": 10000,
+        "statutory_wording": "May extend to ten thousand rupees (₹10,000)"
+      },
+      {
+        "obligation_subject": "Breach of any term of voluntary undertaking accepted by the Board",
+        "provision_ref": "Section 32",
+        "schedule_item_number": 6,
+        "statutory_ceiling_inr": 0,
+        "statutory_wording": "Up to the extent applicable for the breach in respect of which the proceedings under section 33 were instituted"
+      },
+      {
+        "obligation_subject": "Breach of any other provision of this Act or rules made thereunder",
+        "provision_ref": "Section 33(1) Residual",
+        "schedule_item_number": 7,
+        "statutory_ceiling_inr": 500000000,
+        "statutory_wording": "May extend to fifty crore rupees (₹50 crore)"
+      }
+    ],
+    "statutory_ceiling_residual_inr": 500000000,
+    "statutory_ceiling_sec10_inr": 1500000000,
+    "statutory_ceiling_sec15_inr": 10000,
+    "statutory_ceiling_sec8_5_inr": 2500000000,
+    "statutory_ceiling_sec8_6_inr": 2000000000,
+    "statutory_ceiling_sec9_inr": 2000000000,
+    "statutory_commencement_date": "2027-05-13",
+    "statutory_max_ceiling_inr": 8000000000
+  },
+  "execution_timestamp": "2026-11-10T11:55:00Z",
+  "executive_dossier_15_sections": [
+    "Section 1: Executive Summary \u0026 Acquisition Posture",
+    "Section 2: Target Assessment Scope \u0026 Governance",
+    "Section 3: Asset Inventory \u0026 Attack Surface Map",
+    "Section 4: External Attack-Surface Reconnaissance Findings",
+    "Section 5: Public Cloud Storage \u0026 BaaS Exposure Audit",
+    "Section 6: Mobile APK Application Security Due-Diligence",
+    "Section 7: Critical Security Findings \u0026 Exploitability Analysis",
+    "Section 8: Technical Debt \u0026 Codebase Maintainability",
+    "Section 9: Remediation Engineering-Hour Estimates",
+    "Section 10: GDPR \u0026 DPDP Statutory Regulatory Exposure Scenarios",
+    "Section 11: Acquisition Technical Integration Risks",
+    "Section 12: Risk Prioritization \u0026 Key Drivers",
+    "Section 13: Evidence Provenance, Limitations \u0026 Non-Claims",
+    "Section 14: Recommended Remediation Roadmap \u0026 Escrow Holdback",
+    "Section 15: Final Acquisition Risk Assessment \u0026 Decision Matrix"
+  ],
+  "gdpr_statutory_modeling": {
+    "annual_turnover_eur": 36800000,
+    "applicable_articles": [
+      "Article 32 (Security of Processing - technical and organisational measures)",
+      "Article 33 (Notification of a personal data breach to supervisory authority)",
+      "Article 5 (Principles relating to processing of personal data)"
+    ],
+    "conservative_scenario_eur": 73600,
+    "high_impact_scenario_eur": 920000,
+    "jurisdiction": "European Union (GDPR - Regulation (EU) 2016/679)",
+    "legal_commencement_status": "IN_FORCE",
+    "probable_scenario_eur": 368000,
+    "statutory_ceiling_art83_4": 10000000,
+    "statutory_ceiling_art83_5": 20000000,
+    "statutory_effective_date": "2018-05-25",
+    "statutory_max_ceiling_eur": 20000000
+  },
+  "git_head_commit": "f69dfb51d99063408c6884f50fe7fa003a2958cb",
+  "implemented_files": [
+    "pkg/report/due_diligence.go",
+    "pkg/report/due_diligence_test.go"
+  ],
+  "iron_gate_exit_condition": "PASSED - COMPOSITE FINANCIAL LIABILITY AND STATUTORY MATH STRICTLY VALIDATES",
+  "milestone": "Phase 10.2 — M\u0026A Technical Due-Diligence \u0026 Acquisition Risk Profiler",
+  "mobile_apk_assessment": {
+    "cleartext_traffic": false,
+    "dangerous_permissions": [
+      "android.permission.CAMERA",
+      "android.permission.ACCESS_FINE_LOCATION"
+    ],
+    "dynamic_claims": "NONE - NO DYNAMIC CLAIMS WITHOUT RUNTIME INSTRUMENTATION",
+    "package_name": "io.omnihealth.patient",
+    "provenance": "STATIC_BINARY_EXTRACTION_ONLY",
+    "static_risk_score": 25
+  },
+  "receipt_version": "3.0.0",
+  "reconnaissance_simulation": {
+    "api_endpoints_identified": 1,
+    "assets_cataloged": 5,
+    "baas_instances_mapped": 1,
+    "cloud_buckets_discovered": 1,
+    "external_admin_portals": 1,
+    "scope_guardrail_enforced": true,
+    "target_root_domain": "omnihealth.io",
+    "zero_credential_mode": true
+  },
+  "source_file_hashes": {
+    "pkg/report/due_diligence.go": "4A0DEDFADD3AC12EC51E64BDC348D02FF944E07A6DE391A41D42725337603949",
+    "pkg/report/due_diligence_test.go": "9B0F5488302EE0248C4C23D6589B34D82128DEE86E22B249AAFBE82029F8869F"
+  },
+  "subphase_verifications": [
+    {
+      "status": "PASSED",
+      "test_case": "TestDueDiligence_01_DomainAndSubdomainAssetDiscovery"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestDueDiligence_02_PublicStorageExposureClassification"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestDueDiligence_03_BaaSExposureClassification_FirebaseSupabase"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestDueDiligence_04_MobileAPKAssessmentIntegration"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestDueDiligence_05_FindingProvenanceAndStatePreservation"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestDueDiligence_06_TechnicalDebtEstimation_HoursAndCost"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestDueDiligence_07_GDPRStatutoryCeilingsAndScenarios"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestDueDiligence_08_DPDPStatutoryCeilingsAndScheduleScenarios"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestDueDiligence_09_InvalidAndIncompleteRegulatoryInputs"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestDueDiligence_10_AcquisitionRiskScoringAndGrading"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestDueDiligence_11_ExecutiveDossier15SectionsGeneration"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestDueDiligence_12_DeterministicOutputAndCanonicalDigest"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestDueDiligence_13_SecretRedactionInDossier"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestDueDiligence_14_ScopeEnforcementAndGuardrails"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestDueDiligence_15_SSRFAndHostileDestinationDefense"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestDueDiligence_16_MarkdownAndHTMLExport"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestDueDiligence_17_Phase74DossierCompatibility"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestDueDiligence_18_MultiAssetLabEndToEndSimulation"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestDueDiligence_19_DPDPPreCommencementDate"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestDueDiligence_20_DPDPPostCommencementDate"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestDueDiligence_21_GDPRArt83_4_and_83_5_Ceilings"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestDueDiligence_22_StorageNotFoundClassification"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestDueDiligence_23_StorageAccessDeniedClassification"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestDueDiligence_24_BaaSPublicConfigNonVulnerability"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestDueDiligence_25_IncompleteCoverageRiskScoring"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestDueDiligence_26_EscrowMultiplierConfigurability"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestDueDiligence_27_DossierRegulatoryStatusAndAssumptions"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestDueDiligence_28_DPDPBoundaryDate_2025_11_13"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestDueDiligence_29_DPDPBoundaryDate_2026_11_13"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestDueDiligence_30_DPDPBoundaryDate_2027_05_13"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestDueDiligence_31_DPDPScheduleItemizationAndStatutoryWording"
+    }
+  ],
+  "technical_debt_estimation": {
+    "blended_hourly_rate_usd": 175,
+    "confidence_level": "HIGH",
+    "estimation_disclaimer": "LEGAL \u0026 FINANCIAL DISCLAIMER: Estimated engineering hours and projected remediation costs represent analytical technical-debt benchmarks for acquisition diligence. They do not constitute a contractual warranty or fixed quotation.",
+    "total_base_cost_usd": 25200,
+    "total_base_hours": 144,
+    "total_lower_cost_usd": 15120,
+    "total_lower_hours": 86.4,
+    "total_upper_cost_usd": 45360,
+    "total_upper_hours": 259.2
+  }
+}

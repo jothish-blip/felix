@@ -46,6 +46,8 @@ func run(args []string) int {
 		return runCompliance(subArgs)
 	case "cve":
 		return runCVE(subArgs)
+	case "license", "licensing":
+		return runLicense(subArgs)
 	case "assessment":
 		return runAssessment(subArgs)
 	case "schedule", "schedules":
@@ -105,6 +107,8 @@ func run(args []string) int {
 				return runCompliance([]string{"--help"})
 			case "cve":
 				return runCVE([]string{"--help"})
+			case "license", "licensing":
+				return runLicense([]string{"--help"})
 			case "assessment":
 				return runAssessment([]string{"--help"})
 			case "schedule":
@@ -165,6 +169,7 @@ func printRootHelp() {
 	fmt.Println("  apk         Validate, isolate, and audit Android APK packages (generates mobile_audit.html)")
 	fmt.Println("  report      Generate assessment reports from existing scan results (zero network)")
 	fmt.Println("  cve         Manage embedded SQLite CVE knowledge base and run SemVer queries")
+	fmt.Println("  license     Manage enterprise licensing, metered usage quotas, and signed exports")
 	fmt.Println("  compliance  Manage compliance catalogs, mapping, evaluations, integrity, SLAs, MTTR, and exports")
 	fmt.Println("  client      Manage clients and organizations for structured assessments")
 	fmt.Println("  assessment  Manage authorized security assessment projects and runs")

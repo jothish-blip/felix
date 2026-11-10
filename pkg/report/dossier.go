@@ -1289,7 +1289,7 @@ func buildDossierTechnicalAppendix(findings []DossierFinding) DossierTechnicalAp
 	return DossierTechnicalAppendix{
 		TotalCatalogedFindings: len(findings),
 		RedactionAuditStatus:   "CERTIFIED_ZERO_SECRET_LEAKAGE",
-		ToolchainVersion:       fmt.Sprintf("FELIX v3.0 (Report Engine Schema %s)", DossierSchemaVersion),
+		ToolchainVersion:       fmt.Sprintf("FELIX 1.0 (Report Engine Schema %s)", DossierSchemaVersion),
 		ReportDigest:           digestHex,
 		FindingDigests:         digests,
 	}
@@ -1632,7 +1632,7 @@ const executiveDossierHTMLTemplate = `<!DOCTYPE html>
   <div class="container">
     <header>
       <div class="header-top">
-        <span class="brand-tag">FELIX v3.0 Assessment Deliverable</span>
+        <span class="brand-tag">FELIX 1.0 Assessment Deliverable</span>
         <span class="dossier-id">{{.DossierID}}</span>
       </div>
       <h1>{{escape .AssessmentTitle}}</h1>
@@ -1939,7 +1939,7 @@ const executiveDossierHTMLTemplate = `<!DOCTYPE html>
     </section>
 
     <footer>
-      Generated autonomously by Google FELIX v3.0 &nbsp;|&nbsp; Phase 7.4 Executive Dossier Deliverable
+      Generated autonomously by Google FELIX 1.0 &nbsp;|&nbsp; Executive Dossier Deliverable
     </footer>
   </div>
 </body>

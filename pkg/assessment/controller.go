@@ -31,6 +31,36 @@ import (
 	"github.com/google/uuid"
 )
 
+// EnforcerReservation represents a transient execution quota reservation.
+type EnforcerReservation interface {
+	Commit(status string, metadata map[string]string) error
+	Release(reason string) error
+}
+
+// LicenseEnforcer defines the interface for licensing and concurrency enforcement on assessment executions.
+type LicenseEnforcer interface {
+	ReserveExecution(ctx context.Context, opID string, feature string, targetCount int) (EnforcerReservation, error)
+}
+
+var (
+	globalLicenseEnforcer LicenseEnforcer
+	globalEnforcerMu      sync.RWMutex
+)
+
+// SetGlobalLicenseEnforcer registers the system-wide license enforcer.
+func SetGlobalLicenseEnforcer(e LicenseEnforcer) {
+	globalEnforcerMu.Lock()
+	defer globalEnforcerMu.Unlock()
+	globalLicenseEnforcer = e
+}
+
+// GetGlobalLicenseEnforcer returns the active license enforcer.
+func GetGlobalLicenseEnforcer() LicenseEnforcer {
+	globalEnforcerMu.RLock()
+	defer globalEnforcerMu.RUnlock()
+	return globalLicenseEnforcer
+}
+
 // Controller orchestrates the lifecycle, authorization validation, scope enforcement,
 // scanning execution, and finding traceability for security assessments.
 type Controller struct {
@@ -105,6 +135,7 @@ type ExecutionOptions struct {
 	BaselineScope      string // "all", "new", "new_and_regressed"
 	ScopeManifestPath  string
 	ScopeManifest      *PentestManifest
+	LicenseEnforcer    LicenseEnforcer
 }
 
 // ExecutionResult encapsulates the outcome of an assessment run.
@@ -231,6 +262,32 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 	if c.oastCorrelator != nil {
 		defer c.oastCorrelator.CancelAssessmentProbes(asm.ID)
 	}
+
+	// Licensing and Entitlement Enforcement (Phase 10.3)
+	enforcer := opts.LicenseEnforcer
+	if enforcer == nil {
+		enforcer = GetGlobalLicenseEnforcer()
+	}
+
+	var reservation EnforcerReservation
+	if enforcer != nil {
+		feature := "scan.basic"
+		if asm.AssessmentType == AssessmentTypeCloudSecurity || asm.AssessmentType == "cloudsec" {
+			feature = "cloudsec.audit"
+		}
+		res, err := enforcer.ReserveExecution(ctx, asm.ID, feature, len(asm.Targets))
+		if err != nil {
+			return nil, clierror.SecurityFailure("licensing refusal: %v", err)
+		}
+		reservation = res
+	}
+
+	reservationCommitted := false
+	defer func() {
+		if reservation != nil && !reservationCommitted {
+			_ = reservation.Release("uncompleted or aborted execution")
+		}
+	}()
 
 	tenantID := asm.ClientID
 	if opts.TenantID != "" {
@@ -1389,6 +1446,23 @@ func (c *Controller) RunAssessment(ctx context.Context, assessmentID string, opt
 	finalErr := snapErr
 	if finalErr == nil {
 		finalErr = reportWriteErr
+	}
+
+	if reservation != nil {
+		if finalErr == nil && (execRecord.Status == StatusCompleted || execRecord.Status == StatusCompletedWithErrors) {
+			_ = reservation.Commit(string(execRecord.Status), map[string]string{
+				"execution_id":  execRecord.ID,
+				"assessment_id": asm.ID,
+			})
+			reservationCommitted = true
+		} else {
+			reason := "assessment execution failed"
+			if finalErr != nil {
+				reason = finalErr.Error()
+			}
+			_ = reservation.Release(reason)
+			reservationCommitted = true
+		}
 	}
 
 	return &ExecutionResult{

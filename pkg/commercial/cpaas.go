@@ -524,6 +524,21 @@ func (s *CPaaSScheduler) executeTask(ctx context.Context, sched *ScheduleConfig,
 	exec.StartedAt = &startTime
 	_ = s.store.UpdateExecution(ctx, exec)
 
+	// Licensing feature entitlement check (Phase 10.3)
+	if !IsDevTestMode() {
+		mgr := GetGlobalLicenseManager()
+		if mgr != nil {
+			if err := mgr.CheckFeature(FeatureCommercialCPaaS); err != nil {
+				exec.Status = ExecutionStatusFailed
+				exec.ErrorMessage = fmt.Sprintf("licensing refusal: %v", err)
+				now := s.clock().UTC()
+				exec.CompletedAt = &now
+				_ = s.store.UpdateExecution(ctx, exec)
+				return
+			}
+		}
+	}
+
 	if s.runner == nil {
 		exec.Status = ExecutionStatusFailed
 		exec.ErrorMessage = "no assessment runner configured"
