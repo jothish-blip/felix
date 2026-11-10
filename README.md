@@ -1,12 +1,15 @@
-# Felix
+# FELIX
 
-> **Deterministic Web Security Auditing Platform**  
+> **Proprietary & Autonomous Offensive Security Auditing Platform**  
 > *"Attackers rely on luck. Felix leaves them zero."*
 
-[![Go Test](https://img.shields.io/badge/go%20test-162%2F162%20passing-brightgreen)](#)
-[![Go Vet](https://img.shields.io/badge/go%20vet-clean-brightgreen)](#)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Confidential](https://img.shields.io/badge/License-Proprietary%20%26%20Confidential-red.svg)](#)
+[![Version](https://img.shields.io/badge/Release-FELIX%201.0%20MVP-blue.svg)](#)
 [![Platform](https://img.shields.io/badge/platform-windows%20%7C%20linux%20%7C%20macos-lightgrey)](#)
+
+> [!CAUTION]
+> **CONFIDENTIAL & PROPRIETARY — ALL RIGHTS RESERVED**  
+> This software is the exclusive, confidential, and proprietary intellectual property of Jothish. Unauthorized copying, distribution, reverse engineering, decompilation, public disclosure, or commercial transfer is strictly prohibited.
 
 Felix is an evidence-first, non-destructive web security auditing platform written in Go. Designed for application security engineers, penetration testers, and DevSecOps pipelines, Felix audits web assets, client JavaScript bundles, modern APIs, and cloud backends without invasive exploits, fuzzing, or destructive payloads.
 
