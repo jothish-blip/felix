@@ -1,0 +1,156 @@
+{
+  "receipt_version": "3.0.0",
+  "conclusive_status": "AUDIT_IN_PROGRESS_PROPOSED_DIFFS_VERIFIED",
+  "canonical_payload_sha256": "42b64c3cd84ca9b224626b48f6648d4cb3deb743e15c5a2ec7a363b31dea93f5",
+  "benchmark_metrics": {
+    "generation_duration_ms": 7.5,
+    "source_preservation_rate": 100,
+    "source_validated_count": 4,
+    "syntactically_valid_count": 4,
+    "syntax_validation_rate": 100,
+    "total_remediations_generated": 4
+  },
+  "implemented_capabilities": [
+    "Deterministic finding-to-remediation unified diff generation",
+    "Consolidated multi-finding remediation planning",
+    "Source-code context and line boundary validation",
+    "Syntax validation for unified diff headers and line counts",
+    "In-memory non-destructive patch applicability verification",
+    "Safety auditing: secret leak detection, weakening security rejection, arbitrary exec prevention",
+    "DAG attack-path-aware prioritization (entrypoints elevated to Priority 1, bottlenecks to Priority 2)",
+    "Shared root cause consolidation for overlapping file lines",
+    "Deterministic canonical serialization and SHA-256 output hashing",
+    "Distinction of lifecycle statuses: RECOMMENDATION_ONLY, SOURCE_VALIDATED, SYNTACTICALLY_VALIDATED, TESTED, APPLIED, VERIFIED",
+    "Anti-forgery live verification artifact auditing and protected provenance boundary (rejects caller-supplied boolean assertions, arbitrary hashes, synthetic fixtures, mismatched patch hashes, and unauthenticated caller-supplied LIVE_TARGET claims without exposing caller-controlled authority registration mechanisms)"
+  ],
+  "supported_categories": [
+    "SQLI (SQL Injection: parameterized prepared statements for Node, Python, Go, Java)",
+    "BOLA (Broken Object-Level Authorization: resource ownership checks for Node, Python, Go)",
+    "XSS (Cross-Site Scripting: DOMPurify and context-aware HTML entity encoding)",
+    "SECURITY_HEADER (Defensive headers: Helmet, CSP, nosniff, DENY, HSTS middleware)",
+    "SSRF (Server-Side Request Forgery: destination IP and metadata endpoint rejection)",
+    "PATH_TRAVERSAL (Directory Traversal: canonicalization and base directory containment)"
+  ],
+  "source_context_validation_results": {
+    "inspected_files": [
+      "server/routes/products.js",
+      "server/routes/users.js",
+      "server/routes/greeting.js",
+      "app.js"
+    ],
+    "missing_source_policy": "Explicit INSUFFICIENT_CONTEXT status returned; no patch fabrication when source unavailable",
+    "reference_diff_policy": "Explicit RECOMMENDATION_ONLY status and IsReferencePattern=true flag when explicitly requested"
+  },
+  "generated_diff_validation": {
+    "hunk_line_counting_verified": true,
+    "patch_applicability_verified": true,
+    "unified_diff_format_verified": true,
+    "zero_filesystem_writes": true
+  },
+  "dag_integration_results": {
+    "breakage_narrative": "Remediating perimeter entrypoint 'Public Web Perimeter Route' (REM-ITEM-FIND-XSS-JUICE-003) breaks path PATH-JUICE-CHAIN-01 at the boundary upon application, preventing traversal toward Juice Shop SQLite Database (NODE-SQLITE-DB) (Status: PROPOSED_PATH_BREAK; projected path interruption, patch not yet applied or verified).",
+    "broken_path_count": 0,
+    "eliminated_edges": [],
+    "entrypoint_node_ids": [
+      "NODE-ENTRY-PERIMETER"
+    ],
+    "path_id": "PATH-JUICE-CHAIN-01",
+    "prioritization": [
+      "REM-ITEM-FIND-XSS-JUICE-003",
+      "REM-ITEM-FIND-BOLA-VAMPI-002",
+      "REM-ITEM-FIND-HDR-JUICE-004",
+      "REM-ITEM-FIND-SQLI-JUICE-001"
+    ],
+    "proposed_broken_path_count": 1,
+    "proposed_eliminated_edges": [
+      "EDGE-01-TO-02 (NODE-ENTRY-PERIMETER -\u003e NODE-SQLI-BACKEND)",
+      "EDGE-02-TO-03 (NODE-SQLI-BACKEND -\u003e NODE-SQLITE-DB)"
+    ],
+    "protected_assets": [
+      "Juice Shop SQLite Database (NODE-SQLITE-DB)"
+    ],
+    "status": "PROPOSED_PATH_BREAK"
+  },
+  "test_results": {
+    "exit_code": 0,
+    "unit_and_regression_tests_passed": 21
+  },
+  "determinism_results": {
+    "canonical_content_sha256": "42b64c3cd84ca9b224626b48f6648d4cb3deb743e15c5a2ec7a363b31dea93f5",
+    "hash_stability_across_reordering": true,
+    "volatile_fields_excluded": [
+      "metadata.generated_at",
+      "benchmark_metrics.generation_duration_ms"
+    ]
+  },
+  "known_limitations": [
+    "Phase 7.3 is strictly a non-destructive remediation diff generator: automated patch application and live verification re-testing are outside Phase 7.3 scope. Generated diffs remain at PROPOSED_PATH_BREAK (BrokenPathCount = 0, EliminatedEdges = []). In accordance with the cryptographic provenance audit, self-contained SHA-256 integrity hashing does not authenticate artifact origin; VERIFIED_PATH_BREAK requires a future dedicated verification phase (Phase 9.2 Remediation Retest Engine) with protected, non-forgeable execution provenance.",
+    "AST-level syntactic matching requires matching runtime/compiler toolchains for full syntax compilation.",
+    "Reference pattern diffs for black-box findings are illustrative templates and require developer tailoring to the target repository."
+  ],
+  "representative_remediations": [
+    {
+      "id": "REM-ITEM-FIND-BOLA-VAMPI-002",
+      "finding_id": "FIND-BOLA-VAMPI-002",
+      "category": "BOLA",
+      "target_file": "server/routes/users.js",
+      "status": "SYNTACTICALLY_VALIDATED",
+      "priority": 3,
+      "syntactically_valid": true,
+      "applicable_to_source": true,
+      "preserves_unrelated_code": true,
+      "unified_diff_snippet": "--- a/server/routes/users.js\n+++ b/server/routes/users.js\n@@ -2,7 +2,10 @@\n const router = express.Router();\n \n router.get('/profile/:id', async (req, res) =\u003e {\n-\tconst resource = await Resource.findById(req.params.id);\n+\t// FELIX Remediated: Object ownership check prevents BOLA/IDOR\n...",
+      "regression_test_recommendations": [
+        "Send authenticated request as User A accessing User B's object ID; assert 403 Forbidden",
+        "Send authenticated request as User A accessing User A's object ID; assert 200 OK"
+      ]
+    },
+    {
+      "id": "REM-ITEM-FIND-HDR-JUICE-004",
+      "finding_id": "FIND-HDR-JUICE-004",
+      "category": "SECURITY_HEADER",
+      "target_file": "app.js",
+      "status": "SYNTACTICALLY_VALIDATED",
+      "priority": 3,
+      "syntactically_valid": true,
+      "applicable_to_source": true,
+      "preserves_unrelated_code": true,
+      "unified_diff_snippet": "--- a/app.js\n+++ b/app.js\n@@ -1,5 +1,11 @@\n const express = require('express');\n const app = express();\n \n-app.use(express.json());\n+\t// FELIX Remediated: Enforce security headers middleware\n...",
+      "regression_test_recommendations": [
+        "Request root endpoint and verify Content-Security-Policy, X-Content-Type-Options, and X-Frame-Options headers are present"
+      ]
+    },
+    {
+      "id": "REM-ITEM-FIND-SQLI-JUICE-001",
+      "finding_id": "FIND-SQLI-JUICE-001",
+      "category": "SQLI",
+      "target_file": "server/routes/products.js",
+      "status": "SYNTACTICALLY_VALIDATED",
+      "priority": 3,
+      "syntactically_valid": true,
+      "applicable_to_source": true,
+      "preserves_unrelated_code": true,
+      "unified_diff_snippet": "--- a/server/routes/products.js\n+++ b/server/routes/products.js\n@@ -3,8 +3,9 @@\n const db = require('../db');\n \n router.get('/search', async (req, res) =\u003e {\n-\tconst query = \"SELECT * FROM products WHERE description LIKE '%\" + req.query.q + \"%'\";\n-\tconst result = await db.query(query);\n...",
+      "regression_test_recommendations": [
+        "Send boolean differential payload (' OR 1=1--) and verify target treats it as literal string with 0 injection matches",
+        "Send legitimate search query with alphanumeric characters and verify 200 OK with expected results",
+        "Verify user input is never concatenated into SQL query string and parameter values are supplied to database execution call"
+      ]
+    },
+    {
+      "id": "REM-ITEM-FIND-XSS-JUICE-003",
+      "finding_id": "FIND-XSS-JUICE-003",
+      "category": "XSS",
+      "target_file": "server/routes/greeting.js",
+      "status": "SYNTACTICALLY_VALIDATED",
+      "priority": 1,
+      "syntactically_valid": true,
+      "applicable_to_source": true,
+      "preserves_unrelated_code": true,
+      "unified_diff_snippet": "--- a/server/routes/greeting.js\n+++ b/server/routes/greeting.js\n@@ -2,7 +2,9 @@\n const router = express.Router();\n \n router.get('/greet', (req, res) =\u003e {\n-\tres.send('\u003cdiv\u003eWelcome ' + req.query.name + '\u003c/div\u003e');\n+\t// FELIX Remediated: DOMPurify sanitization neutralizes XSS payloads\n...",
+      "regression_test_recommendations": [
+        "Inject payload \u003cscript\u003ealert(1)\u003c/script\u003e and verify payload is encoded (\u0026lt;script\u0026gt;) or neutralized in output"
+      ]
+    }
+  ]
+}

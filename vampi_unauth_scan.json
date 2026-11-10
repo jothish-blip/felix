@@ -1,0 +1,2432 @@
+{
+  "version": "2.0.0",
+  "target": "http://127.0.0.1:5000",
+  "targets": [
+    "http://127.0.0.1:5000"
+  ],
+  "timestamp": "2026-11-10T06:57:57Z",
+  "duration": "147ms",
+  "duration_ms": 147,
+  "request_count": 29,
+  "completion_status": "COMPLETED",
+  "risk_score_available": true,
+  "risk_score": 33,
+  "risk_level": "HIGH",
+  "summary": {
+    "total_findings": 6,
+    "critical_count": 0,
+    "high_count": 1,
+    "medium_count": 0,
+    "low_count": 2,
+    "info_count": 3,
+    "verified_count": 6,
+    "detected_count": 0,
+    "observed_count": 0,
+    "not_verified_count": 0,
+    "not_exposed_count": 0,
+    "attempted_count": 6,
+    "verification_rate_attempted": 100,
+    "verification_rate_total": 100,
+    "confirmation_rate": 100,
+    "conclusive_count": 6,
+    "conclusive_rate": 100,
+    "attempt_rate": 100,
+    "confirmed_count": 6,
+    "suspected_count": 0,
+    "not_tested_count": 0,
+    "error_count": 0,
+    "by_status": {
+      "CONFIRMED": 6
+    },
+    "score_available": true,
+    "by_source": {
+      "api": 6
+    }
+  },
+  "top_priorities": [
+    {
+      "id": "API-0530df708d8f3644",
+      "rule_id": "API-FASTAPI-SENSITIVE-SCHEMA",
+      "status": "CONFIRMED",
+      "classification_outcome": "CONFIRMED",
+      "reachability": "CONFIRMED_REACHABLE",
+      "auth_context": "NO_CHALLENGE",
+      "framework": "FastAPI",
+      "analysis_method": "ACTIVE_VERIFICATION",
+      "primary_asset_id": "ast_71849fc12f32c75f3c2839e6",
+      "affected_asset_ids": [
+        "ast_2f2949ea3c3086352e688f5b",
+        "ast_71849fc12f32c75f3c2839e6",
+        "ast_8315ea488c20cb4572cc25e1",
+        "ast_a946247c3768b401814f953b"
+      ],
+      "title": "FastAPI OpenAPI schema contains embedded credentials or sensitive defaults",
+      "category": "fastapi-sensitive-schema",
+      "severity": "HIGH",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:5000",
+      "endpoint": "http://127.0.0.1:5000/openapi.json",
+      "method": "GET",
+      "description": "FastAPI OpenAPI schema contains embedded credentials or sensitive defaults",
+      "evidence_summary": "HTTP 200 OK. FastAPI OpenAPI schema contains unmasked credential for field \"auth_token\" (secret value redacted). Note: Credential validity and active authorization status were not verified.",
+      "evidence": {
+        "observation": "HTTP 200 OK. FastAPI OpenAPI schema contains unmasked credential for field \"auth_token\" (secret value redacted). Note: Credential validity and active authorization status were not verified.",
+        "location": "http://127.0.0.1:5000/openapi.json",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "active_probe",
+        "detection_status": "DETECTED",
+        "negative_evidence": "Credential observed in schema definition; active authentication or authorization against backend services was not attempted.",
+        "expected_behavior": "Minimal response schema without sensitive data",
+        "observed_behavior": "Sensitive fields present in JSON response body",
+        "details": {
+          "api_title": "VAmPI",
+          "auth_context": "NO_CHALLENGE",
+          "category": "fastapi-sensitive-schema",
+          "classification": "DOCUMENTATION",
+          "classification_outcome": "CONFIRMED",
+          "credential_active_status": "[REDACTED]",
+          "credential_validity": "unverified",
+          "fingerprint_version": "v2",
+          "framework": "FastAPI",
+          "http_status": "200",
+          "limitations": "Discovered secret values were redacted; credential validity and active authorization status were not verified.; Candidate credential validity and active authorization status remain unverified.",
+          "openapi_ver": "3.0.1",
+          "reachability": "CONFIRMED_REACHABLE",
+          "score_formula": "round(25.00 base * 1.00 conf * 1.00 ver) = 25/40",
+          "score_rationale": "Calculated score 25/40 (model felix_finding_v1) from HIGH severity base (25.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x).",
+          "secret_field": "[REDACTED]",
+          "total_routes": "12"
+        },
+        "provenance": {
+          "evidence_id": "ev_c7a67cd1f8fe41c720c4fcae",
+          "evidence_type": "http_response",
+          "source_engine": "api",
+          "rule_id": "API-FASTAPI-SENSITIVE-SCHEMA",
+          "finding_id": "API-0530df708d8f3644",
+          "asset_id": "ast_71849fc12f32c75f3c2839e6",
+          "collected_at": "0001-01-01T00:00:00Z",
+          "location": "http://127.0.0.1:5000/openapi.json",
+          "collection_method": "active_probe",
+          "analysis_method": "ACTIVE_VERIFICATION",
+          "content_digest": "sha256:b896514ee7f2ca6886e725922b61e0d1cfb946d3f1bdbff10c6ef17d9ffa143e"
+        }
+      },
+      "verification": {
+        "status": "VERIFIED",
+        "detection_status": "HIGH",
+        "result": "Sensitive fields present in JSON response body",
+        "rationale": "Detection pattern match is strong; Direct empirical verification evidence satisfies criteria; Status is VERIFIED based on satisfied mandatory proof criteria",
+        "policy_id": "POL-APISEC-01",
+        "verification_method": "payload_inspection",
+        "analysis_method": "ACTIVE_VERIFICATION",
+        "confidence_score": 98,
+        "reproduction_steps": [
+          "1. Target environment setup: verify reachability to http://127.0.0.1:5000",
+          "   - Precondition: API endpoint query",
+          "2. Dispatch safe probe via GET to http://127.0.0.1:5000/openapi.json",
+          "   Execute: curl -s -i -X GET -H \"auth_context: [REDACTED]\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000/openapi.json\"",
+          "3. Expected secure behavior: Minimal response schema without sensitive data",
+          "4. Observed result: Sensitive fields present in JSON response body",
+          "5. Verification conclusion: VERIFIED under policy POL-APISEC-01"
+        ],
+        "safe_curl_command": "curl -s -i -X GET -H \"auth_context: [REDACTED]\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000/openapi.json\"",
+        "attempted": true
+      },
+      "remediation": "Remove sensitive credentials, tokens, passwords, or private configuration defaults from OpenAPI field descriptions, summaries, and schema examples.",
+      "remediation_advice": {
+        "summary": "Remove sensitive credentials, tokens, passwords, or private configuration defaults from OpenAPI field descriptions, summaries, and schema examples."
+      },
+      "provenance": {
+        "evidence_id": "ev_c7a67cd1f8fe41c720c4fcae",
+        "evidence_type": "http_response",
+        "source_engine": "api",
+        "rule_id": "API-FASTAPI-SENSITIVE-SCHEMA",
+        "finding_id": "API-0530df708d8f3644",
+        "asset_id": "ast_71849fc12f32c75f3c2839e6",
+        "collected_at": "0001-01-01T00:00:00Z",
+        "location": "http://127.0.0.1:5000/openapi.json",
+        "collection_method": "active_probe",
+        "analysis_method": "ACTIVE_VERIFICATION",
+        "content_digest": "sha256:b896514ee7f2ca6886e725922b61e0d1cfb946d3f1bdbff10c6ef17d9ffa143e"
+      },
+      "source": "api",
+      "fingerprint": "ef19ff0d43d5e598e214c77090103f76ed3b15730571061cc0c1e2c2c7c2d0bb",
+      "score": 25,
+      "score_explanation": {
+        "score": 25,
+        "severity": "HIGH",
+        "base_score": 25,
+        "category_modifier": 0,
+        "effective_base": 25,
+        "confidence": "HIGH",
+        "confidence_weight": 1,
+        "verification_status": "VERIFIED",
+        "verification_weight": 1,
+        "model": "felix_finding_v1",
+        "formula": "round(25.00 base * 1.00 conf * 1.00 ver) = 25/40",
+        "rationale": "Calculated score 25/40 (model felix_finding_v1) from HIGH severity base (25.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x)."
+      },
+      "timestamp": "0001-01-01T00:00:00Z"
+    },
+    {
+      "id": "API-b262835e2196e0e9",
+      "rule_id": "API-MISSING-CSP",
+      "status": "CONFIRMED",
+      "classification_outcome": "INFORMATIONAL",
+      "reachability": "CONFIRMED_REACHABLE",
+      "auth_context": "NO_CHALLENGE",
+      "framework": "generic",
+      "analysis_method": "ACTIVE_VERIFICATION",
+      "primary_asset_id": "ast_71849fc12f32c75f3c2839e6",
+      "affected_asset_ids": [
+        "ast_2f2949ea3c3086352e688f5b",
+        "ast_71849fc12f32c75f3c2839e6",
+        "ast_8315ea488c20cb4572cc25e1",
+        "ast_a946247c3768b401814f953b"
+      ],
+      "title": "Missing Content-Security-Policy (CSP) defense-in-depth header",
+      "category": "missing-csp",
+      "severity": "LOW",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:5000",
+      "endpoint": "http://127.0.0.1:5000",
+      "method": "GET",
+      "description": "Missing Content-Security-Policy (CSP) defense-in-depth header",
+      "evidence_summary": "Response headers do not include Content-Security-Policy.",
+      "evidence": {
+        "observation": "Response headers do not include Content-Security-Policy.",
+        "location": "http://127.0.0.1:5000",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "header_inspection",
+        "detection_status": "DETECTED",
+        "negative_evidence": "Informational hardening observation; does not constitute an exploitable vulnerability by itself.",
+        "expected_behavior": "Defensive security header configured",
+        "observed_behavior": "Header absent in response",
+        "details": {
+          "auth_context": "NO_CHALLENGE",
+          "category": "missing-csp",
+          "classification_outcome": "INFORMATIONAL",
+          "enforcing": "absent",
+          "fingerprint_version": "v2",
+          "framework": "generic",
+          "header": "Content-Security-Policy",
+          "observed": "absent",
+          "reachability": "CONFIRMED_REACHABLE",
+          "report_only": "absent",
+          "score_formula": "round(5.00 base * 1.00 conf * 1.00 ver) = 5/40",
+          "score_rationale": "Calculated score 5/40 (model felix_finding_v1) from LOW severity base (5.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x)."
+        },
+        "provenance": {
+          "evidence_id": "ev_0d797943c8736b2ab93e81d3",
+          "evidence_type": "http_response",
+          "source_engine": "api",
+          "rule_id": "API-MISSING-CSP",
+          "finding_id": "API-b262835e2196e0e9",
+          "asset_id": "ast_71849fc12f32c75f3c2839e6",
+          "collected_at": "0001-01-01T00:00:00Z",
+          "location": "http://127.0.0.1:5000",
+          "collection_method": "header_inspection",
+          "analysis_method": "STATIC_ANALYSIS",
+          "content_digest": "sha256:0bd8c54cc84aa27c72f591f384046e66b9b3fdecd5950266bb08891f3905a26a"
+        }
+      },
+      "verification": {
+        "status": "VERIFIED",
+        "detection_status": "HIGH",
+        "result": "Header absent in response",
+        "rationale": "Detection pattern match is strong; Direct empirical verification evidence satisfies criteria; Status is VERIFIED based on satisfied mandatory proof criteria",
+        "policy_id": "POL-APISEC-01",
+        "verification_method": "response_header_audit",
+        "analysis_method": "ACTIVE_VERIFICATION",
+        "confidence_score": 98,
+        "reproduction_steps": [
+          "1. Target environment setup: verify reachability to http://127.0.0.1:5000",
+          "   - Precondition: In-scope HTTP GET response",
+          "2. Dispatch safe probe via GET to http://127.0.0.1:5000",
+          "   Execute: curl -s -i -X GET -H \"header: Content-Security-Policy\" -H \"auth_context: [REDACTED]\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000\"",
+          "3. Expected secure behavior: Defensive security header configured",
+          "4. Observed result: Header absent in response",
+          "5. Verification conclusion: VERIFIED under policy POL-APISEC-01"
+        ],
+        "safe_curl_command": "curl -s -i -X GET -H \"header: Content-Security-Policy\" -H \"auth_context: [REDACTED]\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000\"",
+        "attempted": true
+      },
+      "remediation": "Deploy a robust Content-Security-Policy (CSP) header restricting script execution, styles, and object embeds to trusted sources. Begin with `Content-Security-Policy-Report-Only` during staging.",
+      "remediation_advice": {
+        "summary": "Deploy a robust Content-Security-Policy (CSP) header restricting script execution, styles, and object embeds to trusted sources. Begin with `Content-Security-Policy-Report-Only` during staging."
+      },
+      "provenance": {
+        "evidence_id": "ev_0d797943c8736b2ab93e81d3",
+        "evidence_type": "http_response",
+        "source_engine": "api",
+        "rule_id": "API-MISSING-CSP",
+        "finding_id": "API-b262835e2196e0e9",
+        "asset_id": "ast_71849fc12f32c75f3c2839e6",
+        "collected_at": "0001-01-01T00:00:00Z",
+        "location": "http://127.0.0.1:5000",
+        "collection_method": "header_inspection",
+        "analysis_method": "STATIC_ANALYSIS",
+        "content_digest": "sha256:0bd8c54cc84aa27c72f591f384046e66b9b3fdecd5950266bb08891f3905a26a"
+      },
+      "source": "api",
+      "fingerprint": "65007262053ddeee43d32bb1d7d218c790704e2c1d6067c796803cf90f8f7bae",
+      "score": 5,
+      "score_explanation": {
+        "score": 5,
+        "severity": "LOW",
+        "base_score": 5,
+        "category_modifier": 0,
+        "effective_base": 5,
+        "confidence": "HIGH",
+        "confidence_weight": 1,
+        "verification_status": "VERIFIED",
+        "verification_weight": 1,
+        "model": "felix_finding_v1",
+        "formula": "round(5.00 base * 1.00 conf * 1.00 ver) = 5/40",
+        "rationale": "Calculated score 5/40 (model felix_finding_v1) from LOW severity base (5.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x)."
+      },
+      "timestamp": "0001-01-01T00:00:00Z"
+    },
+    {
+      "id": "API-e3c1151175c642f8",
+      "rule_id": "API-MISSING-X-FRAME-OPTIONS",
+      "status": "CONFIRMED",
+      "classification_outcome": "INFORMATIONAL",
+      "reachability": "CONFIRMED_REACHABLE",
+      "auth_context": "NO_CHALLENGE",
+      "framework": "generic",
+      "analysis_method": "ACTIVE_VERIFICATION",
+      "primary_asset_id": "ast_71849fc12f32c75f3c2839e6",
+      "affected_asset_ids": [
+        "ast_2f2949ea3c3086352e688f5b",
+        "ast_71849fc12f32c75f3c2839e6",
+        "ast_8315ea488c20cb4572cc25e1",
+        "ast_a946247c3768b401814f953b"
+      ],
+      "title": "Missing X-Frame-Options header (clickjacking protection)",
+      "category": "missing-x-frame-options",
+      "severity": "LOW",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:5000",
+      "endpoint": "http://127.0.0.1:5000",
+      "method": "GET",
+      "description": "Missing X-Frame-Options header (clickjacking protection)",
+      "evidence_summary": "Response headers do not include X-Frame-Options or CSP frame-ancestors directive.",
+      "evidence": {
+        "observation": "Response headers do not include X-Frame-Options or CSP frame-ancestors directive.",
+        "location": "http://127.0.0.1:5000",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "header_inspection",
+        "detection_status": "DETECTED",
+        "negative_evidence": "No clickjacking defense-in-depth header was returned by the web server.",
+        "expected_behavior": "Defensive security header configured",
+        "observed_behavior": "Header absent in response",
+        "details": {
+          "auth_context": "NO_CHALLENGE",
+          "category": "missing-x-frame-options",
+          "classification_outcome": "INFORMATIONAL",
+          "fingerprint_version": "v2",
+          "framework": "generic",
+          "header": "X-Frame-Options",
+          "observed": "absent",
+          "reachability": "CONFIRMED_REACHABLE",
+          "score_formula": "round(5.00 base * 1.00 conf * 1.00 ver) = 5/40",
+          "score_rationale": "Calculated score 5/40 (model felix_finding_v1) from LOW severity base (5.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x)."
+        },
+        "provenance": {
+          "evidence_id": "ev_c7b126d5df3959e9749cd1e9",
+          "evidence_type": "http_response",
+          "source_engine": "api",
+          "rule_id": "API-MISSING-X-FRAME-OPTIONS",
+          "finding_id": "API-e3c1151175c642f8",
+          "asset_id": "ast_71849fc12f32c75f3c2839e6",
+          "collected_at": "0001-01-01T00:00:00Z",
+          "location": "http://127.0.0.1:5000",
+          "collection_method": "header_inspection",
+          "analysis_method": "STATIC_ANALYSIS",
+          "content_digest": "sha256:89a1242bcc47c4edcde27bf00bdb856f38e47f1606d734a2f5b71afdb18aeb79"
+        }
+      },
+      "verification": {
+        "status": "VERIFIED",
+        "detection_status": "HIGH",
+        "result": "Header absent in response",
+        "rationale": "Detection pattern match is strong; Direct empirical verification evidence satisfies criteria; Status is VERIFIED based on satisfied mandatory proof criteria",
+        "policy_id": "POL-APISEC-01",
+        "verification_method": "response_header_audit",
+        "analysis_method": "ACTIVE_VERIFICATION",
+        "confidence_score": 98,
+        "reproduction_steps": [
+          "1. Target environment setup: verify reachability to http://127.0.0.1:5000",
+          "   - Precondition: In-scope HTTP GET response",
+          "2. Dispatch safe probe via GET to http://127.0.0.1:5000",
+          "   Execute: curl -s -i -X GET -H \"auth_context: [REDACTED]\" -H \"header: X-Frame-Options\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000\"",
+          "3. Expected secure behavior: Defensive security header configured",
+          "4. Observed result: Header absent in response",
+          "5. Verification conclusion: VERIFIED under policy POL-APISEC-01"
+        ],
+        "safe_curl_command": "curl -s -i -X GET -H \"auth_context: [REDACTED]\" -H \"header: X-Frame-Options\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000\"",
+        "attempted": true
+      },
+      "remediation": "Configure `X-Frame-Options: DENY` or `SAMEORIGIN`, or implement CSP `frame-ancestors` directive to mitigate clickjacking attacks.",
+      "remediation_advice": {
+        "summary": "Configure `X-Frame-Options: DENY` or `SAMEORIGIN`, or implement CSP `frame-ancestors` directive to mitigate clickjacking attacks."
+      },
+      "provenance": {
+        "evidence_id": "ev_c7b126d5df3959e9749cd1e9",
+        "evidence_type": "http_response",
+        "source_engine": "api",
+        "rule_id": "API-MISSING-X-FRAME-OPTIONS",
+        "finding_id": "API-e3c1151175c642f8",
+        "asset_id": "ast_71849fc12f32c75f3c2839e6",
+        "collected_at": "0001-01-01T00:00:00Z",
+        "location": "http://127.0.0.1:5000",
+        "collection_method": "header_inspection",
+        "analysis_method": "STATIC_ANALYSIS",
+        "content_digest": "sha256:89a1242bcc47c4edcde27bf00bdb856f38e47f1606d734a2f5b71afdb18aeb79"
+      },
+      "source": "api",
+      "fingerprint": "093e21d0435e08a9c2928a755906892374f56e8250e3e4feb9500fea4e901f14",
+      "score": 5,
+      "score_explanation": {
+        "score": 5,
+        "severity": "LOW",
+        "base_score": 5,
+        "category_modifier": 0,
+        "effective_base": 5,
+        "confidence": "HIGH",
+        "confidence_weight": 1,
+        "verification_status": "VERIFIED",
+        "verification_weight": 1,
+        "model": "felix_finding_v1",
+        "formula": "round(5.00 base * 1.00 conf * 1.00 ver) = 5/40",
+        "rationale": "Calculated score 5/40 (model felix_finding_v1) from LOW severity base (5.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x)."
+      },
+      "timestamp": "0001-01-01T00:00:00Z"
+    },
+    {
+      "id": "API-5258776b875c4d4d",
+      "rule_id": "API-MISSING-PERMISSIONS-POLICY",
+      "status": "CONFIRMED",
+      "classification_outcome": "INFORMATIONAL",
+      "reachability": "CONFIRMED_REACHABLE",
+      "auth_context": "NO_CHALLENGE",
+      "framework": "generic",
+      "analysis_method": "ACTIVE_VERIFICATION",
+      "primary_asset_id": "ast_71849fc12f32c75f3c2839e6",
+      "affected_asset_ids": [
+        "ast_2f2949ea3c3086352e688f5b",
+        "ast_71849fc12f32c75f3c2839e6",
+        "ast_8315ea488c20cb4572cc25e1",
+        "ast_a946247c3768b401814f953b"
+      ],
+      "title": "Missing Permissions-Policy header (browser feature gating)",
+      "category": "missing-permissions-policy",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:5000",
+      "endpoint": "http://127.0.0.1:5000",
+      "method": "GET",
+      "description": "Missing Permissions-Policy header (browser feature gating)",
+      "evidence_summary": "Response headers do not include Permissions-Policy.",
+      "evidence": {
+        "observation": "Response headers do not include Permissions-Policy.",
+        "location": "http://127.0.0.1:5000",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "header_inspection",
+        "detection_status": "DETECTED",
+        "negative_evidence": "Browser feature delegation policy not explicitly configured.",
+        "expected_behavior": "Defensive security header configured",
+        "observed_behavior": "Header absent in response",
+        "details": {
+          "auth_context": "NO_CHALLENGE",
+          "category": "missing-permissions-policy",
+          "classification_outcome": "INFORMATIONAL",
+          "fingerprint_version": "v2",
+          "framework": "generic",
+          "header": "Permissions-Policy",
+          "observed": "absent",
+          "reachability": "CONFIRMED_REACHABLE",
+          "score_formula": "round(1.00 base * 1.00 conf * 1.00 ver) = 1/40",
+          "score_rationale": "Calculated score 1/40 (model felix_finding_v1) from INFO severity base (1.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x)."
+        },
+        "provenance": {
+          "evidence_id": "ev_32353acfd597d248759cc7c8",
+          "evidence_type": "http_response",
+          "source_engine": "api",
+          "rule_id": "API-MISSING-PERMISSIONS-POLICY",
+          "finding_id": "API-5258776b875c4d4d",
+          "asset_id": "ast_71849fc12f32c75f3c2839e6",
+          "collected_at": "0001-01-01T00:00:00Z",
+          "location": "http://127.0.0.1:5000",
+          "collection_method": "header_inspection",
+          "analysis_method": "STATIC_ANALYSIS",
+          "content_digest": "sha256:c52b8fd1ef1b394e9086f67a8972ca5cd01ec18a01ea9db50b2f4dce93610453"
+        }
+      },
+      "verification": {
+        "status": "VERIFIED",
+        "detection_status": "HIGH",
+        "result": "Header absent in response",
+        "rationale": "Detection pattern match is strong; Direct empirical verification evidence satisfies criteria; Status is VERIFIED based on satisfied mandatory proof criteria",
+        "policy_id": "POL-APISEC-01",
+        "verification_method": "response_header_audit",
+        "analysis_method": "ACTIVE_VERIFICATION",
+        "confidence_score": 98,
+        "reproduction_steps": [
+          "1. Target environment setup: verify reachability to http://127.0.0.1:5000",
+          "   - Precondition: In-scope HTTP GET response",
+          "2. Dispatch safe probe via GET to http://127.0.0.1:5000",
+          "   Execute: curl -s -i -X GET -H \"auth_context: [REDACTED]\" -H \"header: Permissions-Policy\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000\"",
+          "3. Expected secure behavior: Defensive security header configured",
+          "4. Observed result: Header absent in response",
+          "5. Verification conclusion: VERIFIED under policy POL-APISEC-01"
+        ],
+        "safe_curl_command": "curl -s -i -X GET -H \"auth_context: [REDACTED]\" -H \"header: Permissions-Policy\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000\"",
+        "attempted": true
+      },
+      "remediation": "Configure a `Permissions-Policy` header explicitly disabling unnecessary browser capabilities (e.g. `camera=(), microphone=(), geolocation=()`).",
+      "remediation_advice": {
+        "summary": "Configure a `Permissions-Policy` header explicitly disabling unnecessary browser capabilities (e.g. `camera=(), microphone=(), geolocation=()`)."
+      },
+      "provenance": {
+        "evidence_id": "ev_32353acfd597d248759cc7c8",
+        "evidence_type": "http_response",
+        "source_engine": "api",
+        "rule_id": "API-MISSING-PERMISSIONS-POLICY",
+        "finding_id": "API-5258776b875c4d4d",
+        "asset_id": "ast_71849fc12f32c75f3c2839e6",
+        "collected_at": "0001-01-01T00:00:00Z",
+        "location": "http://127.0.0.1:5000",
+        "collection_method": "header_inspection",
+        "analysis_method": "STATIC_ANALYSIS",
+        "content_digest": "sha256:c52b8fd1ef1b394e9086f67a8972ca5cd01ec18a01ea9db50b2f4dce93610453"
+      },
+      "source": "api",
+      "fingerprint": "6a39e9eac028ec23c14785ecb9beddd6f6292ef5730e674147369f31100be86c",
+      "score": 1,
+      "score_explanation": {
+        "score": 1,
+        "severity": "INFO",
+        "base_score": 1,
+        "category_modifier": 0,
+        "effective_base": 1,
+        "confidence": "HIGH",
+        "confidence_weight": 1,
+        "verification_status": "VERIFIED",
+        "verification_weight": 1,
+        "model": "felix_finding_v1",
+        "formula": "round(1.00 base * 1.00 conf * 1.00 ver) = 1/40",
+        "rationale": "Calculated score 1/40 (model felix_finding_v1) from INFO severity base (1.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x)."
+      },
+      "timestamp": "0001-01-01T00:00:00Z"
+    },
+    {
+      "id": "API-18dc33de072f012d",
+      "rule_id": "API-MISSING-REFERRER-POLICY",
+      "status": "CONFIRMED",
+      "classification_outcome": "INFORMATIONAL",
+      "reachability": "CONFIRMED_REACHABLE",
+      "auth_context": "NO_CHALLENGE",
+      "framework": "generic",
+      "analysis_method": "ACTIVE_VERIFICATION",
+      "primary_asset_id": "ast_71849fc12f32c75f3c2839e6",
+      "affected_asset_ids": [
+        "ast_2f2949ea3c3086352e688f5b",
+        "ast_71849fc12f32c75f3c2839e6",
+        "ast_8315ea488c20cb4572cc25e1",
+        "ast_a946247c3768b401814f953b"
+      ],
+      "title": "Missing Referrer-Policy defense-in-depth header",
+      "category": "missing-referrer-policy",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:5000",
+      "endpoint": "http://127.0.0.1:5000",
+      "method": "GET",
+      "description": "Missing Referrer-Policy defense-in-depth header",
+      "evidence_summary": "Response headers do not include Referrer-Policy (browser default applies).",
+      "evidence": {
+        "observation": "Response headers do not include Referrer-Policy (browser default applies).",
+        "location": "http://127.0.0.1:5000",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "header_inspection",
+        "detection_status": "DETECTED",
+        "negative_evidence": "Referrer policy is not explicitly declared; browser fallback applies.",
+        "expected_behavior": "Defensive security header configured",
+        "observed_behavior": "Header absent in response",
+        "details": {
+          "auth_context": "NO_CHALLENGE",
+          "category": "missing-referrer-policy",
+          "classification_outcome": "INFORMATIONAL",
+          "fingerprint_version": "v2",
+          "framework": "generic",
+          "header": "Referrer-Policy",
+          "observed": "absent",
+          "reachability": "CONFIRMED_REACHABLE",
+          "score_formula": "round(1.00 base * 1.00 conf * 1.00 ver) = 1/40",
+          "score_rationale": "Calculated score 1/40 (model felix_finding_v1) from INFO severity base (1.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x)."
+        },
+        "provenance": {
+          "evidence_id": "ev_7b31f571253399da82a9c1ed",
+          "evidence_type": "http_response",
+          "source_engine": "api",
+          "rule_id": "API-MISSING-REFERRER-POLICY",
+          "finding_id": "API-18dc33de072f012d",
+          "asset_id": "ast_71849fc12f32c75f3c2839e6",
+          "collected_at": "0001-01-01T00:00:00Z",
+          "location": "http://127.0.0.1:5000",
+          "collection_method": "header_inspection",
+          "analysis_method": "STATIC_ANALYSIS",
+          "content_digest": "sha256:6ae8a41b9d9aca8ace8503d8f16ad667adbcc4b46be040018b686ab4eee74d97"
+        }
+      },
+      "verification": {
+        "status": "VERIFIED",
+        "detection_status": "HIGH",
+        "result": "Header absent in response",
+        "rationale": "Detection pattern match is strong; Direct empirical verification evidence satisfies criteria; Status is VERIFIED based on satisfied mandatory proof criteria",
+        "policy_id": "POL-APISEC-01",
+        "verification_method": "response_header_audit",
+        "analysis_method": "ACTIVE_VERIFICATION",
+        "confidence_score": 98,
+        "reproduction_steps": [
+          "1. Target environment setup: verify reachability to http://127.0.0.1:5000",
+          "   - Precondition: In-scope HTTP GET response",
+          "2. Dispatch safe probe via GET to http://127.0.0.1:5000",
+          "   Execute: curl -s -i -X GET -H \"header: Referrer-Policy\" -H \"auth_context: [REDACTED]\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000\"",
+          "3. Expected secure behavior: Defensive security header configured",
+          "4. Observed result: Header absent in response",
+          "5. Verification conclusion: VERIFIED under policy POL-APISEC-01"
+        ],
+        "safe_curl_command": "curl -s -i -X GET -H \"header: Referrer-Policy\" -H \"auth_context: [REDACTED]\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000\"",
+        "attempted": true
+      },
+      "remediation": "Review the observed endpoint and asset configurations, adhere to principle of least privilege, and restrict unauthorized access.",
+      "remediation_advice": {
+        "summary": "Review the observed endpoint and asset configurations, adhere to principle of least privilege, and restrict unauthorized access."
+      },
+      "provenance": {
+        "evidence_id": "ev_7b31f571253399da82a9c1ed",
+        "evidence_type": "http_response",
+        "source_engine": "api",
+        "rule_id": "API-MISSING-REFERRER-POLICY",
+        "finding_id": "API-18dc33de072f012d",
+        "asset_id": "ast_71849fc12f32c75f3c2839e6",
+        "collected_at": "0001-01-01T00:00:00Z",
+        "location": "http://127.0.0.1:5000",
+        "collection_method": "header_inspection",
+        "analysis_method": "STATIC_ANALYSIS",
+        "content_digest": "sha256:6ae8a41b9d9aca8ace8503d8f16ad667adbcc4b46be040018b686ab4eee74d97"
+      },
+      "source": "api",
+      "fingerprint": "e265d4f32ca09943c55b21f18821a3fd54c7832e2aa875aa1e2be9dc27263d0c",
+      "score": 1,
+      "score_explanation": {
+        "score": 1,
+        "severity": "INFO",
+        "base_score": 1,
+        "category_modifier": 0,
+        "effective_base": 1,
+        "confidence": "HIGH",
+        "confidence_weight": 1,
+        "verification_status": "VERIFIED",
+        "verification_weight": 1,
+        "model": "felix_finding_v1",
+        "formula": "round(1.00 base * 1.00 conf * 1.00 ver) = 1/40",
+        "rationale": "Calculated score 1/40 (model felix_finding_v1) from INFO severity base (1.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x)."
+      },
+      "timestamp": "0001-01-01T00:00:00Z"
+    }
+  ],
+  "findings": [
+    {
+      "id": "API-0530df708d8f3644",
+      "rule_id": "API-FASTAPI-SENSITIVE-SCHEMA",
+      "status": "CONFIRMED",
+      "classification_outcome": "CONFIRMED",
+      "reachability": "CONFIRMED_REACHABLE",
+      "auth_context": "NO_CHALLENGE",
+      "framework": "FastAPI",
+      "analysis_method": "ACTIVE_VERIFICATION",
+      "primary_asset_id": "ast_71849fc12f32c75f3c2839e6",
+      "affected_asset_ids": [
+        "ast_2f2949ea3c3086352e688f5b",
+        "ast_71849fc12f32c75f3c2839e6",
+        "ast_8315ea488c20cb4572cc25e1",
+        "ast_a946247c3768b401814f953b"
+      ],
+      "title": "FastAPI OpenAPI schema contains embedded credentials or sensitive defaults",
+      "category": "fastapi-sensitive-schema",
+      "severity": "HIGH",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:5000",
+      "endpoint": "http://127.0.0.1:5000/openapi.json",
+      "method": "GET",
+      "description": "FastAPI OpenAPI schema contains embedded credentials or sensitive defaults",
+      "evidence_summary": "HTTP 200 OK. FastAPI OpenAPI schema contains unmasked credential for field \"auth_token\" (secret value redacted). Note: Credential validity and active authorization status were not verified.",
+      "evidence": {
+        "observation": "HTTP 200 OK. FastAPI OpenAPI schema contains unmasked credential for field \"auth_token\" (secret value redacted). Note: Credential validity and active authorization status were not verified.",
+        "location": "http://127.0.0.1:5000/openapi.json",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "active_probe",
+        "detection_status": "DETECTED",
+        "negative_evidence": "Credential observed in schema definition; active authentication or authorization against backend services was not attempted.",
+        "expected_behavior": "Minimal response schema without sensitive data",
+        "observed_behavior": "Sensitive fields present in JSON response body",
+        "details": {
+          "api_title": "VAmPI",
+          "auth_context": "NO_CHALLENGE",
+          "category": "fastapi-sensitive-schema",
+          "classification": "DOCUMENTATION",
+          "classification_outcome": "CONFIRMED",
+          "credential_active_status": "[REDACTED]",
+          "credential_validity": "unverified",
+          "fingerprint_version": "v2",
+          "framework": "FastAPI",
+          "http_status": "200",
+          "limitations": "Discovered secret values were redacted; credential validity and active authorization status were not verified.; Candidate credential validity and active authorization status remain unverified.",
+          "openapi_ver": "3.0.1",
+          "reachability": "CONFIRMED_REACHABLE",
+          "score_formula": "round(25.00 base * 1.00 conf * 1.00 ver) = 25/40",
+          "score_rationale": "Calculated score 25/40 (model felix_finding_v1) from HIGH severity base (25.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x).",
+          "secret_field": "[REDACTED]",
+          "total_routes": "12"
+        },
+        "provenance": {
+          "evidence_id": "ev_c7a67cd1f8fe41c720c4fcae",
+          "evidence_type": "http_response",
+          "source_engine": "api",
+          "rule_id": "API-FASTAPI-SENSITIVE-SCHEMA",
+          "finding_id": "API-0530df708d8f3644",
+          "asset_id": "ast_71849fc12f32c75f3c2839e6",
+          "collected_at": "0001-01-01T00:00:00Z",
+          "location": "http://127.0.0.1:5000/openapi.json",
+          "collection_method": "active_probe",
+          "analysis_method": "ACTIVE_VERIFICATION",
+          "content_digest": "sha256:b896514ee7f2ca6886e725922b61e0d1cfb946d3f1bdbff10c6ef17d9ffa143e"
+        }
+      },
+      "verification": {
+        "status": "VERIFIED",
+        "detection_status": "HIGH",
+        "result": "Sensitive fields present in JSON response body",
+        "rationale": "Detection pattern match is strong; Direct empirical verification evidence satisfies criteria; Status is VERIFIED based on satisfied mandatory proof criteria",
+        "policy_id": "POL-APISEC-01",
+        "verification_method": "payload_inspection",
+        "analysis_method": "ACTIVE_VERIFICATION",
+        "confidence_score": 98,
+        "reproduction_steps": [
+          "1. Target environment setup: verify reachability to http://127.0.0.1:5000",
+          "   - Precondition: API endpoint query",
+          "2. Dispatch safe probe via GET to http://127.0.0.1:5000/openapi.json",
+          "   Execute: curl -s -i -X GET -H \"auth_context: [REDACTED]\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000/openapi.json\"",
+          "3. Expected secure behavior: Minimal response schema without sensitive data",
+          "4. Observed result: Sensitive fields present in JSON response body",
+          "5. Verification conclusion: VERIFIED under policy POL-APISEC-01"
+        ],
+        "safe_curl_command": "curl -s -i -X GET -H \"auth_context: [REDACTED]\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000/openapi.json\"",
+        "attempted": true
+      },
+      "remediation": "Remove sensitive credentials, tokens, passwords, or private configuration defaults from OpenAPI field descriptions, summaries, and schema examples.",
+      "remediation_advice": {
+        "summary": "Remove sensitive credentials, tokens, passwords, or private configuration defaults from OpenAPI field descriptions, summaries, and schema examples."
+      },
+      "provenance": {
+        "evidence_id": "ev_c7a67cd1f8fe41c720c4fcae",
+        "evidence_type": "http_response",
+        "source_engine": "api",
+        "rule_id": "API-FASTAPI-SENSITIVE-SCHEMA",
+        "finding_id": "API-0530df708d8f3644",
+        "asset_id": "ast_71849fc12f32c75f3c2839e6",
+        "collected_at": "0001-01-01T00:00:00Z",
+        "location": "http://127.0.0.1:5000/openapi.json",
+        "collection_method": "active_probe",
+        "analysis_method": "ACTIVE_VERIFICATION",
+        "content_digest": "sha256:b896514ee7f2ca6886e725922b61e0d1cfb946d3f1bdbff10c6ef17d9ffa143e"
+      },
+      "source": "api",
+      "fingerprint": "ef19ff0d43d5e598e214c77090103f76ed3b15730571061cc0c1e2c2c7c2d0bb",
+      "score": 25,
+      "score_explanation": {
+        "score": 25,
+        "severity": "HIGH",
+        "base_score": 25,
+        "category_modifier": 0,
+        "effective_base": 25,
+        "confidence": "HIGH",
+        "confidence_weight": 1,
+        "verification_status": "VERIFIED",
+        "verification_weight": 1,
+        "model": "felix_finding_v1",
+        "formula": "round(25.00 base * 1.00 conf * 1.00 ver) = 25/40",
+        "rationale": "Calculated score 25/40 (model felix_finding_v1) from HIGH severity base (25.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x)."
+      },
+      "timestamp": "0001-01-01T00:00:00Z"
+    },
+    {
+      "id": "API-b262835e2196e0e9",
+      "rule_id": "API-MISSING-CSP",
+      "status": "CONFIRMED",
+      "classification_outcome": "INFORMATIONAL",
+      "reachability": "CONFIRMED_REACHABLE",
+      "auth_context": "NO_CHALLENGE",
+      "framework": "generic",
+      "analysis_method": "ACTIVE_VERIFICATION",
+      "primary_asset_id": "ast_71849fc12f32c75f3c2839e6",
+      "affected_asset_ids": [
+        "ast_2f2949ea3c3086352e688f5b",
+        "ast_71849fc12f32c75f3c2839e6",
+        "ast_8315ea488c20cb4572cc25e1",
+        "ast_a946247c3768b401814f953b"
+      ],
+      "title": "Missing Content-Security-Policy (CSP) defense-in-depth header",
+      "category": "missing-csp",
+      "severity": "LOW",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:5000",
+      "endpoint": "http://127.0.0.1:5000",
+      "method": "GET",
+      "description": "Missing Content-Security-Policy (CSP) defense-in-depth header",
+      "evidence_summary": "Response headers do not include Content-Security-Policy.",
+      "evidence": {
+        "observation": "Response headers do not include Content-Security-Policy.",
+        "location": "http://127.0.0.1:5000",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "header_inspection",
+        "detection_status": "DETECTED",
+        "negative_evidence": "Informational hardening observation; does not constitute an exploitable vulnerability by itself.",
+        "expected_behavior": "Defensive security header configured",
+        "observed_behavior": "Header absent in response",
+        "details": {
+          "auth_context": "NO_CHALLENGE",
+          "category": "missing-csp",
+          "classification_outcome": "INFORMATIONAL",
+          "enforcing": "absent",
+          "fingerprint_version": "v2",
+          "framework": "generic",
+          "header": "Content-Security-Policy",
+          "observed": "absent",
+          "reachability": "CONFIRMED_REACHABLE",
+          "report_only": "absent",
+          "score_formula": "round(5.00 base * 1.00 conf * 1.00 ver) = 5/40",
+          "score_rationale": "Calculated score 5/40 (model felix_finding_v1) from LOW severity base (5.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x)."
+        },
+        "provenance": {
+          "evidence_id": "ev_0d797943c8736b2ab93e81d3",
+          "evidence_type": "http_response",
+          "source_engine": "api",
+          "rule_id": "API-MISSING-CSP",
+          "finding_id": "API-b262835e2196e0e9",
+          "asset_id": "ast_71849fc12f32c75f3c2839e6",
+          "collected_at": "0001-01-01T00:00:00Z",
+          "location": "http://127.0.0.1:5000",
+          "collection_method": "header_inspection",
+          "analysis_method": "STATIC_ANALYSIS",
+          "content_digest": "sha256:0bd8c54cc84aa27c72f591f384046e66b9b3fdecd5950266bb08891f3905a26a"
+        }
+      },
+      "verification": {
+        "status": "VERIFIED",
+        "detection_status": "HIGH",
+        "result": "Header absent in response",
+        "rationale": "Detection pattern match is strong; Direct empirical verification evidence satisfies criteria; Status is VERIFIED based on satisfied mandatory proof criteria",
+        "policy_id": "POL-APISEC-01",
+        "verification_method": "response_header_audit",
+        "analysis_method": "ACTIVE_VERIFICATION",
+        "confidence_score": 98,
+        "reproduction_steps": [
+          "1. Target environment setup: verify reachability to http://127.0.0.1:5000",
+          "   - Precondition: In-scope HTTP GET response",
+          "2. Dispatch safe probe via GET to http://127.0.0.1:5000",
+          "   Execute: curl -s -i -X GET -H \"header: Content-Security-Policy\" -H \"auth_context: [REDACTED]\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000\"",
+          "3. Expected secure behavior: Defensive security header configured",
+          "4. Observed result: Header absent in response",
+          "5. Verification conclusion: VERIFIED under policy POL-APISEC-01"
+        ],
+        "safe_curl_command": "curl -s -i -X GET -H \"header: Content-Security-Policy\" -H \"auth_context: [REDACTED]\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000\"",
+        "attempted": true
+      },
+      "remediation": "Deploy a robust Content-Security-Policy (CSP) header restricting script execution, styles, and object embeds to trusted sources. Begin with `Content-Security-Policy-Report-Only` during staging.",
+      "remediation_advice": {
+        "summary": "Deploy a robust Content-Security-Policy (CSP) header restricting script execution, styles, and object embeds to trusted sources. Begin with `Content-Security-Policy-Report-Only` during staging."
+      },
+      "provenance": {
+        "evidence_id": "ev_0d797943c8736b2ab93e81d3",
+        "evidence_type": "http_response",
+        "source_engine": "api",
+        "rule_id": "API-MISSING-CSP",
+        "finding_id": "API-b262835e2196e0e9",
+        "asset_id": "ast_71849fc12f32c75f3c2839e6",
+        "collected_at": "0001-01-01T00:00:00Z",
+        "location": "http://127.0.0.1:5000",
+        "collection_method": "header_inspection",
+        "analysis_method": "STATIC_ANALYSIS",
+        "content_digest": "sha256:0bd8c54cc84aa27c72f591f384046e66b9b3fdecd5950266bb08891f3905a26a"
+      },
+      "source": "api",
+      "fingerprint": "65007262053ddeee43d32bb1d7d218c790704e2c1d6067c796803cf90f8f7bae",
+      "score": 5,
+      "score_explanation": {
+        "score": 5,
+        "severity": "LOW",
+        "base_score": 5,
+        "category_modifier": 0,
+        "effective_base": 5,
+        "confidence": "HIGH",
+        "confidence_weight": 1,
+        "verification_status": "VERIFIED",
+        "verification_weight": 1,
+        "model": "felix_finding_v1",
+        "formula": "round(5.00 base * 1.00 conf * 1.00 ver) = 5/40",
+        "rationale": "Calculated score 5/40 (model felix_finding_v1) from LOW severity base (5.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x)."
+      },
+      "timestamp": "0001-01-01T00:00:00Z"
+    },
+    {
+      "id": "API-e3c1151175c642f8",
+      "rule_id": "API-MISSING-X-FRAME-OPTIONS",
+      "status": "CONFIRMED",
+      "classification_outcome": "INFORMATIONAL",
+      "reachability": "CONFIRMED_REACHABLE",
+      "auth_context": "NO_CHALLENGE",
+      "framework": "generic",
+      "analysis_method": "ACTIVE_VERIFICATION",
+      "primary_asset_id": "ast_71849fc12f32c75f3c2839e6",
+      "affected_asset_ids": [
+        "ast_2f2949ea3c3086352e688f5b",
+        "ast_71849fc12f32c75f3c2839e6",
+        "ast_8315ea488c20cb4572cc25e1",
+        "ast_a946247c3768b401814f953b"
+      ],
+      "title": "Missing X-Frame-Options header (clickjacking protection)",
+      "category": "missing-x-frame-options",
+      "severity": "LOW",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:5000",
+      "endpoint": "http://127.0.0.1:5000",
+      "method": "GET",
+      "description": "Missing X-Frame-Options header (clickjacking protection)",
+      "evidence_summary": "Response headers do not include X-Frame-Options or CSP frame-ancestors directive.",
+      "evidence": {
+        "observation": "Response headers do not include X-Frame-Options or CSP frame-ancestors directive.",
+        "location": "http://127.0.0.1:5000",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "header_inspection",
+        "detection_status": "DETECTED",
+        "negative_evidence": "No clickjacking defense-in-depth header was returned by the web server.",
+        "expected_behavior": "Defensive security header configured",
+        "observed_behavior": "Header absent in response",
+        "details": {
+          "auth_context": "NO_CHALLENGE",
+          "category": "missing-x-frame-options",
+          "classification_outcome": "INFORMATIONAL",
+          "fingerprint_version": "v2",
+          "framework": "generic",
+          "header": "X-Frame-Options",
+          "observed": "absent",
+          "reachability": "CONFIRMED_REACHABLE",
+          "score_formula": "round(5.00 base * 1.00 conf * 1.00 ver) = 5/40",
+          "score_rationale": "Calculated score 5/40 (model felix_finding_v1) from LOW severity base (5.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x)."
+        },
+        "provenance": {
+          "evidence_id": "ev_c7b126d5df3959e9749cd1e9",
+          "evidence_type": "http_response",
+          "source_engine": "api",
+          "rule_id": "API-MISSING-X-FRAME-OPTIONS",
+          "finding_id": "API-e3c1151175c642f8",
+          "asset_id": "ast_71849fc12f32c75f3c2839e6",
+          "collected_at": "0001-01-01T00:00:00Z",
+          "location": "http://127.0.0.1:5000",
+          "collection_method": "header_inspection",
+          "analysis_method": "STATIC_ANALYSIS",
+          "content_digest": "sha256:89a1242bcc47c4edcde27bf00bdb856f38e47f1606d734a2f5b71afdb18aeb79"
+        }
+      },
+      "verification": {
+        "status": "VERIFIED",
+        "detection_status": "HIGH",
+        "result": "Header absent in response",
+        "rationale": "Detection pattern match is strong; Direct empirical verification evidence satisfies criteria; Status is VERIFIED based on satisfied mandatory proof criteria",
+        "policy_id": "POL-APISEC-01",
+        "verification_method": "response_header_audit",
+        "analysis_method": "ACTIVE_VERIFICATION",
+        "confidence_score": 98,
+        "reproduction_steps": [
+          "1. Target environment setup: verify reachability to http://127.0.0.1:5000",
+          "   - Precondition: In-scope HTTP GET response",
+          "2. Dispatch safe probe via GET to http://127.0.0.1:5000",
+          "   Execute: curl -s -i -X GET -H \"auth_context: [REDACTED]\" -H \"header: X-Frame-Options\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000\"",
+          "3. Expected secure behavior: Defensive security header configured",
+          "4. Observed result: Header absent in response",
+          "5. Verification conclusion: VERIFIED under policy POL-APISEC-01"
+        ],
+        "safe_curl_command": "curl -s -i -X GET -H \"auth_context: [REDACTED]\" -H \"header: X-Frame-Options\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000\"",
+        "attempted": true
+      },
+      "remediation": "Configure `X-Frame-Options: DENY` or `SAMEORIGIN`, or implement CSP `frame-ancestors` directive to mitigate clickjacking attacks.",
+      "remediation_advice": {
+        "summary": "Configure `X-Frame-Options: DENY` or `SAMEORIGIN`, or implement CSP `frame-ancestors` directive to mitigate clickjacking attacks."
+      },
+      "provenance": {
+        "evidence_id": "ev_c7b126d5df3959e9749cd1e9",
+        "evidence_type": "http_response",
+        "source_engine": "api",
+        "rule_id": "API-MISSING-X-FRAME-OPTIONS",
+        "finding_id": "API-e3c1151175c642f8",
+        "asset_id": "ast_71849fc12f32c75f3c2839e6",
+        "collected_at": "0001-01-01T00:00:00Z",
+        "location": "http://127.0.0.1:5000",
+        "collection_method": "header_inspection",
+        "analysis_method": "STATIC_ANALYSIS",
+        "content_digest": "sha256:89a1242bcc47c4edcde27bf00bdb856f38e47f1606d734a2f5b71afdb18aeb79"
+      },
+      "source": "api",
+      "fingerprint": "093e21d0435e08a9c2928a755906892374f56e8250e3e4feb9500fea4e901f14",
+      "score": 5,
+      "score_explanation": {
+        "score": 5,
+        "severity": "LOW",
+        "base_score": 5,
+        "category_modifier": 0,
+        "effective_base": 5,
+        "confidence": "HIGH",
+        "confidence_weight": 1,
+        "verification_status": "VERIFIED",
+        "verification_weight": 1,
+        "model": "felix_finding_v1",
+        "formula": "round(5.00 base * 1.00 conf * 1.00 ver) = 5/40",
+        "rationale": "Calculated score 5/40 (model felix_finding_v1) from LOW severity base (5.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x)."
+      },
+      "timestamp": "0001-01-01T00:00:00Z"
+    },
+    {
+      "id": "API-5258776b875c4d4d",
+      "rule_id": "API-MISSING-PERMISSIONS-POLICY",
+      "status": "CONFIRMED",
+      "classification_outcome": "INFORMATIONAL",
+      "reachability": "CONFIRMED_REACHABLE",
+      "auth_context": "NO_CHALLENGE",
+      "framework": "generic",
+      "analysis_method": "ACTIVE_VERIFICATION",
+      "primary_asset_id": "ast_71849fc12f32c75f3c2839e6",
+      "affected_asset_ids": [
+        "ast_2f2949ea3c3086352e688f5b",
+        "ast_71849fc12f32c75f3c2839e6",
+        "ast_8315ea488c20cb4572cc25e1",
+        "ast_a946247c3768b401814f953b"
+      ],
+      "title": "Missing Permissions-Policy header (browser feature gating)",
+      "category": "missing-permissions-policy",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:5000",
+      "endpoint": "http://127.0.0.1:5000",
+      "method": "GET",
+      "description": "Missing Permissions-Policy header (browser feature gating)",
+      "evidence_summary": "Response headers do not include Permissions-Policy.",
+      "evidence": {
+        "observation": "Response headers do not include Permissions-Policy.",
+        "location": "http://127.0.0.1:5000",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "header_inspection",
+        "detection_status": "DETECTED",
+        "negative_evidence": "Browser feature delegation policy not explicitly configured.",
+        "expected_behavior": "Defensive security header configured",
+        "observed_behavior": "Header absent in response",
+        "details": {
+          "auth_context": "NO_CHALLENGE",
+          "category": "missing-permissions-policy",
+          "classification_outcome": "INFORMATIONAL",
+          "fingerprint_version": "v2",
+          "framework": "generic",
+          "header": "Permissions-Policy",
+          "observed": "absent",
+          "reachability": "CONFIRMED_REACHABLE",
+          "score_formula": "round(1.00 base * 1.00 conf * 1.00 ver) = 1/40",
+          "score_rationale": "Calculated score 1/40 (model felix_finding_v1) from INFO severity base (1.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x)."
+        },
+        "provenance": {
+          "evidence_id": "ev_32353acfd597d248759cc7c8",
+          "evidence_type": "http_response",
+          "source_engine": "api",
+          "rule_id": "API-MISSING-PERMISSIONS-POLICY",
+          "finding_id": "API-5258776b875c4d4d",
+          "asset_id": "ast_71849fc12f32c75f3c2839e6",
+          "collected_at": "0001-01-01T00:00:00Z",
+          "location": "http://127.0.0.1:5000",
+          "collection_method": "header_inspection",
+          "analysis_method": "STATIC_ANALYSIS",
+          "content_digest": "sha256:c52b8fd1ef1b394e9086f67a8972ca5cd01ec18a01ea9db50b2f4dce93610453"
+        }
+      },
+      "verification": {
+        "status": "VERIFIED",
+        "detection_status": "HIGH",
+        "result": "Header absent in response",
+        "rationale": "Detection pattern match is strong; Direct empirical verification evidence satisfies criteria; Status is VERIFIED based on satisfied mandatory proof criteria",
+        "policy_id": "POL-APISEC-01",
+        "verification_method": "response_header_audit",
+        "analysis_method": "ACTIVE_VERIFICATION",
+        "confidence_score": 98,
+        "reproduction_steps": [
+          "1. Target environment setup: verify reachability to http://127.0.0.1:5000",
+          "   - Precondition: In-scope HTTP GET response",
+          "2. Dispatch safe probe via GET to http://127.0.0.1:5000",
+          "   Execute: curl -s -i -X GET -H \"auth_context: [REDACTED]\" -H \"header: Permissions-Policy\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000\"",
+          "3. Expected secure behavior: Defensive security header configured",
+          "4. Observed result: Header absent in response",
+          "5. Verification conclusion: VERIFIED under policy POL-APISEC-01"
+        ],
+        "safe_curl_command": "curl -s -i -X GET -H \"auth_context: [REDACTED]\" -H \"header: Permissions-Policy\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000\"",
+        "attempted": true
+      },
+      "remediation": "Configure a `Permissions-Policy` header explicitly disabling unnecessary browser capabilities (e.g. `camera=(), microphone=(), geolocation=()`).",
+      "remediation_advice": {
+        "summary": "Configure a `Permissions-Policy` header explicitly disabling unnecessary browser capabilities (e.g. `camera=(), microphone=(), geolocation=()`)."
+      },
+      "provenance": {
+        "evidence_id": "ev_32353acfd597d248759cc7c8",
+        "evidence_type": "http_response",
+        "source_engine": "api",
+        "rule_id": "API-MISSING-PERMISSIONS-POLICY",
+        "finding_id": "API-5258776b875c4d4d",
+        "asset_id": "ast_71849fc12f32c75f3c2839e6",
+        "collected_at": "0001-01-01T00:00:00Z",
+        "location": "http://127.0.0.1:5000",
+        "collection_method": "header_inspection",
+        "analysis_method": "STATIC_ANALYSIS",
+        "content_digest": "sha256:c52b8fd1ef1b394e9086f67a8972ca5cd01ec18a01ea9db50b2f4dce93610453"
+      },
+      "source": "api",
+      "fingerprint": "6a39e9eac028ec23c14785ecb9beddd6f6292ef5730e674147369f31100be86c",
+      "score": 1,
+      "score_explanation": {
+        "score": 1,
+        "severity": "INFO",
+        "base_score": 1,
+        "category_modifier": 0,
+        "effective_base": 1,
+        "confidence": "HIGH",
+        "confidence_weight": 1,
+        "verification_status": "VERIFIED",
+        "verification_weight": 1,
+        "model": "felix_finding_v1",
+        "formula": "round(1.00 base * 1.00 conf * 1.00 ver) = 1/40",
+        "rationale": "Calculated score 1/40 (model felix_finding_v1) from INFO severity base (1.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x)."
+      },
+      "timestamp": "0001-01-01T00:00:00Z"
+    },
+    {
+      "id": "API-18dc33de072f012d",
+      "rule_id": "API-MISSING-REFERRER-POLICY",
+      "status": "CONFIRMED",
+      "classification_outcome": "INFORMATIONAL",
+      "reachability": "CONFIRMED_REACHABLE",
+      "auth_context": "NO_CHALLENGE",
+      "framework": "generic",
+      "analysis_method": "ACTIVE_VERIFICATION",
+      "primary_asset_id": "ast_71849fc12f32c75f3c2839e6",
+      "affected_asset_ids": [
+        "ast_2f2949ea3c3086352e688f5b",
+        "ast_71849fc12f32c75f3c2839e6",
+        "ast_8315ea488c20cb4572cc25e1",
+        "ast_a946247c3768b401814f953b"
+      ],
+      "title": "Missing Referrer-Policy defense-in-depth header",
+      "category": "missing-referrer-policy",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:5000",
+      "endpoint": "http://127.0.0.1:5000",
+      "method": "GET",
+      "description": "Missing Referrer-Policy defense-in-depth header",
+      "evidence_summary": "Response headers do not include Referrer-Policy (browser default applies).",
+      "evidence": {
+        "observation": "Response headers do not include Referrer-Policy (browser default applies).",
+        "location": "http://127.0.0.1:5000",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "header_inspection",
+        "detection_status": "DETECTED",
+        "negative_evidence": "Referrer policy is not explicitly declared; browser fallback applies.",
+        "expected_behavior": "Defensive security header configured",
+        "observed_behavior": "Header absent in response",
+        "details": {
+          "auth_context": "NO_CHALLENGE",
+          "category": "missing-referrer-policy",
+          "classification_outcome": "INFORMATIONAL",
+          "fingerprint_version": "v2",
+          "framework": "generic",
+          "header": "Referrer-Policy",
+          "observed": "absent",
+          "reachability": "CONFIRMED_REACHABLE",
+          "score_formula": "round(1.00 base * 1.00 conf * 1.00 ver) = 1/40",
+          "score_rationale": "Calculated score 1/40 (model felix_finding_v1) from INFO severity base (1.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x)."
+        },
+        "provenance": {
+          "evidence_id": "ev_7b31f571253399da82a9c1ed",
+          "evidence_type": "http_response",
+          "source_engine": "api",
+          "rule_id": "API-MISSING-REFERRER-POLICY",
+          "finding_id": "API-18dc33de072f012d",
+          "asset_id": "ast_71849fc12f32c75f3c2839e6",
+          "collected_at": "0001-01-01T00:00:00Z",
+          "location": "http://127.0.0.1:5000",
+          "collection_method": "header_inspection",
+          "analysis_method": "STATIC_ANALYSIS",
+          "content_digest": "sha256:6ae8a41b9d9aca8ace8503d8f16ad667adbcc4b46be040018b686ab4eee74d97"
+        }
+      },
+      "verification": {
+        "status": "VERIFIED",
+        "detection_status": "HIGH",
+        "result": "Header absent in response",
+        "rationale": "Detection pattern match is strong; Direct empirical verification evidence satisfies criteria; Status is VERIFIED based on satisfied mandatory proof criteria",
+        "policy_id": "POL-APISEC-01",
+        "verification_method": "response_header_audit",
+        "analysis_method": "ACTIVE_VERIFICATION",
+        "confidence_score": 98,
+        "reproduction_steps": [
+          "1. Target environment setup: verify reachability to http://127.0.0.1:5000",
+          "   - Precondition: In-scope HTTP GET response",
+          "2. Dispatch safe probe via GET to http://127.0.0.1:5000",
+          "   Execute: curl -s -i -X GET -H \"header: Referrer-Policy\" -H \"auth_context: [REDACTED]\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000\"",
+          "3. Expected secure behavior: Defensive security header configured",
+          "4. Observed result: Header absent in response",
+          "5. Verification conclusion: VERIFIED under policy POL-APISEC-01"
+        ],
+        "safe_curl_command": "curl -s -i -X GET -H \"header: Referrer-Policy\" -H \"auth_context: [REDACTED]\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000\"",
+        "attempted": true
+      },
+      "remediation": "Review the observed endpoint and asset configurations, adhere to principle of least privilege, and restrict unauthorized access.",
+      "remediation_advice": {
+        "summary": "Review the observed endpoint and asset configurations, adhere to principle of least privilege, and restrict unauthorized access."
+      },
+      "provenance": {
+        "evidence_id": "ev_7b31f571253399da82a9c1ed",
+        "evidence_type": "http_response",
+        "source_engine": "api",
+        "rule_id": "API-MISSING-REFERRER-POLICY",
+        "finding_id": "API-18dc33de072f012d",
+        "asset_id": "ast_71849fc12f32c75f3c2839e6",
+        "collected_at": "0001-01-01T00:00:00Z",
+        "location": "http://127.0.0.1:5000",
+        "collection_method": "header_inspection",
+        "analysis_method": "STATIC_ANALYSIS",
+        "content_digest": "sha256:6ae8a41b9d9aca8ace8503d8f16ad667adbcc4b46be040018b686ab4eee74d97"
+      },
+      "source": "api",
+      "fingerprint": "e265d4f32ca09943c55b21f18821a3fd54c7832e2aa875aa1e2be9dc27263d0c",
+      "score": 1,
+      "score_explanation": {
+        "score": 1,
+        "severity": "INFO",
+        "base_score": 1,
+        "category_modifier": 0,
+        "effective_base": 1,
+        "confidence": "HIGH",
+        "confidence_weight": 1,
+        "verification_status": "VERIFIED",
+        "verification_weight": 1,
+        "model": "felix_finding_v1",
+        "formula": "round(1.00 base * 1.00 conf * 1.00 ver) = 1/40",
+        "rationale": "Calculated score 1/40 (model felix_finding_v1) from INFO severity base (1.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x)."
+      },
+      "timestamp": "0001-01-01T00:00:00Z"
+    },
+    {
+      "id": "API-c843a62e671c51a3",
+      "rule_id": "API-MISSING-X-CONTENT-TYPE-OPTIONS",
+      "status": "CONFIRMED",
+      "classification_outcome": "INFORMATIONAL",
+      "reachability": "CONFIRMED_REACHABLE",
+      "auth_context": "NO_CHALLENGE",
+      "framework": "generic",
+      "analysis_method": "ACTIVE_VERIFICATION",
+      "primary_asset_id": "ast_71849fc12f32c75f3c2839e6",
+      "affected_asset_ids": [
+        "ast_2f2949ea3c3086352e688f5b",
+        "ast_71849fc12f32c75f3c2839e6",
+        "ast_8315ea488c20cb4572cc25e1",
+        "ast_a946247c3768b401814f953b"
+      ],
+      "title": "Missing or incomplete X-Content-Type-Options: nosniff header",
+      "category": "missing-x-content-type-options",
+      "severity": "INFO",
+      "confidence": "HIGH",
+      "target": "http://127.0.0.1:5000",
+      "endpoint": "http://127.0.0.1:5000",
+      "method": "GET",
+      "description": "Missing or incomplete X-Content-Type-Options: nosniff header",
+      "evidence_summary": "X-Content-Type-Options observed: \"absent\" (expected 'nosniff').",
+      "evidence": {
+        "observation": "X-Content-Type-Options observed: \"absent\" (expected 'nosniff').",
+        "location": "http://127.0.0.1:5000",
+        "http_method": "GET",
+        "http_status": 200,
+        "detection_method": "header_inspection",
+        "detection_status": "DETECTED",
+        "negative_evidence": "MIME sniffing protection not explicitly declared.",
+        "expected_behavior": "Defensive security header configured",
+        "observed_behavior": "Header absent in response",
+        "details": {
+          "auth_context": "NO_CHALLENGE",
+          "category": "missing-x-content-type-options",
+          "classification_outcome": "INFORMATIONAL",
+          "fingerprint_version": "v2",
+          "framework": "generic",
+          "header": "X-Content-Type-Options",
+          "observed": "absent",
+          "reachability": "CONFIRMED_REACHABLE",
+          "score_formula": "round(1.00 base * 1.00 conf * 1.00 ver) = 1/40",
+          "score_rationale": "Calculated score 1/40 (model felix_finding_v1) from INFO severity base (1.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x)."
+        },
+        "provenance": {
+          "evidence_id": "ev_98ce490da131bcd7b267f7a4",
+          "evidence_type": "http_response",
+          "source_engine": "api",
+          "rule_id": "API-MISSING-X-CONTENT-TYPE-OPTIONS",
+          "finding_id": "API-c843a62e671c51a3",
+          "asset_id": "ast_71849fc12f32c75f3c2839e6",
+          "collected_at": "0001-01-01T00:00:00Z",
+          "location": "http://127.0.0.1:5000",
+          "collection_method": "header_inspection",
+          "analysis_method": "STATIC_ANALYSIS",
+          "content_digest": "sha256:f90f42e118b3e3e423ec80411c27e2d4810f1e9428bf7e04cf00ef89136faed0"
+        }
+      },
+      "verification": {
+        "status": "VERIFIED",
+        "detection_status": "HIGH",
+        "result": "Header absent in response",
+        "rationale": "Detection pattern match is strong; Direct empirical verification evidence satisfies criteria; Status is VERIFIED based on satisfied mandatory proof criteria",
+        "policy_id": "POL-APISEC-01",
+        "verification_method": "response_header_audit",
+        "analysis_method": "ACTIVE_VERIFICATION",
+        "confidence_score": 98,
+        "reproduction_steps": [
+          "1. Target environment setup: verify reachability to http://127.0.0.1:5000",
+          "   - Precondition: In-scope HTTP GET response",
+          "2. Dispatch safe probe via GET to http://127.0.0.1:5000",
+          "   Execute: curl -s -i -X GET -H \"auth_context: [REDACTED]\" -H \"header: X-Content-Type-Options\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000\"",
+          "3. Expected secure behavior: Defensive security header configured",
+          "4. Observed result: Header absent in response",
+          "5. Verification conclusion: VERIFIED under policy POL-APISEC-01"
+        ],
+        "safe_curl_command": "curl -s -i -X GET -H \"auth_context: [REDACTED]\" -H \"header: X-Content-Type-Options\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000\"",
+        "attempted": true
+      },
+      "remediation": "Add `X-Content-Type-Options: nosniff` header across all responses to prevent browser MIME-type sniffing.",
+      "remediation_advice": {
+        "summary": "Add `X-Content-Type-Options: nosniff` header across all responses to prevent browser MIME-type sniffing."
+      },
+      "provenance": {
+        "evidence_id": "ev_98ce490da131bcd7b267f7a4",
+        "evidence_type": "http_response",
+        "source_engine": "api",
+        "rule_id": "API-MISSING-X-CONTENT-TYPE-OPTIONS",
+        "finding_id": "API-c843a62e671c51a3",
+        "asset_id": "ast_71849fc12f32c75f3c2839e6",
+        "collected_at": "0001-01-01T00:00:00Z",
+        "location": "http://127.0.0.1:5000",
+        "collection_method": "header_inspection",
+        "analysis_method": "STATIC_ANALYSIS",
+        "content_digest": "sha256:f90f42e118b3e3e423ec80411c27e2d4810f1e9428bf7e04cf00ef89136faed0"
+      },
+      "source": "api",
+      "fingerprint": "14eabb1f75a691989f3fcbe180b9757b9f88f3776ac99dac8b8bcb6ac740e2d5",
+      "score": 1,
+      "score_explanation": {
+        "score": 1,
+        "severity": "INFO",
+        "base_score": 1,
+        "category_modifier": 0,
+        "effective_base": 1,
+        "confidence": "HIGH",
+        "confidence_weight": 1,
+        "verification_status": "VERIFIED",
+        "verification_weight": 1,
+        "model": "felix_finding_v1",
+        "formula": "round(1.00 base * 1.00 conf * 1.00 ver) = 1/40",
+        "rationale": "Calculated score 1/40 (model felix_finding_v1) from INFO severity base (1.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x)."
+      },
+      "timestamp": "0001-01-01T00:00:00Z"
+    }
+  ],
+  "security_stories": [],
+  "verification_summary": {
+    "attempt_rate": 100,
+    "attempted_count": 6,
+    "blocked_count": 0,
+    "category_stats": {
+      "FASTAPI-SENSITIVE-SCHEMA": {
+        "blocked": 0,
+        "category": "FASTAPI-SENSITIVE-SCHEMA",
+        "detected": 0,
+        "not_exposed": 0,
+        "not_verified": 0,
+        "observed": 0,
+        "total": 1,
+        "verified": 1
+      },
+      "MISSING-CSP": {
+        "blocked": 0,
+        "category": "MISSING-CSP",
+        "detected": 0,
+        "not_exposed": 0,
+        "not_verified": 0,
+        "observed": 0,
+        "total": 1,
+        "verified": 1
+      },
+      "MISSING-PERMISSIONS-POLICY": {
+        "blocked": 0,
+        "category": "MISSING-PERMISSIONS-POLICY",
+        "detected": 0,
+        "not_exposed": 0,
+        "not_verified": 0,
+        "observed": 0,
+        "total": 1,
+        "verified": 1
+      },
+      "MISSING-REFERRER-POLICY": {
+        "blocked": 0,
+        "category": "MISSING-REFERRER-POLICY",
+        "detected": 0,
+        "not_exposed": 0,
+        "not_verified": 0,
+        "observed": 0,
+        "total": 1,
+        "verified": 1
+      },
+      "MISSING-X-CONTENT-TYPE-OPTIONS": {
+        "blocked": 0,
+        "category": "MISSING-X-CONTENT-TYPE-OPTIONS",
+        "detected": 0,
+        "not_exposed": 0,
+        "not_verified": 0,
+        "observed": 0,
+        "total": 1,
+        "verified": 1
+      },
+      "MISSING-X-FRAME-OPTIONS": {
+        "blocked": 0,
+        "category": "MISSING-X-FRAME-OPTIONS",
+        "detected": 0,
+        "not_exposed": 0,
+        "not_verified": 0,
+        "observed": 0,
+        "total": 1,
+        "verified": 1
+      }
+    },
+    "conclusive_count": 6,
+    "conclusive_rate": 100,
+    "confirmation_rate": 100,
+    "detected_count": 0,
+    "inconclusive_count": 0,
+    "not_exposed_count": 0,
+    "not_verified_count": 0,
+    "observed_count": 0,
+    "synthetic_count": 0,
+    "total_findings": 6,
+    "unsupported_count": 0,
+    "verification_rate_attempted": 100,
+    "verification_rate_total": 100,
+    "verified_count": 6
+  },
+  "commercial_report": {
+    "schema_version": "2.0.0",
+    "report_id": "REP-ASM-2026-E2D7",
+    "generated_at": "2026-11-10T06:57:57Z",
+    "executive_summary": {
+      "assessment_id": "ASM-2026-E2D7",
+      "target": "http://127.0.0.1:5000",
+      "targets": [
+        "http://127.0.0.1:5000"
+      ],
+      "timestamp": "2026-11-10T06:57:57Z",
+      "scope_summary": "Authorized web security evaluation of http://127.0.0.1:5000 spanning 1 targets.",
+      "completion_status": "COMPLETED",
+      "assets_discovered_count": 2,
+      "api_endpoints_count": 1,
+      "web_routes_count": 1,
+      "findings_detected_count": 0,
+      "findings_verified_count": 6,
+      "findings_unverified_count": 0,
+      "findings_confirmed_count": 6,
+      "status_distribution": {
+        "CONFIRMED": 6,
+        "ERROR": 0,
+        "INCONCLUSIVE": 0,
+        "NOT_TESTED": 0,
+        "SUSPECTED": 0
+      },
+      "observations_count": 0,
+      "not_exposed_checks_count": 0,
+      "inconclusive_checks_count": 0,
+      "not_assessed_checks_count": 0,
+      "severity_distribution": {
+        "CRITICAL": 0,
+        "HIGH": 1,
+        "INFO": 3,
+        "LOW": 2,
+        "MEDIUM": 0
+      },
+      "risk_score": 33,
+      "risk_score_available": true,
+      "risk_level": "HIGH",
+      "attack_surface_highlights": [
+        "2 total attack-surface resources cataloged across 2 endpoint/route categories.",
+        "1 API endpoints cataloged.",
+        "1 web routes cataloged.",
+        "Backend technologies identified: FastAPI."
+      ],
+      "key_concerns": [
+        "[HIGH] FastAPI OpenAPI schema contains embedded credentials or sensitive defaults at http://127.0.0.1:5000/openapi.json (High-severity security condition identified on assessed endpoint.)"
+      ],
+      "assessment_limitations": [
+        "Assessment strictly enforced authorized, non-destructive black-box audit boundaries.",
+        "No invasive privilege mutation, destructive payloads, or credential stuffing attacks were executed."
+      ],
+      "posture_statement": "Felix confirmed 6 verified findings, 0 detected findings, 0 observations, and 0 defended checks, resulting in a deterministic risk score of 33/100 (HIGH). High-priority verified findings represent immediate actionable exposures."
+    },
+    "assessment_scope": {
+      "in_scope_domains": [
+        "127.0.0.1"
+      ],
+      "in_scope_urls": [
+        "http://127.0.0.1:5000"
+      ],
+      "discovered_endpoints_count": 2,
+      "assessed_endpoints_count": 6,
+      "api_endpoints_count": 1,
+      "web_routes_count": 1,
+      "api_services": [
+        "http://127.0.0.1:5000/openapi.json"
+      ],
+      "cloud_resources": null,
+      "authentication_contexts": [
+        "Unauthenticated Baseline"
+      ],
+      "started_at": "2026-11-10T06:57:57Z",
+      "completed_at": "2026-11-10T06:57:57Z",
+      "duration": "147ms",
+      "engines_executed": [
+        "felix-crawler",
+        "felix-secrets",
+        "felix-cloud",
+        "felix-api",
+        "felix-webvuln",
+        "felix-authz",
+        "felix-sessionsec",
+        "felix-businesslogic",
+        "felix-correlation",
+        "felix-verification"
+      ],
+      "engines_skipped": null,
+      "completed_checks_count": 6,
+      "incomplete_checks_count": 0,
+      "inconclusive_checks_count": 0,
+      "explicit_restrictions": null,
+      "excluded_targets": null,
+      "provenance": "LIVE",
+      "synthetic_fixture": false
+    },
+    "attack_surface": {
+      "total_assets": 2,
+      "api_endpoints_count": 1,
+      "web_routes_count": 1,
+      "assets_by_type": {
+        "API_ENDPOINT": 1,
+        "DOMAIN": 1
+      },
+      "assets": [
+        {
+          "asset_id": "AST-4082b9d5fc59a9e7",
+          "url": "http://127.0.0.1:5000/openapi.json",
+          "asset_type": "API_ENDPOINT",
+          "discovery_source": "api",
+          "assessment_state": "ASSESSED",
+          "authentication_context": "Unknown",
+          "associated_finding_ids": [
+            "API-0530df708d8f3644"
+          ],
+          "exposure_info": "Observed via api (fastapi-sensitive-schema)",
+          "http_status": 200
+        },
+        {
+          "asset_id": "AST-f9413619c3096789",
+          "url": "http://127.0.0.1:5000",
+          "asset_type": "DOMAIN",
+          "discovery_source": "assessment_target_configuration",
+          "assessment_state": "ASSESSED",
+          "authentication_context": "Configured Assessment Target",
+          "associated_finding_ids": [
+            "API-b262835e2196e0e9",
+            "API-e3c1151175c642f8",
+            "API-5258776b875c4d4d",
+            "API-18dc33de072f012d",
+            "API-c843a62e671c51a3"
+          ],
+          "exposure_info": "Primary authorized target boundary",
+          "http_status": 200
+        }
+      ]
+    },
+    "risk_overview": {
+      "risk_score": 33,
+      "risk_score_available": true,
+      "risk_level": "HIGH",
+      "scoring_model_description": "Felix Deterministic Risk Model (0–100): Weighted empirical verification, multi-exposure diminishing returns, hardening caps (max 20 pts), and correlated story bonuses (max +15 pts). This metric reflects demonstrable exposure and is deliberately distinct from standalone CVSS base scoring. Risk level elevated from LOW (score band 33) to HIGH anchored by verified HIGH exposure finding API-0530df708d8f3644.",
+      "severity_distribution": {
+        "CRITICAL": 0,
+        "HIGH": 1,
+        "INFO": 3,
+        "LOW": 2,
+        "MEDIUM": 0
+      },
+      "verified_counts_by_severity": {
+        "HIGH": 1,
+        "INFO": 3,
+        "LOW": 2
+      },
+      "detected_counts_by_severity": {},
+      "finding_risk_contributions": [
+        {
+          "finding_id": "API-0530df708d8f3644",
+          "title": "FastAPI OpenAPI schema contains embedded credentials or sensitive defaults",
+          "severity": "HIGH",
+          "verification_status": "VERIFIED",
+          "score": 25,
+          "weight": 1,
+          "adjusted_score": 25,
+          "model": "felix_deterministic_v1",
+          "risk_type": "EXPOSURE",
+          "formula": "round(25.00 base * 1.00 conf * 1.00 ver) = 25/40; report_weighted: 25.00 * 1.00x = 25.00 pts",
+          "rationale": "Raw score 25/40 (weight 1.0x, adjusted 25.00) weighted by severity (HIGH), confidence (HIGH), and verification status (VERIFIED). Calculated score 25/40 (model felix_finding_v1) from HIGH severity base (25.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x).",
+          "is_available": true
+        },
+        {
+          "finding_id": "API-b262835e2196e0e9",
+          "title": "Missing Content-Security-Policy (CSP) defense-in-depth header",
+          "severity": "LOW",
+          "verification_status": "VERIFIED",
+          "score": 5,
+          "weight": 1,
+          "adjusted_score": 5,
+          "model": "felix_deterministic_v1",
+          "risk_type": "HARDENING_DEFENSE_IN_DEPTH",
+          "formula": "round(5.00 base * 1.00 conf * 1.00 ver) = 5/40; hardening_weighted: 5.00 * 1.00x = 5.00 pts (subtotal capped at 20.00)",
+          "rationale": "Raw score 5/40 (weight 1.0x, adjusted 5.00) defense-in-depth header finding under hardening cap (max 20 pts). Calculated score 5/40 (model felix_finding_v1) from LOW severity base (5.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x).",
+          "is_available": true
+        },
+        {
+          "finding_id": "API-e3c1151175c642f8",
+          "title": "Missing X-Frame-Options header (clickjacking protection)",
+          "severity": "LOW",
+          "verification_status": "VERIFIED",
+          "score": 5,
+          "weight": 0.5,
+          "adjusted_score": 2.5,
+          "model": "felix_deterministic_v1",
+          "risk_type": "HARDENING_DEFENSE_IN_DEPTH",
+          "formula": "round(5.00 base * 1.00 conf * 1.00 ver) = 5/40; hardening_weighted: 5.00 * 0.50x = 2.50 pts (subtotal capped at 20.00)",
+          "rationale": "Raw score 5/40 (weight 0.5x, adjusted 2.50) defense-in-depth header finding under hardening cap (max 20 pts). Calculated score 5/40 (model felix_finding_v1) from LOW severity base (5.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x).",
+          "is_available": true
+        },
+        {
+          "finding_id": "API-18dc33de072f012d",
+          "title": "Missing Referrer-Policy defense-in-depth header",
+          "severity": "INFO",
+          "verification_status": "VERIFIED",
+          "score": 1,
+          "weight": 0.3,
+          "adjusted_score": 0.3,
+          "model": "felix_deterministic_v1",
+          "risk_type": "HARDENING_DEFENSE_IN_DEPTH",
+          "formula": "round(1.00 base * 1.00 conf * 1.00 ver) = 1/40; hardening_weighted: 1.00 * 0.30x = 0.30 pts (subtotal capped at 20.00)",
+          "rationale": "Raw score 1/40 (weight 0.3x, adjusted 0.30) defense-in-depth header finding under hardening cap (max 20 pts). Calculated score 1/40 (model felix_finding_v1) from INFO severity base (1.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x).",
+          "is_available": true
+        },
+        {
+          "finding_id": "API-5258776b875c4d4d",
+          "title": "Missing Permissions-Policy header (browser feature gating)",
+          "severity": "INFO",
+          "verification_status": "VERIFIED",
+          "score": 1,
+          "weight": 0.2,
+          "adjusted_score": 0.2,
+          "model": "felix_deterministic_v1",
+          "risk_type": "HARDENING_DEFENSE_IN_DEPTH",
+          "formula": "round(1.00 base * 1.00 conf * 1.00 ver) = 1/40; hardening_weighted: 1.00 * 0.20x = 0.20 pts (subtotal capped at 20.00)",
+          "rationale": "Raw score 1/40 (weight 0.2x, adjusted 0.20) defense-in-depth header finding under hardening cap (max 20 pts). Calculated score 1/40 (model felix_finding_v1) from INFO severity base (1.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x).",
+          "is_available": true
+        },
+        {
+          "finding_id": "API-c843a62e671c51a3",
+          "title": "Missing or incomplete X-Content-Type-Options: nosniff header",
+          "severity": "INFO",
+          "verification_status": "VERIFIED",
+          "score": 1,
+          "weight": 0.1,
+          "adjusted_score": 0.1,
+          "model": "felix_deterministic_v1",
+          "risk_type": "HARDENING_DEFENSE_IN_DEPTH",
+          "formula": "round(1.00 base * 1.00 conf * 1.00 ver) = 1/40; hardening_weighted: 1.00 * 0.10x = 0.10 pts (subtotal capped at 20.00)",
+          "rationale": "Raw score 1/40 (weight 0.1x, adjusted 0.10) defense-in-depth header finding under hardening cap (max 20 pts). Calculated score 1/40 (model felix_finding_v1) from INFO severity base (1.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x).",
+          "is_available": true
+        }
+      ],
+      "score_breakdown": {
+        "exposure_subtotal": 25,
+        "hardening_subtotal": 8.1,
+        "raw_hardening_subtotal": 8.1,
+        "story_bonus": 0,
+        "total_score": 33,
+        "raw_total_score": 33,
+        "score_band_level": "LOW",
+        "anchor_level": "HIGH",
+        "final_risk_level": "HIGH",
+        "anchor_finding_id": "API-0530df708d8f3644",
+        "anchor_rationale": "Risk level elevated from LOW (score band 33) to HIGH anchored by verified HIGH exposure finding API-0530df708d8f3644",
+        "formula": "round(25.00 exposure + 8.10 hardening + 0.00 story bonus) = 33"
+      },
+      "risk_concentrations": [
+        {
+          "component": "127.0.0.1:5000/openapi.json",
+          "risk_level": "HIGH",
+          "score": 25,
+          "count": 1
+        },
+        {
+          "component": "127.0.0.1:5000",
+          "risk_level": "LOW",
+          "score": 13,
+          "count": 5
+        }
+      ],
+      "risk_limitations": [
+        "Risk score reflects non-destructive black-box evaluation and does not calculate likelihood of zero-day attacks or internal network penetration.",
+        "Hardening findings (e.g. defense-in-depth headers) are strictly capped at 20 points maximum to prevent artificial score inflation on otherwise secure targets.",
+        "Candidate attack paths without empirical confirmation contribute zero unverified risk to the primary score."
+      ]
+    },
+    "verified_findings": [
+      {
+        "id": "API-0530df708d8f3644",
+        "title": "FastAPI OpenAPI schema contains embedded credentials or sensitive defaults",
+        "description": "FastAPI OpenAPI schema contains embedded credentials or sensitive defaults",
+        "affected_asset": "http://127.0.0.1:5000/openapi.json",
+        "asset_location": "http://127.0.0.1:5000/openapi.json",
+        "severity": "HIGH",
+        "confidence": {
+          "detection_confidence": "HIGH",
+          "verification_confidence": "HIGH",
+          "overall_confidence": "HIGH",
+          "confidence_score": 98,
+          "rationale": "Detection pattern match is strong; Direct empirical verification evidence satisfies criteria; Status is VERIFIED based on satisfied mandatory proof criteria"
+        },
+        "authentication_state": "Unknown",
+        "detection_method": "active_probe",
+        "verification": {
+          "status": "VERIFIED",
+          "method_or_policy": "POL-APISEC-01",
+          "criteria_satisfied": [
+            "Resource reachability verified",
+            "Response content criteria satisfied"
+          ],
+          "preconditions": [
+            "Authorized assessment target within defined scope boundaries"
+          ],
+          "limitations": [
+            "Verification establishes tested condition only; non-destructive bounds enforced."
+          ],
+          "result_summary": "Sensitive fields present in JSON response body"
+        },
+        "evidence": {
+          "observation": "HTTP 200 OK. FastAPI OpenAPI schema contains unmasked credential for field \"auth_token\" (secret value redacted). Note: Credential validity and active authorization status were not verified.",
+          "location": "http://127.0.0.1:5000/openapi.json",
+          "http_method": "GET",
+          "http_status": 200,
+          "sanitized_excerpt": "HTTP 200 OK. FastAPI OpenAPI schema contains unmasked credential for field \"auth_token\" (secret value redacted). Note: Credential validity and active authorization status were not verified.",
+          "evidence_summary": "HTTP 200 OK. FastAPI OpenAPI schema contains unmasked credential for field \"auth_token\" (secret value redacted). Note: Credential validity and active authorization status were not verified.",
+          "negative_evidence": "Credential observed in schema definition; active authentication or authorization against backend services was not attempted.",
+          "evidence_references": [
+            "http://127.0.0.1:5000/openapi.json"
+          ],
+          "reproduction_steps": [
+            "1. Target environment setup: verify reachability to http://127.0.0.1:5000",
+            "   - Precondition: API endpoint query",
+            "2. Dispatch safe probe via GET to http://127.0.0.1:5000/openapi.json",
+            "   Execute: curl -s -i -X GET -H \"auth_context: [REDACTED]\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000/openapi.json\"",
+            "3. Expected secure behavior: Minimal response schema without sensitive data",
+            "4. Observed result: Sensitive fields present in JSON response body",
+            "5. Verification conclusion: VERIFIED under policy POL-APISEC-01"
+          ],
+          "safe_curl_command": "curl -s -i -X GET -H \"auth_context: [REDACTED]\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000/openapi.json\"",
+          "provenance": "LIVE",
+          "timestamp": "2026-11-10T06:57:57Z",
+          "is_available": true
+        },
+        "security_impact": {
+          "demonstrated_impact": "Security weakness observed on target endpoint during authorized assessment.",
+          "plausible_impact": "Potential compromise of resource confidentiality or integrity under attacker execution.",
+          "unverified_impact": "Destructive exploitation was not attempted under non-destructive safety policy.",
+          "summary": "High-severity security condition identified on assessed endpoint."
+        },
+        "risk_contribution": {
+          "finding_id": "API-0530df708d8f3644",
+          "title": "FastAPI OpenAPI schema contains embedded credentials or sensitive defaults",
+          "severity": "HIGH",
+          "verification_status": "VERIFIED",
+          "score": 25,
+          "weight": 1,
+          "adjusted_score": 25,
+          "model": "felix_deterministic_v1",
+          "risk_type": "EXPOSURE",
+          "formula": "round(25.00 base * 1.00 conf * 1.00 ver) = 25/40; report_weighted: 25.00 * 1.00x = 25.00 pts",
+          "rationale": "Raw score 25/40 (weight 1.0x, adjusted 25.00) weighted by severity (HIGH), confidence (HIGH), and verification status (VERIFIED). Calculated score 25/40 (model felix_finding_v1) from HIGH severity base (25.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x).",
+          "is_available": true
+        },
+        "category": "fastapi-sensitive-schema",
+        "source": "api",
+        "framework": "FastAPI",
+        "status": "CONFIRMED",
+        "analysis_method": "ACTIVE_VERIFICATION"
+      },
+      {
+        "id": "API-b262835e2196e0e9",
+        "title": "Missing Content-Security-Policy (CSP) defense-in-depth header",
+        "description": "Missing Content-Security-Policy (CSP) defense-in-depth header",
+        "affected_asset": "http://127.0.0.1:5000",
+        "asset_location": "http://127.0.0.1:5000",
+        "severity": "LOW",
+        "confidence": {
+          "detection_confidence": "HIGH",
+          "verification_confidence": "HIGH",
+          "overall_confidence": "HIGH",
+          "confidence_score": 98,
+          "rationale": "Detection pattern match is strong; Direct empirical verification evidence satisfies criteria; Status is VERIFIED based on satisfied mandatory proof criteria"
+        },
+        "authentication_state": "Unknown",
+        "detection_method": "header_inspection",
+        "verification": {
+          "status": "VERIFIED",
+          "method_or_policy": "POL-APISEC-01",
+          "criteria_satisfied": [
+            "Resource reachability verified",
+            "Response content criteria satisfied"
+          ],
+          "preconditions": [
+            "Authorized assessment target within defined scope boundaries"
+          ],
+          "limitations": [
+            "Verification establishes tested condition only; non-destructive bounds enforced."
+          ],
+          "result_summary": "Header absent in response"
+        },
+        "evidence": {
+          "observation": "Response headers do not include Content-Security-Policy.",
+          "location": "http://127.0.0.1:5000",
+          "http_method": "GET",
+          "http_status": 200,
+          "sanitized_excerpt": "Response headers do not include Content-Security-Policy.",
+          "evidence_summary": "Response headers do not include Content-Security-Policy.",
+          "negative_evidence": "Informational hardening observation; does not constitute an exploitable vulnerability by itself.",
+          "evidence_references": [
+            "http://127.0.0.1:5000"
+          ],
+          "reproduction_steps": [
+            "1. Target environment setup: verify reachability to http://127.0.0.1:5000",
+            "   - Precondition: In-scope HTTP GET response",
+            "2. Dispatch safe probe via GET to http://127.0.0.1:5000",
+            "   Execute: curl -s -i -X GET -H \"header: Content-Security-Policy\" -H \"auth_context: [REDACTED]\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000\"",
+            "3. Expected secure behavior: Defensive security header configured",
+            "4. Observed result: Header absent in response",
+            "5. Verification conclusion: VERIFIED under policy POL-APISEC-01"
+          ],
+          "safe_curl_command": "curl -s -i -X GET -H \"header: Content-Security-Policy\" -H \"auth_context: [REDACTED]\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000\"",
+          "provenance": "LIVE",
+          "timestamp": "2026-11-10T06:57:57Z",
+          "is_available": true
+        },
+        "security_impact": {
+          "demonstrated_impact": "Server HTTP response headers lack standard defense-in-depth protection directives.",
+          "plausible_impact": "In the event of an independent injection flaw, browser-side defensive mitigations would be absent.",
+          "unverified_impact": "No active injection, cross-site scripting, or framing condition was demonstrated.",
+          "summary": "Absence of hardening headers reduces defense-in-depth protection against secondary attacks."
+        },
+        "risk_contribution": {
+          "finding_id": "API-b262835e2196e0e9",
+          "title": "Missing Content-Security-Policy (CSP) defense-in-depth header",
+          "severity": "LOW",
+          "verification_status": "VERIFIED",
+          "score": 5,
+          "weight": 1,
+          "adjusted_score": 5,
+          "model": "felix_deterministic_v1",
+          "risk_type": "HARDENING_DEFENSE_IN_DEPTH",
+          "formula": "round(5.00 base * 1.00 conf * 1.00 ver) = 5/40; hardening_weighted: 5.00 * 1.00x = 5.00 pts (subtotal capped at 20.00)",
+          "rationale": "Raw score 5/40 (weight 1.0x, adjusted 5.00) defense-in-depth header finding under hardening cap (max 20 pts). Calculated score 5/40 (model felix_finding_v1) from LOW severity base (5.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x).",
+          "is_available": true
+        },
+        "category": "missing-csp",
+        "source": "api",
+        "framework": "generic",
+        "status": "CONFIRMED",
+        "analysis_method": "ACTIVE_VERIFICATION"
+      },
+      {
+        "id": "API-e3c1151175c642f8",
+        "title": "Missing X-Frame-Options header (clickjacking protection)",
+        "description": "Missing X-Frame-Options header (clickjacking protection)",
+        "affected_asset": "http://127.0.0.1:5000",
+        "asset_location": "http://127.0.0.1:5000",
+        "severity": "LOW",
+        "confidence": {
+          "detection_confidence": "HIGH",
+          "verification_confidence": "HIGH",
+          "overall_confidence": "HIGH",
+          "confidence_score": 98,
+          "rationale": "Detection pattern match is strong; Direct empirical verification evidence satisfies criteria; Status is VERIFIED based on satisfied mandatory proof criteria"
+        },
+        "authentication_state": "Unknown",
+        "detection_method": "header_inspection",
+        "verification": {
+          "status": "VERIFIED",
+          "method_or_policy": "POL-APISEC-01",
+          "criteria_satisfied": [
+            "Resource reachability verified",
+            "Response content criteria satisfied"
+          ],
+          "preconditions": [
+            "Authorized assessment target within defined scope boundaries"
+          ],
+          "limitations": [
+            "Verification establishes tested condition only; non-destructive bounds enforced."
+          ],
+          "result_summary": "Header absent in response"
+        },
+        "evidence": {
+          "observation": "Response headers do not include X-Frame-Options or CSP frame-ancestors directive.",
+          "location": "http://127.0.0.1:5000",
+          "http_method": "GET",
+          "http_status": 200,
+          "sanitized_excerpt": "Response headers do not include X-Frame-Options or CSP frame-ancestors directive.",
+          "evidence_summary": "Response headers do not include X-Frame-Options or CSP frame-ancestors directive.",
+          "negative_evidence": "No clickjacking defense-in-depth header was returned by the web server.",
+          "evidence_references": [
+            "http://127.0.0.1:5000"
+          ],
+          "reproduction_steps": [
+            "1. Target environment setup: verify reachability to http://127.0.0.1:5000",
+            "   - Precondition: In-scope HTTP GET response",
+            "2. Dispatch safe probe via GET to http://127.0.0.1:5000",
+            "   Execute: curl -s -i -X GET -H \"auth_context: [REDACTED]\" -H \"header: X-Frame-Options\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000\"",
+            "3. Expected secure behavior: Defensive security header configured",
+            "4. Observed result: Header absent in response",
+            "5. Verification conclusion: VERIFIED under policy POL-APISEC-01"
+          ],
+          "safe_curl_command": "curl -s -i -X GET -H \"auth_context: [REDACTED]\" -H \"header: X-Frame-Options\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000\"",
+          "provenance": "LIVE",
+          "timestamp": "2026-11-10T06:57:57Z",
+          "is_available": true
+        },
+        "security_impact": {
+          "demonstrated_impact": "Server HTTP response headers lack standard defense-in-depth protection directives.",
+          "plausible_impact": "In the event of an independent injection flaw, browser-side defensive mitigations would be absent.",
+          "unverified_impact": "No active injection, cross-site scripting, or framing condition was demonstrated.",
+          "summary": "Absence of hardening headers reduces defense-in-depth protection against secondary attacks."
+        },
+        "risk_contribution": {
+          "finding_id": "API-e3c1151175c642f8",
+          "title": "Missing X-Frame-Options header (clickjacking protection)",
+          "severity": "LOW",
+          "verification_status": "VERIFIED",
+          "score": 5,
+          "weight": 0.5,
+          "adjusted_score": 2.5,
+          "model": "felix_deterministic_v1",
+          "risk_type": "HARDENING_DEFENSE_IN_DEPTH",
+          "formula": "round(5.00 base * 1.00 conf * 1.00 ver) = 5/40; hardening_weighted: 5.00 * 0.50x = 2.50 pts (subtotal capped at 20.00)",
+          "rationale": "Raw score 5/40 (weight 0.5x, adjusted 2.50) defense-in-depth header finding under hardening cap (max 20 pts). Calculated score 5/40 (model felix_finding_v1) from LOW severity base (5.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x).",
+          "is_available": true
+        },
+        "category": "missing-x-frame-options",
+        "source": "api",
+        "framework": "generic",
+        "status": "CONFIRMED",
+        "analysis_method": "ACTIVE_VERIFICATION"
+      },
+      {
+        "id": "API-18dc33de072f012d",
+        "title": "Missing Referrer-Policy defense-in-depth header",
+        "description": "Missing Referrer-Policy defense-in-depth header",
+        "affected_asset": "http://127.0.0.1:5000",
+        "asset_location": "http://127.0.0.1:5000",
+        "severity": "INFO",
+        "confidence": {
+          "detection_confidence": "HIGH",
+          "verification_confidence": "HIGH",
+          "overall_confidence": "HIGH",
+          "confidence_score": 98,
+          "rationale": "Detection pattern match is strong; Direct empirical verification evidence satisfies criteria; Status is VERIFIED based on satisfied mandatory proof criteria"
+        },
+        "authentication_state": "Unknown",
+        "detection_method": "header_inspection",
+        "verification": {
+          "status": "VERIFIED",
+          "method_or_policy": "POL-APISEC-01",
+          "criteria_satisfied": [
+            "Resource reachability verified",
+            "Response content criteria satisfied"
+          ],
+          "preconditions": [
+            "Authorized assessment target within defined scope boundaries"
+          ],
+          "limitations": [
+            "Verification establishes tested condition only; non-destructive bounds enforced."
+          ],
+          "result_summary": "Header absent in response"
+        },
+        "evidence": {
+          "observation": "Response headers do not include Referrer-Policy (browser default applies).",
+          "location": "http://127.0.0.1:5000",
+          "http_method": "GET",
+          "http_status": 200,
+          "sanitized_excerpt": "Response headers do not include Referrer-Policy (browser default applies).",
+          "evidence_summary": "Response headers do not include Referrer-Policy (browser default applies).",
+          "negative_evidence": "Referrer policy is not explicitly declared; browser fallback applies.",
+          "evidence_references": [
+            "http://127.0.0.1:5000"
+          ],
+          "reproduction_steps": [
+            "1. Target environment setup: verify reachability to http://127.0.0.1:5000",
+            "   - Precondition: In-scope HTTP GET response",
+            "2. Dispatch safe probe via GET to http://127.0.0.1:5000",
+            "   Execute: curl -s -i -X GET -H \"header: Referrer-Policy\" -H \"auth_context: [REDACTED]\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000\"",
+            "3. Expected secure behavior: Defensive security header configured",
+            "4. Observed result: Header absent in response",
+            "5. Verification conclusion: VERIFIED under policy POL-APISEC-01"
+          ],
+          "safe_curl_command": "curl -s -i -X GET -H \"header: Referrer-Policy\" -H \"auth_context: [REDACTED]\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000\"",
+          "provenance": "LIVE",
+          "timestamp": "2026-11-10T06:57:57Z",
+          "is_available": true
+        },
+        "security_impact": {
+          "demonstrated_impact": "Server HTTP response headers lack standard defense-in-depth protection directives.",
+          "plausible_impact": "In the event of an independent injection flaw, browser-side defensive mitigations would be absent.",
+          "unverified_impact": "No active injection, cross-site scripting, or framing condition was demonstrated.",
+          "summary": "Absence of hardening headers reduces defense-in-depth protection against secondary attacks."
+        },
+        "risk_contribution": {
+          "finding_id": "API-18dc33de072f012d",
+          "title": "Missing Referrer-Policy defense-in-depth header",
+          "severity": "INFO",
+          "verification_status": "VERIFIED",
+          "score": 1,
+          "weight": 0.3,
+          "adjusted_score": 0.3,
+          "model": "felix_deterministic_v1",
+          "risk_type": "HARDENING_DEFENSE_IN_DEPTH",
+          "formula": "round(1.00 base * 1.00 conf * 1.00 ver) = 1/40; hardening_weighted: 1.00 * 0.30x = 0.30 pts (subtotal capped at 20.00)",
+          "rationale": "Raw score 1/40 (weight 0.3x, adjusted 0.30) defense-in-depth header finding under hardening cap (max 20 pts). Calculated score 1/40 (model felix_finding_v1) from INFO severity base (1.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x).",
+          "is_available": true
+        },
+        "category": "missing-referrer-policy",
+        "source": "api",
+        "framework": "generic",
+        "status": "CONFIRMED",
+        "analysis_method": "ACTIVE_VERIFICATION"
+      },
+      {
+        "id": "API-5258776b875c4d4d",
+        "title": "Missing Permissions-Policy header (browser feature gating)",
+        "description": "Missing Permissions-Policy header (browser feature gating)",
+        "affected_asset": "http://127.0.0.1:5000",
+        "asset_location": "http://127.0.0.1:5000",
+        "severity": "INFO",
+        "confidence": {
+          "detection_confidence": "HIGH",
+          "verification_confidence": "HIGH",
+          "overall_confidence": "HIGH",
+          "confidence_score": 98,
+          "rationale": "Detection pattern match is strong; Direct empirical verification evidence satisfies criteria; Status is VERIFIED based on satisfied mandatory proof criteria"
+        },
+        "authentication_state": "Unknown",
+        "detection_method": "header_inspection",
+        "verification": {
+          "status": "VERIFIED",
+          "method_or_policy": "POL-APISEC-01",
+          "criteria_satisfied": [
+            "Resource reachability verified",
+            "Response content criteria satisfied"
+          ],
+          "preconditions": [
+            "Authorized assessment target within defined scope boundaries"
+          ],
+          "limitations": [
+            "Verification establishes tested condition only; non-destructive bounds enforced."
+          ],
+          "result_summary": "Header absent in response"
+        },
+        "evidence": {
+          "observation": "Response headers do not include Permissions-Policy.",
+          "location": "http://127.0.0.1:5000",
+          "http_method": "GET",
+          "http_status": 200,
+          "sanitized_excerpt": "Response headers do not include Permissions-Policy.",
+          "evidence_summary": "Response headers do not include Permissions-Policy.",
+          "negative_evidence": "Browser feature delegation policy not explicitly configured.",
+          "evidence_references": [
+            "http://127.0.0.1:5000"
+          ],
+          "reproduction_steps": [
+            "1. Target environment setup: verify reachability to http://127.0.0.1:5000",
+            "   - Precondition: In-scope HTTP GET response",
+            "2. Dispatch safe probe via GET to http://127.0.0.1:5000",
+            "   Execute: curl -s -i -X GET -H \"auth_context: [REDACTED]\" -H \"header: Permissions-Policy\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000\"",
+            "3. Expected secure behavior: Defensive security header configured",
+            "4. Observed result: Header absent in response",
+            "5. Verification conclusion: VERIFIED under policy POL-APISEC-01"
+          ],
+          "safe_curl_command": "curl -s -i -X GET -H \"auth_context: [REDACTED]\" -H \"header: Permissions-Policy\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000\"",
+          "provenance": "LIVE",
+          "timestamp": "2026-11-10T06:57:57Z",
+          "is_available": true
+        },
+        "security_impact": {
+          "demonstrated_impact": "Server HTTP response headers lack standard defense-in-depth protection directives.",
+          "plausible_impact": "In the event of an independent injection flaw, browser-side defensive mitigations would be absent.",
+          "unverified_impact": "No active injection, cross-site scripting, or framing condition was demonstrated.",
+          "summary": "Absence of hardening headers reduces defense-in-depth protection against secondary attacks."
+        },
+        "risk_contribution": {
+          "finding_id": "API-5258776b875c4d4d",
+          "title": "Missing Permissions-Policy header (browser feature gating)",
+          "severity": "INFO",
+          "verification_status": "VERIFIED",
+          "score": 1,
+          "weight": 0.2,
+          "adjusted_score": 0.2,
+          "model": "felix_deterministic_v1",
+          "risk_type": "HARDENING_DEFENSE_IN_DEPTH",
+          "formula": "round(1.00 base * 1.00 conf * 1.00 ver) = 1/40; hardening_weighted: 1.00 * 0.20x = 0.20 pts (subtotal capped at 20.00)",
+          "rationale": "Raw score 1/40 (weight 0.2x, adjusted 0.20) defense-in-depth header finding under hardening cap (max 20 pts). Calculated score 1/40 (model felix_finding_v1) from INFO severity base (1.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x).",
+          "is_available": true
+        },
+        "category": "missing-permissions-policy",
+        "source": "api",
+        "framework": "generic",
+        "status": "CONFIRMED",
+        "analysis_method": "ACTIVE_VERIFICATION"
+      },
+      {
+        "id": "API-c843a62e671c51a3",
+        "title": "Missing or incomplete X-Content-Type-Options: nosniff header",
+        "description": "Missing or incomplete X-Content-Type-Options: nosniff header",
+        "affected_asset": "http://127.0.0.1:5000",
+        "asset_location": "http://127.0.0.1:5000",
+        "severity": "INFO",
+        "confidence": {
+          "detection_confidence": "HIGH",
+          "verification_confidence": "HIGH",
+          "overall_confidence": "HIGH",
+          "confidence_score": 98,
+          "rationale": "Detection pattern match is strong; Direct empirical verification evidence satisfies criteria; Status is VERIFIED based on satisfied mandatory proof criteria"
+        },
+        "authentication_state": "Unknown",
+        "detection_method": "header_inspection",
+        "verification": {
+          "status": "VERIFIED",
+          "method_or_policy": "POL-APISEC-01",
+          "criteria_satisfied": [
+            "Resource reachability verified",
+            "Response content criteria satisfied"
+          ],
+          "preconditions": [
+            "Authorized assessment target within defined scope boundaries"
+          ],
+          "limitations": [
+            "Verification establishes tested condition only; non-destructive bounds enforced."
+          ],
+          "result_summary": "Header absent in response"
+        },
+        "evidence": {
+          "observation": "X-Content-Type-Options observed: \"absent\" (expected 'nosniff').",
+          "location": "http://127.0.0.1:5000",
+          "http_method": "GET",
+          "http_status": 200,
+          "sanitized_excerpt": "X-Content-Type-Options observed: \"absent\" (expected 'nosniff').",
+          "evidence_summary": "X-Content-Type-Options observed: \"absent\" (expected 'nosniff').",
+          "negative_evidence": "MIME sniffing protection not explicitly declared.",
+          "evidence_references": [
+            "http://127.0.0.1:5000"
+          ],
+          "reproduction_steps": [
+            "1. Target environment setup: verify reachability to http://127.0.0.1:5000",
+            "   - Precondition: In-scope HTTP GET response",
+            "2. Dispatch safe probe via GET to http://127.0.0.1:5000",
+            "   Execute: curl -s -i -X GET -H \"auth_context: [REDACTED]\" -H \"header: X-Content-Type-Options\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000\"",
+            "3. Expected secure behavior: Defensive security header configured",
+            "4. Observed result: Header absent in response",
+            "5. Verification conclusion: VERIFIED under policy POL-APISEC-01"
+          ],
+          "safe_curl_command": "curl -s -i -X GET -H \"auth_context: [REDACTED]\" -H \"header: X-Content-Type-Options\" -H \"User-Agent: Felix-Security-Audit/2.0\" \"http://127.0.0.1:5000\"",
+          "provenance": "LIVE",
+          "timestamp": "2026-11-10T06:57:57Z",
+          "is_available": true
+        },
+        "security_impact": {
+          "demonstrated_impact": "Server HTTP response headers lack standard defense-in-depth protection directives.",
+          "plausible_impact": "In the event of an independent injection flaw, browser-side defensive mitigations would be absent.",
+          "unverified_impact": "No active injection, cross-site scripting, or framing condition was demonstrated.",
+          "summary": "Absence of hardening headers reduces defense-in-depth protection against secondary attacks."
+        },
+        "risk_contribution": {
+          "finding_id": "API-c843a62e671c51a3",
+          "title": "Missing or incomplete X-Content-Type-Options: nosniff header",
+          "severity": "INFO",
+          "verification_status": "VERIFIED",
+          "score": 1,
+          "weight": 0.1,
+          "adjusted_score": 0.1,
+          "model": "felix_deterministic_v1",
+          "risk_type": "HARDENING_DEFENSE_IN_DEPTH",
+          "formula": "round(1.00 base * 1.00 conf * 1.00 ver) = 1/40; hardening_weighted: 1.00 * 0.10x = 0.10 pts (subtotal capped at 20.00)",
+          "rationale": "Raw score 1/40 (weight 0.1x, adjusted 0.10) defense-in-depth header finding under hardening cap (max 20 pts). Calculated score 1/40 (model felix_finding_v1) from INFO severity base (1.0), HIGH confidence (1.00x), and VERIFIED verification (1.00x).",
+          "is_available": true
+        },
+        "category": "missing-x-content-type-options",
+        "source": "api",
+        "framework": "generic",
+        "status": "CONFIRMED",
+        "analysis_method": "ACTIVE_VERIFICATION"
+      }
+    ],
+    "detected_findings": null,
+    "observations": null,
+    "technical_appendix": {
+      "assessment_metadata": {
+        "assessment_id": "9033a75d-38dd-4221-a4c7-b48eddfbdfdb",
+        "assessment_ref": "ASM-2026-E2D7",
+        "client_id": "6bb14a02-008e-4651-a449-1cb53e7b3c52",
+        "duration": "147ms",
+        "engine_version": "5.0.0",
+        "engines": [
+          "felix-crawler",
+          "felix-secrets",
+          "felix-cloud",
+          "felix-api",
+          "felix-report"
+        ],
+        "execution_id": "exec-1fc746e7-d7a2-434d-9c14-7c6c8e851530",
+        "request_count": 29,
+        "scanner": "Felix",
+        "target": "http://127.0.0.1:5000"
+      },
+      "engine_execution_summary": [
+        {
+          "engine_name": "felix-crawler",
+          "version": "2.0.0",
+          "status": "EXECUTED",
+          "assets_analyzed": 6,
+          "findings_count": 0
+        },
+        {
+          "engine_name": "felix-secrets",
+          "version": "2.0.0",
+          "status": "EXECUTED",
+          "assets_analyzed": 6,
+          "findings_count": 0
+        },
+        {
+          "engine_name": "felix-cloud",
+          "version": "2.0.0",
+          "status": "EXECUTED",
+          "assets_analyzed": 6,
+          "findings_count": 0
+        },
+        {
+          "engine_name": "felix-api",
+          "version": "2.0.0",
+          "status": "EXECUTED",
+          "assets_analyzed": 6,
+          "findings_count": 6
+        },
+        {
+          "engine_name": "felix-verification",
+          "version": "2.0.0",
+          "status": "EXECUTED",
+          "assets_analyzed": 6,
+          "findings_count": 6
+        },
+        {
+          "engine_name": "felix-correlation",
+          "version": "2.0.0",
+          "status": "EXECUTED",
+          "assets_analyzed": 6,
+          "findings_count": 0
+        }
+      ],
+      "discovery_and_detection_stats": {
+        "attack_paths_total": 0,
+        "attempted_checks": 6,
+        "critical_count": 0,
+        "high_count": 1,
+        "info_count": 3,
+        "low_count": 2,
+        "medium_count": 0,
+        "stories_total": 0,
+        "total_findings": 6
+      },
+      "verification_status_counts": {
+        "BLOCKED": 0,
+        "DETECTED": 0,
+        "INCONCLUSIVE": 0,
+        "NOT_EXPOSED": 0,
+        "NOT_VERIFIED": 0,
+        "OBSERVED": 0,
+        "SYNTHETIC": 0,
+        "VERIFIED": 6
+      },
+      "negative_verification_outcomes": null,
+      "finding_index": [
+        {
+          "finding_id": "API-0530df708d8f3644",
+          "title": "FastAPI OpenAPI schema contains embedded credentials or sensitive defaults",
+          "source_engine": "api",
+          "category": "fastapi-sensitive-schema",
+          "detection_method": "active_probe",
+          "policy_or_rule_id": "POL-APISEC-01",
+          "evidence_references": "http://127.0.0.1:5000/openapi.json",
+          "provenance": "LIVE",
+          "authentication_state": "Unknown",
+          "canonical_status": "VERIFIED",
+          "severity": "HIGH"
+        },
+        {
+          "finding_id": "API-18dc33de072f012d",
+          "title": "Missing Referrer-Policy defense-in-depth header",
+          "source_engine": "api",
+          "category": "missing-referrer-policy",
+          "detection_method": "header_inspection",
+          "policy_or_rule_id": "POL-APISEC-01",
+          "evidence_references": "http://127.0.0.1:5000",
+          "provenance": "LIVE",
+          "authentication_state": "Unknown",
+          "canonical_status": "VERIFIED",
+          "severity": "INFO"
+        },
+        {
+          "finding_id": "API-5258776b875c4d4d",
+          "title": "Missing Permissions-Policy header (browser feature gating)",
+          "source_engine": "api",
+          "category": "missing-permissions-policy",
+          "detection_method": "header_inspection",
+          "policy_or_rule_id": "POL-APISEC-01",
+          "evidence_references": "http://127.0.0.1:5000",
+          "provenance": "LIVE",
+          "authentication_state": "Unknown",
+          "canonical_status": "VERIFIED",
+          "severity": "INFO"
+        },
+        {
+          "finding_id": "API-b262835e2196e0e9",
+          "title": "Missing Content-Security-Policy (CSP) defense-in-depth header",
+          "source_engine": "api",
+          "category": "missing-csp",
+          "detection_method": "header_inspection",
+          "policy_or_rule_id": "POL-APISEC-01",
+          "evidence_references": "http://127.0.0.1:5000",
+          "provenance": "LIVE",
+          "authentication_state": "Unknown",
+          "canonical_status": "VERIFIED",
+          "severity": "LOW"
+        },
+        {
+          "finding_id": "API-c843a62e671c51a3",
+          "title": "Missing or incomplete X-Content-Type-Options: nosniff header",
+          "source_engine": "api",
+          "category": "missing-x-content-type-options",
+          "detection_method": "header_inspection",
+          "policy_or_rule_id": "POL-APISEC-01",
+          "evidence_references": "http://127.0.0.1:5000",
+          "provenance": "LIVE",
+          "authentication_state": "Unknown",
+          "canonical_status": "VERIFIED",
+          "severity": "INFO"
+        },
+        {
+          "finding_id": "API-e3c1151175c642f8",
+          "title": "Missing X-Frame-Options header (clickjacking protection)",
+          "source_engine": "api",
+          "category": "missing-x-frame-options",
+          "detection_method": "header_inspection",
+          "policy_or_rule_id": "POL-APISEC-01",
+          "evidence_references": "http://127.0.0.1:5000",
+          "provenance": "LIVE",
+          "authentication_state": "Unknown",
+          "canonical_status": "VERIFIED",
+          "severity": "LOW"
+        }
+      ],
+      "correlation_rules_evaluated": [
+        "COR-01: Entry Point to Vulnerable Resource (WSTG-INFO-01 / CWE-200)",
+        "COR-02: Authentication to Authorization (WSTG-ATHN-01 / CWE-287)",
+        "COR-03: BOLA and Sensitive Data Exposure (WSTG-ATHZ-04 / CWE-639)",
+        "COR-04: Public Exposure to Sensitive Resource (WSTG-CONF-04 / CWE-552)",
+        "COR-05: Privilege Escalation (WSTG-ATHZ-03 / CWE-269)",
+        "COR-06: Business Logic Chains (WSTG-BUSL-01 / CWE-840)",
+        "COR-07: Session and Identity Dependencies (WSTG-SESS-06 / CWE-613)",
+        "COR-08: Cloud and Application Dependencies (WSTG-INPV-12 / CWE-918)",
+        "COR-09: Common Root Cause (WSTG-CONF-01 / CWE-657)",
+        "COR-10: Impact Amplification (WSTG-CLNT-07 / CWE-942)"
+      ],
+      "errors_and_coverage_gaps": null,
+      "synthetic_fixture_indicators": null,
+      "risk_model_metadata": {
+        "algorithm": "felix_deterministic_v1",
+        "diminishing_weights": [
+          1,
+          0.5,
+          0.3,
+          0.2,
+          0.1
+        ],
+        "hardening_cap": 20,
+        "range": "0-100",
+        "story_bonus_cap": 15
+      },
+      "report_generated_at": "2026-11-10T06:57:57Z",
+      "report_schema_version": "2.0.0"
+    }
+  },
+  "metadata": {
+    "assessment_id": "9033a75d-38dd-4221-a4c7-b48eddfbdfdb",
+    "assessment_ref": "ASM-2026-E2D7",
+    "client_id": "6bb14a02-008e-4651-a449-1cb53e7b3c52",
+    "engine_version": "5.0.0",
+    "engines": [
+      "felix-crawler",
+      "felix-secrets",
+      "felix-cloud",
+      "felix-api",
+      "felix-report"
+    ],
+    "execution_id": "exec-1fc746e7-d7a2-434d-9c14-7c6c8e851530",
+    "scanner": "Felix"
+  }
+}

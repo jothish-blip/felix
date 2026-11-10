@@ -1,0 +1,194 @@
+{
+  "benchmark_metrics": {
+    "admin_delete_blocked_by_default_verified": true,
+    "admin_delete_narrow_authorization_verified": true,
+    "ambiguous_encoding_rejection_verified": true,
+    "cancellation_shutdown_safety_verified": true,
+    "case_sensitivity_allowlist_verified": true,
+    "concurrent_worker_coordination_verified": true,
+    "connection_time_pinning_verified": true,
+    "crawler_integration_guardrail_verified": true,
+    "dns_prohibited_ip_enforcement_verified": true,
+    "dns_rebinding_dual_homed_defense_verified": true,
+    "dynamic_waf_429_backoff_verified": true,
+    "dynamic_waf_503_504_strain_detection_verified": true,
+    "dynamic_waf_origin_isolation_verified": true,
+    "dynamic_waf_retry_after_handling_verified": true,
+    "empty_scope_fail_closed_verified": true,
+    "exit_code": 0,
+    "general_allowlist_override_prevention_verified": true,
+    "host_allowlist_strict_matching_verified": true,
+    "hostname_confusion_rejection_verified": true,
+    "http_date_retry_after_verified": true,
+    "http_method_authorization_verified": true,
+    "ipv4_and_ipv6_destination_validation_verified": true,
+    "local_safety_lab_zero_blacklisted_hits_verified": true,
+    "malformed_manifest_rejection_verified": true,
+    "manifest_parsing_verified": true,
+    "pacing_timestamps_verified": true,
+    "path_traversal_bypass_defense_verified": true,
+    "payment_route_blacklist_refusal_verified": true,
+    "payment_route_encoding_traversal_defense_verified": true,
+    "recovery_probation_restoration_verified": true,
+    "redirect_hop_validation_verified": true,
+    "secret_redaction_verified": true,
+    "semicolon_matrix_param_defense_verified": true,
+    "total_tests_executed": 29,
+    "total_tests_passed": 29
+  },
+  "canonical_payload_sha256": "a7d12dfe6c19f717caff973f5daa18bb78f471c0af4d48f4cf1f73652776b489",
+  "conclusive_status": "COMPLETED_AND_VERIFIED",
+  "execution_timestamp": "2026-11-10T07:35:00Z",
+  "hardcoded_blacklisted_routes": [
+    "/checkout/pay",
+    "/billing/charge",
+    "/payment/execute"
+  ],
+  "iron_gate_exit_condition": "PASSED - ZERO BLACKLISTED ROUTES TRIGGERED DURING CRAWL",
+  "manifest_schema_version": "1.0",
+  "milestone": "Phase 9.4 — Enterprise Pre-Flight Guardrails \u0026 Scope Defense",
+  "receipt_version": "3.0.0",
+  "security_invariants_enforced": [
+    "Declarative scope manifest (felix.pentest.yml) enforces fail-closed authorization",
+    "Unconditional refusal of hardcoded payment routes (/checkout/pay, /billing/charge, /payment/execute)",
+    "Destructive path normalization resolves percent-encoding, multi-slashes, dot-segment traversal, and semicolon matrix parameters",
+    "Ambiguous, malformed, null-byte, and excessive recursive encodings unconditionally rejected",
+    "Allowlist path matching preserves case to prevent lowercasing from authorizing unapproved routes",
+    "Administrative DELETE requests blocked by default unless explicitly and narrowly authorized",
+    "General allowlists strictly cannot override payment route blacklist",
+    "DNS resolution to prohibited IP addresses (cloud metadata IPv4/IPv6, loopback, private) blocked at connection time",
+    "DNS rebinding and dual-homed smuggling blocked by safe dialer inspecting all resolved addresses",
+    "Connection-time destination pinning connects directly to validated IP literal",
+    "Redirect hop validation prevents escaping scope, reaching payment routes, or pivoting to prohibited IPs",
+    "Dynamic WAF origin-health tracker monitors 429, 503, 504 and throttles concurrency to 1, rate to 1 req/sec, and enforces 30s backoff or parsed Retry-After (seconds \u0026 RFC 7231 HTTP-date)",
+    "Server-side request counters empirically prove 0 blacklisted requests reached the mock production network",
+    "Zero sensitive credentials leaked in blocked operation diagnostics"
+  ],
+  "server_side_request_counters": {
+    "admin_delete_requests_received": 0,
+    "allowed_requests_received": 5,
+    "billing_charge_requests_received": 0,
+    "blacklisted_routes_total_hits": 0,
+    "checkout_pay_requests_received": 0,
+    "payment_execute_requests_received": 0,
+    "unauthorized_requests_received": 0
+  },
+  "subphase_verifications": [
+    {
+      "status": "PASSED",
+      "test_case": "TestGuardrail_01_ValidManifestParsingAndSchemaValidation"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestGuardrail_02_MalformedAndMissingManifestRejection"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestGuardrail_03_EmptyScopeFailClosed"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestGuardrail_04_HostAllowlistStrictMatchingAndPortHandling"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestGuardrail_05_HostnameConfusionAndWildcardRejection"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestGuardrail_06_PathAllowlistAndTraversalBypassDefense"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestGuardrail_07_HTTPMethodAuthorization"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestGuardrail_08_IPv4AndIPv6DestinationValidation"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestGuardrail_09_PaymentRouteBlacklistHardcodedRefusal"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestGuardrail_10_PaymentRouteEncodingAndTraversalVariants"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestGuardrail_11_AdministrativeDeleteBlockedByDefault"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestGuardrail_12_AdministrativeDeleteNarrowAuthorization"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestGuardrail_13_GeneralAllowlistCannotOverridePaymentBlacklist"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestGuardrail_14_RedirectHopScopeAndBlacklistValidation"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestGuardrail_15_DynamicWAF_HTTP429ThresholdAndBackoff"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestGuardrail_16_DynamicWAF_HTTP503And504StrainDetection"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestGuardrail_17_DynamicWAF_RetryAfterHeaderHandling"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestGuardrail_18_DynamicWAF_OriginIsolation"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestGuardrail_19_DynamicWAF_ConcurrentWorkerCoordination"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestGuardrail_20_DynamicWAF_RecoveryAndProbationRestoration"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestGuardrail_21_ContextCancellationAndShutdownSafety"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestGuardrail_22_SecretRedactionInBlockedDiagnostics"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestGuardrail_23_LocalSafetyLab_ZeroBlacklistedRoutesTriggered"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestGuardrail_24_EndToEndCrawlerIntegrationUnderGuardrail"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestGuardrail_25_DNSResolutionAndConnectionTimeSSRFDefense"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestGuardrail_26_DNSRebindingDualHomedSmugglingDefense"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestGuardrail_27_RedirectScopeAndBlacklistEgressDefense"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestGuardrail_28_QuantitativeWAF_PacingTimestampsAndHTTPDate"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestGuardrail_29_PathNormalization_MatrixParamsAndAmbiguousEncoding"
+    }
+  ]
+}

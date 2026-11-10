@@ -1,0 +1,180 @@
+{
+  "benchmark_metrics": {
+    "adversarial_400_422_guards_verified": true,
+    "attestation_integration_verified": true,
+    "authorization_boundary_verified": true,
+    "baseline_immutability_verified": true,
+    "cleanliness_invariant_proven": true,
+    "defensive_403_guard_verified": true,
+    "defensive_404_guard_verified": true,
+    "destructive_endpoint_guardrail_verified": true,
+    "deterministic_replay_verified": true,
+    "dossier_integration_verified": true,
+    "engine_orchestration_verified": true,
+    "exit_code": 0,
+    "six_status_state_machine_verified": true,
+    "sqlite_persistence_recovery_verified": true,
+    "targeted_mode_skipped_checks_verified": true,
+    "total_tests_executed": 18,
+    "total_tests_passed": 18
+  },
+  "canonical_payload_sha256": "45ad444e24a407822bd22396860458ba74fb71c6b2b23ae9079f7f2ecd3996ee",
+  "conclusive_status": "COMPLETED_AND_VERIFIED",
+  "cryptographic_attestation": {
+    "algorithm": "Ed25519",
+    "canonical_digest": "sha256:6a38ace2d348363ec6680e634ef941bdcab736b62d9889cbf0bb969bd12e1a43",
+    "letter_id": "ATT-asm-retest-asm-lab-bench-001-1794239962-AF66F1C3-1794239962",
+    "offline_verifiable": true,
+    "signature_hex": "bc4c7bee0783ffdcd93c4e3cc4c769ef2ee6ae59c81e6ee31573bf214799c9fa13eac431b2b40f4a82a155564709b56fad5f0795eed1726cf525fec5facae00f",
+    "signer_key_id": "KEY-FELIX-PHASE9-CANONICAL",
+    "status": "SIGNED"
+  },
+  "execution_timestamp": "2026-11-09T21:15:00Z",
+  "milestone": "Phase 9.2 - Remediation Retest Engine + Full Assessment Comparison",
+  "operating_modes_verified": [
+    "FULL_REASSESSMENT",
+    "TARGETED_RETEST"
+  ],
+  "receipt_version": "3.0.0",
+  "retest_summary": {
+    "baseline_assessment_id": "asm-lab-bench-001",
+    "baseline_assessment_ref": "ASM-2026-LAB01",
+    "baseline_findings_count": 5,
+    "child_assessment_id": "asm-retest-asm-lab-bench-001-1794239962-AF66F1C3",
+    "child_assessment_ref": "ASM-RETEST-ASM-2026-LAB01-AF66F1C3",
+    "child_findings_count": 2,
+    "cleanliness_explanation": "Assessment cannot be declared clean: 1 defect(s) remain unresolved; 1 fresh finding(s) discovered in child assessment; 1 finding(s) inconclusive / ambiguous; 1 finding(s) not retested / skipped; 1 asset(s) unavailable / out of scope; 1 engine coverage gap(s) disclosed.",
+    "inconclusive_count": 1,
+    "is_clean": false,
+    "new_findings_count": 1,
+    "not_retested_count": 1,
+    "parent_link_verified": true,
+    "remaining_unresolved": 1,
+    "remediated_verified": 1,
+    "targeted_skipped_checks": 5,
+    "unavailable_count": 1
+  },
+  "state_transitions_verified": [
+    "REMEDIATED_VERIFIED",
+    "REMAINING_UNRESOLVED",
+    "INCONCLUSIVE",
+    "NOT_RETESTED",
+    "OUT_OF_SCOPE_OR_ASSET_UNAVAILABLE",
+    "NEW_FINDING"
+  ],
+  "subphase_verifications": [
+    {
+      "status": "PASSED",
+      "test_case": "TestRetest_01_OriginalAssessmentImmutabilityAndLinkage"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestRetest_02_FullVsTargetedModeExecution"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestRetest_03_HistoricalFindingEligibility"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestRetest_04_DeterministicProofProbeReplay"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestRetest_05_RemediatedVerifiedTransition"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestRetest_06_RemainingUnresolvedTransition"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestRetest_07_DefensiveResponsesFalseRemediationGuards"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestRetest_08_TimeoutsAndErrors"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestRetest_09_DestructiveOperationGuardrail"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestRetest_10_NewFindingsAndDisappearedFindings"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestRetest_11_FullAssessmentComparisonDeterminism"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestRetest_12_SQLitePersistenceAndRestartRecovery"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestRetest_13_DossierIntegration"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestRetest_14_Phase91AttestationIntegration"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestRetest_15_LocalLabSimulationAndEvidenceGeneration"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestRetest_16_AdversarialHTTP400and422Rejection"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestRetest_17_AuthorizationBoundaryAndTargetScope"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestRetest_18_EngineOrchestrationInFullMode"
+    }
+  ],
+  "trusted_evidence_authority_architecture": {
+    "auth_application_provenance_verification": {
+      "independent_provenance_required": true,
+      "signed_evidence_required": true,
+      "transport_401_403_insufficient": true
+    },
+    "bola_trusted_dual_principal_verification": {
+      "dual_principal_required": true,
+      "owner_access_positive_control": true,
+      "signed_evidence_required": true,
+      "unauthorized_denial_confirmed": true,
+      "zero_object_data_leakage": true
+    },
+    "caller_supplied_booleans_rejected": true,
+    "cors_browser_verification": {
+      "complete_browser_suite_required": true,
+      "signed_evidence_required": true,
+      "single_response_omission_insufficient": true
+    },
+    "evidence_mechanism": "CRYPTOGRAPHICALLY_SIGNED_EVIDENCE_RECORDS",
+    "key_custody": "INDEPENDENT_TRUSTED_REGISTRY",
+    "signature_algorithm": "Ed25519",
+    "sqli_controlled_behavioral_verification": {
+      "negative_control_safe_required": true,
+      "positive_control_reproduction_required": true,
+      "signed_evidence_required": true
+    },
+    "target_self_asserted_headers_rejected": [
+      "X-Backend-Query-Parameterized",
+      "X-BOLA-Positive-Control",
+      "X-Application-Auth-Status",
+      "X-App-Auth-Layer",
+      "X-Auth-Decision"
+    ],
+    "target_self_asserted_json_fields_rejected": [
+      "sanitized",
+      "parameterized",
+      "positive_control_verified",
+      "auth_layer"
+    ]
+  }
+}

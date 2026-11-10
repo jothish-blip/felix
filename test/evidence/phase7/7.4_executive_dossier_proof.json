@@ -1,0 +1,140 @@
+{
+  "receipt_version": "3.0.0",
+  "milestone": "Phase 7.4 — Executive Cyber Risk Dossier Generator",
+  "conclusive_status": "IN_PROGRESS_AUDIT_PENDING_FORMAL_ACCEPTANCE",
+  "canonical_payload_sha256": "d2b8dbfa32f10a2e552c97fc9c7b66f3cf7c0ff7727e70cdd2fb9b5692e57599",
+  "dossier_id": "DOSSIER-7c1aa0269e05",
+  "target": "https://target.corp",
+  "organization": "Global Banking \u0026 Digital Services Corporation",
+  "benchmark_metrics": {
+    "attack_paths_rendered": 1,
+    "compliance_frameworks_count": 6,
+    "generation_duration_ms": 5.5,
+    "html_rendered_bytes": 45611,
+    "pocs_cataloged": 2,
+    "priority_findings_selected": 4,
+    "proposed_diffs_cataloged": 3,
+    "total_findings_processed": 5
+  },
+  "executive_summary": {
+    "assessment_id": "DOSSIER-7c1aa0269e05",
+    "organization": "Global Banking \u0026 Digital Services Corporation",
+    "target": "https://target.corp",
+    "targets": [
+      "https://target.corp",
+      "https://api.target.corp"
+    ],
+    "generated_at": "2026-11-09T11:00:00Z",
+    "completion_status": "COMPLETED",
+    "total_findings": 5,
+    "critical_count": 1,
+    "high_count": 2,
+    "medium_count": 0,
+    "low_count": 1,
+    "info_count": 1,
+    "verified_findings_count": 4,
+    "detected_findings_count": 0,
+    "defended_boundaries_count": 1,
+    "risk_score": 95,
+    "risk_level": "CRITICAL",
+    "strategic_posture_summary": "Critical security exposure detected: 3 verified/confirmed high-risk vulnerabilities present an immediate exploit trajectory requiring expedited emergency remediation.",
+    "key_business_concerns": [
+      "Autonomous attack-chain synthesis confirmed 1 traversable multi-hop path(s) connecting perimeter entrypoints to sensitive backend assets.",
+      "Verified SQL Injection in Search Endpoint on https://target.corp/api/v1/products/search exposes organization to critical system compromise."
+    ],
+    "executive_recommendations": [
+      "Review and apply proposed Priority 1 remediation diffs at perimeter entrypoints to immediately disrupt multi-hop traversal paths.",
+      "Deploy parameterized database query interfaces across all dynamic search and lookup handlers to eliminate injection risks.",
+      "Enforce strict tenant and object-level ownership checks across API endpoints prior to database record retrieval.",
+      "Schedule targeted live re-testing upon patch deployment to verify vulnerability resolution and issue clean Letter of Attestation."
+    ],
+    "severity_distribution": {
+      "CRITICAL": 1,
+      "HIGH": 2,
+      "INFO": 1,
+      "LOW": 1,
+      "MEDIUM": 0
+    }
+  },
+  "financial_exposure": {
+    "has_monetary_estimates": false,
+    "model_type": "QUALITATIVE_EVALUATION",
+    "disclaimer": "No monetary loss figures are fabricated. Empirical financial impact cannot be determined solely from vulnerability scanning without calibrated organizational telemetry (e.g. record valuations, SLA penalties, corporate revenue). Qualitative business impact and regulatory exposure categories are provided with explicit uncertainty ratings.",
+    "methodology_notes": "Qualitative impact model categorizing business disruption, regulatory exposure, and operational severity based on verified finding classes.",
+    "business_impact_categories": [
+      {
+        "category": "Database Integrity \u0026 Regulatory Liability Risk",
+        "impact_severity": "CRITICAL",
+        "uncertainty_level": "LOW (Empirically Verified)",
+        "regulatory_exposure_scope": "DPDP Act 2023 Sec 8(5) reasonable safeguards failure; potential Section 8(6) mandatory breach notification",
+        "operational_risk_rationale": "Direct structured query evaluation bypasses data access layer, risking bulk tenant extraction or unauthorized data modification.",
+        "mapped_findings": [
+          "F-SQLI-001"
+        ]
+      },
+      {
+        "category": "Customer Data Privacy \u0026 Access Breach Risk",
+        "impact_severity": "HIGH",
+        "uncertainty_level": "LOW (Empirically Verified)",
+        "regulatory_exposure_scope": "DPDP Act 2023 / GDPR cross-tenant data crossover; potential contractual customer SLA penalties",
+        "operational_risk_rationale": "Flawed object-level authorization permits cross-tenant customer record extraction via modified identifiers.",
+        "mapped_findings": [
+          "F-BOLA-003"
+        ]
+      },
+      {
+        "category": "Cloud Infrastructure \u0026 Intranet Pivoting Risk",
+        "impact_severity": "HIGH",
+        "uncertainty_level": "LOW (Empirically Verified)",
+        "regulatory_exposure_scope": "CERT-In Directions (2022) perimeter routing breach; cloud IAM credential theft liability",
+        "operational_risk_rationale": "Server-side request forgery allows attackers to query internal services and cloud instance metadata credentials.",
+        "mapped_findings": [
+          "F-SSRF-002"
+        ]
+      }
+    ]
+  },
+  "compliance_frameworks": [
+    "OWASP-TOP10-2021 (OWASP Top 10 (2021)): GAPS_IDENTIFIED [4 deficient / 1 compliant]",
+    "NIST-CSF-2.0 (NIST Cybersecurity Framework (CSF 2.0)): GAPS_IDENTIFIED [4 deficient / 0 compliant]",
+    "ISO-27001-2022 (ISO/IEC 27001:2022): GAPS_IDENTIFIED [3 deficient / 1 compliant]",
+    "CERT-In-2022 (CERT-In Cyber Security Directions): GAPS_IDENTIFIED [2 deficient / 0 compliant]",
+    "RBI-CSF-2016 (RBI Cyber Security Framework): GAPS_IDENTIFIED [3 deficient / 0 compliant]",
+    "DPDP-2023 (DPDP Act (Digital Personal Data Protection)): GAPS_IDENTIFIED [2 deficient / 0 compliant]"
+  ],
+  "attack_path_details": {
+    "entrypoint": "https://target.corp/api/v1/media/fetch",
+    "path_id": "PATH-CORP-CHAIN-01",
+    "path_title": "Perimeter SSRF to Internal SQLi Database Compromise",
+    "svg_rendering_inlined": true,
+    "target_asset": "Internal Production Relational Database",
+    "terminal_impact": "Remote Structured Query Evaluation \u0026 Complete Table Exfiltration",
+    "total_paths": 1,
+    "validation_status": "CONFIRMED"
+  },
+  "remediation_plan_summary": {
+    "broken_path_count": 0,
+    "eliminated_edges": [],
+    "execution_disclaimer": "Remediation diffs represent developer-ready code patches validated in memory against source context. Generated diffs have NOT been applied to live codebases. Verified path interruption requires a future authorized verification workflow (Phase 9.2 Remediation Retest Engine).",
+    "path_interruption_status": "PROPOSED_PATH_BREAK",
+    "proposed_broken_path_count": 1,
+    "proposed_eliminated_edges": [
+      "EDGE-01 (Perimeter SSRF Entrypoint -\u003e Internal SQL Injection)"
+    ],
+    "remediation_status": "PROPOSED_DEVELOPER_DIFFS",
+    "total_proposed_patches": 3
+  },
+  "exploitability_assessment": {
+    "execution_disclaimer": "Proof-of-Concept procedures are deterministic, non-destructive reproduction commands designed for security validation in authorized test environments. Generated PoCs do NOT imply that the production target was compromised or altered. Execution mode and target execution provenance are preserved verbatim from upstream engines.",
+    "exploitation_status": "PLANNED_AND_SYNTHESIZED_NON_DESTRUCTIVE",
+    "total_synthesized_pocs": 2
+  },
+  "evidence_integrity_attestation": {
+    "canonical_content_hashing_verified": true,
+    "future_live_retest_milestone": "Phase 9.2 Remediation Retest Engine",
+    "non_destructive_testing_verified": true,
+    "proposed_remediation_boundary_held": true,
+    "zero_external_cdn_dependencies": true,
+    "zero_secret_leakage_verified": true
+  }
+}

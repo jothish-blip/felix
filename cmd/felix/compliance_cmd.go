@@ -40,6 +40,8 @@ func runCompliance(args []string) int {
 		return runComplianceExport(subArgs)
 	case "gate", "gates":
 		return runComplianceGate(subArgs)
+	case "sync", "vendor-sync", "auditor-sync":
+		return runComplianceSync(subArgs)
 	case "limitations", "limitation", "boundaries":
 		return runComplianceLimitations(subArgs)
 	case "help", "--help", "-h":
@@ -66,6 +68,7 @@ func printComplianceHelp() {
 	fmt.Println("  dossier      Generate and validate evidence-backed compliance dossiers")
 	fmt.Println("  export       Export compliance records in normalized JSON or NIST OSCAL format")
 	fmt.Println("  gate         Evaluate compliance gates for CI/CD pipelines against policies")
+	fmt.Println("  sync         Synchronize assessment and attestation evidence to Vanta, Drata, or Secureframe")
 	fmt.Println("  limitations  Inspect assessment limitations, explicit coverage basis, and determination boundaries")
 	fmt.Println("  help         Display this help message")
 	fmt.Println("\nExamples:")

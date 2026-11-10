@@ -1,0 +1,194 @@
+{
+  "benchmark_metrics": {
+    "authentication_failure_handling_verified": true,
+    "conflicting_sync_record_rejection_verified": true,
+    "dns_rebinding_and_resolved_ip_validation_verified": true,
+    "drata_evidence_upload_verified": true,
+    "drata_soc2_cc6_6_mapping_verified": true,
+    "drata_soc2_cc6_8_mapping_verified": true,
+    "drata_soc2_cc7_1_mapping_verified": true,
+    "exit_code": 0,
+    "idempotency_duplicate_prevention_verified": true,
+    "inbound_status_non_trust_verified": true,
+    "malformed_hostile_vendor_response_verified": true,
+    "missing_credentials_rejection_verified": true,
+    "multi_platform_orchestration_verified": true,
+    "pagination_support_verified": true,
+    "partial_failure_handling_verified": true,
+    "persistence_and_recovery_round_trip_verified": true,
+    "rate_limiting_and_retry_after_verified": true,
+    "request_timeout_handling_verified": true,
+    "retest_state_preservation_verified": true,
+    "secret_redaction_verified": true,
+    "secureframe_test_and_sla_sync_verified": true,
+    "simulated_fixture_segregation_verified": true,
+    "ssrf_cloud_metadata_refusal_verified": true,
+    "ssrf_loopback_prohibited_verified": true,
+    "ssrf_redirect_hop_blocked_verified": true,
+    "tampered_attestation_rejection_verified": true,
+    "total_tests_executed": 26,
+    "total_tests_passed": 26,
+    "unsupported_platform_rejection_verified": true,
+    "untrusted_signing_key_detection_verified": true,
+    "vanta_rest_api_ingest_verified": true,
+    "vanta_schema_validation_verified": true
+  },
+  "canonical_payload_sha256": "7e75638d75712853f14e7358602b352d0689e16ed6f0ed3e8702dd65d4b0813f",
+  "conclusive_status": "COMPLETED_AND_VERIFIED",
+  "controls_mapping_summary": {
+    "CC6.6": "Logical Boundaries and Infrastructure Security Defenses",
+    "CC6.8": "Unauthorized and Malicious Code Prevention and Logical Access Controls",
+    "CC7.1": "Vulnerability Management, Detection, Retesting and Penetration Testing"
+  },
+  "cryptographic_attestation_metadata": {
+    "algorithm": "Ed25519",
+    "canonical_digest": "sha256:d8c51e06e00b8e663a8a38a7c295be3620e408ec2ce6fdb1fecde194b655979c",
+    "independent_signature_verified": true,
+    "key_id": "KEY-FELIX-PHASE9-CANONICAL",
+    "letter_id": "ATT-asm-phase9-compliance-001",
+    "offline_verifiable": true,
+    "signer_authority": "FELIX Cryptographic Attestation Engine v3.0",
+    "status": "SIGNED_AND_VERIFIED"
+  },
+  "execution_timestamp": "2026-11-10T07:10:00Z",
+  "milestone": "Phase 9.3 — Automated Compliance Platform Ingestion",
+  "platform_endpoints_verified": {
+    "drata_controls_mapping_url": "/public/v1/controls/mapping",
+    "drata_evidence_upload_url": "/public/v1/evidence/upload",
+    "secureframe_penetration_test_url": "/v1/tests/penetration-test",
+    "vanta_penetration_tests_url": "/v1/audits/penetration-tests"
+  },
+  "platforms_verified": [
+    "VANTA",
+    "DRATA",
+    "SECUREFRAME"
+  ],
+  "receipt_version": "3.0.0",
+  "retest_transitions_preserved": [
+    "REMEDIATED_VERIFIED",
+    "REMAINING_UNRESOLVED",
+    "INCONCLUSIVE",
+    "NOT_RETESTED",
+    "OUT_OF_SCOPE_OR_ASSET_UNAVAILABLE",
+    "NEW_FINDING"
+  ],
+  "security_invariants_enforced": [
+    "SSRF protection strictly blocks cloud metadata targets (169.254.169.254, fd00:ec2::254)",
+    "SSRF protection blocks loopback/private IPs unless explicitly authorized for testing",
+    "SSRF protection validates redirect hops against destination boundaries and forbids protocol downgrades",
+    "DNS rebinding protection validates resolved IPs on every TCP connection dial",
+    "Zero API secrets or bearer tokens exposed or persisted in sync audit records",
+    "Simulated fixture records segregated and excluded from production compliance sync",
+    "Inbound compliance platform status treated as untrusted external observation",
+    "Deterministic idempotency key deduplication prevents double-submission replay",
+    "Outbound Vanta payload verified against strict Vanta Penetration Test JSON schema before transmission",
+    "Hostile or malformed vendor API responses cleanly rejected and classified as SyncStatusFailed",
+    "Conflicting cross-assessment records rejected during idempotency evaluation"
+  ],
+  "subphase_verifications": [
+    {
+      "status": "PASSED",
+      "test_case": "TestComplianceSync_01_VantaSuccessfulSyncAndSchemaValidation"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestComplianceSync_02_VantaSchemaRejection"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestComplianceSync_03_DrataEvidenceUploadAndSOC2Mapping"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestComplianceSync_04_SecureframeTestAndSLASync"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestComplianceSync_05_MultiPlatformOrchestration"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestComplianceSync_06_AuthenticationFailure401"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestComplianceSync_07_MissingCredentialsRejection"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestComplianceSync_08_RateLimitingAndRetryAfter"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestComplianceSync_09_IdempotencyDuplicatePrevention"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestComplianceSync_10_PartialFailureHandling"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestComplianceSync_11_SSRFCloudMetadataRefusal"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestComplianceSync_12_SSRFLoopbackProhibited"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestComplianceSync_13_SSRFRedirectHopBlocked"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestComplianceSync_14_SecretRedaction"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestComplianceSync_15_TamperedAttestationRejection"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestComplianceSync_16_UntrustedSigningKeyDetection"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestComplianceSync_17_RetestStatePreservation"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestComplianceSync_18_SimulatedFixtureSegregation"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestComplianceSync_19_InboundStatusNonTrust"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestComplianceSync_20_PersistenceAndRecoveryRoundTrip"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestComplianceSync_21_DNSRebindingAndResolvedIPValidation"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestComplianceSync_22_RequestTimeoutHandling"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestComplianceSync_23_PaginationSupport"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestComplianceSync_24_MalformedHostileVendorResponse"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestComplianceSync_25_ConflictingSyncRecordRejection"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestComplianceSync_26_UnsupportedPlatformRejection"
+    }
+  ]
+}

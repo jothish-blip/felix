@@ -129,6 +129,12 @@ type ComplianceStore interface {
 	VerifyRemediationIntegrity(remediationID string, keyProvider KeyProvider) (*RemediationIntegrityVerificationResult, error)
 	GetRemediationIntegrityRecord(remediationID string) (*RemediationIntegrityRecord, error)
 
+	// Platform Sync Persistence methods (Phase 9.3)
+	SavePlatformSyncRecord(rec *PlatformSyncRecord) error
+	GetPlatformSyncRecord(syncID string) (*PlatformSyncRecord, error)
+	GetPlatformSyncRecordByIdempotencyKey(key string) (*PlatformSyncRecord, error)
+	ListPlatformSyncRecords(platform, assessmentID string) ([]PlatformSyncRecord, error)
+
 	// Close releases storage resources.
 	Close() error
 }
@@ -515,6 +521,50 @@ func (s *SQLiteComplianceStore) migrate() error {
 
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("failed committing migration v5: %w", err)
+		}
+	}
+
+	// Migration 6: Compliance platform synchronization tracking (Phase 9.3)
+	if currentVersion < 6 {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		schemaV6 := `
+		CREATE TABLE IF NOT EXISTS compliance_platform_sync_records (
+			sync_id TEXT PRIMARY KEY,
+			platform TEXT NOT NULL,
+			assessment_id TEXT NOT NULL,
+			execution_id TEXT DEFAULT '',
+			attestation_letter_id TEXT DEFAULT '',
+			external_record_id TEXT DEFAULT '',
+			external_url TEXT DEFAULT '',
+			status TEXT NOT NULL,
+			idempotency_key TEXT NOT NULL,
+			payload_digest TEXT NOT NULL,
+			records_synced INTEGER NOT NULL DEFAULT 0,
+			records_failed INTEGER NOT NULL DEFAULT 0,
+			error_message TEXT DEFAULT '',
+			synced_at TIMESTAMP NOT NULL,
+			created_at TIMESTAMP NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_sync_platform_asm ON compliance_platform_sync_records(platform, assessment_id);
+		CREATE INDEX IF NOT EXISTS idx_sync_idempotency ON compliance_platform_sync_records(idempotency_key);
+		`
+
+		if _, err := tx.Exec(schemaV6); err != nil {
+			return fmt.Errorf("failed executing migration v6: %w", err)
+		}
+
+		if _, err := tx.Exec("INSERT INTO compliance_schema_migrations (version, applied_at) VALUES (6, ?)", time.Now().UTC()); err != nil {
+			return fmt.Errorf("failed recording migration v6: %w", err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("failed committing migration v6: %w", err)
 		}
 	}
 

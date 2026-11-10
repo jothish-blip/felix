@@ -1,0 +1,122 @@
+{
+  "assessment_scope_summary": {
+    "assessment_id": "asm-phase9-001",
+    "client_name": "Enterprise Sovereign Cloud",
+    "client_organization": "Sovereign Cloud Infrastructure Ltd",
+    "confirmed_findings": 2,
+    "critical_findings": 1,
+    "high_findings": 1,
+    "limitations_count": 2,
+    "low_findings": 1,
+    "medium_findings": 0,
+    "scope_mode": "same-origin",
+    "significant_exposures": 2,
+    "suspected_findings": 1,
+    "targets_count": 2,
+    "total_findings": 3,
+    "untested_areas_count": 2
+  },
+  "benchmark_metrics": {
+    "adversarial_forged_key_rejection_verified": true,
+    "deterministic_canonical_digest_verified": true,
+    "exit_code": 0,
+    "independent_public_key_verification_verified": true,
+    "key_identity_binding_verified": true,
+    "markdown_rendering_verified": true,
+    "offline_verification_verified": true,
+    "private_key_zero_leakage_verified": true,
+    "sqlite_store_ingestion_verified": true,
+    "tampered_signature_rejection_verified": true,
+    "tampered_snapshot_rejection_verified": true,
+    "total_tests_executed": 16,
+    "total_tests_passed": 16,
+    "trusted_key_registry_verified": true,
+    "trusted_public_key_anchor_verified": true,
+    "truthful_executive_statement_verified": true,
+    "untested_areas_disclosure_verified": true,
+    "untrusted_embedded_key_rejection_verified": true,
+    "wrong_key_rejection_verified": true
+  },
+  "canonical_payload_sha256": "8e6f266c820b2391f167074687f2d9d04fafe3e25cb3929b1e4c610501512f2e",
+  "conclusive_status": "COMPLETED_AND_VERIFIED",
+  "cryptographic_attestation_metadata": {
+    "algorithm": "Ed25519",
+    "canonical_digest": "sha256:8e6f266c820b2391f167074687f2d9d04fafe3e25cb3929b1e4c610501512f2e",
+    "key_id": "KEY-FELIX-PHASE9-CANONICAL",
+    "letter_id": "ATT-asm-phase9-001-1794223667",
+    "letter_version": "3.0.0",
+    "offline_verifiable": true,
+    "public_key_hex": "d63dc31ccf66c12d806e2031ec163329f123257757775368851f1c4a9c444df2",
+    "signature_hex": "97cea64be546d0fd45ef0596453d8b4f25fc4336c6346062a01bfe69dd78ddb4b6ab19d405cd8934395b4fcac274be3fddaf5e11068ced173b5d2a1b65849100",
+    "signer_authority": "FELIX Cryptographic Attestation Engine v3.0"
+  },
+  "execution_timestamp": "2026-11-09T11:27:47Z",
+  "milestone": "Phase 9.1 — Cryptographic Letter of Attestation Generator",
+  "receipt_version": "3.0.0",
+  "subphase_verifications": [
+    {
+      "status": "PASSED",
+      "test_case": "TestAttestation_01_ValidEd25519SignatureGeneration"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestAttestation_02_SuccessfulIndependentPublicKeyVerification"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestAttestation_03_TamperedSnapshotRejection"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestAttestation_04_TamperedSignatureRejection"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestAttestation_05_WrongPublicKeyRejection"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestAttestation_06_InvalidAssessmentRejection"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestAttestation_07_IncompleteAssessmentLimitations"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestAttestation_08_SecretAndPrivateKeyRedaction"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestAttestation_09_DeterministicCanonicalDigest"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestAttestation_10_OfflineSignatureVerification"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestAttestation_11_HistoricalSnapshotPreservation"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestAttestation_12_AccurateDistinctionBetweenVerifiedAndUnverifiedFindings"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestAttestation_13_HumanReadableMarkdownRendering"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestAttestation_14_RegressionSuiteAndEvidenceGeneration"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestAttestation_15_AdversarialForgedKeyAndUntrustedRejection"
+    },
+    {
+      "status": "PASSED",
+      "test_case": "TestAttestation_16_KeyIdentityBindingAndTrustModel"
+    }
+  ]
+}

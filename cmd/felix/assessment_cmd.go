@@ -118,6 +118,10 @@ func runAssessment(args []string) int {
 		return runAssessmentNotification(subArgs)
 	case "recover", "recovery":
 		return runAssessmentRecover(subArgs)
+	case "retest", "reassessment":
+		return runAssessmentRetest(subArgs)
+	case "sync", "vendor-sync", "auditor-sync":
+		return runComplianceSync(subArgs)
 	default:
 		fmt.Fprintf(os.Stderr, "[-] Unknown assessment subcommand: %s\n\n", sub)
 		printAssessmentHelp()
@@ -131,6 +135,7 @@ func printAssessmentHelp() {
 	fmt.Println("  create       Create a new security assessment project")
 	fmt.Println("  list         List security assessments")
 	fmt.Println("  show         Display comprehensive assessment dossier")
+	fmt.Println("  retest       Execute remediation retest & comparative assessment engine")
 	fmt.Println("  target add   Add target URL to assessment")
 	fmt.Println("  scope add    Add scope rule to assessment")
 	fmt.Println("  exclude add  Add exclusion rule (hostname, path, URL)")

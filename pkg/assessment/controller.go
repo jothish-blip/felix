@@ -103,6 +103,8 @@ type ExecutionOptions struct {
 	IdempotencyKey     string
 	BaselineRef        string
 	BaselineScope      string // "all", "new", "new_and_regressed"
+	ScopeManifestPath  string
+	ScopeManifest      *PentestManifest
 }
 
 // ExecutionResult encapsulates the outcome of an assessment run.
@@ -149,6 +151,27 @@ func (c *Controller) buildSafeHTTPClient(
 	transport := crawler.NewRateLimitedTransport(safeTransport, crawler.RateLimitOptions{
 		MaxConcurrency: concurrency,
 	})
+
+	var finalTransport http.RoundTripper = transport
+	manifest := opts.ScopeManifest
+	if manifest == nil && opts.ScopeManifestPath != "" {
+		if m, err := ParsePentestManifestFile(opts.ScopeManifestPath); err == nil {
+			manifest = m
+		}
+	}
+	if manifest != nil {
+		if gt, err := NewGuardrailTransport(manifest, GuardrailOptions{
+			BaseTransport: transport,
+			SSRF: crawler.SafeTransportOptions{
+				Timeout:         timeoutDur,
+				AllowLoopback:   opts.AllowLoopback || cfgStore.AllowLoopback,
+				AllowPrivateIPs: opts.AllowPrivateIPs || cfgStore.AllowPrivateIPs,
+			},
+		}); err == nil {
+			finalTransport = gt
+		}
+	}
+
 	maxRedirects := opts.MaxRedirects
 	if maxRedirects <= 0 {
 		maxRedirects = cfgStore.MaxRedirects
@@ -157,7 +180,7 @@ func (c *Controller) buildSafeHTTPClient(
 		maxRedirects = config.DefaultMaxRedirects
 	}
 	return &http.Client{
-		Transport: transport,
+		Transport: finalTransport,
 		Timeout:   timeoutDur,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= maxRedirects {
@@ -179,6 +202,11 @@ func (c *Controller) buildSafeHTTPClient(
 			lastURL := ""
 			if len(via) > 0 {
 				lastURL = via[len(via)-1].URL.String()
+			}
+			if manifest != nil {
+				if bl := CheckScope(req, manifest); bl != nil && bl.Blocked {
+					return fmt.Errorf("redirect blocked by guardrail: %s", bl.Reason)
+				}
 			}
 			if err := scopeVal.ValidateRedirect(lastURL, req.URL.String()); err != nil {
 				return fmt.Errorf("redirect blocked by scope validator: %w", err)

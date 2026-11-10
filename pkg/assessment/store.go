@@ -2989,7 +2989,11 @@ func (s *SQLiteStore) SaveFindings(findings []AssessmentFinding) error {
 			f.EvidenceDetails.Details["rule_id"] = f.RuleID
 		}
 		if f.Status != "" {
-			f.EvidenceDetails.Details["finding_status"] = string(report.NormalizeFindingStatus(f.Status))
+			if string(f.Status) == "VERIFIED_DEFECT" {
+				f.EvidenceDetails.Details["finding_status"] = "VERIFIED_DEFECT"
+			} else {
+				f.EvidenceDetails.Details["finding_status"] = string(report.NormalizeFindingStatus(f.Status))
+			}
 		} else {
 			f.EvidenceDetails.Details["finding_status"] = string(report.FindingStatusFromVerification(f.VerificationStatus))
 		}
@@ -3142,7 +3146,11 @@ func (s *SQLiteStore) GetFindings(assessmentID string, executionID string) ([]As
 				f.RuleID = rID
 			}
 			if st, ok := f.EvidenceDetails.Details["finding_status"]; ok {
-				f.Status = report.NormalizeFindingStatus(report.FindingStatus(st))
+				if st == "VERIFIED_DEFECT" {
+					f.Status = report.FindingStatus("VERIFIED_DEFECT")
+				} else {
+					f.Status = report.NormalizeFindingStatus(report.FindingStatus(st))
+				}
 			}
 			if am, ok := f.EvidenceDetails.Details["analysis_method"]; ok && am != "" {
 				f.AnalysisMethod = report.AnalysisMethod(am)
@@ -3171,6 +3179,8 @@ func (s *SQLiteStore) GetFindings(assessmentID string, executionID string) ([]As
 		}
 		if f.Status == "" {
 			f.Status = report.FindingStatusFromVerification(f.VerificationStatus)
+		} else if string(f.Status) == "VERIFIED_DEFECT" {
+			f.Status = report.FindingStatus("VERIFIED_DEFECT")
 		} else {
 			f.Status = report.NormalizeFindingStatus(f.Status)
 		}
@@ -4563,7 +4573,11 @@ func (s *SQLiteStore) CreateSnapshot(snapshot *AssessmentSnapshot, findings []As
 				f.EvidenceDetails.Details["rule_id"] = f.RuleID
 			}
 			if f.Status != "" {
-				f.EvidenceDetails.Details["finding_status"] = string(report.NormalizeFindingStatus(f.Status))
+				if string(f.Status) == "VERIFIED_DEFECT" {
+					f.EvidenceDetails.Details["finding_status"] = "VERIFIED_DEFECT"
+				} else {
+					f.EvidenceDetails.Details["finding_status"] = string(report.NormalizeFindingStatus(f.Status))
+				}
 			} else {
 				f.EvidenceDetails.Details["finding_status"] = string(report.FindingStatusFromVerification(f.VerificationStatus))
 			}
