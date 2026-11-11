@@ -799,7 +799,7 @@ func InferDAGEdges(nodes map[string]*DAGNode) []*DAGEdge {
 						Confidence:       confidence,
 						Weight:           weight,
 						Explanation:      secrets.RedactText(explanation),
-						ValidationStatus: ValidationConfirmed,
+						ValidationStatus: ValidationCandidate,
 					})
 				}
 			}

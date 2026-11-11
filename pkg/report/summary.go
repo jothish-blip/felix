@@ -297,10 +297,35 @@ func RecalculateReportRisk(rep *Report) {
 	rep.RiskScore = score
 	rep.RiskLevel = level
 
-	// Only verified attack paths with non-low confidence are eligible to escalate risk.
-	// Candidate or hypothesis paths contribute zero unverified risk to primary score.
+	// Recompute attack path state counts deterministically.
+	rep.Summary.ConfirmedAttackPaths = 0
+	rep.Summary.HighConfidenceAttackPaths = 0
+	rep.Summary.CandidateAttackPaths = 0
+	rep.Summary.InconclusiveAttackPaths = 0
+	rep.Summary.NotReachableAttackPaths = 0
+	rep.Summary.NotTestedAttackPaths = 0
 	for _, p := range rep.AttackPaths {
-		if !strings.EqualFold(p.Status, "VERIFIED") || NormalizeConfidence(p.Confidence) == ConfidenceLow {
+		switch strings.ToUpper(strings.TrimSpace(p.Status)) {
+		case "VERIFIED", "CONFIRMED":
+			rep.Summary.ConfirmedAttackPaths++
+		case "HIGH_CONFIDENCE":
+			rep.Summary.HighConfidenceAttackPaths++
+		case "CANDIDATE", "EVIDENCE_SUPPORTED", "OBSERVED":
+			rep.Summary.CandidateAttackPaths++
+		case "INCONCLUSIVE":
+			rep.Summary.InconclusiveAttackPaths++
+		case "NOT_REACHABLE", "INVALID":
+			rep.Summary.NotReachableAttackPaths++
+		case "NOT_TESTED":
+			rep.Summary.NotTestedAttackPaths++
+		}
+	}
+
+	// Only verified/confirmed attack paths with non-low confidence are eligible to escalate risk.
+	// Candidate, inconclusive, not-reachable, or hypothesis paths contribute zero unverified risk to primary score.
+	for _, p := range rep.AttackPaths {
+		stUpper := strings.ToUpper(strings.TrimSpace(p.Status))
+		if (stUpper != "VERIFIED" && stUpper != "CONFIRMED") || NormalizeConfidence(p.Confidence) == ConfidenceLow {
 			continue
 		}
 
@@ -353,7 +378,12 @@ func isExplicitInfoLevel(raw string) bool {
 // AttachAttackPaths associates correlated attack paths with the audit report,
 // updating the report's risk level if any path represents a higher verified risk.
 func AttachAttackPaths(rep *Report, paths []AttackPathSummary) {
-	if rep == nil || len(paths) == 0 {
+	if rep == nil {
+		return
+	}
+	if len(paths) == 0 {
+		rep.AttackPaths = nil
+		RecalculateReportRisk(rep)
 		return
 	}
 	for i := range paths {

@@ -15,7 +15,20 @@ func NormalizeFinding(f report.Finding) NormalizedFinding {
 	normCat := report.NormalizeCategory(f.Category)
 	normSev := report.NormalizeSeverity(f.Severity)
 	normConf := report.NormalizeConfidence(f.Confidence)
+	rawVerUpper := strings.ToUpper(strings.TrimSpace(string(f.Verification.Status)))
 	normVer := report.NormalizeVerificationStatus(f.Verification.Status)
+	if normVer == report.VerificationObserved {
+		switch rawVerUpper {
+		case "CONFIRMED":
+			normVer = report.VerificationVerified
+		case "HIGH CONFIDENCE", "POTENTIAL", "SUSPECTED":
+			normVer = report.VerificationDetected
+		case "NOT VALIDATED", "NOT_VALIDATED", "NOT EXPOSED":
+			normVer = report.VerificationNotExposed
+		case "NOT TESTED", "NOT_TESTED", "INCONCLUSIVE":
+			normVer = report.VerificationNotVerified
+		}
+	}
 
 	host, origin, path := extractHostAndPath(f.Target, f.Endpoint)
 

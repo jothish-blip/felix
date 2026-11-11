@@ -91,7 +91,7 @@ func AnalyzeRemediationBottlenecks(paths []AttackPath, findings []NormalizedFind
 	seenCandidateIDs := make(map[string]bool)
 
 	for _, p := range paths {
-		isVerified := p.Status == PathVerified || p.Status.IsEvidenceSupported()
+		isVerified := IsConfirmedStatus(p.Status) || p.Status.IsEvidenceSupported()
 		if isVerified {
 			if !seenVerifiedIDs[p.ID] {
 				seenVerifiedIDs[p.ID] = true

@@ -1,6 +1,7 @@
 # Binaries
 bin/
 dist/
+/felix
 *.exe
 *.exe~
 *.dll
@@ -11,24 +12,31 @@ dist/
 *.test
 *.out
 reports/
+test_assess_out/
+/tmp/
 
 # IDE / OS
 .vscode/
 .idea/
 .DS_Store
+._*
 Thumbs.db
 
-# Local certificates
+# Local certificates & runtime licenses
 certs/
+*.felixlic
 
 # Environment & secrets
 .env
 .env.*
 !.env.example
 
-# Logs & coverage
+# Logs & coverage (never ignore Go source files such as pkg/intelligence/coverage.go)
 *.log
-coverage.*
+/coverage.*
+coverage.out
+coverage.html
+*.coverprofile
 
 # Root temporary test reports & scratch
 /*.html

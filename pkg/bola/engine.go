@@ -145,8 +145,11 @@ func NewEngine(client *http.Client, config Config) *Engine {
 // scopedClient creates an HTTP client that validates every redirect destination
 // against the assessment's approved scope and exclusions before the redirected request is sent,
 // and enforces cross-origin and cleartext credential withholding.
-func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
-	transport := e.client.Transport
+func (e *Engine) buildGuardedClient(actx *AssessmentContext, baseTransport http.RoundTripper, jar http.CookieJar) *http.Client {
+	transport := baseTransport
+	if transport == nil {
+		transport = e.client.Transport
+	}
 	if transport == nil {
 		transport = crawler.NewSafeTransport(crawler.SafeTransportOptions{
 			Timeout:       e.config.Timeout,
@@ -172,6 +175,7 @@ func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
 	return &http.Client{
 		Transport: guardedTransport,
 		Timeout:   e.config.Timeout,
+		Jar:       jar,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return fmt.Errorf("stopped after 10 redirects")
@@ -207,6 +211,22 @@ func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
 			return nil
 		},
 	}
+}
+
+func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
+	return e.buildGuardedClient(actx, e.client.Transport, nil)
+}
+
+func (e *Engine) scopedClientFor(actx *AssessmentContext, alias string) *http.Client {
+	if actx == nil || len(actx.IdentityClients) == 0 {
+		return e.scopedClient(actx)
+	}
+	for k, c := range actx.IdentityClients {
+		if strings.EqualFold(k, alias) && c != nil {
+			return e.buildGuardedClient(actx, c.Transport, c.Jar)
+		}
+	}
+	return e.scopedClient(actx)
 }
 
 // Plan produces a pre-assessment test plan evaluating prerequisites without dispatching network requests.
@@ -257,6 +277,7 @@ func (e *Engine) Plan(ctx context.Context, actx *AssessmentContext) (*TestPlan, 
 				Status:            PlanReady,
 			}
 
+			targetURL := buildTargetURL(actx.BaseURL, ep, obj)
 			// Validate plan prerequisites
 			if len(actx.Identities) < 2 {
 				t.Status = PlanBlocked
@@ -270,6 +291,12 @@ func (e *Engine) Plan(ctx context.Context, actx *AssessmentContext) (*TestPlan, 
 			} else if isMutation && !actx.AllowStateChangingTests {
 				t.Status = PlanBlocked
 				t.BlockedReason = "state-changing mutations require --allow-state-changing opt-in"
+			} else if isMutation && !actx.SyntheticFixture {
+				t.Status = PlanBlocked
+				t.BlockedReason = "state-changing mutations require --synthetic-fixture verification"
+			} else if isMutation && !IsIsolatedFixtureTarget(targetURL, actx.AuthorizedFixtureHosts, actx.IsFixtureTarget) {
+				t.Status = PlanBlocked
+				t.BlockedReason = "state-changing mutations blocked: target is not a verified isolated synthetic fixture"
 			}
 
 			if t.Status == PlanReady {
@@ -383,19 +410,46 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 		return results, e.compileSummary(results), nil
 	}
 
-	client := e.scopedClient(actx)
+	if actx.DispatchedRequests == nil {
+		var localCounter int32
+		actx.DispatchedRequests = &localCounter
+	}
 
-	// Map identities by alias
+	// Map identities by lowercased alias for consistent lookup
 	identMap := make(map[string]TestIdentity)
 	for _, id := range actx.Identities {
-		identMap[id.Alias] = id
+		identMap[strings.ToLower(strings.TrimSpace(id.Alias))] = id
 	}
+
+	clientCache := make(map[string]*http.Client)
+	getClient := func(alias string) *http.Client {
+		key := strings.ToLower(strings.TrimSpace(alias))
+		if c, ok := clientCache[key]; ok {
+			return c
+		}
+		c := e.scopedClientFor(actx, alias)
+		clientCache[key] = c
+		return c
+	}
+
+	evaluateAllNonOwners := actx.TestAllIdentities || len(actx.IdentityClients) > 0
+	perIdentityReqs := make(map[string]int)
+	seenTests := make(map[string]bool)
+	objectsTested := make(map[string]bool)
 
 	testIdx := 1
 	for _, ep := range actx.Endpoints {
 		isMutation := ep.IsStateChanging || isStateChangingMethod(ep.Method)
 
 		for _, obj := range actx.Objects {
+			if actx.MaxObjects > 0 && !objectsTested[obj.ID] && len(objectsTested) >= actx.MaxObjects {
+				continue
+			}
+			// Match object to its discovered template when TemplatePath is known (avoid M x N noise)
+			if obj.TemplatePath != "" && !strings.EqualFold(normalizeURLPath(obj.TemplatePath), normalizeURLPath(ep.PathPattern)) {
+				continue
+			}
+
 			// Check context cancellation
 			select {
 			case <-ctx.Done():
@@ -410,6 +464,7 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 				}
 			}
 
+			objectsTested[obj.ID] = true
 			cat := CategoryBOLAUserRead
 			if obj.TenantID != "" {
 				cat = CategoryBOLATenantRead
@@ -421,6 +476,32 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 				cat = CategoryBOLAWriteMutation
 			}
 			meta := CategoryMetadata[cat]
+
+			// Public resource control check (identical public object is NOT BOLA)
+			if obj.IsPublic {
+				r := Result{
+					ID:                uuid.New().String(),
+					AssessmentID:      actx.AssessmentID,
+					ExecutionID:       actx.ExecutionID,
+					Category:          cat,
+					VulnCode:          meta.Code,
+					TestID:            fmt.Sprintf("BOLA-TEST-%03d", testIdx),
+					TestName:          fmt.Sprintf("Public Resource Control Check for %s", obj.ID),
+					OWASPRef:          meta.OWASP,
+					CWERef:            meta.CWE,
+					Endpoint:          ep.PathPattern,
+					Method:            ep.Method,
+					ObjectID:          obj.ID,
+					VerificationState: StateNotVulnerable,
+					Severity:          "INFO",
+					Confidence:        "HIGH",
+					EvidenceSummary:   fmt.Sprintf("Object %s is explicitly classified as public non-private content; cross-identity access is permitted", obj.ID),
+					CreatedAt:         time.Now().UTC(),
+				}
+				results = append(results, r)
+				testIdx++
+				continue
+			}
 
 			// Ownership mapping check
 			if obj.OwnerIdentity == "" {
@@ -448,7 +529,7 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 				continue
 			}
 
-			owner, hasOwner := identMap[obj.OwnerIdentity]
+			owner, hasOwner := identMap[strings.ToLower(strings.TrimSpace(obj.OwnerIdentity))]
 			if !hasOwner {
 				r := Result{
 					ID:                uuid.New().String(),
@@ -475,17 +556,23 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 				continue
 			}
 
-			// Find distinct non-owner identity
-			var nonOwner TestIdentity
-			var hasNonOwner bool
+			// Collect distinct horizontal/anonymous non-owner identities
+			var nonOwners []TestIdentity
 			for _, id := range actx.Identities {
-				if !strings.EqualFold(id.Alias, owner.Alias) {
-					nonOwner = id
-					hasNonOwner = true
+				if strings.EqualFold(id.Alias, owner.Alias) {
+					continue
+				}
+				// Privileged admin roles are evaluated separately in administrative boundary / BFLA checks,
+				// not treated as horizontal cross-tenant BOLA violations unless the owner is also admin.
+				if strings.EqualFold(id.Role, "admin") && !strings.EqualFold(owner.Role, "admin") {
+					continue
+				}
+				nonOwners = append(nonOwners, id)
+				if !evaluateAllNonOwners {
 					break
 				}
 			}
-			if !hasNonOwner || !AreIdentitiesDistinct(owner, nonOwner) {
+			if len(nonOwners) == 0 {
 				r := Result{
 					ID:                uuid.New().String(),
 					AssessmentID:      actx.AssessmentID,
@@ -521,9 +608,44 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 				continue
 			}
 
-			if isMutation {
-				if !actx.AllowStateChangingTests {
-					// Read-only default guard
+			ownerClient := getClient(owner.Alias)
+			var cachedBaseResp *ResponseData
+
+			for _, nonOwner := range nonOwners {
+				if !AreIdentitiesDistinct(owner, nonOwner) {
+					r := Result{
+						ID:                uuid.New().String(),
+						AssessmentID:      actx.AssessmentID,
+						ExecutionID:       actx.ExecutionID,
+						Category:          cat,
+						VulnCode:          "BOLA-NO-NON-OWNER",
+						TestID:            fmt.Sprintf("BOLA-TEST-%03d", testIdx),
+						TestName:          fmt.Sprintf("Non-Owner Identity Resolution for %s", obj.ID),
+						OWASPRef:          meta.OWASP,
+						CWERef:            meta.CWE,
+						Endpoint:          ep.PathPattern,
+						Method:            ep.Method,
+						ObjectID:          obj.ID,
+						OwnerAlias:        owner.Alias,
+						AccessorAlias:     nonOwner.Alias,
+						VerificationState: StateInconclusive,
+						Severity:          "INFO",
+						Confidence:        "LOW",
+						EvidenceSummary:   fmt.Sprintf("Configured identity %s is identical to owner %s; cannot establish cross-principal boundary", nonOwner.Alias, owner.Alias),
+						CreatedAt:         time.Now().UTC(),
+					}
+					results = append(results, r)
+					testIdx++
+					continue
+				}
+
+				dedupKey := fmt.Sprintf("%s|%s|%s|%s|%s", strings.ToUpper(ep.Method), targetURL, obj.ID, strings.ToLower(owner.Alias), strings.ToLower(nonOwner.Alias))
+				if seenTests[dedupKey] {
+					continue
+				}
+				seenTests[dedupKey] = true
+
+				if actx.MaxRequestsPerIdentity > 0 && perIdentityReqs[strings.ToLower(nonOwner.Alias)] >= actx.MaxRequestsPerIdentity {
 					r := Result{
 						ID:                uuid.New().String(),
 						AssessmentID:      actx.AssessmentID,
@@ -542,7 +664,7 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 						VerificationState: StateSkipped,
 						Severity:          "INFO",
 						Confidence:        "LOW",
-						EvidenceSummary:   "State-changing mutation test skipped: requires explicit --allow-state-changing opt-in",
+						EvidenceSummary:   fmt.Sprintf("Skipped due to per-identity request limit (%d) for %s", actx.MaxRequestsPerIdentity, nonOwner.Alias),
 						CreatedAt:         time.Now().UTC(),
 					}
 					results = append(results, r)
@@ -550,15 +672,119 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 					continue
 				}
 
-				// Execute authorized mutation test
-				crossResp, err := e.sendRequest(ctx, client, ep.Method, targetURL, nonOwner, []byte(`{"canary":"felix_bola_probe"}`))
+				nonOwnerClient := getClient(nonOwner.Alias)
+
+				if isMutation {
+					mutationBlockReason := ""
+					if !actx.AllowStateChangingTests {
+						mutationBlockReason = "State-changing mutation test skipped: requires explicit --allow-state-changing opt-in"
+					} else if !actx.SyntheticFixture {
+						mutationBlockReason = "State-changing mutation test skipped: restricted to designated synthetic fixtures (--synthetic-fixture required)"
+					} else if !IsIsolatedFixtureTarget(targetURL, actx.AuthorizedFixtureHosts, actx.IsFixtureTarget) {
+						mutationBlockReason = fmt.Sprintf("State-changing mutation test skipped: target %q is not a verified isolated synthetic fixture", SanitizeURL(targetURL))
+					}
+					if mutationBlockReason != "" {
+						r := Result{
+							ID:                uuid.New().String(),
+							AssessmentID:      actx.AssessmentID,
+							ExecutionID:       actx.ExecutionID,
+							Category:          cat,
+							VulnCode:          meta.Code,
+							TestID:            fmt.Sprintf("BOLA-TEST-%03d", testIdx),
+							TestName:          fmt.Sprintf("%s: %s", meta.Name, ep.PathPattern),
+							OWASPRef:          meta.OWASP,
+							CWERef:            meta.CWE,
+							Endpoint:          ep.PathPattern,
+							Method:            ep.Method,
+							ObjectID:          obj.ID,
+							OwnerAlias:        owner.Alias,
+							AccessorAlias:     nonOwner.Alias,
+							VerificationState: StateSkipped,
+							Severity:          "INFO",
+							Confidence:        "LOW",
+							EvidenceSummary:   mutationBlockReason,
+							CreatedAt:         time.Now().UTC(),
+						}
+						results = append(results, r)
+						testIdx++
+						continue
+					}
+
+					perIdentityReqs[strings.ToLower(nonOwner.Alias)]++
+					crossResp, err := e.sendRequest(ctx, nonOwnerClient, ep.Method, targetURL, nonOwner, []byte(`{"canary":"felix_bola_probe"}`))
+					if err != nil {
+						if ctx.Err() != nil {
+							return results, e.compileSummary(results), ctx.Err()
+						}
+						continue
+					}
+					cmp := CompareWrite(crossResp, obj, owner.Alias, nonOwner.Alias, true)
+					if obj.OwnershipUnconfirmed && cmp.State == StateVerified {
+						cmp.State = StateCandidate
+						cmp.Confidence = "MEDIUM"
+					}
+					res := Result{
+						ID:                uuid.New().String(),
+						AssessmentID:      actx.AssessmentID,
+						ExecutionID:       actx.ExecutionID,
+						Category:          cat,
+						VulnCode:          meta.Code,
+						TestID:            fmt.Sprintf("BOLA-TEST-%03d", testIdx),
+						TestName:          fmt.Sprintf("%s: %s", meta.Name, ep.PathPattern),
+						OWASPRef:          meta.OWASP,
+						CWERef:            meta.CWE,
+						Endpoint:          ep.PathPattern,
+						Method:            ep.Method,
+						ObjectID:          obj.ID,
+						OwnerAlias:        owner.Alias,
+						AccessorAlias:     nonOwner.Alias,
+						VerificationState: cmp.State,
+						Severity:          cmp.Severity,
+						Confidence:        cmp.Confidence,
+						ObservedStatus:    crossResp.StatusCode,
+						EvidenceSummary:   cmp.EvidenceSummary,
+						EvidenceDetails:   cmp.EvidenceDetails,
+						CreatedAt:         time.Now().UTC(),
+					}
+					if cmp.State == StateVerified || cmp.State == StateCandidate {
+						res.Finding = e.buildFindingWithContext(res, meta, targetURL, obj, nonOwner)
+					}
+					results = append(results, res)
+					testIdx++
+					continue
+				}
+
+				// Read-Only Verification (GET)
+				// 1. Owner Baseline Request (cached per endpoint+object across non-owners)
+				if cachedBaseResp == nil {
+					perIdentityReqs[strings.ToLower(owner.Alias)]++
+					baseResp, err := e.sendRequest(ctx, ownerClient, "GET", targetURL, owner, nil)
+					if err != nil {
+						if ctx.Err() != nil {
+							return results, e.compileSummary(results), ctx.Err()
+						}
+						break
+					}
+					cachedBaseResp = &baseResp
+				}
+
+				// 2. Non-Owner Cross-Principal Request
+				perIdentityReqs[strings.ToLower(nonOwner.Alias)]++
+				crossResp, err := e.sendRequest(ctx, nonOwnerClient, "GET", targetURL, nonOwner, nil)
 				if err != nil {
 					if ctx.Err() != nil {
 						return results, e.compileSummary(results), ctx.Err()
 					}
 					continue
 				}
-				cmp := CompareWrite(crossResp, obj, owner.Alias, nonOwner.Alias, true)
+
+				// 3. Response Analysis & Differential Comparison
+				cmp := CompareRead(*cachedBaseResp, crossResp, obj, owner.Alias, nonOwner.Alias)
+				if obj.OwnershipUnconfirmed && cmp.State == StateVerified {
+					cmp.State = StateCandidate
+					cmp.Confidence = "MEDIUM"
+					cmp.EvidenceSummary += " (downgraded to candidate because ownership mapping was not conclusively verified)"
+				}
 				res := Result{
 					ID:                uuid.New().String(),
 					AssessmentID:      actx.AssessmentID,
@@ -570,7 +796,7 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 					OWASPRef:          meta.OWASP,
 					CWERef:            meta.CWE,
 					Endpoint:          ep.PathPattern,
-					Method:            ep.Method,
+					Method:            "GET",
 					ObjectID:          obj.ID,
 					OwnerAlias:        owner.Alias,
 					AccessorAlias:     nonOwner.Alias,
@@ -583,62 +809,11 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 					CreatedAt:         time.Now().UTC(),
 				}
 				if cmp.State == StateVerified || cmp.State == StateCandidate {
-					res.Finding = e.buildFinding(res, meta, targetURL)
+					res.Finding = e.buildFindingWithContext(res, meta, targetURL, obj, nonOwner)
 				}
 				results = append(results, res)
 				testIdx++
-				continue
 			}
-
-			// Read-Only Verification (GET)
-			// 1. Owner Baseline Request
-			baseResp, err := e.sendRequest(ctx, client, "GET", targetURL, owner, nil)
-			if err != nil {
-				if ctx.Err() != nil {
-					return results, e.compileSummary(results), ctx.Err()
-				}
-				continue
-			}
-
-			// 2. Non-Owner Cross-Principal Request
-			crossResp, err := e.sendRequest(ctx, client, "GET", targetURL, nonOwner, nil)
-			if err != nil {
-				if ctx.Err() != nil {
-					return results, e.compileSummary(results), ctx.Err()
-				}
-				continue
-			}
-
-			// 3. Response Analysis & Differential Comparison
-			cmp := CompareRead(baseResp, crossResp, obj, owner.Alias, nonOwner.Alias)
-			res := Result{
-				ID:                uuid.New().String(),
-				AssessmentID:      actx.AssessmentID,
-				ExecutionID:       actx.ExecutionID,
-				Category:          cat,
-				VulnCode:          meta.Code,
-				TestID:            fmt.Sprintf("BOLA-TEST-%03d", testIdx),
-				TestName:          fmt.Sprintf("%s: %s", meta.Name, ep.PathPattern),
-				OWASPRef:          meta.OWASP,
-				CWERef:            meta.CWE,
-				Endpoint:          ep.PathPattern,
-				Method:            "GET",
-				ObjectID:          obj.ID,
-				OwnerAlias:        owner.Alias,
-				AccessorAlias:     nonOwner.Alias,
-				VerificationState: cmp.State,
-				Severity:          cmp.Severity,
-				Confidence:        cmp.Confidence,
-				ObservedStatus:    crossResp.StatusCode,
-				EvidenceSummary:   cmp.EvidenceSummary,
-				EvidenceDetails:   cmp.EvidenceDetails,
-				CreatedAt:         time.Now().UTC(),
-			}
-			if cmp.State == StateVerified || cmp.State == StateCandidate {
-				res.Finding = e.buildFinding(res, meta, targetURL)
-			}
-			results = append(results, res)
-			testIdx++
 		}
 	}
 
@@ -693,14 +868,27 @@ func (e *Engine) sendRequest(ctx context.Context, client *http.Client, method, r
 }
 
 func (e *Engine) buildFinding(r Result, meta CategoryInfo, targetURL string) *report.Finding {
+	return e.buildFindingWithContext(r, meta, targetURL, ObjectIdentifier{}, TestIdentity{})
+}
+
+func (e *Engine) buildFindingWithContext(r Result, meta CategoryInfo, targetURL string, obj ObjectIdentifier, accessor TestIdentity) *report.Finding {
 	sanitizedTarget := SanitizeURL(targetURL)
 	sanitizedEndpoint := SanitizeURL(r.Endpoint)
 	if sanitizedEndpoint == "" {
 		sanitizedEndpoint = sanitizedTarget
 	}
 
+	reqRole := accessor.Role
+	if reqRole == "" {
+		reqRole = r.AccessorAlias
+	}
+	src := obj.DiscoverySource
+	if src == "" {
+		src = "ACTIVE_ENGINE"
+	}
+
 	evidence := RedactText(r.EvidenceSummary)
-	return &report.Finding{
+	f := &report.Finding{
 		ID:          uuid.New().String(),
 		Title:       fmt.Sprintf("[%s] %s on %s", r.VulnCode, meta.Name, r.ObjectID),
 		Category:    fmt.Sprintf("%s / %s", meta.OWASP, meta.Name),
@@ -712,21 +900,62 @@ func (e *Engine) buildFinding(r Result, meta CategoryInfo, targetURL string) *re
 		Description: fmt.Sprintf("[%s / %s] %s", r.VulnCode, meta.OWASP, meta.Description),
 		Evidence:    evidence,
 		EvidenceDetails: report.EvidenceDetails{
-			Observation:     evidence,
-			Location:        sanitizedEndpoint,
-			HTTPMethod:      r.Method,
-			HTTPStatus:      r.ObservedStatus,
-			DetectionMethod: "BOLA_VERIFICATION_ENGINE",
+			Observation:      evidence,
+			Location:         sanitizedEndpoint,
+			HTTPMethod:       r.Method,
+			HTTPStatus:       r.ObservedStatus,
+			DetectionMethod:  "BOLA_VERIFICATION_ENGINE",
+			ExpectedBehavior: fmt.Sprintf("Only owning identity (%s) may access object %s; %s should receive HTTP 403/401/404", r.OwnerAlias, RedactText(r.ObjectID), r.AccessorAlias),
+			ObservedBehavior: evidence,
 			Details: map[string]string{
-				"category":       string(r.Category),
-				"vuln_code":      r.VulnCode,
-				"object_id":      RedactText(r.ObjectID),
-				"owner_alias":    r.OwnerAlias,
-				"accessor_alias": r.AccessorAlias,
+				"category":              string(r.Category),
+				"vuln_code":             r.VulnCode,
+				"object_id":             RedactText(r.ObjectID),
+				"owner_alias":           r.OwnerAlias,
+				"owner_identity":        r.OwnerAlias,
+				"accessor_alias":        r.AccessorAlias,
+				"requesting_identity":   r.AccessorAlias,
+				"requesting_role":       reqRole,
+				"discovery_source":      src,
+				"discovery_confidence":  obj.DiscoveryConfidence,
+				"verification_state":    string(r.VerificationState),
+				"authz_engine_verified": "true",
 			},
 		},
 		Remediation: "Enforce strict object-level authorization on the server side by validating that the authenticated principal possesses legitimate ownership or tenant access rights to the requested resource identifier before fulfilling the request.",
 	}
+	if r.VerificationState == StateVerified {
+		f.Verification = report.VerificationRecord{
+			Status:             report.VerificationVerified,
+			Result:             evidence,
+			Rationale:          evidence,
+			PolicyID:           r.TestID,
+			VerificationMethod: "MULTI_IDENTITY_BOLA_DIFFERENTIAL",
+			AnalysisMethod:     report.AnalysisMethodActive,
+			ConfidenceScore:    95,
+			ReproductionSteps: []string{
+				fmt.Sprintf("1. Authenticate as owning principal (%s) and fetch baseline %s %s", r.OwnerAlias, r.Method, sanitizedTarget),
+				fmt.Sprintf("2. Replay %s %s under non-owner identity (%s, role: %s) using isolated session transport", r.Method, sanitizedTarget, r.AccessorAlias, reqRole),
+				fmt.Sprintf("3. Server returned HTTP %d disclosing owner's protected object data", r.ObservedStatus),
+			},
+			SafeCurlCommand: fmt.Sprintf("curl -s -X %s -H \"Authorization: Bearer [REDACTED]\" %q", r.Method, sanitizedTarget),
+			Attempted:       true,
+		}
+		f.Status = report.FindingStatusConfirmed
+	} else {
+		f.Verification = report.VerificationRecord{
+			Status:             report.VerificationDetected,
+			Result:             evidence,
+			Rationale:          evidence,
+			PolicyID:           r.TestID,
+			VerificationMethod: "MULTI_IDENTITY_BOLA_CANDIDATE",
+			AnalysisMethod:     report.AnalysisMethodActive,
+			ConfidenceScore:    55,
+			Attempted:          true,
+		}
+		f.Status = report.FindingStatusSuspected
+	}
+	return f
 }
 
 func (e *Engine) compileSummary(results []Result) *Summary {
@@ -758,6 +987,7 @@ func (e *Engine) compileSummary(results []Result) *Summary {
 			summary.InconclusiveCount++
 		case StateSkipped:
 			summary.BlockedCount++
+			summary.SkippedCount++
 		}
 
 		cov := summary.CoverageMap[string(r.Category)]
@@ -808,12 +1038,22 @@ func buildTargetURL(baseURL string, ep EndpointTemplate, obj ObjectIdentifier) s
 		pattern = "/" + pattern
 	}
 
-	// Replace {id}, {objectId}, {userId}, {recordId}
+	// Replace explicit param placeholders plus common IDs
 	targetPath := pattern
+	if obj.ParamName != "" {
+		targetPath = strings.ReplaceAll(targetPath, "{"+obj.ParamName+"}", url.PathEscape(obj.ID))
+	}
+	for _, p := range ep.Params {
+		if p != "" && p != "tenantId" {
+			targetPath = strings.ReplaceAll(targetPath, "{"+p+"}", url.PathEscape(obj.ID))
+		}
+	}
 	targetPath = strings.ReplaceAll(targetPath, "{id}", url.PathEscape(obj.ID))
 	targetPath = strings.ReplaceAll(targetPath, "{objectId}", url.PathEscape(obj.ID))
 	targetPath = strings.ReplaceAll(targetPath, "{userId}", url.PathEscape(obj.ID))
 	targetPath = strings.ReplaceAll(targetPath, "{recordId}", url.PathEscape(obj.ID))
+	targetPath = strings.ReplaceAll(targetPath, "{username}", url.PathEscape(obj.ID))
+	targetPath = strings.ReplaceAll(targetPath, "{book_title}", url.PathEscape(obj.ID))
 	if obj.TenantID != "" {
 		targetPath = strings.ReplaceAll(targetPath, "{tenantId}", url.PathEscape(obj.TenantID))
 	}

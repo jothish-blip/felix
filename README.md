@@ -275,6 +275,150 @@ felix update
 
 ---
 
+## Unified Command Architecture (FELIX 1.0)
+
+Felix provides a unified, professional command-line interface where all security assessment capabilities, vulnerability engines, and operational workflows are accessible through one central binary command:
+
+```bash
+felix <command> [flags]
+```
+
+Users do not need to memorize separate binaries, internal package names, or fragmented shell scripts. The CLI enforces a structured hierarchy across five operational categories:
+
+```text
+                            ┌────────────────────────┐
+                            │      felix <cmd>       │
+                            └───────────┬────────────┘
+                                        │
+     ┌──────────────────┬───────────────┼───────────────┬──────────────────┐
+     ▼                  ▼               ▼               ▼                  ▼
+┌──────────┐    ┌──────────────┐ ┌─────────────┐ ┌─────────────┐    ┌─────────────┐
+│  Assess  │    │ Direct Audit │ │ Projects &  │ │Governance & │    │   Core &    │
+│ Workflow │    │   Modules    │ │ Operations  │ │  Reporting  │    │  Utilities  │
+└────┬─────┘    └───────┬──────┘ └──────┬──────┘ └──────┬──────┘    └──────┬──────┘
+     │                  │               │               │                  │
+felix assess     felix recon      felix assessment  felix report     felix capabilities
+                 felix scan       felix target      felix license    felix doctor
+                 felix web        felix client                       felix config
+                 felix api        felix schedule                     felix version
+                 felix auth       felix history                      felix update
+                 felix authz      felix diff                         felix install
+                 felix bola       felix summary                      felix uninstall
+                 felix bfla       felix recover                      felix completion
+                 felix bopla      felix notification                 felix help
+                 felix secrets    felix operator
+                 felix cloud      felix monitor
+                 felix mobile     felix ci
+                 felix cve        felix compliance
+                 felix oast
+```
+
+### 1. Unified Assessment Orchestrator (`felix assess`)
+
+The unified assessment orchestrator runs a complete, multi-stage assessment against an authorized target application and produces HTML, JSON, and SARIF deliverables in a single command.
+
+```bash
+felix assess --target <url> --profile <profile> --output <dir> --auth-confirm [flags]
+```
+
+> [!IMPORTANT]
+> **Mandatory Authorisation Certification:** Active assessments will never assume authorization. You must provide `--auth-confirm` or `--authorizing-party <name>`. If omitted, Felix refuses execution with exit code 2. Direct target commands (`felix web <url>`, `felix api <url>`, etc.) also require explicit operator confirmation.
+
+#### Assessment Profiles
+
+| Profile | Included Modules | Target Use Case | Default Safe Mode |
+| :--- | :--- | :--- | :---: |
+| `quick` | `recon`, `headers`, `secrets`, `cookies` | Rapid passive audit & smoke checks | Yes |
+| `standard` | `recon`, `web`, `api`, `auth`, `headers`, `secrets`, `cookies`, `cors` | Complete web & API application audit | Passive & active |
+| `full` | `recon`, `web`, `api`, `auth`, `authz`, `bola`, `bfla`, `secrets`, `headers`, `cookies`, `cors` | All operationally validated capabilities (excludes experimental/mock-only engines) | Comprehensive |
+| `api` | `recon`, `api`, `auth`, `authz`, `bola`, `bfla`, `headers`, `cors` | Dedicated REST API & access control auditing | API-focused |
+| `custom` | Defined via `--modules <list>` | Targeted penetration testing scenarios (e.g. including `bopla`, `cloud`) | Configurable |
+
+> [!NOTE]
+> **Capability Maturity Guardrails:** The `full` and `api` profiles exclusively execute operationally validated engines. Unvalidated or fixture-only capabilities (`bopla`: `LAB-TESTED`, `cloud`: `MOCK-VALIDATED`, `graphql`: `LAB-TESTED` schema introspection) are excluded from default automated execution and require explicit selection via `--profile custom --modules ...`.
+
+#### Common `felix assess` Examples
+
+```bash
+# Standard assessment generating HTML, JSON, and SARIF deliverables
+felix assess --target https://example.com --profile standard --output ./audit_results --auth-confirm
+
+# Enterprise assessment certifying written authorization party
+felix assess --target https://example.com --profile standard --output ./audit_results --authorizing-party "Acme Corp CISO"
+
+# Rapid quick audit against local test fixture
+felix assess --target http://127.0.0.1:3000 --profile quick --output ./quick_audit --allow-loopback --auth-confirm
+
+# API security assessment with Bearer token authentication
+felix assess --target https://api.example.com --profile api --auth "ey..." --output ./api_audit --auth-confirm
+
+# Dry-run inspection (validates parameters and prints execution plan without network traffic or auth check)
+felix assess --target https://example.com --profile full --output ./audit_plan --dry-run
+
+# Custom assessment running specific modules
+felix assess --target https://example.com --profile custom --modules recon,secrets,headers --output ./custom_out --auth-confirm
+```
+```
+
+### 2. Capabilities & Engine Registry (`felix capabilities`)
+
+Inspect all registered assessment engines, operational maturity status, and license tier requirements:
+
+```bash
+# Formatted table of all engines and maturity levels
+felix capabilities
+
+# Structured JSON matrix for programmatic integration
+felix capabilities --json
+
+# Filter by licensing tier
+felix capabilities --tier COMMUNITY
+```
+
+### 3. Attack-Surface Reconnaissance (`felix recon`)
+
+Automated zero-credential discovery of hosts, subdomains, endpoints, forms, parameters, and technologies:
+
+```bash
+# Discover attack surface assets
+felix recon --target https://example.com
+
+# Discover with detailed endpoint and route listings
+felix recon --target https://example.com --verbose --output inventory.json
+```
+
+### 4. High-Entropy Secret Detection (`felix secrets`)
+
+Scan source code, directories, web endpoints, or raw strings for leaked credentials and API tokens:
+
+```bash
+# Scan a directory recursively (redacts values and outputs findings)
+felix secrets --file ./src
+
+# Scan a remote web page and its JavaScript assets
+felix secrets --url https://example.com
+
+# Scan an inline string with JSON output
+felix secrets --string "AKIAIOSFODNN7EXAMPLE" --json
+```
+
+### 5. Out-of-Band Probing (`felix oast`)
+
+Generate cryptographically secure 128-bit interaction tokens and verify callback receipts for blind vulnerability detection:
+
+```bash
+# Generate interaction token
+felix oast token
+
+# Check for received callbacks
+felix oast verify --token <token>
+
+# Run local OAST HTTP receiver for isolated test fixtures
+felix oast server --port 8088
+```
+
+---
+
 ## Basic Scanning
 
 ### 1. Basic Web Audit
@@ -492,6 +636,8 @@ Felix enforces deterministic Unix exit codes suitable for automation and CI/CD p
 
 ---
 
-## License
+## Proprietary Commercial Notice
 
-Felix is licensed under the [MIT License](LICENSE).
+FELIX is confidential, proprietary software owned exclusively by Jothish. All rights reserved.
+
+This software is strictly private and is **not** licensed under the MIT License or any open-source license. Unauthorized copying, distribution, decompilation, public disclosure, or reverse engineering is strictly prohibited. Commercial security assessments powered by FELIX are delivered solely under formal, written client agreements.

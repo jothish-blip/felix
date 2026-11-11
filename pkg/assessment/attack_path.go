@@ -55,29 +55,99 @@ func ConvertAttackPathToSummary(p correlation.AttackPath) report.AttackPathSumma
 			Confidence:         e.Confidence,
 			Explanation:        e.Explanation,
 			EvidenceReferences: e.EvidenceReferences,
+			IdentityContext:    e.IdentityContext,
+			AuthContext:        e.AuthContext,
+			RequiredPrivileges: e.RequiredPrivileges,
+			ReachabilityStatus: string(e.ReachabilityStatus),
+			ValidationResult:   e.ValidationResult,
 		})
 	}
 
+	var stepSummaries []report.StepVerificationSummary
+	for _, sv := range p.StepVerifications {
+		stepSummaries = append(stepSummaries, report.StepVerificationSummary{
+			StepIndex:           sv.StepIndex,
+			FindingID:           sv.FindingID,
+			EdgeID:              sv.EdgeID,
+			EntryCondition:      sv.EntryCondition,
+			RequiredIdentity:    sv.RequiredIdentity,
+			RequiredPermissions: sv.RequiredPermissions,
+			TargetResource:      sv.TargetResource,
+			Method:              sv.Method,
+			ExpectedResult:      sv.ExpectedResult,
+			ObservedResult:      sv.ObservedResult,
+			EvidenceRefs:        sv.EvidenceRefs,
+			NextStepReachable:   string(sv.NextStepReachable),
+			ValidationStatus:    string(sv.ValidationStatus),
+			HTTPStatus:          sv.HTTPStatus,
+			ImpactVerified:      sv.ImpactVerified,
+			DemonstratedImpact:  sv.DemonstratedImpact,
+			UnverifiedImpact:    sv.UnverifiedImpact,
+			Limitations:         sv.Limitations,
+		})
+	}
+
+	var credSummaries []report.CredentialValidationSummary
+	for _, cv := range p.CredentialValidations {
+		credSummaries = append(credSummaries, report.CredentialValidationSummary{
+			ID:                cv.ID,
+			Status:            string(cv.Status),
+			SourceFindingID:   cv.SourceFindingID,
+			SourceEvidenceRef: cv.SourceEvidenceRef,
+			TokenFingerprint:  cv.TokenFingerprint,
+			TokenKind:         cv.TokenKind,
+			IsPlaceholder:     cv.IsPlaceholder,
+			PlaceholderReason: cv.PlaceholderReason,
+			IntendedIdentity:  cv.IntendedIdentity,
+			ObservedIdentity:  cv.ObservedIdentity,
+			IdentityMatched:   cv.IdentityMatched,
+			TargetScope:       cv.TargetScope,
+			ScopeValid:        cv.ScopeValid,
+			UsabilityChecked:  cv.UsabilityChecked,
+			HTTPStatus:        cv.HTTPStatus,
+			EvidenceSummary:   cv.EvidenceSummary,
+			Limitation:        cv.Limitation,
+		})
+	}
+
+	validationState := string(p.ValidationState)
+	if validationState == "" {
+		validationState = string(p.Status)
+	}
+
 	return report.AttackPathSummary{
-		ID:                p.ID,
-		Title:             p.Title,
-		Status:            string(p.Status),
-		Confidence:        p.Confidence,
-		CombinedRiskLevel: p.CombinedRiskLevel,
-		CombinedRiskScore: p.CombinedRiskScore,
-		RiskRationale:     p.RiskRationale,
-		EntryPoint:        p.EntryPoint,
-		TargetAsset:       p.TargetAsset,
-		PrimaryWeakness:   p.PrimaryWeakness,
-		TerminalImpact:    p.TerminalImpact,
-		Transitions:       transitions,
-		Assumptions:       p.Assumptions,
-		MissingEvidence:   p.MissingEvidence,
-		Remediation:       p.Remediation,
-		NodeIDs:           p.NodeIDs,
-		SyntheticFixture:  p.SyntheticFixture,
-		GraphNodes:        graphNodes,
-		GraphEdges:        graphEdges,
+		ID:                    p.ID,
+		Title:                 p.Title,
+		Status:                string(p.Status),
+		ValidationState:       validationState,
+		Confidence:            p.Confidence,
+		ConfidenceRationale:   p.ConfidenceRationale,
+		CombinedRiskLevel:     p.CombinedRiskLevel,
+		CombinedRiskScore:     p.CombinedRiskScore,
+		RiskRationale:         p.RiskRationale,
+		EntryPoint:            p.EntryPoint,
+		TargetAsset:           p.TargetAsset,
+		PrimaryWeakness:       p.PrimaryWeakness,
+		TerminalImpact:        p.TerminalImpact,
+		IdentityContext:       p.IdentityContext,
+		Preconditions:         p.Preconditions,
+		ReachabilityStatus:    string(p.ReachabilityStatus),
+		EvidenceRefs:          p.EvidenceRefs,
+		DemonstratedImpact:    p.DemonstratedImpact,
+		UnverifiedImpact:      p.UnverifiedImpact,
+		StepVerifications:     stepSummaries,
+		CredentialValidations: credSummaries,
+		Limitations:           p.Limitations,
+		VerifiedTransitions:   p.VerifiedTransitions,
+		UnverifiedTransitions: p.UnverifiedTransitions,
+		Transitions:           transitions,
+		Assumptions:           p.Assumptions,
+		MissingEvidence:       p.MissingEvidence,
+		Remediation:           p.Remediation,
+		NodeIDs:               p.NodeIDs,
+		SyntheticFixture:      p.SyntheticFixture,
+		GraphNodes:            graphNodes,
+		GraphEdges:            graphEdges,
 	}
 }
 

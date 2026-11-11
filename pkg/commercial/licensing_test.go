@@ -351,9 +351,12 @@ func TestLicensing_09_CommunityTierFeatureRestrictions(t *testing.T) {
 	// Default community mode without installed commercial license
 	mgr, _, _ := setupTestManager(t)
 
-	// Basic recon feature allowed in Community
+	// Basic recon and basic scan features allowed in Community
 	if err := mgr.CheckFeature(FeatureZeroCredentialRecon); err != nil {
 		t.Errorf("expected zero credential recon permitted in Community, got: %v", err)
+	}
+	if err := mgr.CheckFeature(FeatureScanBasic); err != nil {
+		t.Errorf("expected scan.basic permitted in Community, got: %v", err)
 	}
 
 	// Enterprise features strictly blocked in Community
@@ -365,6 +368,8 @@ func TestLicensing_09_CommunityTierFeatureRestrictions(t *testing.T) {
 		FeatureComplianceVanta,
 		FeatureComplianceDrata,
 		FeatureAirGappedExport,
+		FeatureCloudSecurity,
+		FeatureMobileAPK,
 	}
 
 	for _, feat := range enterpriseFeatures {

@@ -706,12 +706,12 @@ func TestCorrelation_Category23_ConfidenceLevelsAccurate(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// Category 24: RuleCatalog Metadata Complete for All 15 Rules
+// Category 24: RuleCatalog Metadata Complete for All 16 Rules (COR-01..COR-10, COR-CRED-PIVOT, and 5 Structural Rules)
 // -----------------------------------------------------------------------------
 func TestCorrelation_Category24_RuleCatalogMetadataComplete(t *testing.T) {
 	allRules := correlation.AllRules()
-	if len(allRules) != 15 {
-		t.Fatalf("expected 15 rules in AllRules(), got %d", len(allRules))
+	if len(allRules) != 16 {
+		t.Fatalf("expected 16 rules in AllRules(), got %d", len(allRules))
 	}
 
 	for _, code := range allRules {

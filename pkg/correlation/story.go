@@ -48,14 +48,26 @@ func GenerateSecurityStory(path *AttackPath) report.SecurityStory {
 	}
 
 	// 2. Action enabled & 5. Asset affected & 6. Impact
+	isVerified := IsConfirmedStatus(path.Status)
 	actionEnabled := fmt.Sprintf("Traversing from %s enables access to %s.", firstNode.Title, lastNode.Title)
-	if path.Status != PathVerified {
-		actionEnabled = fmt.Sprintf("Traversing from %s potentially enables access to %s (candidate).", firstNode.Title, lastNode.Title)
+	if !isVerified {
+		switch path.Status {
+		case PathNotReachable:
+			actionEnabled = fmt.Sprintf("Transition from %s attempted to reach %s, but was blocked or unreachable.", firstNode.Title, lastNode.Title)
+		case PathNotTested:
+			actionEnabled = fmt.Sprintf("Structural link from %s potentially relates to %s; active transition validation was not tested.", firstNode.Title, lastNode.Title)
+		case PathHighConfidence:
+			actionEnabled = fmt.Sprintf("Verified evidence partially traverses from %s toward %s, with remaining step(s) awaiting confirmation.", firstNode.Title, lastNode.Title)
+		default:
+			actionEnabled = fmt.Sprintf("Traversing from %s potentially enables access to %s (candidate).", firstNode.Title, lastNode.Title)
+		}
 	}
 
 	impactDesc := path.TerminalImpact
-	if impactDesc == "" {
-		if path.Status == PathVerified {
+	if path.DemonstratedImpact != "" && !isVerified {
+		impactDesc = fmt.Sprintf("Demonstrated: %s | Unverified: %s", path.DemonstratedImpact, firstNonEmpty(path.UnverifiedImpact, path.TerminalImpact))
+	} else if impactDesc == "" {
+		if isVerified {
 			impactDesc = fmt.Sprintf("Compromise of %s via verified relationship chain.", path.TargetAsset)
 		} else {
 			impactDesc = fmt.Sprintf("Potential compromise of %s via candidate relationship chain.", path.TargetAsset)
@@ -66,20 +78,33 @@ func GenerateSecurityStory(path *AttackPath) report.SecurityStory {
 	investigateFirst, remediationGuidance := deriveBottleneckRemediation(path)
 
 	storyTitle := path.Title
-	if path.Status != PathVerified {
-		if path.Status == PathInconclusive {
+	if !isVerified {
+		switch path.Status {
+		case PathHighConfidence:
+			if !strings.Contains(storyTitle, "(High Confidence)") {
+				storyTitle = fmt.Sprintf("Partially Validated Attack Path: %s (High Confidence)", storyTitle)
+			}
+		case PathNotReachable:
+			if !strings.Contains(storyTitle, "(Not Reachable)") {
+				storyTitle = fmt.Sprintf("Blocked Attack Path: %s (Not Reachable)", storyTitle)
+			}
+		case PathNotTested:
+			if !strings.Contains(storyTitle, "(Not Tested)") {
+				storyTitle = fmt.Sprintf("Untested Attack Path: %s (Not Tested)", storyTitle)
+			}
+		case PathInconclusive:
 			if !strings.Contains(storyTitle, "(Inconclusive)") {
 				storyTitle = fmt.Sprintf("Potential Attack Path: %s (Inconclusive)", storyTitle)
 			}
-		} else if path.Status == PathCandidate {
+		case PathCandidate:
 			if !strings.Contains(storyTitle, "(Candidate)") {
 				storyTitle = fmt.Sprintf("Potential Attack Path: %s (Candidate)", storyTitle)
 			}
-		} else if path.Status == PathEvidenceSupported {
+		case PathEvidenceSupported:
 			if !strings.Contains(storyTitle, "(Evidence-Supported)") {
 				storyTitle = fmt.Sprintf("Attack Path: %s (Evidence-Supported)", storyTitle)
 			}
-		} else {
+		default:
 			if !strings.Contains(storyTitle, "(Observed)") {
 				storyTitle = fmt.Sprintf("Attack Path: %s (Observed)", storyTitle)
 			}

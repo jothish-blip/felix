@@ -36,6 +36,10 @@ func isPIDAlive(pid int) bool {
 	return p.Signal(syscall.Signal(0)) == nil
 }
 
+func isChromiumProcess(pid int) (bool, string) {
+	return isPIDAlive(pid), "browser"
+}
+
 // GetChildPIDs returns child processes for POSIX platforms.
 func GetChildPIDs(parentPID int) []int {
 	return nil

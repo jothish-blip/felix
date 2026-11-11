@@ -695,8 +695,8 @@ func TestSwarm_10_AcceptanceWorkloadEndToEnd(t *testing.T) {
 				Timestamp:   time.Now().UTC(),
 			}
 		}
-		// Small simulated processing time (10ms)
-		time.Sleep(10 * time.Millisecond)
+		// Small simulated processing time (20ms)
+		time.Sleep(20 * time.Millisecond)
 		return findings, nil
 	}
 
@@ -718,10 +718,26 @@ func TestSwarm_10_AcceptanceWorkloadEndToEnd(t *testing.T) {
 		}
 	}
 
-	// Kill Worker 3 mid-scan after brief execution
-	time.Sleep(60 * time.Millisecond)
-	workers[2].Kill()
-	t.Logf("Simulated mid-scan crash: Worker 3 (worker-node-03) killed")
+	// Find a worker executing an active in-flight task and kill it mid-scan
+	var victimWorker *Worker
+	deadlineKill := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadlineKill) {
+		for _, w := range workers {
+			if at, ok := w.activeTaskID.Load().(string); ok && at != "" {
+				victimWorker = w
+				break
+			}
+		}
+		if victimWorker != nil {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if victimWorker == nil {
+		victimWorker = workers[2]
+	}
+	victimWorker.Kill()
+	t.Logf("Simulated mid-scan crash: Worker %s killed while executing in-flight task", victimWorker.ID())
 
 	// Wait for all 100 asset scans to complete (including reassignment)
 	deadline := time.Now().Add(10 * time.Second)
@@ -743,9 +759,16 @@ func TestSwarm_10_AcceptanceWorkloadEndToEnd(t *testing.T) {
 	}
 
 	// Give single writer time to commit all findings to SQLite
-	time.Sleep(400 * time.Millisecond)
-
-	persistedFindings, err := writer.CountPersistedFindings()
+	var persistedFindings int
+	var err error
+	flushDeadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(flushDeadline) {
+		persistedFindings, err = writer.CountPersistedFindings()
+		if err == nil && persistedFindings == expectedFindingsTotal {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 	if err != nil {
 		t.Fatalf("CountPersistedFindings failed: %v", err)
 	}

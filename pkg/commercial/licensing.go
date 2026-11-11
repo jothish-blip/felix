@@ -63,6 +63,7 @@ const (
 	FeatureZeroCredentialRecon = "recon.zero_credential"
 	FeatureCustomCronSchedules = "cpaas.custom_cron"
 	FeatureUnlimitedTargets    = "assessment.unlimited_targets"
+	FeatureScanBasic           = "scan.basic"
 
 	// Feature Aliases
 	FeatureCommercialCPaaS    = FeatureCPaaS
@@ -1215,6 +1216,7 @@ func (m *LicenseManager) buildDefaultCommunityLicense() *SignedLicense {
 				MaxHistoricalRetentionDays: 14,
 				AllowedFeatures: []string{
 					FeatureZeroCredentialRecon,
+					FeatureScanBasic,
 				},
 				AllowedProfiles:          []string{"standard"},
 				AllowAirGappedExport:     false,

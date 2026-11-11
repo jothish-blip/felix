@@ -87,12 +87,17 @@ func (e *Engine) AnalyzeTarget(
 	// 3. Collect all discovered paths and URLs from crawled assets and HTML links
 	var discoveredPaths []string
 	seenPaths := make(map[string]struct{})
+	pathParams := make(map[string][]string)
+
 	for _, a := range crawledAssets {
 		if parsed, err := url.Parse(a.URL); err == nil && parsed.Path != "" {
 			cleanP := parsed.Path
 			if _, exists := seenPaths[cleanP]; !exists {
 				seenPaths[cleanP] = struct{}{}
 				discoveredPaths = append(discoveredPaths, cleanP)
+			}
+			for k := range parsed.Query() {
+				pathParams[cleanP] = append(pathParams[cleanP], k)
 			}
 		}
 	}
@@ -102,10 +107,27 @@ func (e *Engine) AnalyzeTarget(
 		for _, m := range matches {
 			if len(m) > 1 {
 				rawHref := m[1]
-				if strings.HasPrefix(rawHref, "/") {
+				if strings.HasPrefix(rawHref, "/") || (!strings.Contains(rawHref, "://") && !strings.HasPrefix(rawHref, "mailto:") && !strings.HasPrefix(rawHref, "javascript:")) {
 					cleanP := rawHref
-					if idx := strings.IndexAny(cleanP, "?#"); idx != -1 {
+					if !strings.HasPrefix(cleanP, "/") {
+						cleanP = "/" + cleanP
+					}
+					var linkParams []string
+					if idx := strings.Index(cleanP, "?"); idx != -1 {
+						queryPart := cleanP[idx+1:]
 						cleanP = cleanP[:idx]
+						for _, pair := range strings.Split(queryPart, "&") {
+							kv := strings.SplitN(pair, "=", 2)
+							if len(kv) > 0 && kv[0] != "" {
+								linkParams = append(linkParams, kv[0])
+							}
+						}
+					}
+					if idx := strings.Index(cleanP, "#"); idx != -1 {
+						cleanP = cleanP[:idx]
+					}
+					if len(linkParams) > 0 {
+						pathParams[cleanP] = append(pathParams[cleanP], linkParams...)
 					}
 					if _, exists := seenPaths[cleanP]; !exists {
 						seenPaths[cleanP] = struct{}{}
@@ -143,6 +165,26 @@ func (e *Engine) AnalyzeTarget(
 	forms := e.formExt.ExtractForms(htmlContent, parsedTarget)
 	if len(forms) > 0 {
 		e.formExt.IngestForms(inv, asmID, execID, targetID, rootAppID, forms)
+
+		for _, f := range forms {
+			cleanAction := strings.TrimSpace(f.Action)
+			if cleanAction != "" {
+				if !strings.HasPrefix(cleanAction, "/") && !strings.Contains(cleanAction, "://") {
+					cleanAction = "/" + cleanAction
+				}
+				if strings.HasPrefix(cleanAction, "/") {
+					if _, exists := seenPaths[cleanAction]; !exists {
+						seenPaths[cleanAction] = struct{}{}
+						discoveredPaths = append(discoveredPaths, cleanAction)
+					}
+					for _, fld := range f.Fields {
+						if fld.Name != "" {
+							pathParams[cleanAction] = append(pathParams[cleanAction], fld.Name)
+						}
+					}
+				}
+			}
+		}
 
 		// 8. Authentication Surface Discovery from Forms
 		formAuthSurfaces := e.authExt.ExtractFromForms(forms)
@@ -195,8 +237,25 @@ func (e *Engine) AnalyzeTarget(
 		}
 	}
 
-	// 10. Check all discovered paths for authentication routes
+	// 10. Ingest discovered paths as Endpoint assets
 	for _, p := range discoveredPaths {
+		fullURL := fmt.Sprintf("%s://%s%s", parsedTarget.Scheme, parsedTarget.Host, p)
+		if isScopeAllowed == nil || isScopeAllowed(fullURL) {
+			classification := ""
+			if strings.HasPrefix(p, "/api/") || strings.HasPrefix(p, "/rest/") {
+				classification = "API"
+			}
+			epAsset := NewEndpointAsset(asmID, execID, targetID, "GET", fullURL, EndpointDetails{
+				URL:            fullURL,
+				HTTPMethod:     "GET",
+				Path:           p,
+				Parameters:     pathParams[p],
+				Classification: classification,
+			})
+			epAsset.ParentID = rootAppID
+			epAsset.DiscoveryMethod = "HTML_LINK_EXTRACTION"
+			inv.AddAsset(epAsset)
+		}
 		if authType, isAuth := ClassifyAuthRoute(p); isAuth {
 			e.authExt.IngestAuthSurfaces(inv, asmID, execID, targetID, rootAppID, []DiscoveredAuthSurface{
 				{

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -169,13 +170,19 @@ func extractSessionCookie(cookies map[string]string) string {
 
 // ObjectIdentifier models a reference to a protected object, its location, and owner.
 type ObjectIdentifier struct {
-	ID            string `json:"id"`
-	Type          string `json:"type,omitempty"` // "user", "order", "document", "record", etc.
-	Location      string `json:"location"`       // "path", "query", "body"
-	ParamName     string `json:"param_name"`     // e.g. "id", "userId", "order_id"
-	OwnerIdentity string `json:"owner_identity"` // Alias of owner identity (e.g. "user_b")
-	TenantID      string `json:"tenant_id,omitempty"`
-	ProtectedData string `json:"protected_data,omitempty"` // Known protected field or marker
+	ID                   string `json:"id"`
+	Type                 string `json:"type,omitempty"` // "user", "order", "document", "record", etc.
+	Location             string `json:"location"`       // "path", "query", "body"
+	ParamName            string `json:"param_name"`     // e.g. "id", "userId", "order_id"
+	TemplatePath         string `json:"template_path,omitempty"`
+	OwnerIdentity        string `json:"owner_identity"` // Alias of owner identity (e.g. "user_b")
+	TenantID             string `json:"tenant_id,omitempty"`
+	ProtectedData        string `json:"protected_data,omitempty"` // Known protected field or marker
+	DiscoverySource      string `json:"discovery_source,omitempty"`
+	DiscoveryConfidence  string `json:"discovery_confidence,omitempty"`
+	OwnershipEstablished bool   `json:"ownership_established,omitempty"`
+	OwnershipUnconfirmed bool   `json:"ownership_unconfirmed,omitempty"`
+	IsPublic             bool   `json:"is_public,omitempty"`
 }
 
 // EndpointTemplate describes an endpoint surface evaluated for BOLA.
@@ -262,14 +269,17 @@ type CategoryCoverage struct {
 
 // Summary aggregates BOLA verification results across categories.
 type Summary struct {
-	TotalTests         int                         `json:"total_tests"`
-	CategoriesCovered  int                         `json:"categories_covered"`
-	VerifiedCount      int                         `json:"verified_count"`
-	CandidateCount     int                         `json:"candidate_count"`
-	NotVulnerableCount int                         `json:"not_vulnerable_count"`
-	InconclusiveCount  int                         `json:"inconclusive_count"`
-	BlockedCount       int                         `json:"blocked_count"`
-	CoverageMap        map[string]CategoryCoverage `json:"coverage_map"`
+	TotalTests           int                         `json:"total_tests"`
+	CategoriesCovered    int                         `json:"categories_covered"`
+	VerifiedCount        int                         `json:"verified_count"`
+	CandidateCount       int                         `json:"candidate_count"`
+	NotVulnerableCount   int                         `json:"not_vulnerable_count"`
+	InconclusiveCount    int                         `json:"inconclusive_count"`
+	BlockedCount         int                         `json:"blocked_count"`
+	SkippedCount         int                         `json:"skipped_count,omitempty"`
+	ObjectsDiscovered    int                         `json:"objects_discovered,omitempty"`
+	ObjectsWithOwnership int                         `json:"objects_with_ownership,omitempty"`
+	CoverageMap          map[string]CategoryCoverage `json:"coverage_map"`
 }
 
 // RunRecord represents a persistent run record in the database.
@@ -295,12 +305,18 @@ type AssessmentContext struct {
 	BaseURL                 string
 	Endpoints               []EndpointTemplate
 	Identities              []TestIdentity
+	IdentityClients         map[string]*http.Client
 	Objects                 []ObjectIdentifier
 	IsAllowed               func(string) bool
 	IsExcluded              func(string) bool
 	SyntheticFixture        bool
 	AllowStateChangingTests bool
+	AuthorizedFixtureHosts  []string
+	IsFixtureTarget         func(target string) bool
 	DryRun                  bool
+	TestAllIdentities       bool
+	MaxObjects              int
+	MaxRequestsPerIdentity  int
 	Authorization           *auth.AuthorizationRecord
 	MaxRequests             int
 	DispatchedRequests      *int32
@@ -352,4 +368,9 @@ func SanitizeURL(rawURL string) string {
 	u.RawQuery = ""
 	u.User = nil
 	return u.String()
+}
+
+// IsIsolatedFixtureTarget validates that a mutation target belongs to an isolated synthetic fixture.
+func IsIsolatedFixtureTarget(rawURL string, authorizedFixtures []string, isFixtureFunc func(string) bool) bool {
+	return auth.IsIsolatedFixtureTarget(rawURL, authorizedFixtures, isFixtureFunc)
 }

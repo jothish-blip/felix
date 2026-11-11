@@ -148,12 +148,39 @@ func SanitizeReport(rep Report) Report {
 	for i, p := range rep.AttackPaths {
 		cleanP := p
 		cleanP.Title = SanitizeEvidence(p.Title)
+		cleanP.ConfidenceRationale = SanitizeEvidence(p.ConfidenceRationale)
 		cleanP.RiskRationale = SanitizeEvidence(p.RiskRationale)
 		cleanP.EntryPoint = secrets.SanitizeURL(p.EntryPoint)
 		cleanP.TargetAsset = secrets.SanitizeURL(p.TargetAsset)
 		cleanP.PrimaryWeakness = SanitizeEvidence(p.PrimaryWeakness)
 		cleanP.TerminalImpact = SanitizeEvidence(p.TerminalImpact)
+		cleanP.IdentityContext = SanitizeEvidence(p.IdentityContext)
+		cleanP.DemonstratedImpact = SanitizeEvidence(p.DemonstratedImpact)
+		cleanP.UnverifiedImpact = SanitizeEvidence(p.UnverifiedImpact)
 		cleanP.Remediation = SanitizeEvidence(p.Remediation)
+
+		if len(p.Preconditions) > 0 {
+			cleanPre := make([]string, len(p.Preconditions))
+			for j, pre := range p.Preconditions {
+				cleanPre[j] = SanitizeEvidence(pre)
+			}
+			cleanP.Preconditions = cleanPre
+		}
+		if len(p.EvidenceRefs) > 0 {
+			cleanRefs := make([]string, len(p.EvidenceRefs))
+			for j, er := range p.EvidenceRefs {
+				cleanRefs[j] = SanitizeEvidence(er)
+			}
+			cleanP.EvidenceRefs = cleanRefs
+		}
+		if len(p.Limitations) > 0 {
+			cleanLim := make([]string, len(p.Limitations))
+			for j, lm := range p.Limitations {
+				cleanLim[j] = SanitizeEvidence(lm)
+			}
+			cleanP.Limitations = cleanLim
+		}
+
 		cleanTr := make([]string, len(p.Transitions))
 		for j, tr := range p.Transitions {
 			cleanTr[j] = SanitizeEvidence(tr)
@@ -169,6 +196,53 @@ func SanitizeReport(rep Report) Report {
 			cleanMe[j] = SanitizeEvidence(me)
 		}
 		cleanP.MissingEvidence = cleanMe
+
+		if len(p.StepVerifications) > 0 {
+			cleanSteps := make([]StepVerificationSummary, len(p.StepVerifications))
+			for j, sv := range p.StepVerifications {
+				csv := sv
+				csv.EntryCondition = SanitizeEvidence(sv.EntryCondition)
+				csv.RequiredIdentity = SanitizeEvidence(sv.RequiredIdentity)
+				csv.RequiredPermissions = SanitizeEvidence(sv.RequiredPermissions)
+				csv.TargetResource = secrets.SanitizeURL(sv.TargetResource)
+				csv.ExpectedResult = SanitizeEvidence(sv.ExpectedResult)
+				csv.ObservedResult = SanitizeEvidence(sv.ObservedResult)
+				csv.DemonstratedImpact = SanitizeEvidence(sv.DemonstratedImpact)
+				csv.UnverifiedImpact = SanitizeEvidence(sv.UnverifiedImpact)
+				if len(sv.EvidenceRefs) > 0 {
+					erCopy := make([]string, len(sv.EvidenceRefs))
+					for k, er := range sv.EvidenceRefs {
+						erCopy[k] = SanitizeEvidence(er)
+					}
+					csv.EvidenceRefs = erCopy
+				}
+				if len(sv.Limitations) > 0 {
+					limCopy := make([]string, len(sv.Limitations))
+					for k, lm := range sv.Limitations {
+						limCopy[k] = SanitizeEvidence(lm)
+					}
+					csv.Limitations = limCopy
+				}
+				cleanSteps[j] = csv
+			}
+			cleanP.StepVerifications = cleanSteps
+		}
+
+		if len(p.CredentialValidations) > 0 {
+			cleanCreds := make([]CredentialValidationSummary, len(p.CredentialValidations))
+			for j, cv := range p.CredentialValidations {
+				ccv := cv
+				ccv.SourceEvidenceRef = SanitizeEvidence(cv.SourceEvidenceRef)
+				ccv.PlaceholderReason = SanitizeEvidence(cv.PlaceholderReason)
+				ccv.IntendedIdentity = SanitizeEvidence(cv.IntendedIdentity)
+				ccv.ObservedIdentity = SanitizeEvidence(cv.ObservedIdentity)
+				ccv.TargetScope = secrets.SanitizeURL(cv.TargetScope)
+				ccv.EvidenceSummary = SanitizeEvidence(cv.EvidenceSummary)
+				ccv.Limitation = SanitizeEvidence(cv.Limitation)
+				cleanCreds[j] = ccv
+			}
+			cleanP.CredentialValidations = cleanCreds
+		}
 
 		if len(p.GraphNodes) > 0 {
 			cleanNodes := make([]AttackPathNode, len(p.GraphNodes))
@@ -189,6 +263,10 @@ func SanitizeReport(rep Report) Report {
 				ce.SourceTitle = SanitizeEvidence(e.SourceTitle)
 				ce.TargetTitle = SanitizeEvidence(e.TargetTitle)
 				ce.Explanation = SanitizeEvidence(e.Explanation)
+				ce.IdentityContext = SanitizeEvidence(e.IdentityContext)
+				ce.AuthContext = SanitizeEvidence(e.AuthContext)
+				ce.RequiredPrivileges = SanitizeEvidence(e.RequiredPrivileges)
+				ce.ValidationResult = SanitizeEvidence(e.ValidationResult)
 				cleanEdges[j] = ce
 			}
 			cleanP.GraphEdges = cleanEdges
@@ -201,6 +279,9 @@ func SanitizeReport(rep Report) Report {
 	rep.TopPriorities = cleanPriorities
 	rep.SecurityStories = cleanStories
 	rep.AttackPaths = cleanPaths
+	if rep.AuthorizationReport != nil {
+		rep.AuthorizationReport = SanitizeAuthorizationReport(rep.AuthorizationReport)
+	}
 	if len(rep.Metadata) > 0 {
 		rep.Metadata = secrets.RedactMap(rep.Metadata)
 	}

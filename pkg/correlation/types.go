@@ -30,7 +30,8 @@ const (
 // in an attack path. Root cause sharing and structural asset relations must not form attack path edges.
 func (rt RelationshipType) IsSequenceType() bool {
 	switch rt {
-	case RelEnables, RelExposes, RelBypasses, RelDependsOn, RelAmplifiesImpact, RelReaches:
+	case RelEnables, RelExposes, RelBypasses, RelDependsOn, RelAmplifiesImpact, RelReaches,
+		RelCredEnablesAccess, RelInfoRevealsResource, RelBACCrossTenant, RelPrivEscRestricted, RelSessionCompromise:
 		return true
 	default:
 		return false
@@ -84,6 +85,7 @@ const (
 	RuleCORSharedComp   RuleCode = "COR-SHARED-COMP"   // Shared component or backend resource
 	RuleCORRelatedEv    RuleCode = "COR-RELATED-EV"    // Shared technical indicator or evidence reference
 	RuleCORPossible     RuleCode = "COR-POSSIBLE"      // Heuristic infrastructure association
+	RuleCORCredPivot    RuleCode = "COR-CRED-PIVOT"    // Credential exposure enabling authenticated access
 )
 
 // RuleMetadata provides human-readable documentation and standards cross-references for a rule.
@@ -178,6 +180,14 @@ var RuleCatalog = map[RuleCode]RuleMetadata{
 		CWE:         "CWE-942",
 		WSTG:        "WSTG-CLNT-07",
 	},
+	RuleCORCredPivot: {
+		Code:        RuleCORCredPivot,
+		Name:        "Credential Exposure to Authenticated Access",
+		Description: "Connects a verified non-placeholder credential exposure to an authorized or cross-tenant transition under that identity.",
+		EdgeType:    RelCredEnablesAccess,
+		CWE:         "CWE-798",
+		WSTG:        "WSTG-ATHN-01",
+	},
 	RuleCORSameEndpoint: {
 		Code:        RuleCORSameEndpoint,
 		Name:        "Same Canonical Endpoint",
@@ -215,6 +225,7 @@ func AllRules() []RuleCode {
 	return []RuleCode{
 		RuleCOR01, RuleCOR02, RuleCOR03, RuleCOR04, RuleCOR05,
 		RuleCOR06, RuleCOR07, RuleCOR08, RuleCOR09, RuleCOR10,
+		RuleCORCredPivot,
 		RuleCORSameEndpoint, RuleCORSameAsset, RuleCORSharedComp, RuleCORRelatedEv, RuleCORPossible,
 	}
 }
@@ -288,36 +299,55 @@ type Relationship struct {
 	AssetID            string           `json:"asset_id,omitempty"`
 	AssetKey           string           `json:"asset_key,omitempty"`
 	IsExact            bool             `json:"is_exact"`
-	EvidenceReferences []string         `json:"evidence_references"`
-	Explanation        string           `json:"explanation"`
-	Prerequisites      []string         `json:"prerequisites,omitempty"`
-	Assumptions        []string         `json:"assumptions,omitempty"`
-	InconclusiveReason string           `json:"inconclusive_reason,omitempty"`
+	EvidenceReferences   []string                      `json:"evidence_references"`
+	Explanation          string                        `json:"explanation"`
+	IdentityContext      string                        `json:"identity_context,omitempty"`
+	AuthContext          string                        `json:"auth_context,omitempty"`
+	RequiredPrivileges   string                        `json:"required_privileges,omitempty"`
+	ReachabilityStatus   ReachabilityStatus            `json:"reachability_status,omitempty"`
+	ValidationResult     string                        `json:"validation_result,omitempty"`
+	CredentialValidation *CredentialVerificationResult `json:"credential_validation,omitempty"`
+	Prerequisites        []string                      `json:"prerequisites,omitempty"`
+	Assumptions          []string                      `json:"assumptions,omitempty"`
+	InconclusiveReason   string                        `json:"inconclusive_reason,omitempty"`
 }
 
 // AttackPath models an ordered sequence of findings connected by validated relationships,
 // representing a coherent multi-step security risk.
 type AttackPath struct {
-	ID                 string                `json:"id"`
-	Title              string                `json:"title"`
-	NodeIDs            []string              `json:"node_ids"`
-	Nodes              []NormalizedFinding   `json:"nodes"`
-	Edges              []Relationship        `json:"edges"`
-	EntryPoint         string                `json:"entry_point,omitempty"`
-	TargetAsset        string                `json:"target_asset"`
-	PrimaryWeakness    string                `json:"primary_weakness"`
-	TerminalImpact     string                `json:"terminal_impact"`
-	Status             PathStatus            `json:"status"`
-	Confidence         string                `json:"confidence"`
-	CombinedRiskLevel  string                `json:"combined_risk_level"`
-	CombinedRiskScore  int                   `json:"combined_risk_score"`
-	RiskRationale      string                `json:"risk_rationale"`
-	Assumptions        []string              `json:"assumptions,omitempty"`
-	MissingEvidence    []string              `json:"missing_evidence,omitempty"`
-	SecurityStory      report.SecurityStory  `json:"security_story"`
-	Remediation        string                `json:"remediation"`
-	SyntheticFixture   bool                  `json:"synthetic_fixture,omitempty"`
-	CreatedAt          time.Time             `json:"created_at"`
+	ID                    string                         `json:"id"`
+	Title                 string                         `json:"title"`
+	NodeIDs               []string                       `json:"node_ids"`
+	Nodes                 []NormalizedFinding            `json:"nodes"`
+	Edges                 []Relationship                 `json:"edges"`
+	EntryPoint            string                         `json:"entry_point,omitempty"`
+	TargetAsset           string                         `json:"target_asset"`
+	PrimaryWeakness       string                         `json:"primary_weakness"`
+	TerminalImpact        string                         `json:"terminal_impact"`
+	Status                PathStatus                     `json:"status"`
+	ValidationState       PathStatus                     `json:"validation_state,omitempty"`
+	Confidence            string                         `json:"confidence"`
+	ConfidenceRationale   string                         `json:"confidence_rationale,omitempty"`
+	IdentityContext       string                         `json:"identity_context,omitempty"`
+	Preconditions         []string                       `json:"preconditions,omitempty"`
+	ReachabilityStatus    ReachabilityStatus             `json:"reachability_status,omitempty"`
+	EvidenceRefs          []string                       `json:"evidence_refs,omitempty"`
+	DemonstratedImpact    string                         `json:"demonstrated_impact,omitempty"`
+	UnverifiedImpact      string                         `json:"unverified_impact,omitempty"`
+	StepVerifications     []StepVerification             `json:"step_verifications,omitempty"`
+	CredentialValidations []CredentialVerificationResult `json:"credential_validations,omitempty"`
+	Limitations           []string                       `json:"limitations,omitempty"`
+	VerifiedTransitions   int                            `json:"verified_transitions,omitempty"`
+	UnverifiedTransitions int                            `json:"unverified_transitions,omitempty"`
+	CombinedRiskLevel     string                         `json:"combined_risk_level"`
+	CombinedRiskScore     int                            `json:"combined_risk_score"`
+	RiskRationale         string                         `json:"risk_rationale"`
+	Assumptions           []string                       `json:"assumptions,omitempty"`
+	MissingEvidence       []string                       `json:"missing_evidence,omitempty"`
+	SecurityStory         report.SecurityStory           `json:"security_story"`
+	Remediation           string                         `json:"remediation"`
+	SyntheticFixture      bool                           `json:"synthetic_fixture,omitempty"`
+	CreatedAt             time.Time                      `json:"created_at"`
 }
 
 // RuleCoverageStat tracks activity for a single correlation rule.
@@ -335,32 +365,40 @@ type Summary struct {
 	ExcludedFindings         int                         `json:"excluded_findings"`
 	CandidateRelationships   int                         `json:"candidate_relationships"`
 	ConfirmedRelationships   int                         `json:"confirmed_relationships"`
-	CandidatePaths           int                         `json:"candidate_paths"`
-	VerifiedPaths            int                         `json:"verified_paths"`
-	InconclusivePaths        int                         `json:"inconclusive_paths"`
-	ObservedPaths            int                         `json:"observed_paths"`
-	EvidenceSupportedPaths   int                         `json:"evidence_supported_paths,omitempty"`
-	HighestRiskLevel         string                      `json:"highest_risk_level"`
-	HighestRiskScore         int                         `json:"highest_risk_score"`
-	AffectedAssets           []string                    `json:"affected_assets"`
-	AssetAssociations        []AssetAssociation          `json:"asset_associations,omitempty"`
-	Relationships            []Relationship              `json:"relationships,omitempty"`
-	KeyRemediationPriorities []string                    `json:"key_remediation_priorities"`
-	BottleneckAnalysis       *BottleneckAnalysisResult   `json:"bottleneck_analysis,omitempty"`
-	LimitsReached            bool                        `json:"limits_reached,omitempty"`
-	TruncationReason         string                      `json:"truncation_reason,omitempty"`
-	SyntheticFixture         bool                        `json:"synthetic_fixture,omitempty"`
-	RuleStats                map[string]RuleCoverageStat `json:"rule_stats"`
+	CandidatePaths           int                            `json:"candidate_paths"`
+	VerifiedPaths            int                            `json:"verified_paths"`
+	ConfirmedPaths           int                            `json:"confirmed_paths,omitempty"`
+	HighConfidencePaths      int                            `json:"high_confidence_paths,omitempty"`
+	InconclusivePaths        int                            `json:"inconclusive_paths"`
+	NotReachablePaths        int                            `json:"not_reachable_paths,omitempty"`
+	NotTestedPaths           int                            `json:"not_tested_paths,omitempty"`
+	ObservedPaths            int                            `json:"observed_paths"`
+	EvidenceSupportedPaths   int                            `json:"evidence_supported_paths,omitempty"`
+	IndividualFindingsCount  int                            `json:"individual_findings_count,omitempty"`
+	CorrelatedObservations   int                            `json:"correlated_observations,omitempty"`
+	HighestRiskLevel         string                         `json:"highest_risk_level"`
+	HighestRiskScore         int                            `json:"highest_risk_score"`
+	AffectedAssets           []string                       `json:"affected_assets"`
+	AssetAssociations        []AssetAssociation             `json:"asset_associations,omitempty"`
+	Relationships            []Relationship                 `json:"relationships,omitempty"`
+	CredentialValidations    []CredentialVerificationResult `json:"credential_validations,omitempty"`
+	KeyRemediationPriorities []string                       `json:"key_remediation_priorities"`
+	BottleneckAnalysis       *BottleneckAnalysisResult      `json:"bottleneck_analysis,omitempty"`
+	LimitsReached            bool                           `json:"limits_reached,omitempty"`
+	TruncationReason         string                         `json:"truncation_reason,omitempty"`
+	SyntheticFixture         bool                           `json:"synthetic_fixture,omitempty"`
+	RuleStats                map[string]RuleCoverageStat    `json:"rule_stats"`
 }
 
 // Config controls correlation engine constraints and behavior.
 type Config struct {
-	MaxPathDepth       int
-	MaxCandidatePaths  int
-	MinPathLength      int
-	MinConfidence      string
-	RulesEnabled       []RuleCode
-	AllowSynthetic     bool
+	MaxPathDepth                int
+	MaxCandidatePaths           int
+	MinPathLength               int
+	MinConfidence               string
+	RulesEnabled                []RuleCode
+	AllowSynthetic              bool
+	RequireValidatedTransitions bool
 }
 
 // DefaultConfig provides conservative, safe defaults preventing combinatorial explosion.
@@ -373,6 +411,7 @@ func DefaultConfig() Config {
 		RulesEnabled: []RuleCode{
 			RuleCOR01, RuleCOR02, RuleCOR03, RuleCOR04, RuleCOR05,
 			RuleCOR06, RuleCOR07, RuleCOR08, RuleCOR09, RuleCOR10,
+			RuleCORCredPivot,
 			RuleCORSameEndpoint, RuleCORSameAsset, RuleCORSharedComp, RuleCORRelatedEv, RuleCORPossible,
 		},
 		AllowSynthetic: true,

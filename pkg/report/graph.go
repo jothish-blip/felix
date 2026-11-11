@@ -22,7 +22,7 @@ func EnrichAttackPathGraph(path *AttackPathSummary, findings []Finding) {
 		findingMap[f.ID] = f
 	}
 
-	// 1. Populate GraphNodes if missing
+	// 1. Populate GraphNodes if missing (never connect arbitrary unrelated findings).
 	if len(path.GraphNodes) == 0 && len(path.NodeIDs) == 0 {
 		for _, f := range findings {
 			for _, tr := range path.Transitions {
@@ -30,15 +30,6 @@ func EnrichAttackPathGraph(path *AttackPathSummary, findings []Finding) {
 					path.NodeIDs = append(path.NodeIDs, f.ID)
 					break
 				}
-			}
-		}
-		if len(path.NodeIDs) == 0 && len(findings) > 0 {
-			count := len(findings)
-			if count > 4 {
-				count = 4
-			}
-			for i := 0; i < count; i++ {
-				path.NodeIDs = append(path.NodeIDs, findings[i].ID)
 			}
 		}
 	}
@@ -93,6 +84,9 @@ func EnrichAttackPathGraph(path *AttackPathSummary, findings []Finding) {
 			ruleName := "Entry Point to Vulnerable Resource"
 			relType := "REACHES"
 			valStatus := path.Status
+			if strings.TrimSpace(valStatus) == "" {
+				valStatus = "CANDIDATE"
+			}
 			explanation := fmt.Sprintf("Attack transition from %s to %s", src.Title, tgt.Title)
 
 			if i == 1 {
@@ -266,6 +260,8 @@ func RenderAttackPathSVG(path AttackPathSummary) template.HTML {
 	sb.WriteString(`<path d="M 0 1.5 L 9 5 L 0 8.5 z" fill="#e5c65a"/></marker>`)
 	sb.WriteString(`<marker id="arrow-inconclusive" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">`)
 	sb.WriteString(`<path d="M 0 1.5 L 9 5 L 0 8.5 z" fill="#888888"/></marker>`)
+	sb.WriteString(`<marker id="arrow-not-reachable" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">`)
+	sb.WriteString(`<path d="M 0 1.5 L 9 5 L 0 8.5 z" fill="#ff5a5f"/></marker>`)
 	sb.WriteString(`</defs>`)
 
 	// 1. Draw Edges
@@ -290,11 +286,20 @@ func RenderAttackPathSVG(path AttackPathSummary) template.HTML {
 		dashArray := ""
 
 		statusUpper := strings.ToUpper(strings.TrimSpace(e.ValidationStatus))
-		if statusUpper == "PLAUSIBLE" || statusUpper == "CANDIDATE" {
+		switch statusUpper {
+		case "HIGH_CONFIDENCE", "HIGH CONFIDENCE":
+			strokeColor = "#2dd4bf"
+			markerID = "arrow-confirmed"
+			dashArray = ` stroke-dasharray="8,2"`
+		case "PLAUSIBLE", "CANDIDATE", "EVIDENCE_SUPPORTED":
 			strokeColor = "#e5c65a"
 			markerID = "arrow-candidate"
 			dashArray = ` stroke-dasharray="6,4"`
-		} else if statusUpper == "INCONCLUSIVE" {
+		case "NOT_REACHABLE", "INVALID":
+			strokeColor = "#ff5a5f"
+			markerID = "arrow-not-reachable"
+			dashArray = ` stroke-dasharray="2,4"`
+		case "INCONCLUSIVE", "NOT_TESTED", "OBSERVED":
 			strokeColor = "#888888"
 			markerID = "arrow-inconclusive"
 			dashArray = ` stroke-dasharray="3,3"`
@@ -394,7 +399,10 @@ func RenderAttackPathSVG(path AttackPathSummary) template.HTML {
 		verLabel := "VERIFIED"
 		vUpper := strings.ToUpper(strings.TrimSpace(n.VerificationStatus))
 		switch vUpper {
-		case "DETECTED", "CANDIDATE":
+		case "HIGH_CONFIDENCE", "HIGH CONFIDENCE":
+			verColor = "#2dd4bf"
+			verLabel = "HIGH_CONF"
+		case "DETECTED", "CANDIDATE", "SUSPECTED":
 			verColor = "#e5c65a"
 			verLabel = "CANDIDATE"
 		case "OBSERVED":
@@ -403,9 +411,12 @@ func RenderAttackPathSVG(path AttackPathSummary) template.HTML {
 		case "NOT_EXPOSED", "DEFENDED":
 			verColor = "#2dd4bf"
 			verLabel = "DEFENDED"
-		case "INCONCLUSIVE":
+		case "NOT_REACHABLE", "INVALID":
+			verColor = "#ff5a5f"
+			verLabel = vUpper
+		case "INCONCLUSIVE", "NOT_TESTED":
 			verColor = "#888888"
-			verLabel = "INCONCLUSIVE"
+			verLabel = vUpper
 		}
 
 		titleTrunc := truncateText(n.Title, 25)

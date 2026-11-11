@@ -90,6 +90,11 @@ func NewAttackGraph(findings []NormalizedFinding, relationships []Relationship) 
 		}
 
 		// Self-loop validation
+		if rel.ValidationStatus == ValidationInvalid {
+			errors = append(errors, fmt.Sprintf("Invalid edge '%s': transition '%s' -> '%s' marked INVALID (%s)", rel.ID, rel.SourceFindingID, rel.TargetFindingID, rel.Explanation))
+			continue
+		}
+
 		if rel.SourceFindingID == rel.TargetFindingID {
 			errors = append(errors, fmt.Sprintf("Self-loop rejected on node '%s': sequence transition to self is invalid", rel.SourceFindingID))
 			continue

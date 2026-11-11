@@ -101,7 +101,7 @@ func TestCLI_VersionVariants(t *testing.T) {
 		if code != 0 {
 			t.Errorf("flag %q: expected exit code 0, got %d", flag, code)
 		}
-		if !strings.Contains(out, "Felix Security Auditor") || !strings.Contains(out, "2.0.0") {
+		if !strings.Contains(out, "Felix Security Auditor") || !strings.Contains(out, "1.0.0") {
 			t.Errorf("flag %q: unexpected version output: %s", flag, out)
 		}
 	}
@@ -167,8 +167,8 @@ func TestCLI_Version(t *testing.T) {
 	if !strings.Contains(out, "Felix Security Auditor") {
 		t.Errorf("expected version output to contain 'Felix Security Auditor', got: %s", out)
 	}
-	if !strings.Contains(out, "2.0.0") {
-		t.Errorf("expected version output to contain '2.0.0', got: %s", out)
+	if !strings.Contains(out, "1.0.0") {
+		t.Errorf("expected version output to contain '1.0.0', got: %s", out)
 	}
 }
 

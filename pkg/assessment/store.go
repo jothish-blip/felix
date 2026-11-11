@@ -7218,12 +7218,19 @@ func (s *SQLiteStore) GetCorrelationSummary(assessmentID string, executionID str
 			sum.AffectedAssets = append(sum.AffectedAssets, p.TargetAsset)
 		}
 		switch p.Status {
-		case correlation.PathVerified:
+		case correlation.PathVerified, correlation.PathConfirmed:
 			sum.VerifiedPaths++
+			sum.ConfirmedPaths++
+		case correlation.PathHighConfidence:
+			sum.HighConfidencePaths++
 		case correlation.PathCandidate:
 			sum.CandidatePaths++
 		case correlation.PathInconclusive:
 			sum.InconclusivePaths++
+		case correlation.PathNotReachable:
+			sum.NotReachablePaths++
+		case correlation.PathNotTested:
+			sum.NotTestedPaths++
 		case correlation.PathObserved:
 			sum.ObservedPaths++
 		case correlation.PathEvidenceSupported:

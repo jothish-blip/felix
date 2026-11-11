@@ -38,6 +38,13 @@ func EvaluateRules(findings []NormalizedFinding, cfg Config) []Relationship {
 				}
 			}
 
+			if rulesEnabled[RuleCORCredPivot] || rulesEnabled[RuleCOR02] {
+				if r, ok := evaluateCredentialPivot(f1, f2); ok {
+					rels = append(rels, r)
+					seenDirectedPairs[f1.ID+"->"+f2.ID] = true
+					continue
+				}
+			}
 			if rulesEnabled[RuleCOR01] {
 				if r, ok := evaluateCOR01(f1, f2); ok {
 					rels = append(rels, r)
@@ -190,6 +197,20 @@ func EvaluateRules(findings []NormalizedFinding, cfg Config) []Relationship {
 			}
 		}
 	}
+
+	// Phase 5 hardening: placeholder rejection, identity conflict checks, evidence enrichment,
+	// passive cookie filter, and RequireValidatedTransitions gating.
+	findingPtrByID := make(map[string]*NormalizedFinding, len(findings))
+	for idx := range findings {
+		findingPtrByID[findings[idx].ID] = &findings[idx]
+	}
+	hardenedRels := make([]Relationship, 0, len(rels))
+	for _, r := range rels {
+		if processed, keep := postProcessAndHardenRelationship(r, findingPtrByID[r.SourceFindingID], findingPtrByID[r.TargetFindingID], cfg); keep {
+			hardenedRels = append(hardenedRels, processed)
+		}
+	}
+	rels = hardenedRels
 
 	// 3. Deterministically sort candidate relationships by RuleCode, SourceFindingID, TargetFindingID
 	sort.Slice(rels, func(i, j int) bool {
@@ -439,6 +460,9 @@ func evaluateCOR05(f1, f2 *NormalizedFinding) (Relationship, bool) {
 		strings.Contains(strings.ToLower(f1.Title), "unprivileged") ||
 		strings.Contains(strings.ToLower(f1.Title), "user")
 
+	if isCredentialFinding(f2) || isPassiveCookieHygieneFinding(f2) {
+		return Relationship{}, false
+	}
 	isPrivilegedAction := strings.Contains(f2.NormalizedCategory, "admin") ||
 		strings.Contains(f2.NormalizedCategory, "privilege") ||
 		strings.Contains(f2.NormalizedCategory, "bfla") ||

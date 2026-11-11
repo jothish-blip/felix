@@ -377,6 +377,11 @@ const commercialHTMLReportTemplate = `<!DOCTYPE html>
   .badge-NOT_VERIFIED { background: var(--not-verified-bg); color: var(--not-verified); border-color: var(--not-verified-border); }
   .badge-EVIDENCE_SUPPORTED, .badge-OBSERVED { background: var(--bg-elevated); color: var(--text-secondary); border-color: var(--border-default); }
   .badge-NOT_EXPOSED, .badge-DEFENDED { background: var(--not-exposed-bg); color: var(--not-exposed); border-color: var(--not-exposed-border); }
+  .badge-CONFIRMED { background: var(--verified-bg); color: var(--verified); border-color: var(--verified-border); }
+  .badge-HIGH_CONFIDENCE { background: rgba(45, 212, 191, 0.14); color: #2dd4bf; border-color: rgba(45, 212, 191, 0.35); }
+  .badge-CANDIDATE { background: var(--detected-bg); color: var(--detected); border-color: var(--detected-border); }
+  .badge-NOT_REACHABLE, .badge-INVALID { background: var(--crit-bg); color: var(--crit); border-color: var(--crit-border); }
+  .badge-NOT_TESTED, .badge-INCONCLUSIVE { background: var(--bg-elevated); color: var(--text-muted); border-color: var(--border-default); }
   .badge-SYNTHETIC { background: rgba(168, 85, 247, 0.12); color: #c084fc; border-color: rgba(168, 85, 247, 0.3); }
 
   .color-CRITICAL { color: var(--crit); }
@@ -1514,13 +1519,74 @@ const commercialHTMLReportTemplate = `<!DOCTYPE html>
       <div class="item-card">
         <div class="item-header">
           <div class="item-title">{{$p.Title}}</div>
-          <div style="display: flex; gap: 0.5rem; align-items: center;">
+          <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
             <span class="badge badge-{{$p.CombinedRiskLevel}}">{{severityBadge $p.CombinedRiskLevel}} ({{$p.CombinedRiskScore}}/100)</span>
-            <span class="badge badge-INFO">{{$p.Status}}</span>
+            <span class="badge badge-{{$p.Status}}">{{$p.Status}}</span>
+            {{if $p.ReachabilityStatus}}<span class="badge badge-INFO">Reachability: {{$p.ReachabilityStatus}}</span>{{end}}
             {{if $p.SyntheticFixture}}<span class="badge badge-SYNTHETIC">[SYNTHETIC FIXTURE]</span>{{end}}
           </div>
         </div>
         <p style="font-size: 0.92rem; margin-bottom: 0.75rem;">{{$p.RiskRationale}}</p>
+        {{if $p.ConfidenceRationale}}
+        <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.55rem;"><strong>Confidence Rationale:</strong> {{$p.ConfidenceRationale}}</p>
+        {{end}}
+        {{if $p.DemonstratedImpact}}
+        <p style="font-size: 0.86rem; color: var(--verified); margin-bottom: 0.45rem;"><strong>Demonstrated Impact:</strong> {{$p.DemonstratedImpact}}</p>
+        {{end}}
+        {{if $p.UnverifiedImpact}}
+        <p style="font-size: 0.86rem; color: var(--detected); margin-bottom: 0.45rem;"><strong>Unverified Impact:</strong> {{$p.UnverifiedImpact}}</p>
+        {{end}}
+        {{if $p.StepVerifications}}
+        <div class="sub-box">
+          <div class="sub-box-title">Step-by-Step Verification Trace ({{$p.VerifiedTransitions}} verified / {{$p.UnverifiedTransitions}} unverified)</div>
+          <div class="table-wrapper">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Entry Condition</th>
+                  <th>Identity &amp; Permissions</th>
+                  <th>Resource</th>
+                  <th>Observed Result</th>
+                  <th>Reachability</th>
+                </tr>
+              </thead>
+              <tbody>
+                {{range $p.StepVerifications}}
+                <tr>
+                  <td>{{.StepIndex}}</td>
+                  <td>{{.EntryCondition}}</td>
+                  <td><code>{{.RequiredIdentity}}</code> ({{.RequiredPermissions}})</td>
+                  <td><code>{{.Method}} {{.TargetResource}}</code></td>
+                  <td>{{.ObservedResult}}</td>
+                  <td><span class="badge badge-{{.ValidationStatus}}">{{.NextStepReachable}} ({{.ValidationStatus}})</span></td>
+                </tr>
+                {{end}}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        {{end}}
+        {{if $p.CredentialValidations}}
+        <div class="sub-box">
+          <div class="sub-box-title">Credential Relationship Validation (Fingerprints Only)</div>
+          <ul class="clean-list" style="margin-bottom: 0;">
+            {{range $p.CredentialValidations}}
+            <li class="clean-list-item"><span class="clean-list-dot"></span><span><span class="badge badge-{{.Status}}">{{.Status}}</span> <code>{{.SourceFindingID}}</code> {{if .TokenFingerprint}}({{.TokenKind}} {{.TokenFingerprint}}){{end}} &mdash; Intended: <code>{{.IntendedIdentity}}</code>{{if .ObservedIdentity}}, Observed: <code>{{.ObservedIdentity}}</code>{{end}} {{if .Limitation}}({{.Limitation}}){{end}}</span></li>
+            {{end}}
+          </ul>
+        </div>
+        {{end}}
+        {{if $p.Limitations}}
+        <div class="sub-box">
+          <div class="sub-box-title">Validation Limitations</div>
+          <ul class="clean-list" style="margin-bottom: 0;">
+            {{range $p.Limitations}}
+            <li class="clean-list-item"><span class="clean-list-dot"></span><span>{{.}}</span></li>
+            {{end}}
+          </ul>
+        </div>
+        {{end}}
         {{if $p.Transitions}}
         <div class="sub-box">
           <div class="sub-box-title">Attack Transitions</div>

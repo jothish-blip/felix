@@ -1125,6 +1125,7 @@ func TestDAST_02_BOLAHandoff(t *testing.T) {
 			{ID: "dinesh", Type: "user", Location: "body", ParamName: "username", OwnerIdentity: "user_a"},
 		},
 		AllowStateChangingTests: true, // explicit opt-in for mutation probe
+		SyntheticFixture:        true,
 	}
 
 	activeBOLAEngine := bola.NewEngine(ts.Client(), bolaCfg)

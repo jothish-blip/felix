@@ -87,12 +87,28 @@ func StripSensitiveCredentials(req *http.Request) {
 // credentialGuardedTransport wraps an http.RoundTripper to withhold sensitive credentials
 // from remote unencrypted HTTP requests and enforce request budget.
 type credentialGuardedTransport struct {
-	base        http.RoundTripper
-	maxRequests int
-	reqCount    *int32
+	base          http.RoundTripper
+	maxRequests   int
+	reqCount      *int32
+	perIdentLimit int
+	perIdentCount *int32
 }
 
 func (c *credentialGuardedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if c.perIdentLimit > 0 && c.perIdentCount != nil {
+		for {
+			curr := atomic.LoadInt32(c.perIdentCount)
+			if int(curr) >= c.perIdentLimit {
+				return nil, fmt.Errorf("per-identity request budget exceeded (limit: %d)", c.perIdentLimit)
+			}
+			if atomic.CompareAndSwapInt32(c.perIdentCount, curr, curr+1) {
+				break
+			}
+		}
+	} else if c.perIdentCount != nil {
+		atomic.AddInt32(c.perIdentCount, 1)
+	}
+
 	if c.maxRequests > 0 && c.reqCount != nil {
 		for {
 			curr := atomic.LoadInt32(c.reqCount)
@@ -114,6 +130,27 @@ func (c *credentialGuardedTransport) RoundTrip(req *http.Request) (*http.Respons
 		return c.base.RoundTrip(reqClone)
 	}
 	return c.base.RoundTrip(req)
+}
+
+// IsDestructiveFunction identifies paths or HTTP methods that mutate sensitive account/system state.
+func IsDestructiveFunction(method, rawPath string) bool {
+	m := strings.ToUpper(strings.TrimSpace(method))
+	if m == http.MethodDelete {
+		return true
+	}
+	lower := strings.ToLower(strings.TrimSpace(rawPath))
+	destructiveTokens := []string{
+		"/delete", "/remove", "/suspend", "/disable", "/deactivate",
+		"/password", "/reset", "/payment", "/billing", "/checkout", "/purchase",
+		"/restart", "/shutdown", "/reboot", "/wipe", "/purge", "/truncate", "/drop",
+		"/logout", "/signout",
+	}
+	for _, tok := range destructiveTokens {
+		if strings.Contains(lower, tok) {
+			return true
+		}
+	}
+	return false
 }
 
 // Engine evaluates Broken Function Level Authorization (BFLA) across privilege boundaries.
@@ -144,23 +181,44 @@ func NewEngine(client *http.Client, config Config) *Engine {
 // scopedClient creates an isolated http.Client scoped to an assessment execution,
 // enforcing redirect credential protection and budget constraints.
 func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
-	baseTransport := e.client.Transport
+	return e.buildGuardedClient(e.client, actx, 0, nil)
+}
+
+func (e *Engine) buildGuardedClient(baseClient *http.Client, actx *AssessmentContext, perIdentLimit int, perIdentCount *int32) *http.Client {
+	var baseTransport http.RoundTripper
+	var jar http.CookieJar
+	if baseClient != nil {
+		baseTransport = baseClient.Transport
+		jar = baseClient.Jar
+	}
+	if baseTransport == nil && e.client != nil {
+		baseTransport = e.client.Transport
+	}
 	if baseTransport == nil {
 		baseTransport = http.DefaultTransport
 	}
 
 	guard := &credentialGuardedTransport{
-		base:        baseTransport,
-		maxRequests: actx.MaxRequests,
-		reqCount:    actx.DispatchedRequests,
+		base:          baseTransport,
+		maxRequests:   actx.MaxRequests,
+		reqCount:      actx.DispatchedRequests,
+		perIdentLimit: perIdentLimit,
+		perIdentCount: perIdentCount,
 	}
 
 	return &http.Client{
 		Transport: guard,
+		Jar:       jar,
 		Timeout:   e.config.Timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return fmt.Errorf("stopped after 10 redirects")
+			}
+			if actx.IsExcluded != nil && actx.IsExcluded(req.URL.String()) {
+				return fmt.Errorf("redirect target %s excluded by scope", SanitizeURL(req.URL.String()))
+			}
+			if actx.IsAllowed != nil && !actx.IsAllowed(req.URL.String()) {
+				return fmt.Errorf("redirect target %s outside authorized scope", SanitizeURL(req.URL.String()))
 			}
 			if len(via) > 0 {
 				prevURL := via[len(via)-1].URL
@@ -171,6 +229,43 @@ func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
 			return nil
 		},
 	}
+}
+
+func (e *Engine) scopedClientFor(actx *AssessmentContext, id *TestIdentity, cache map[string]*http.Client, perIdentCounts map[string]*int32) *http.Client {
+	if id == nil {
+		return e.scopedClient(actx)
+	}
+	key := strings.ToUpper(strings.TrimSpace(id.Alias))
+	if key == "" {
+		key = strings.ToUpper(strings.TrimSpace(id.Role))
+	}
+	if cached, ok := cache[key]; ok {
+		return cached
+	}
+	var baseClient *http.Client
+	if len(actx.IdentityClients) > 0 {
+		for k, c := range actx.IdentityClients {
+			if strings.EqualFold(k, id.Alias) || strings.EqualFold(k, id.Role) {
+				baseClient = c
+				break
+			}
+		}
+	}
+	if baseClient == nil {
+		baseClient = e.client
+	}
+	var perCount *int32
+	if actx.MaxRequestsPerIdentity > 0 {
+		perCount = perIdentCounts[key]
+		if perCount == nil {
+			var zero int32
+			perCount = &zero
+			perIdentCounts[key] = perCount
+		}
+	}
+	wrapped := e.buildGuardedClient(baseClient, actx, actx.MaxRequestsPerIdentity, perCount)
+	cache[key] = wrapped
+	return wrapped
 }
 
 // Plan produces a pre-assessment execution plan without dispatching network requests (dry-run).
@@ -230,6 +325,10 @@ func (e *Engine) Plan(ctx context.Context, actx *AssessmentContext) (*TestPlan, 
 			pt.Status = PlanBlocked
 			pt.BlockedReason = "Target endpoint is excluded by assessment scope policy"
 			plan.BlockedTests++
+		} else if (pol.SafetyClass == "DESTRUCTIVE" || (pol.DiscoverySource != "" && IsDestructiveFunction(pol.Method, pol.Path))) && !pol.AllowReversibleTest {
+			pt.Status = PlanSkipped
+			pt.BlockedReason = "Destructive function excluded by safety policy"
+			plan.BlockedTests++
 		} else if (pol.IsStateChanging || pol.Category == CategoryBFLAWriteMutation) && !actx.AllowStateChangingTests {
 			pt.Status = PlanSkipped
 			pt.BlockedReason = "State-changing function tests require explicit --allow-state-changing opt-in"
@@ -237,6 +336,10 @@ func (e *Engine) Plan(ctx context.Context, actx *AssessmentContext) (*TestPlan, 
 		} else if (pol.IsStateChanging || pol.Category == CategoryBFLAWriteMutation) && !actx.SyntheticFixture {
 			pt.Status = PlanBlocked
 			pt.BlockedReason = "State-changing function tests are restricted to designated synthetic fixtures or isolated test environments"
+			plan.BlockedTests++
+		} else if (pol.IsStateChanging || pol.Category == CategoryBFLAWriteMutation) && !IsIsolatedFixtureTarget(fullURL, actx.AuthorizedFixtureHosts, actx.IsFixtureTarget) {
+			pt.Status = PlanBlocked
+			pt.BlockedReason = "State-changing function tests blocked: target is not a verified isolated synthetic fixture"
 			plan.BlockedTests++
 		} else if testedIdent == nil {
 			pt.Status = PlanBlocked
@@ -304,8 +407,10 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 		actx.DispatchedRequests = &initialReqs
 	}
 
-	client := e.scopedClient(actx)
+	clientCache := make(map[string]*http.Client)
+	perIdentCounts := make(map[string]*int32)
 	var results []Result
+	var privilegeComparisons int
 
 	// Check if we have at least two distinct identities
 	hasDistinctIdentities := false
@@ -323,17 +428,32 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 		}
 	}
 
-	// 5. Execute assessment for each policy
+	// 5. Execute assessment for each policy (with deduplication & bounded function budget)
+	seenFuncs := make(map[string]bool)
+	evaluatedFuncs := 0
 	for _, pol := range policies {
 		if ctx.Err() != nil {
 			return nil, nil, ctx.Err()
 		}
+
+		funcKey := strings.ToUpper(strings.TrimSpace(pol.Method)) + " " + strings.TrimSpace(pol.Path)
+		if funcKey != " " && seenFuncs[funcKey] {
+			continue
+		}
+		seenFuncs[funcKey] = true
 
 		fullURL := joinURL(actx.BaseURL, pol.Path)
 
 		// Scope Exclusions
 		if actx.IsExcluded != nil && actx.IsExcluded(fullURL) {
 			res := makeSkippedResult(actx, pol, "Endpoint excluded by assessment scope rules")
+			results = append(results, res)
+			continue
+		}
+
+		// Destructive operation safety gate
+		if (pol.SafetyClass == "DESTRUCTIVE" || (pol.DiscoverySource != "" && IsDestructiveFunction(pol.Method, pol.Path))) && !pol.AllowReversibleTest {
+			res := makeSkippedResult(actx, pol, "Destructive function excluded by default safety policy")
 			results = append(results, res)
 			continue
 		}
@@ -350,7 +470,19 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 				results = append(results, res)
 				continue
 			}
+			if !IsIsolatedFixtureTarget(fullURL, actx.AuthorizedFixtureHosts, actx.IsFixtureTarget) {
+				res := makeSkippedResult(actx, pol, fmt.Sprintf("State-changing test blocked: target %q is not a verified isolated synthetic fixture", SanitizeURL(fullURL)))
+				results = append(results, res)
+				continue
+			}
 		}
+
+		if actx.MaxFunctions > 0 && evaluatedFuncs >= actx.MaxFunctions {
+			res := makeSkippedResult(actx, pol, fmt.Sprintf("Skipped due to max function evaluation cap (%d)", actx.MaxFunctions))
+			results = append(results, res)
+			continue
+		}
+		evaluatedFuncs++
 
 		// Check for distinct identities
 		if !hasDistinctIdentities {
@@ -376,11 +508,16 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 			continue
 		}
 
-		// Resolve allowed identity (positive control) and restricted identity (test target)
+		// Resolve allowed identity (positive control) and restricted identities (test targets)
 		allowedIdent := findAllowedIdentity(identities, pol)
-		testedIdent := findRestrictedIdentity(identities, pol, allowedIdent)
+		var testedIdents []*TestIdentity
+		if actx.TestAllIdentities || len(actx.IdentityClients) > 0 {
+			testedIdents = findRestrictedIdentities(identities, pol, allowedIdent)
+		} else if single := findRestrictedIdentity(identities, pol, allowedIdent); single != nil {
+			testedIdents = []*TestIdentity{single}
+		}
 
-		if allowedIdent == nil || testedIdent == nil {
+		if allowedIdent == nil || len(testedIdents) == 0 {
 			res := Result{
 				ID:                uuid.New().String(),
 				AssessmentID:      actx.AssessmentID,
@@ -403,10 +540,11 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 			continue
 		}
 
-		// Step A: Positive Control Baseline (Allowed Role)
+		// Step A: Positive Control Baseline (Allowed Role) executed once per policy with its isolated client
 		var baselineResp ResponseData
+		allowedClient := e.scopedClientFor(actx, allowedIdent, clientCache, perIdentCounts)
 		if pol.PositiveControlRequired {
-			baseData, err := e.executeRequest(ctx, client, pol.Method, fullURL, pol.Payload, allowedIdent)
+			baseData, err := e.executeRequest(ctx, allowedClient, pol.Method, fullURL, pol.Payload, allowedIdent)
 			if err != nil {
 				res := Result{
 					ID:                uuid.New().String(),
@@ -421,8 +559,8 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 					Endpoint:          pol.Path,
 					Method:            pol.Method,
 					RequiredRole:      allowedIdent.Role,
-					AccessorRole:      testedIdent.Role,
-					AccessorAlias:     testedIdent.Alias,
+					AccessorRole:      testedIdents[0].Role,
+					AccessorAlias:     testedIdents[0].Alias,
 					VerificationState: StateInconclusive,
 					Severity:          "INFO",
 					Confidence:        "LOW",
@@ -435,10 +573,141 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 			baselineResp = baseData
 		}
 
-		// Special Handling for CategoryBFLAMethodBypass
-		if pol.Category == CategoryBFLAMethodBypass {
-			// Step B1: Test Primary Method (Restricted Role)
-			primaryResp, err := e.executeRequest(ctx, client, pol.Method, fullURL, pol.Payload, testedIdent)
+		for _, testedIdent := range testedIdents {
+			if ctx.Err() != nil {
+				return nil, nil, ctx.Err()
+			}
+			testedClient := e.scopedClientFor(actx, testedIdent, clientCache, perIdentCounts)
+
+			// Special Handling for CategoryBFLAMethodBypass
+			if pol.Category == CategoryBFLAMethodBypass {
+				// Step B1: Test Primary Method (Restricted Role)
+				primaryResp, err := e.executeRequest(ctx, testedClient, pol.Method, fullURL, pol.Payload, testedIdent)
+				if err != nil {
+					res := Result{
+						ID:                uuid.New().String(),
+						AssessmentID:      actx.AssessmentID,
+						ExecutionID:       actx.ExecutionID,
+						Category:          pol.Category,
+						VulnCode:          string(pol.Category),
+						TestID:            fmt.Sprintf("bfla-%s", pol.FunctionID),
+						TestName:          pol.Name,
+						OWASPRef:          CategoryMetadata[pol.Category].OWASP,
+						CWERef:            CategoryMetadata[pol.Category].CWE,
+						Endpoint:          pol.Path,
+						Method:            pol.Method,
+						RequiredRole:      allowedIdent.Role,
+						AccessorRole:      testedIdent.Role,
+						AccessorAlias:     testedIdent.Alias,
+						VerificationState: StateInconclusive,
+						Severity:          "INFO",
+						Confidence:        "LOW",
+						EvidenceSummary:   fmt.Sprintf("Primary method %s test request for role %s failed: %v", pol.Method, testedIdent.Role, err),
+						CreatedAt:         time.Now().UTC(),
+					}
+					results = append(results, res)
+					continue
+				}
+
+				// Check if primary method was denied
+				isPrimaryDenied := primaryResp.StatusCode == http.StatusUnauthorized ||
+					primaryResp.StatusCode == http.StatusForbidden ||
+					primaryResp.StatusCode == http.StatusNotFound ||
+					primaryResp.StatusCode == http.StatusMethodNotAllowed ||
+					IsHTMLOrLoginPage(primaryResp) ||
+					IsGenericErrorJSON(primaryResp.Body)
+
+				if isPrimaryDenied {
+					altMethods := pol.AlternateMethods
+					if len(altMethods) == 0 {
+						altMethods = defaultAlternateMethods(pol.Method)
+					}
+
+					var bestComp *ComparisonResult
+					var bestAltMethod string
+					var bestAltStatus int
+					writeAttempted := false
+
+					for _, altM := range altMethods {
+						if ctx.Err() != nil {
+							return nil, nil, ctx.Err()
+						}
+						// If alternate method is a write method:
+						if isWriteMethod(altM) {
+							if writeAttempted {
+								continue
+							}
+							if IsDestructiveFunction(altM, pol.Path) && !pol.AllowReversibleTest && pol.DiscoverySource != "" {
+								continue
+							}
+							if !actx.AllowStateChangingTests || !actx.SyntheticFixture || !IsIsolatedFixtureTarget(fullURL, actx.AuthorizedFixtureHosts, actx.IsFixtureTarget) {
+								continue
+							}
+							writeAttempted = true
+						}
+
+						altResp, err := e.executeRequest(ctx, testedClient, altM, fullURL, pol.Payload, testedIdent)
+						if err != nil {
+							continue
+						}
+
+						privilegeComparisons++
+						comp := downgradeIfRoleUnestablished(
+							CompareMethodBypass(primaryResp, altResp, pol, allowedIdent.Role, testedIdent.Role, testedIdent.Alias, altM),
+							pol,
+						)
+						if comp.State == StateVerified {
+							bestComp = &comp
+							bestAltMethod = altM
+							bestAltStatus = altResp.StatusCode
+							break
+						}
+						if comp.State == StateCandidate && (bestComp == nil || bestComp.State != StateCandidate) {
+							bestComp = &comp
+							bestAltMethod = altM
+							bestAltStatus = altResp.StatusCode
+						} else if bestComp == nil {
+							bestComp = &comp
+							bestAltMethod = altM
+							bestAltStatus = altResp.StatusCode
+						}
+					}
+
+					if bestComp != nil {
+						res := Result{
+							ID:                uuid.New().String(),
+							AssessmentID:      actx.AssessmentID,
+							ExecutionID:       actx.ExecutionID,
+							Category:          pol.Category,
+							VulnCode:          string(pol.Category),
+							TestID:            fmt.Sprintf("bfla-%s", pol.FunctionID),
+							TestName:          pol.Name,
+							OWASPRef:          CategoryMetadata[pol.Category].OWASP,
+							CWERef:            CategoryMetadata[pol.Category].CWE,
+							Endpoint:          pol.Path,
+							Method:            bestAltMethod,
+							RequiredRole:      allowedIdent.Role,
+							AccessorRole:      testedIdent.Role,
+							AccessorAlias:     testedIdent.Alias,
+							VerificationState: bestComp.State,
+							Severity:          bestComp.Severity,
+							Confidence:        bestComp.Confidence,
+							ObservedStatus:    bestAltStatus,
+							EvidenceSummary:   bestComp.EvidenceSummary,
+							EvidenceDetails:   bestComp.EvidenceDetails,
+							CreatedAt:         time.Now().UTC(),
+						}
+						if bestComp.State == StateVerified || bestComp.State == StateCandidate {
+							res.Finding = buildFinding(res, pol, *bestComp, fullURL)
+						}
+						results = append(results, res)
+						continue
+					}
+				}
+			}
+
+			// Step B: Lower-Privilege Test Request (Restricted Role)
+			testResp, err := e.executeRequest(ctx, testedClient, pol.Method, fullURL, pol.Payload, testedIdent)
 			if err != nil {
 				res := Result{
 					ID:                uuid.New().String(),
@@ -458,108 +727,20 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 					VerificationState: StateInconclusive,
 					Severity:          "INFO",
 					Confidence:        "LOW",
-					EvidenceSummary:   fmt.Sprintf("Primary method %s test request for role %s failed: %v", pol.Method, testedIdent.Role, err),
+					EvidenceSummary:   fmt.Sprintf("Test request for role %s failed: %v", testedIdent.Role, err),
 					CreatedAt:         time.Now().UTC(),
 				}
 				results = append(results, res)
 				continue
 			}
 
-			// Check if primary method was denied
-			isPrimaryDenied := primaryResp.StatusCode == http.StatusUnauthorized ||
-				primaryResp.StatusCode == http.StatusForbidden ||
-				primaryResp.StatusCode == http.StatusNotFound ||
-				primaryResp.StatusCode == http.StatusMethodNotAllowed ||
-				IsHTMLOrLoginPage(primaryResp) ||
-				IsGenericErrorJSON(primaryResp.Body)
+			// Step C: Differential Authorization Comparison
+			privilegeComparisons++
+			comp := downgradeIfRoleUnestablished(
+				CompareFunctionAccess(baselineResp, testResp, pol, allowedIdent.Role, testedIdent.Role, testedIdent.Alias),
+				pol,
+			)
 
-			if isPrimaryDenied {
-				altMethods := pol.AlternateMethods
-				if len(altMethods) == 0 {
-					altMethods = defaultAlternateMethods(pol.Method)
-				}
-
-				var bestComp *ComparisonResult
-				var bestAltMethod string
-				var bestAltStatus int
-				writeAttempted := false
-
-				for _, altM := range altMethods {
-					if ctx.Err() != nil {
-						return nil, nil, ctx.Err()
-					}
-					// If alternate method is a write method:
-					if isWriteMethod(altM) {
-						if writeAttempted {
-							// Inconclusive or failed attempt does not trigger automatic retry using another write method
-							continue
-						}
-						if !actx.AllowStateChangingTests || !actx.SyntheticFixture {
-							// Block state-changing write alternate method without explicit opt-in and synthetic fixture
-							continue
-						}
-						writeAttempted = true
-					}
-
-					altResp, err := e.executeRequest(ctx, client, altM, fullURL, pol.Payload, testedIdent)
-					if err != nil {
-						continue
-					}
-
-					comp := CompareMethodBypass(primaryResp, altResp, pol, allowedIdent.Role, testedIdent.Role, testedIdent.Alias, altM)
-					if comp.State == StateVerified {
-						bestComp = &comp
-						bestAltMethod = altM
-						bestAltStatus = altResp.StatusCode
-						break
-					}
-					if comp.State == StateCandidate && (bestComp == nil || bestComp.State != StateCandidate) {
-						bestComp = &comp
-						bestAltMethod = altM
-						bestAltStatus = altResp.StatusCode
-					} else if bestComp == nil {
-						bestComp = &comp
-						bestAltMethod = altM
-						bestAltStatus = altResp.StatusCode
-					}
-				}
-
-				if bestComp != nil {
-					res := Result{
-						ID:                uuid.New().String(),
-						AssessmentID:      actx.AssessmentID,
-						ExecutionID:       actx.ExecutionID,
-						Category:          pol.Category,
-						VulnCode:          string(pol.Category),
-						TestID:            fmt.Sprintf("bfla-%s", pol.FunctionID),
-						TestName:          pol.Name,
-						OWASPRef:          CategoryMetadata[pol.Category].OWASP,
-						CWERef:            CategoryMetadata[pol.Category].CWE,
-						Endpoint:          pol.Path,
-						Method:            bestAltMethod,
-						RequiredRole:      allowedIdent.Role,
-						AccessorRole:      testedIdent.Role,
-						AccessorAlias:     testedIdent.Alias,
-						VerificationState: bestComp.State,
-						Severity:          bestComp.Severity,
-						Confidence:        bestComp.Confidence,
-						ObservedStatus:    bestAltStatus,
-						EvidenceSummary:   bestComp.EvidenceSummary,
-						EvidenceDetails:   bestComp.EvidenceDetails,
-						CreatedAt:         time.Now().UTC(),
-					}
-					if bestComp.State == StateVerified || bestComp.State == StateCandidate {
-						res.Finding = buildFinding(res, pol, *bestComp, fullURL)
-					}
-					results = append(results, res)
-					continue
-				}
-			}
-		}
-
-		// Step B: Lower-Privilege Test Request (Restricted Role)
-		testResp, err := e.executeRequest(ctx, client, pol.Method, fullURL, pol.Payload, testedIdent)
-		if err != nil {
 			res := Result{
 				ID:                uuid.New().String(),
 				AssessmentID:      actx.AssessmentID,
@@ -575,52 +756,25 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 				RequiredRole:      allowedIdent.Role,
 				AccessorRole:      testedIdent.Role,
 				AccessorAlias:     testedIdent.Alias,
-				VerificationState: StateInconclusive,
-				Severity:          "INFO",
-				Confidence:        "LOW",
-				EvidenceSummary:   fmt.Sprintf("Test request for role %s failed: %v", testedIdent.Role, err),
+				VerificationState: comp.State,
+				Severity:          comp.Severity,
+				Confidence:        comp.Confidence,
+				ObservedStatus:    testResp.StatusCode,
+				EvidenceSummary:   comp.EvidenceSummary,
+				EvidenceDetails:   comp.EvidenceDetails,
 				CreatedAt:         time.Now().UTC(),
 			}
+
+			// Attach Finding if VERIFIED or CANDIDATE
+			if comp.State == StateVerified || comp.State == StateCandidate {
+				res.Finding = buildFinding(res, pol, comp, fullURL)
+			}
+
 			results = append(results, res)
-			continue
 		}
-
-		// Step C: Differential Authorization Comparison
-		comp := CompareFunctionAccess(baselineResp, testResp, pol, allowedIdent.Role, testedIdent.Role, testedIdent.Alias)
-
-		res := Result{
-			ID:                uuid.New().String(),
-			AssessmentID:      actx.AssessmentID,
-			ExecutionID:       actx.ExecutionID,
-			Category:          pol.Category,
-			VulnCode:          string(pol.Category),
-			TestID:            fmt.Sprintf("bfla-%s", pol.FunctionID),
-			TestName:          pol.Name,
-			OWASPRef:          CategoryMetadata[pol.Category].OWASP,
-			CWERef:            CategoryMetadata[pol.Category].CWE,
-			Endpoint:          pol.Path,
-			Method:            pol.Method,
-			RequiredRole:      allowedIdent.Role,
-			AccessorRole:      testedIdent.Role,
-			AccessorAlias:     testedIdent.Alias,
-			VerificationState: comp.State,
-			Severity:          comp.Severity,
-			Confidence:        comp.Confidence,
-			ObservedStatus:    testResp.StatusCode,
-			EvidenceSummary:   comp.EvidenceSummary,
-			EvidenceDetails:   comp.EvidenceDetails,
-			CreatedAt:         time.Now().UTC(),
-		}
-
-		// Attach Finding if VERIFIED or CANDIDATE
-		if comp.State == StateVerified || comp.State == StateCandidate {
-			res.Finding = buildFinding(res, pol, comp, fullURL)
-		}
-
-		results = append(results, res)
 	}
 
-	summary := compileSummary(results)
+	summary := compileSummaryWithContext(results, policies, privilegeComparisons)
 	return results, summary, nil
 }
 
@@ -719,6 +873,35 @@ func findRestrictedIdentity(identities []TestIdentity, pol FunctionPolicy, allow
 	return nil
 }
 
+func findRestrictedIdentities(identities []TestIdentity, pol FunctionPolicy, allowed *TestIdentity) []*TestIdentity {
+	var out []*TestIdentity
+	for i := range identities {
+		id := &identities[i]
+		if allowed != nil && !AreIdentitiesDistinct(*id, *allowed) {
+			continue
+		}
+		if isRestrictedRole(id.Role, pol) || (pol.RequiredPrivilegeLevel > 0 && id.PrivilegeLevel < pol.RequiredPrivilegeLevel) {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+func downgradeIfRoleUnestablished(comp ComparisonResult, pol FunctionPolicy) ComparisonResult {
+	if !pol.RoleUnestablished || comp.State != StateVerified {
+		return comp
+	}
+	if comp.EvidenceDetails == nil {
+		comp.EvidenceDetails = make(map[string]string)
+	}
+	comp.EvidenceDetails["role_unestablished"] = "true"
+	comp.State = StateCandidate
+	comp.Severity = "MEDIUM"
+	comp.Confidence = "POSSIBLE"
+	comp.EvidenceSummary = strings.TrimSpace(comp.EvidenceSummary) + " (Note: required role was inferred without authoritative policy or visibility differential; downgraded from VERIFIED to CANDIDATE.)"
+	return comp
+}
+
 func makeSkippedResult(actx *AssessmentContext, pol FunctionPolicy, reason string) Result {
 	return Result{
 		ID:                uuid.New().String(),
@@ -749,8 +932,53 @@ func buildFinding(res Result, pol FunctionPolicy, comp ComparisonResult, targetU
 	}
 
 	evidence := RedactText(comp.EvidenceSummary)
+	proofDetails := RedactText(formatEvidenceDetails(comp.EvidenceDetails))
+
+	findingStatus := report.FindingStatusSuspected
+	verStatus := report.VerificationDetected
+	detectionStatus := "CANDIDATE"
+	confidenceScore := 55
+	if res.VerificationState == StateVerified {
+		findingStatus = report.FindingStatusConfirmed
+		verStatus = report.VerificationVerified
+		detectionStatus = "CONFIRMED"
+		confidenceScore = 95
+	}
+
+	details := map[string]string{
+		"category":              string(res.Category),
+		"vuln_code":             res.VulnCode,
+		"required_role":         res.RequiredRole,
+		"accessor_role":         res.AccessorRole,
+		"accessor_alias":        res.AccessorAlias,
+		"verification_state":    string(res.VerificationState),
+		"authz_engine_verified": "true",
+	}
+	if pol.DiscoverySource != "" {
+		details["discovery_source"] = pol.DiscoverySource
+	}
+	if pol.DiscoveryConfidence != "" {
+		details["discovery_confidence"] = pol.DiscoveryConfidence
+	}
+	if pol.RoleEvidence != "" {
+		details["role_evidence"] = RedactText(pol.RoleEvidence)
+	}
+	if pol.RoleUnestablished {
+		details["role_unestablished"] = "true"
+	}
+
+	rationale := RedactText(pol.RoleEvidence)
+	if proofDetails != "" {
+		if rationale != "" {
+			rationale += "; "
+		}
+		rationale += proofDetails
+	}
+
 	return &report.Finding{
 		ID:          uuid.New().String(),
+		RuleID:      "VULN-BFLA-001",
+		Status:      findingStatus,
 		Title:       fmt.Sprintf("[%s] %s on %s %s", res.VulnCode, meta.Name, res.Method, res.Endpoint),
 		Category:    fmt.Sprintf("%s / %s", meta.OWASP, meta.Name),
 		Severity:    res.Severity,
@@ -761,18 +989,26 @@ func buildFinding(res Result, pol FunctionPolicy, comp ComparisonResult, targetU
 		Description: fmt.Sprintf("[%s / %s] %s", res.VulnCode, meta.OWASP, meta.Description),
 		Evidence:    evidence,
 		EvidenceDetails: report.EvidenceDetails{
-			Observation:     evidence,
-			Location:        sanitizedEndpoint,
-			HTTPMethod:      res.Method,
-			HTTPStatus:      res.ObservedStatus,
-			DetectionMethod: "BFLA_VERIFICATION_ENGINE",
-			Details: map[string]string{
-				"category":       string(res.Category),
-				"vuln_code":      res.VulnCode,
-				"required_role":  res.RequiredRole,
-				"accessor_role":  res.AccessorRole,
-				"accessor_alias": res.AccessorAlias,
-			},
+			Observation:      evidence,
+			Location:         sanitizedEndpoint,
+			HTTPMethod:       res.Method,
+			HTTPStatus:       res.ObservedStatus,
+			DetectionMethod:  "BFLA_VERIFICATION_ENGINE",
+			DetectionStatus:  detectionStatus,
+			ExpectedBehavior: fmt.Sprintf("Only authorized role(s) (%s) should execute %s %s", res.RequiredRole, res.Method, sanitizedEndpoint),
+			ObservedBehavior: fmt.Sprintf("Restricted identity %s (role: %s) received HTTP %d", res.AccessorAlias, res.AccessorRole, res.ObservedStatus),
+			Details:          details,
+		},
+		Verification: report.VerificationRecord{
+			Status:             verStatus,
+			DetectionStatus:    detectionStatus,
+			Result:             evidence,
+			Rationale:          rationale,
+			PolicyID:           pol.FunctionID,
+			VerificationMethod: "DIFFERENTIAL_FUNCTION_AUTHORIZATION",
+			AnalysisMethod:     "ACTIVE_VERIFICATION",
+			ConfidenceScore:    confidenceScore,
+			Attempted:          true,
 		},
 		Remediation: "Implement robust server-side role and function-level authorization checks. Verify that the principal has the required role/privilege level before invoking privileged handlers. Do not rely on UI-level hiding or client-side enforcement.",
 	}
@@ -790,9 +1026,21 @@ func formatEvidenceDetails(details map[string]string) string {
 }
 
 func compileSummary(results []Result) *Summary {
+	return compileSummaryWithContext(results, nil, 0)
+}
+
+func compileSummaryWithContext(results []Result, policies []FunctionPolicy, privilegeComparisons int) *Summary {
 	summary := &Summary{
-		TotalTests:  len(results),
-		CoverageMap: make(map[string]CategoryCoverage),
+		TotalTests:           len(results),
+		FunctionsDiscovered:  len(policies),
+		PrivilegeComparisons: privilegeComparisons,
+		CoverageMap:          make(map[string]CategoryCoverage),
+	}
+
+	for _, pol := range policies {
+		if !pol.RoleUnestablished && len(pol.AllowedRoles) > 0 {
+			summary.FunctionsWithEstablishedRole++
+		}
 	}
 
 	allCats := []Category{
@@ -845,6 +1093,7 @@ func compileSummary(results []Result) *Summary {
 			}
 		case StateSkipped:
 			summary.BlockedCount++
+			summary.SkippedCount++
 			cov.Blocked++
 		}
 

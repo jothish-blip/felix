@@ -196,6 +196,7 @@ type PropertyPolicy struct {
 	Category                Category           `json:"category"`
 	PropertyPath            string             `json:"property_path"` // e.g. "role", "user.role", "account.status", "salary"
 	SensitivityCategory     string             `json:"sensitivity_category,omitempty"` // e.g. "ADMIN_PRIVILEGE", "FINANCIAL", "PII", "TENANT_ISOLATION"
+	PropertyClassification  string             `json:"property_classification,omitempty"` // PUBLIC, USER_CONTROLLED, ROLE_RESTRICTED, SYSTEM_MANAGED, SENSITIVE, UNKNOWN
 	ExpectedAccess          ExpectedAccessRule `json:"expected_access"` // OMITTED, MASKED, READ_ONLY, IMMUTABLE, AUTHORIZED_ONLY
 	AllowedRoles            []string           `json:"allowed_roles"`   // Roles authorized to access this property (e.g. ["admin"])
 	RestrictedRoles         []string           `json:"restricted_roles"`// Roles forbidden from accessing this property (e.g. ["user"])
@@ -207,6 +208,31 @@ type PropertyPolicy struct {
 	MaskPattern             string             `json:"mask_pattern,omitempty"` // Substring or pattern expected if masked (e.g. "****")
 	ProtectedResponseMarker string             `json:"protected_response_marker,omitempty"` // Substring proving disclosure
 	PositiveControlRequired bool               `json:"positive_control_required"` // Whether authorized baseline must succeed first
+	DiscoverySource         string             `json:"discovery_source,omitempty"`
+	DiscoveryConfidence     string             `json:"discovery_confidence,omitempty"` // HIGH, MEDIUM, LOW
+	PolicyEvidence          string             `json:"policy_evidence,omitempty"`
+	PolicyUnestablished     bool               `json:"policy_unestablished,omitempty"`
+	IsReversibleTest        bool               `json:"is_reversible_test,omitempty"`
+	RestorePayload          string             `json:"restore_payload,omitempty"`
+	SafetyClass             string             `json:"safety_class,omitempty"` // SAFE_READ, REVERSIBLE_MUTATION, STATE_CHANGING, DESTRUCTIVE
+}
+
+// DiscoveredPropertyRecord tracks discovered object properties and their BOPLA policy/testability classification.
+type DiscoveredPropertyRecord struct {
+	PropertyID             string   `json:"property_id"`
+	Endpoint               string   `json:"endpoint"`
+	Method                 string   `json:"method"`
+	PropertyPath           string   `json:"property_path"`
+	PropertyClassification string   `json:"property_classification"`
+	ExpectedAccess         string   `json:"expected_access"`
+	DiscoverySource        string   `json:"discovery_source"`
+	DiscoveryConfidence    string   `json:"discovery_confidence"`
+	PolicyEstablished      bool     `json:"policy_established"`
+	PolicyEvidence         string   `json:"policy_evidence,omitempty"`
+	ObservedBy             []string `json:"observed_by,omitempty"`
+	SafetyClass            string   `json:"safety_class"`
+	Testability            string   `json:"testability"`
+	SkipReason             string   `json:"skip_reason,omitempty"`
 }
 
 // PolicyFile allows loading property authorization policies and test identities from a JSON file.
@@ -272,6 +298,8 @@ type Result struct {
 	Severity          string            `json:"severity"`
 	Confidence        string            `json:"confidence"`
 	ObservedStatus    int               `json:"observed_status,omitempty"`
+	CleanupStatus     string            `json:"cleanup_status,omitempty"`
+	CleanupWarning    string            `json:"cleanup_warning,omitempty"`
 	EvidenceSummary   string            `json:"evidence_summary"`
 	EvidenceDetails   map[string]string `json:"evidence_details,omitempty"`
 	Finding           *report.Finding   `json:"finding,omitempty"`
@@ -295,14 +323,24 @@ type CategoryCoverage struct {
 
 // Summary aggregates BOPLA verification results across categories.
 type Summary struct {
-	TotalTests         int                         `json:"total_tests"`
-	CategoriesCovered  int                         `json:"categories_covered"`
-	VerifiedCount      int                         `json:"verified_count"`
-	CandidateCount     int                         `json:"candidate_count"`
-	NotVulnerableCount int                         `json:"not_vulnerable_count"`
-	InconclusiveCount  int                         `json:"inconclusive_count"`
-	BlockedCount       int                         `json:"blocked_count"`
-	CoverageMap        map[string]CategoryCoverage `json:"coverage_map"`
+	TotalTests           int                         `json:"total_tests"`
+	CategoriesCovered    int                         `json:"categories_covered"`
+	VerifiedCount        int                         `json:"verified_count"`
+	CandidateCount       int                         `json:"candidate_count"`
+	NotVulnerableCount   int                         `json:"not_vulnerable_count"`
+	InconclusiveCount    int                         `json:"inconclusive_count"`
+	BlockedCount         int                         `json:"blocked_count"`
+	SkippedCount         int                         `json:"skipped_count"`
+	PropertiesDiscovered int                         `json:"properties_discovered,omitempty"`
+	PropertiesWithPolicy int                         `json:"properties_with_policy,omitempty"`
+	ExposureTests        int                         `json:"exposure_tests,omitempty"`
+	ModificationTests    int                         `json:"modification_tests,omitempty"`
+	CleanupAttempted     int                         `json:"cleanup_attempted,omitempty"`
+	CleanupRestored      int                         `json:"cleanup_restored,omitempty"`
+	CleanupFailed        int                         `json:"cleanup_failed,omitempty"`
+	CleanupUnverified    int                         `json:"cleanup_unverified,omitempty"`
+	CleanupWarnings      []string                    `json:"cleanup_warnings,omitempty"`
+	CoverageMap          map[string]CategoryCoverage `json:"coverage_map"`
 }
 
 // RunRecord represents a persistent run record in the database.
@@ -328,12 +366,16 @@ type AssessmentContext struct {
 	BaseURL                 string
 	Policies                []PropertyPolicy
 	Identities              []TestIdentity
+	IdentityClients         map[string]*http.Client
+	TestAllIdentities       bool
 	AllowStateChangingTests bool
 	SyntheticFixture        bool
 	AuthorizedFixtureHosts  []string
 	IsFixtureTarget         func(target string) bool
 	DryRun                  bool
 	MaxRequests             int
+	MaxProperties           int
+	MaxRequestsPerIdentity  int
 	DispatchedRequests      *int32
 	Authorization           *auth.AuthorizationRecord
 	IsAllowed               func(target string) bool
@@ -481,66 +523,13 @@ func BuildFindingID(assessmentID, propertyID, category string) string {
 
 // IsLoopbackHost returns whether a host is a loopback destination.
 func IsLoopbackHost(host string) bool {
-	h := strings.ToLower(strings.TrimSpace(host))
-	return h == "localhost" || h == "127.0.0.1" || h == "::1" || strings.HasPrefix(h, "127.")
+	return auth.IsLoopbackHost(host)
 }
 
 // IsIsolatedFixtureTarget determines whether a target URL is bound to an authorized synthetic fixture
-// or explicitly designated isolated test environment, preventing mutations against arbitrary production targets.
+// or explicitly designated isolated test environment, preventing mutations against arbitrary production or internal targets.
 func IsIsolatedFixtureTarget(rawURL string, authorizedFixtures []string, isFixtureFunc func(string) bool) bool {
-	if isFixtureFunc != nil && isFixtureFunc(rawURL) {
-		return true
-	}
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return false
-	}
-	hostname := strings.ToLower(strings.TrimSpace(u.Hostname()))
-	if hostname == "" {
-		return false
-	}
-
-	// 1. Loopback addresses and local test harness fixtures
-	if IsLoopbackHost(hostname) {
-		return true
-	}
-
-	// 2. Safe local, test, or synthetic fixture domain suffixes
-	fixtureSuffixes := []string{
-		".local",
-		".internal",
-		".test",
-		".example",
-		".synthetic",
-		".mock",
-	}
-	for _, suffix := range fixtureSuffixes {
-		if strings.HasSuffix(hostname, suffix) {
-			return true
-		}
-	}
-
-	// 3. Explicitly configured authorized fixture hosts or patterns
-	for _, af := range authorizedFixtures {
-		clean := strings.ToLower(strings.TrimSpace(af))
-		if clean == "" {
-			continue
-		}
-		if strings.HasPrefix(clean, "*.") {
-			suffix := clean[1:]
-			if strings.HasSuffix(hostname, suffix) {
-				return true
-			}
-		} else if strings.EqualFold(hostname, clean) {
-			return true
-		} else if parsedAF, err := url.Parse(af); err == nil && parsedAF.Hostname() != "" {
-			if strings.EqualFold(hostname, parsedAF.Hostname()) {
-				return true
-			}
-		}
-	}
-
-	return false
+	return auth.IsIsolatedFixtureTarget(rawURL, authorizedFixtures, isFixtureFunc)
 }
 
 // EffectivePort returns the explicit or scheme-default port for a URL.

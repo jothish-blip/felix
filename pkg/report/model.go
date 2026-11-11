@@ -300,6 +300,50 @@ type AttackPathNode struct {
 	IsTarget           bool   `json:"is_target,omitempty"`
 }
 
+// StepVerificationSummary exposes step-by-step transition reachability checks in reports.
+type StepVerificationSummary struct {
+	StepIndex           int      `json:"step_index"`
+	FindingID           string   `json:"finding_id"`
+	EdgeID              string   `json:"edge_id,omitempty"`
+	EntryCondition      string   `json:"entry_condition"`
+	RequiredIdentity    string   `json:"required_identity"`
+	RequiredPermissions string   `json:"required_permissions"`
+	TargetResource      string   `json:"target_resource"`
+	Method              string   `json:"method,omitempty"`
+	ExpectedResult      string   `json:"expected_result"`
+	ObservedResult      string   `json:"observed_result"`
+	EvidenceRefs        []string `json:"evidence_refs,omitempty"`
+	NextStepReachable   string   `json:"next_step_reachable"`
+	ValidationStatus    string   `json:"validation_status"`
+	HTTPStatus          int      `json:"http_status,omitempty"`
+	ImpactVerified      bool     `json:"impact_verified"`
+	DemonstratedImpact  string   `json:"demonstrated_impact,omitempty"`
+	UnverifiedImpact    string   `json:"unverified_impact,omitempty"`
+	Limitations         []string `json:"limitations,omitempty"`
+}
+
+// CredentialValidationSummary exposes sanitized credential verification outcomes in reports.
+// Raw secrets, bearer tokens, cookies, and API keys are never included.
+type CredentialValidationSummary struct {
+	ID                string `json:"id"`
+	Status            string `json:"status"`
+	SourceFindingID   string `json:"source_finding_id"`
+	SourceEvidenceRef string `json:"source_evidence_ref,omitempty"`
+	TokenFingerprint  string `json:"token_fingerprint,omitempty"`
+	TokenKind         string `json:"token_kind,omitempty"`
+	IsPlaceholder     bool   `json:"is_placeholder,omitempty"`
+	PlaceholderReason string `json:"placeholder_reason,omitempty"`
+	IntendedIdentity  string `json:"intended_identity,omitempty"`
+	ObservedIdentity  string `json:"observed_identity,omitempty"`
+	IdentityMatched   bool   `json:"identity_matched"`
+	TargetScope       string `json:"target_scope,omitempty"`
+	ScopeValid        bool   `json:"scope_valid"`
+	UsabilityChecked  bool   `json:"usability_checked"`
+	HTTPStatus        int    `json:"http_status,omitempty"`
+	EvidenceSummary   string `json:"evidence_summary"`
+	Limitation        string `json:"limitation,omitempty"`
+}
+
 // AttackPathEdge represents a validated or candidate transition edge between findings.
 type AttackPathEdge struct {
 	ID                 string   `json:"id"`
@@ -314,29 +358,47 @@ type AttackPathEdge struct {
 	Confidence         string   `json:"confidence"`
 	Explanation        string   `json:"explanation"`
 	EvidenceReferences []string `json:"evidence_references,omitempty"`
+	IdentityContext    string   `json:"identity_context,omitempty"`
+	AuthContext        string   `json:"auth_context,omitempty"`
+	RequiredPrivileges string   `json:"required_privileges,omitempty"`
+	ReachabilityStatus string   `json:"reachability_status,omitempty"`
+	ValidationResult   string   `json:"validation_result,omitempty"`
 }
 
 // AttackPathSummary represents an evidence-backed correlated attack path in client-facing reports.
 type AttackPathSummary struct {
-	ID                string           `json:"id"`
-	Title             string           `json:"title"`
-	Status            string           `json:"status"`
-	Confidence        string           `json:"confidence"`
-	CombinedRiskLevel string           `json:"combined_risk_level"`
-	CombinedRiskScore int              `json:"combined_risk_score"`
-	RiskRationale     string           `json:"risk_rationale,omitempty"`
-	EntryPoint        string           `json:"entry_point,omitempty"`
-	TargetAsset       string           `json:"target_asset"`
-	PrimaryWeakness   string           `json:"primary_weakness"`
-	TerminalImpact    string           `json:"terminal_impact"`
-	Transitions       []string         `json:"transitions,omitempty"`
-	Assumptions       []string         `json:"assumptions,omitempty"`
-	MissingEvidence   []string         `json:"missing_evidence,omitempty"`
-	Remediation       string           `json:"remediation,omitempty"`
-	NodeIDs           []string         `json:"node_ids"`
-	SyntheticFixture  bool             `json:"synthetic_fixture,omitempty"`
-	GraphNodes        []AttackPathNode `json:"graph_nodes,omitempty"`
-	GraphEdges        []AttackPathEdge `json:"graph_edges,omitempty"`
+	ID                    string                        `json:"id"`
+	Title                 string                        `json:"title"`
+	Status                string                        `json:"status"`
+	ValidationState       string                        `json:"validation_state,omitempty"`
+	Confidence            string                        `json:"confidence"`
+	ConfidenceRationale   string                        `json:"confidence_rationale,omitempty"`
+	CombinedRiskLevel     string                        `json:"combined_risk_level"`
+	CombinedRiskScore     int                           `json:"combined_risk_score"`
+	RiskRationale         string                        `json:"risk_rationale,omitempty"`
+	EntryPoint            string                        `json:"entry_point,omitempty"`
+	TargetAsset           string                        `json:"target_asset"`
+	PrimaryWeakness       string                        `json:"primary_weakness"`
+	TerminalImpact        string                        `json:"terminal_impact"`
+	IdentityContext       string                        `json:"identity_context,omitempty"`
+	Preconditions         []string                      `json:"preconditions,omitempty"`
+	ReachabilityStatus    string                        `json:"reachability_status,omitempty"`
+	EvidenceRefs          []string                      `json:"evidence_refs,omitempty"`
+	DemonstratedImpact    string                        `json:"demonstrated_impact,omitempty"`
+	UnverifiedImpact      string                        `json:"unverified_impact,omitempty"`
+	StepVerifications     []StepVerificationSummary     `json:"step_verifications,omitempty"`
+	CredentialValidations []CredentialValidationSummary `json:"credential_validations,omitempty"`
+	Limitations           []string                      `json:"limitations,omitempty"`
+	VerifiedTransitions   int                           `json:"verified_transitions,omitempty"`
+	UnverifiedTransitions int                           `json:"unverified_transitions,omitempty"`
+	Transitions           []string                      `json:"transitions,omitempty"`
+	Assumptions           []string                      `json:"assumptions,omitempty"`
+	MissingEvidence       []string                      `json:"missing_evidence,omitempty"`
+	Remediation           string                        `json:"remediation,omitempty"`
+	NodeIDs               []string                      `json:"node_ids"`
+	SyntheticFixture      bool                          `json:"synthetic_fixture,omitempty"`
+	GraphNodes            []AttackPathNode              `json:"graph_nodes,omitempty"`
+	GraphEdges            []AttackPathEdge              `json:"graph_edges,omitempty"`
 }
 
 // BottleneckCandidateSummary provides report serialization for remediation choke points.
@@ -404,6 +466,12 @@ type Summary struct {
 	ResolvedCount             int                   `json:"resolved_count,omitempty"`
 	RegressedCount            int                   `json:"regressed_count,omitempty"`
 	UnassessedCount           int                   `json:"unassessed_count,omitempty"`
+	ConfirmedAttackPaths      int                   `json:"confirmed_attack_paths,omitempty"`
+	HighConfidenceAttackPaths int                   `json:"high_confidence_attack_paths,omitempty"`
+	CandidateAttackPaths      int                   `json:"candidate_attack_paths,omitempty"`
+	InconclusiveAttackPaths   int                   `json:"inconclusive_attack_paths,omitempty"`
+	NotReachableAttackPaths   int                   `json:"not_reachable_attack_paths,omitempty"`
+	NotTestedAttackPaths      int                   `json:"not_tested_attack_paths,omitempty"`
 }
 
 // Report represents the complete audit results ready for presentation or export.
@@ -428,10 +496,11 @@ type Report struct {
 	VerificationSummary map[string]any      `json:"verification_summary,omitempty"`
 	CommercialReport    *CommercialReport   `json:"commercial_report,omitempty"`
 	ChangeSummary       *ChangeSummary      `json:"change_summary,omitempty"`
-	Reconciliation      *api.ReconciliationReport `json:"reconciliation,omitempty"`
-	ProberResults       *api.ProberReport         `json:"prober_results,omitempty"`
-	CrossTenantResults  *api.CrossTenantReport    `json:"cross_tenant_results,omitempty"`
-	Metadata            map[string]any            `json:"metadata,omitempty"`
+	Reconciliation      *api.ReconciliationReport   `json:"reconciliation,omitempty"`
+	ProberResults       *api.ProberReport           `json:"prober_results,omitempty"`
+	CrossTenantResults  *api.CrossTenantReport      `json:"cross_tenant_results,omitempty"`
+	AuthorizationReport *AuthorizationReportSummary `json:"authorization_report,omitempty"`
+	Metadata            map[string]any              `json:"metadata,omitempty"`
 }
 
 // CloudServiceScopeItem represents an evaluated cloud or database service and its finding status.

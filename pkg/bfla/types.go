@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -182,6 +183,29 @@ type FunctionPolicy struct {
 	PositiveControlRequired bool     `json:"positive_control_required"` // Whether positive control (admin access) must succeed first
 	IsStateChanging         bool     `json:"is_state_changing"`
 	Payload                 string   `json:"payload,omitempty"` // Optional request body for POST/PUT/PATCH
+	DiscoverySource         string   `json:"discovery_source,omitempty"`
+	DiscoveryConfidence     string   `json:"discovery_confidence,omitempty"` // HIGH, MEDIUM, LOW
+	RoleEvidence            string   `json:"role_evidence,omitempty"`
+	RoleUnestablished       bool     `json:"role_unestablished,omitempty"`
+	Testability             string   `json:"testability,omitempty"`         // TESTABLE, EXCLUDED_DESTRUCTIVE, SKIPPED_MUTATION, NOT_CONFIGURED
+	SafetyClass             string   `json:"safety_class,omitempty"`        // SAFE_READ, STATE_CHANGING, DESTRUCTIVE
+	AllowReversibleTest     bool     `json:"allow_reversible_test,omitempty"`
+}
+
+// DiscoveredFunctionRecord tracks discovered application functions and their role/safety classification.
+type DiscoveredFunctionRecord struct {
+	FunctionID          string   `json:"function_id"`
+	Path                string   `json:"path"`
+	Method              string   `json:"method"`
+	DiscoverySource     string   `json:"discovery_source"`
+	DiscoveryConfidence string   `json:"discovery_confidence"`
+	RequiredRole        string   `json:"required_role,omitempty"`
+	RoleEvidence        string   `json:"role_evidence,omitempty"`
+	RoleEstablished     bool     `json:"role_established"`
+	ObservedBy          []string `json:"observed_by,omitempty"`
+	SafetyClass         string   `json:"safety_class"`
+	Testability         string   `json:"testability"`
+	SkipReason          string   `json:"skip_reason,omitempty"`
 }
 
 // PolicyFile allows loading function authorization policies and test identities from a JSON file.
@@ -266,14 +290,18 @@ type CategoryCoverage struct {
 
 // Summary aggregates BFLA verification results across categories.
 type Summary struct {
-	TotalTests         int                         `json:"total_tests"`
-	CategoriesCovered  int                         `json:"categories_covered"`
-	VerifiedCount      int                         `json:"verified_count"`
-	CandidateCount     int                         `json:"candidate_count"`
-	NotVulnerableCount int                         `json:"not_vulnerable_count"`
-	InconclusiveCount  int                         `json:"inconclusive_count"`
-	BlockedCount       int                         `json:"blocked_count"`
-	CoverageMap        map[string]CategoryCoverage `json:"coverage_map"`
+	TotalTests                   int                         `json:"total_tests"`
+	CategoriesCovered            int                         `json:"categories_covered"`
+	VerifiedCount                int                         `json:"verified_count"`
+	CandidateCount               int                         `json:"candidate_count"`
+	NotVulnerableCount           int                         `json:"not_vulnerable_count"`
+	InconclusiveCount            int                         `json:"inconclusive_count"`
+	BlockedCount                 int                         `json:"blocked_count"`
+	SkippedCount                 int                         `json:"skipped_count"`
+	FunctionsDiscovered          int                         `json:"functions_discovered,omitempty"`
+	FunctionsWithEstablishedRole int                         `json:"functions_with_established_role,omitempty"`
+	PrivilegeComparisons         int                         `json:"privilege_comparisons,omitempty"`
+	CoverageMap                  map[string]CategoryCoverage `json:"coverage_map"`
 }
 
 // RunRecord represents a persistent run record in the database.
@@ -299,13 +327,19 @@ type AssessmentContext struct {
 	BaseURL                 string
 	Policies                []FunctionPolicy
 	Identities              []TestIdentity
+	IdentityClients         map[string]*http.Client
+	TestAllIdentities       bool
 	IsAllowed               func(string) bool
 	IsExcluded              func(string) bool
 	SyntheticFixture        bool
 	AllowStateChangingTests bool
+	AuthorizedFixtureHosts  []string
+	IsFixtureTarget         func(target string) bool
 	DryRun                  bool
 	Authorization           *auth.AuthorizationRecord
 	MaxRequests             int
+	MaxFunctions            int
+	MaxRequestsPerIdentity  int
 	DispatchedRequests      *int32
 }
 
@@ -355,4 +389,9 @@ func SanitizeURL(rawURL string) string {
 	u.RawQuery = ""
 	u.User = nil
 	return u.String()
+}
+
+// IsIsolatedFixtureTarget validates that a mutation target belongs to an isolated synthetic fixture.
+func IsIsolatedFixtureTarget(rawURL string, authorizedFixtures []string, isFixtureFunc func(string) bool) bool {
+	return auth.IsIsolatedFixtureTarget(rawURL, authorizedFixtures, isFixtureFunc)
 }

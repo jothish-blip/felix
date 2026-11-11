@@ -717,7 +717,7 @@ func TestOAST_BoundedStorage_CleanupPreservesActiveAndEvidence(t *testing.T) {
 	}
 
 	// 2. Probe Correlated: has verified interaction evidence (must NEVER be removed)
-	pEvidence, err := srv.RegisterProbeWithTTL("F-EVIDENCE", "cve-evidence", "canary", 50*time.Millisecond)
+	pEvidence, err := srv.RegisterProbeWithTTL("F-EVIDENCE", "cve-evidence", "canary", 500*time.Millisecond)
 	if err != nil {
 		t.Fatalf("register evidence probe: %v", err)
 	}
@@ -726,14 +726,14 @@ func TestOAST_BoundedStorage_CleanupPreservesActiveAndEvidence(t *testing.T) {
 		t.Fatalf("simulate callback on evidence probe failed: %v", err)
 	}
 
-	// 3. Probe Expired: short TTL (50ms), 0 interactions (must be cleaned up)
-	pExpired, err := srv.RegisterProbeWithTTL("F-EXPIRED", "cve-expired", "canary", 50*time.Millisecond)
+	// 3. Probe Expired: short TTL (200ms), 0 interactions (must be cleaned up)
+	pExpired, err := srv.RegisterProbeWithTTL("F-EXPIRED", "cve-expired", "canary", 200*time.Millisecond)
 	if err != nil {
 		t.Fatalf("register expired probe: %v", err)
 	}
 
 	// Wait for TTL of probe 2 and 3 to lapse
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(600 * time.Millisecond)
 
 	// Explicitly invoke cleanup
 	prunedCount := srv.PruneExpired()

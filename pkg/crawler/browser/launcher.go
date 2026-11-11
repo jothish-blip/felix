@@ -237,11 +237,19 @@ func Launch(parentCtx context.Context, cfg Config) (*Instance, error) {
 	allocCtx, allocCancel := chromedp.NewExecAllocator(parentCtx, opts...)
 	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
 
+	// Extract browser PID immediately after context creation to ensure process tracking
+	c := chromedp.FromContext(browserCtx)
+	var pid int
+	if c != nil && c.Browser != nil && c.Browser.Process() != nil {
+		pid = c.Browser.Process().Pid
+		_ = osJob.assignProcess(pid)
+	}
+
 	// Navigate to about:blank to initialize CDP connection and process loop
 	if err := chromedp.Do(browserCtx, chromedp.Navigate("about:blank")); err != nil {
 		browserCancel()
 		allocCancel()
-		_ = osJob.terminate(0)
+		_ = osJob.terminate(pid)
 		if autoClean {
 			_ = os.RemoveAll(userDataDir)
 		}
@@ -249,12 +257,13 @@ func Launch(parentCtx context.Context, cfg Config) (*Instance, error) {
 	}
 	spawnDuration := time.Since(t0)
 
-	// Extract browser PID
-	c := chromedp.FromContext(browserCtx)
-	var pid int
-	if c != nil && c.Browser != nil && c.Browser.Process() != nil {
-		pid = c.Browser.Process().Pid
-		_ = osJob.assignProcess(pid)
+	// If PID was not available before handshake, re-extract and assign
+	if pid == 0 {
+		c = chromedp.FromContext(browserCtx)
+		if c != nil && c.Browser != nil && c.Browser.Process() != nil {
+			pid = c.Browser.Process().Pid
+			_ = osJob.assignProcess(pid)
+		}
 	}
 
 	return &Instance{

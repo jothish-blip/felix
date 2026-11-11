@@ -49,7 +49,7 @@ func BuildDeb(cfg DebConfig) error {
 	now := time.Now().UTC()
 
 	// Copyright doc
-	copyrightContent := []byte(fmt.Sprintf("Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/\nUpstream-Name: %s\nSource: %s\n\nFiles: *\nCopyright: 2026 Jothish\nLicense: MIT\n", cfg.Package, cfg.Homepage))
+	copyrightContent := []byte(fmt.Sprintf("Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/\nUpstream-Name: %s\nSource: %s\n\nFiles: *\nCopyright: 2026 Jothish\nLicense: Proprietary\n", cfg.Package, cfg.Homepage))
 	if cfg.LicensePath != "" {
 		if lic, err := os.ReadFile(cfg.LicensePath); err == nil {
 			copyrightContent = append(copyrightContent, lic...)
@@ -414,7 +414,7 @@ CLI configuration file.
 .SH AUTHOR
 Jothish <jothishgandham2@gmail.com>
 .SH COPYRIGHT
-Copyright (c) 2026 Jothish. Released under the MIT License.
+Copyright (c) 2026 Jothish. Proprietary & Confidential. All Rights Reserved.
 `, strings.ToUpper(pkg), pkg, version, pkg, pkg, pkg, pkg, pkg, pkg)
 
 	var buf bytes.Buffer

@@ -276,16 +276,28 @@ func (e *Engine) constructPath(nodeIDs []string, nodes []NormalizedFinding, edge
 
 	// Determine Verification Status
 	allEdgesConfirmed := true
+	anyEdgeHighConf := false
 	anyEdgePlausible := false
 	anyEdgeInconclusive := false
+	anyEdgeNotReachable := false
+	anyEdgeNotTested := false
 	anyInferredHypothesis := false
 
 	for _, ed := range edges {
-		switch ed.ValidationStatus {
+		switch NormalizeEdgeStatus(ed.ValidationStatus) {
 		case ValidationConfirmed:
-		case ValidationPlausible:
+		case ValidationHighConfidence:
+			allEdgesConfirmed = false
+			anyEdgeHighConf = true
+		case ValidationCandidate, ValidationPlausible:
 			allEdgesConfirmed = false
 			anyEdgePlausible = true
+		case ValidationNotReachable, ValidationInvalid:
+			allEdgesConfirmed = false
+			anyEdgeNotReachable = true
+		case ValidationNotTested:
+			allEdgesConfirmed = false
+			anyEdgeNotTested = true
 		case ValidationInconclusive:
 			allEdgesConfirmed = false
 			anyEdgeInconclusive = true
@@ -326,16 +338,39 @@ func (e *Engine) constructPath(nodeIDs []string, nodes []NormalizedFinding, edge
 		status = PathInconclusive
 		conf = report.ConfidenceLow
 		missingEvidence = append(missingEvidence, fmt.Sprintf("Path traverses cyclic dependency in attack graph (%s); invalid cyclic relationships cannot form verified chains", strings.Join(cyclicInPath, ", ")))
+	} else if anyEdgeNotReachable {
+		status = PathNotReachable
+		conf = report.ConfidenceLow
+		missingEvidence = append(missingEvidence, "One or more required attack-path transitions were unreachable or rejected.")
 	} else if anyEdgeInconclusive {
 		status = PathInconclusive
 		conf = report.ConfidenceLow
 		missingEvidence = append(missingEvidence, "Evidence connecting intermediate transitions is inconclusive.")
+	} else if e.config.RequireValidatedTransitions {
+		// Phase 5 invariant: static rule correlation alone NEVER promotes paths to CONFIRMED
+		if anyEdgeNotTested && !anyEdgePlausible && !anyEdgeHighConf {
+			status = PathNotTested
+			conf = string(PathNotTested)
+		} else {
+			status = PathCandidate
+			conf = string(PathCandidate)
+		}
+		missingEvidence = append(missingEvidence, "Transitions matched correlation rules but await Phase 5 active transition reachability validation.")
 	} else if allEdgesConfirmed && allNodesVerified && !anyInferredHypothesis && !anyNodeCandidate {
 		status = PathVerified
 		conf = report.ConfidenceHigh
-	} else if anyInferredHypothesis || anyEdgePlausible || anyNodeCandidate {
-		status = PathCandidate
-		conf = report.ConfidenceMedium
+	} else if anyEdgeHighConf && !anyEdgePlausible && !anyInferredHypothesis {
+		status = PathHighConfidence
+		conf = report.ConfidenceHigh
+		missingEvidence = append(missingEvidence, "Strong supporting evidence exists, but full confirmation criteria remain partially unverified.")
+	} else if anyInferredHypothesis || anyEdgePlausible || anyEdgeNotTested || anyNodeCandidate {
+		if anyEdgeNotTested && !anyEdgePlausible && !anyNodeCandidate && allNodesVerified {
+			status = PathNotTested
+			conf = report.ConfidenceLow
+		} else {
+			status = PathCandidate
+			conf = report.ConfidenceMedium
+		}
 		if anyInferredHypothesis {
 			assumptions = append(assumptions, "One or more nodes depend on an inferred workflow hypothesis requiring operator verification.")
 		}
@@ -344,6 +379,9 @@ func (e *Engine) constructPath(nodeIDs []string, nodes []NormalizedFinding, edge
 		}
 		if anyEdgePlausible {
 			missingEvidence = append(missingEvidence, "One or more connecting transitions are plausible but unconfirmed.")
+		}
+		if anyEdgeNotTested {
+			missingEvidence = append(missingEvidence, "One or more connecting transitions have not yet undergone active reachability verification.")
 		}
 	} else {
 		status = PathEvidenceSupported
@@ -364,8 +402,8 @@ func (e *Engine) constructPath(nodeIDs []string, nodes []NormalizedFinding, edge
 		lastEP = secrets.SanitizeURL(last.Endpoint)
 	}
 	terminalImpact := fmt.Sprintf("Direct exploitation of %s at %s", last.Title, lastEP)
-	if status != PathVerified {
-		terminalImpact = fmt.Sprintf("Potential exploitation of %s at %s (unverified candidate)", last.Title, lastEP)
+	if !IsConfirmedStatus(status) {
+		terminalImpact = fmt.Sprintf("Potential exploitation of %s at %s (unverified %s)", last.Title, lastEP, status)
 	}
 
 	firstEP := first.DisplayEndpoint
@@ -374,8 +412,31 @@ func (e *Engine) constructPath(nodeIDs []string, nodes []NormalizedFinding, edge
 	}
 
 	ruleCodes := make([]string, len(edges))
+	var pathPreconditions []string
+	var pathEvidenceRefs []string
+	var identityParts []string
+	seenPre := make(map[string]bool)
+	seenRef := make(map[string]bool)
+	seenID := make(map[string]bool)
+
 	for i, ed := range edges {
 		ruleCodes[i] = string(ed.RuleCode)
+		for _, p := range ed.Prerequisites {
+			if !seenPre[p] {
+				seenPre[p] = true
+				pathPreconditions = append(pathPreconditions, p)
+			}
+		}
+		for _, er := range ed.EvidenceReferences {
+			if !seenRef[er] {
+				seenRef[er] = true
+				pathEvidenceRefs = append(pathEvidenceRefs, er)
+			}
+		}
+		if ed.IdentityContext != "" && ed.IdentityContext != "UNSPECIFIED" && !seenID[ed.IdentityContext] {
+			seenID[ed.IdentityContext] = true
+			identityParts = append(identityParts, ed.IdentityContext)
+		}
 	}
 	canonicalSeq := fmt.Sprintf("NODES:%s;RULES:%s", strings.Join(nodeIDs, "->"), strings.Join(ruleCodes, "->"))
 	hash := shortHash(canonicalSeq)
@@ -391,22 +452,41 @@ func (e *Engine) constructPath(nodeIDs []string, nodes []NormalizedFinding, edge
 		pathID = fmt.Sprintf("PATH-%s-%s", primaryRule, hash)
 	}
 
+	reachStatus := ReachabilityNotTested
+	if IsConfirmedStatus(status) {
+		reachStatus = ReachabilityReachable
+	} else if status == PathNotReachable {
+		reachStatus = ReachabilityNotReachable
+	} else if status == PathInconclusive {
+		reachStatus = ReachabilityInconclusive
+	}
+
 	path := AttackPath{
-		ID:               pathID,
-		Title:            title,
-		NodeIDs:          nodeIDs,
-		Nodes:            nodes,
-		Edges:            edges,
-		EntryPoint:       firstEP,
-		TargetAsset:      last.Host,
-		PrimaryWeakness:  first.Title,
-		TerminalImpact:   terminalImpact,
-		Status:           status,
-		Confidence:       conf,
-		Assumptions:      assumptions,
-		MissingEvidence:  missingEvidence,
-		SyntheticFixture: isSynth,
-		CreatedAt:        time.Now().UTC(),
+		ID:                 pathID,
+		Title:              title,
+		NodeIDs:            nodeIDs,
+		Nodes:              nodes,
+		Edges:              edges,
+		EntryPoint:         firstEP,
+		TargetAsset:        last.Host,
+		PrimaryWeakness:    first.Title,
+		TerminalImpact:     terminalImpact,
+		Status:             status,
+		ValidationState:    status,
+		Confidence:         conf,
+		IdentityContext:    strings.Join(identityParts, " -> "),
+		Preconditions:      pathPreconditions,
+		ReachabilityStatus: reachStatus,
+		EvidenceRefs:       pathEvidenceRefs,
+		Assumptions:        assumptions,
+		MissingEvidence:    missingEvidence,
+		SyntheticFixture:   isSynth,
+		CreatedAt:          time.Now().UTC(),
+	}
+	if !IsConfirmedStatus(status) {
+		path.UnverifiedImpact = fmt.Sprintf("%s on %s", last.Title, lastEP)
+	} else {
+		path.DemonstratedImpact = terminalImpact
 	}
 
 	// Combined Risk Calculation
@@ -452,8 +532,8 @@ func (e *Engine) processPaths(paths []AttackPath) []AttackPath {
 	// 4. Stable ID ascending
 	sort.Slice(deduped, func(i, j int) bool {
 		pi, pj := deduped[i], deduped[j]
-		verI := pi.Status == PathVerified || pi.Status.IsEvidenceSupported()
-		verJ := pj.Status == PathVerified || pj.Status.IsEvidenceSupported()
+		verI := IsConfirmedStatus(pi.Status) || pi.Status.IsEvidenceSupported()
+		verJ := IsConfirmedStatus(pj.Status) || pj.Status.IsEvidenceSupported()
 		if verI != verJ {
 			return verI
 		}
@@ -562,8 +642,8 @@ func (e *Engine) compileSummary(
 	isSynth := false
 
 	for _, p := range paths {
-		// Only verified or evidence-supported attack paths may escalate primary assessment risk
-		if p.Status == PathVerified || p.Status.IsEvidenceSupported() {
+		// Only verified/confirmed or evidence-supported attack paths may escalate primary assessment risk
+		if IsConfirmedStatus(p.Status) || p.Status.IsEvidenceSupported() {
 			if p.CombinedRiskScore > maxRiskScore {
 				maxRiskScore = p.CombinedRiskScore
 				highestRiskLevel = p.CombinedRiskLevel
@@ -571,11 +651,13 @@ func (e *Engine) compileSummary(
 		}
 
 		switch p.Status {
-		case PathVerified:
+		case PathVerified, PathConfirmed:
 			verifiedCount++
+		case PathHighConfidence:
+			candidateCount++
 		case PathCandidate:
 			candidateCount++
-		case PathInconclusive:
+		case PathInconclusive, PathNotReachable, PathNotTested:
 			inconclusiveCount++
 		case PathObserved:
 			observedCount++

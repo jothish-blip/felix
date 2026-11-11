@@ -169,12 +169,16 @@ func NormalizeConfidence(val any) (float64, error) {
 		}
 		return float64(v), nil
 	case ValidationStatus:
-		switch v {
+		switch NormalizeEdgeStatus(v) {
 		case ValidationConfirmed:
 			return 1.0, nil
-		case ValidationPlausible:
+		case ValidationHighConfidence:
+			return 0.85, nil
+		case ValidationPlausible, ValidationCandidate:
 			return 0.75, nil
-		case ValidationInconclusive:
+		case ValidationNotTested:
+			return 0.50, nil
+		case ValidationInconclusive, ValidationNotReachable, ValidationInvalid:
 			return 0.0, nil
 		default:
 			return 0.50, nil
@@ -184,11 +188,13 @@ func NormalizeConfidence(val any) (float64, error) {
 		switch s {
 		case "1", "1.0", "1.00", report.ConfidenceHigh, "CONFIRMED":
 			return 1.0, nil
-		case "0.75", report.ConfidenceMedium, "PLAUSIBLE":
+		case "HIGH_CONFIDENCE":
+			return 0.85, nil
+		case "0.75", report.ConfidenceMedium, "PLAUSIBLE", "CANDIDATE":
 			return 0.75, nil
-		case "0.5", "0.50", report.ConfidenceLow:
+		case "0.5", "0.50", report.ConfidenceLow, "NOT_TESTED":
 			return 0.50, nil
-		case "0", "0.0", "0.00", "INCONCLUSIVE", "UNVERIFIED", "NONE":
+		case "0", "0.0", "0.00", "INCONCLUSIVE", "NOT_REACHABLE", "INVALID", "UNVERIFIED", "NONE":
 			return 0.0, nil
 		case "":
 			return 0.50, nil
@@ -287,7 +293,7 @@ func CalculateCompoundRisk(path *AttackPath, cfg CompoundRiskConfig) (*CompoundR
 	// Single finding chain: retains individual score without edge contributions
 	if len(path.Nodes) == 1 {
 		intScore := int(math.Round(baseScore))
-		isVerified := path.Status == PathVerified || path.Status.IsEvidenceSupported()
+		isVerified := IsConfirmedStatus(path.Status) || path.Status.IsEvidenceSupported()
 		level := deriveRiskLevel(intScore, isVerified, baseNode.Severity)
 		formula := fmt.Sprintf("S_chain = min(100, max(w_i)) = min(100, %.1f) = %d", baseScore, intScore)
 		rationale := fmt.Sprintf("Single finding chain; risk anchored by %s finding '%s' (score: %d)",

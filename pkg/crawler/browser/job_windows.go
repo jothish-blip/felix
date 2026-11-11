@@ -66,23 +66,52 @@ func (j *osJobHandle) terminate(pid int) error {
 		j.handle = 0
 	}
 
-	// Secondary safety net: if process tree persists, execute taskkill /F /T
-	if pid > 0 && isPIDAlive(pid) {
-		_ = exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(pid)).Run()
+	// Secondary safety net: verify PID is an active Chromium browser process before forced termination
+	if pid > 0 {
+		if isBrowser, _ := isChromiumProcess(pid); isBrowser {
+			_ = exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(pid)).Run()
+		}
 	}
 
 	return nil
+}
+
+// isChromiumProcess verifies whether a PID corresponds to an active browser executable.
+func isChromiumProcess(pid int) (bool, string) {
+	if pid <= 0 {
+		return false, ""
+	}
+	out, err := exec.Command("tasklist", "/FI", fmt.Sprintf("PID eq %d", pid), "/FO", "CSV", "/NH").Output()
+	if err != nil {
+		return false, ""
+	}
+	raw := strings.TrimSpace(string(out))
+	if strings.HasPrefix(raw, "INFO:") || raw == "" {
+		return false, ""
+	}
+	// Parse CSV line: "image.exe","pid",...
+	parts := strings.Split(raw, ",")
+	if len(parts) < 2 {
+		return false, ""
+	}
+	imageName := strings.ToLower(strings.Trim(parts[0], "\" \r\n"))
+	extractedPID := strings.Trim(parts[1], "\" \r\n")
+	if extractedPID != strconv.Itoa(pid) {
+		return false, ""
+	}
+	isBrowser := strings.Contains(imageName, "chrome") ||
+		strings.Contains(imageName, "edge") ||
+		strings.Contains(imageName, "chromium") ||
+		strings.Contains(imageName, "brave")
+	return isBrowser, imageName
 }
 
 func isPIDAlive(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
-	out, err := exec.Command("tasklist", "/FI", fmt.Sprintf("PID eq %d", pid), "/FO", "CSV", "/NH").Output()
-	if err != nil {
-		return false
-	}
-	return strings.Contains(string(out), strconv.Itoa(pid))
+	isBrowser, _ := isChromiumProcess(pid)
+	return isBrowser
 }
 
 // GetChildPIDs queries the Windows kernel for all active child processes spawned by parentPID.

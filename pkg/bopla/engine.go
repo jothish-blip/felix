@@ -18,12 +18,28 @@ import (
 )
 
 type credentialGuardedTransport struct {
-	base        http.RoundTripper
-	maxRequests int
-	reqCount    *int32
+	base          http.RoundTripper
+	maxRequests   int
+	reqCount      *int32
+	perIdentLimit int
+	perIdentCount *int32
 }
 
 func (c *credentialGuardedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if c.perIdentLimit > 0 && c.perIdentCount != nil {
+		for {
+			curr := atomic.LoadInt32(c.perIdentCount)
+			if int(curr) >= c.perIdentLimit {
+				return nil, fmt.Errorf("per-identity request budget exceeded (%d/%d)", curr, c.perIdentLimit)
+			}
+			if atomic.CompareAndSwapInt32(c.perIdentCount, curr, curr+1) {
+				break
+			}
+		}
+	} else if c.perIdentCount != nil {
+		atomic.AddInt32(c.perIdentCount, 1)
+	}
+
 	if c.maxRequests > 0 && c.reqCount != nil {
 		for {
 			curr := atomic.LoadInt32(c.reqCount)
@@ -45,6 +61,25 @@ func (c *credentialGuardedTransport) RoundTrip(req *http.Request) (*http.Respons
 		return c.base.RoundTrip(reqClone)
 	}
 	return c.base.RoundTrip(req)
+}
+
+// IsDestructivePropertyAction returns true if endpoint/property semantics involve irreversible account/credential/billing writes.
+func IsDestructivePropertyAction(endpoint, propertyPath string) bool {
+	ep := strings.ToLower(strings.TrimSpace(endpoint))
+	pp := strings.ToLower(strings.TrimSpace(propertyPath))
+	destructiveEndpointTokens := []string{"/delete", "/remove", "/suspend", "/payment", "/billing", "/checkout", "/wipe", "/reset"}
+	for _, tok := range destructiveEndpointTokens {
+		if strings.Contains(ep, tok) {
+			return true
+		}
+	}
+	destructivePropTokens := []string{"password", "passcode", "pin", "delete", "payment", "card_number", "cvv", "wipe"}
+	for _, tok := range destructivePropTokens {
+		if pp == tok || strings.HasSuffix(pp, "."+tok) {
+			return true
+		}
+	}
+	return false
 }
 
 // Engine executes BOPLA property-level authorization testing.
@@ -80,7 +115,19 @@ func NewEngine(client *http.Client, cfg Config) *Engine {
 // scopedClient creates an isolated http.Client scoped to an assessment execution,
 // enforcing redirect credential protection and budget constraints.
 func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
-	baseTransport := e.client.Transport
+	return e.buildGuardedClient(e.client, actx, 0, nil)
+}
+
+func (e *Engine) buildGuardedClient(baseClient *http.Client, actx *AssessmentContext, perIdentLimit int, perIdentCount *int32) *http.Client {
+	var baseTransport http.RoundTripper
+	var jar http.CookieJar
+	if baseClient != nil {
+		baseTransport = baseClient.Transport
+		jar = baseClient.Jar
+	}
+	if baseTransport == nil && e.client != nil {
+		baseTransport = e.client.Transport
+	}
 	if baseTransport == nil {
 		uTarget, _ := url.Parse(actx.BaseURL)
 		isLoopback := uTarget != nil && IsLoopbackHost(uTarget.Hostname())
@@ -92,18 +139,26 @@ func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
 	}
 
 	guard := &credentialGuardedTransport{
-		base:        baseTransport,
-		maxRequests: actx.MaxRequests,
-		reqCount:    actx.DispatchedRequests,
+		base:          baseTransport,
+		maxRequests:   actx.MaxRequests,
+		reqCount:      actx.DispatchedRequests,
+		perIdentLimit: perIdentLimit,
+		perIdentCount: perIdentCount,
 	}
 
 	return &http.Client{
 		Transport: guard,
 		Timeout:   e.cfg.Timeout,
-		Jar:       nil, // Prevent cookie bleed across identities
+		Jar:       jar,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return fmt.Errorf("stopped after 10 redirects")
+			}
+			if actx.IsExcluded != nil && actx.IsExcluded(req.URL.String()) {
+				return fmt.Errorf("redirect target %s excluded by scope", SanitizeURL(req.URL.String()))
+			}
+			if actx.IsAllowed != nil && !actx.IsAllowed(req.URL.String()) {
+				return fmt.Errorf("redirect target %s outside authorized scope", SanitizeURL(req.URL.String()))
 			}
 			if len(via) > 0 {
 				prevURL := via[len(via)-1].URL
@@ -114,6 +169,43 @@ func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
 			return nil
 		},
 	}
+}
+
+func (e *Engine) scopedClientFor(actx *AssessmentContext, id *TestIdentity, cache map[string]*http.Client, perIdentCounts map[string]*int32) *http.Client {
+	if id == nil {
+		return e.scopedClient(actx)
+	}
+	key := strings.ToUpper(strings.TrimSpace(id.Alias))
+	if key == "" {
+		key = strings.ToUpper(strings.TrimSpace(id.Role))
+	}
+	if cached, ok := cache[key]; ok {
+		return cached
+	}
+	var baseClient *http.Client
+	if len(actx.IdentityClients) > 0 {
+		for k, c := range actx.IdentityClients {
+			if strings.EqualFold(k, id.Alias) || strings.EqualFold(k, id.Role) {
+				baseClient = c
+				break
+			}
+		}
+	}
+	if baseClient == nil {
+		baseClient = e.client
+	}
+	var perCount *int32
+	if actx.MaxRequestsPerIdentity > 0 {
+		perCount = perIdentCounts[key]
+		if perCount == nil {
+			var zero int32
+			perCount = &zero
+			perIdentCounts[key] = perCount
+		}
+	}
+	wrapped := e.buildGuardedClient(baseClient, actx, actx.MaxRequestsPerIdentity, perCount)
+	cache[key] = wrapped
+	return wrapped
 }
 
 // Plan outputs the planned BOPLA tests without sending any network requests.
@@ -187,6 +279,10 @@ func (e *Engine) Plan(ctx context.Context, actx *AssessmentContext) (*TestPlan, 
 			pt.Status = PlanSkipped
 			pt.BlockedReason = "Target endpoint is excluded by assessment scope rules"
 			plan.BlockedTests++
+		} else if (pol.SafetyClass == "DESTRUCTIVE" || (pol.DiscoverySource != "" && (pol.IsStateChanging || pol.Category == CategoryBOPLAPropertyWrite || pol.Category == CategoryBOPLAMassAssignment) && IsDestructivePropertyAction(pol.Endpoint, pol.PropertyPath))) && !pol.IsReversibleTest {
+			pt.Status = PlanSkipped
+			pt.BlockedReason = "Destructive property mutation excluded by default safety policy"
+			plan.BlockedTests++
 		} else if (pol.IsStateChanging || pol.Category == CategoryBOPLAPropertyWrite || pol.Category == CategoryBOPLAMassAssignment) && !actx.AllowStateChangingTests {
 			pt.Status = PlanSkipped
 			pt.BlockedReason = "State-changing property tests require explicit --allow-state-changing opt-in"
@@ -252,17 +348,30 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 
 	results := make([]Result, 0, len(policies))
 
-	// Initialize counters and setup scoped client
+	// Initialize counters and setup scoped client caches
 	if actx.DispatchedRequests == nil {
 		var initialReqs int32
 		actx.DispatchedRequests = &initialReqs
 	}
-	client := e.scopedClient(actx)
+	clientCache := make(map[string]*http.Client)
+	perIdentCounts := make(map[string]*int32)
+	readBaselineCache := make(map[string]ResponseData)
+	var exposureTests, modTests int
+
+	seenPolicies := make(map[string]bool)
+	evaluatedProps := 0
+	mutationHaltedReason := ""
 
 	for _, pol := range policies {
 		if ctx.Err() != nil {
 			return nil, nil, ctx.Err()
 		}
+
+		dedupKey := strings.ToUpper(strings.TrimSpace(pol.Method)) + " " + strings.TrimSpace(pol.Endpoint) + "::" + strings.TrimSpace(pol.PropertyPath)
+		if dedupKey != " ::" && seenPolicies[dedupKey] {
+			continue
+		}
+		seenPolicies[dedupKey] = true
 
 		fullURL, err := ResolveURL(actx.BaseURL, pol.Endpoint)
 		if err != nil {
@@ -290,8 +399,20 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 			continue
 		}
 
+		isWriteTest := pol.IsStateChanging || pol.Category == CategoryBOPLAPropertyWrite || pol.Category == CategoryBOPLAMassAssignment
+		if (pol.SafetyClass == "DESTRUCTIVE" || (pol.DiscoverySource != "" && isWriteTest && IsDestructivePropertyAction(pol.Endpoint, pol.PropertyPath))) && !pol.IsReversibleTest {
+			res := makeSkippedResult(actx, pol, "Destructive property mutation excluded by default safety policy")
+			results = append(results, res)
+			continue
+		}
+
 		// State-changing safety check
-		if pol.IsStateChanging || pol.Category == CategoryBOPLAPropertyWrite || pol.Category == CategoryBOPLAMassAssignment {
+		if isWriteTest {
+			if mutationHaltedReason != "" {
+				res := makeSkippedResult(actx, pol, mutationHaltedReason)
+				results = append(results, res)
+				continue
+			}
 			if !actx.AllowStateChangingTests {
 				res := makeSkippedResult(actx, pol, "State-changing property test blocked: requires explicit --allow-state-changing opt-in")
 				results = append(results, res)
@@ -314,60 +435,191 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 			}
 		}
 
+		if actx.MaxProperties > 0 && evaluatedProps >= actx.MaxProperties {
+			res := makeSkippedResult(actx, pol, fmt.Sprintf("Skipped due to max property evaluation cap (%d)", actx.MaxProperties))
+			results = append(results, res)
+			continue
+		}
+		evaluatedProps++
+
 		// Identity resolution
-		allowedIdent, testedIdent := selectIdentities(pol, identities)
-		if allowedIdent == nil || testedIdent == nil {
+		allowedIdent, singleTestedIdent := selectIdentities(pol, identities)
+		var testedIdents []*TestIdentity
+		if actx.TestAllIdentities || len(actx.IdentityClients) > 0 {
+			testedIdents = selectRestrictedIdentities(pol, identities, allowedIdent)
+		} else if singleTestedIdent != nil {
+			testedIdents = []*TestIdentity{singleTestedIdent}
+		}
+
+		if allowedIdent == nil || len(testedIdents) == 0 {
 			res := makeInconclusiveResult(actx, pol, "Missing required identity contexts for differential property testing")
 			results = append(results, res)
 			continue
 		}
-		if !AreIdentitiesDistinct(*allowedIdent, *testedIdent) {
+		distinctPairs := make([]*TestIdentity, 0, len(testedIdents))
+		for _, cand := range testedIdents {
+			if AreIdentitiesDistinct(*allowedIdent, *cand) {
+				distinctPairs = append(distinctPairs, cand)
+			}
+		}
+		if len(distinctPairs) == 0 {
 			res := makeInconclusiveResult(actx, pol, "Identical identities configured; differential property testing requires distinct principal contexts")
 			results = append(results, res)
 			continue
 		}
 
-		// Step A: Positive Control Baseline Request (Authorized Role)
-		baseResp, err := e.executeRequest(ctx, client, "GET", fullURL, "", allowedIdent)
-		if err != nil {
-			res := Result{
-				ID:                uuid.New().String(),
-				AssessmentID:      actx.AssessmentID,
-				ExecutionID:       actx.ExecutionID,
-				Category:          pol.Category,
-				VulnCode:          string(pol.Category),
-				TestID:            fmt.Sprintf("bopla-%s", pol.PropertyID),
-				TestName:          pol.Name,
-				OWASPRef:          CategoryMetadata[pol.Category].OWASP,
-				CWERef:            CategoryMetadata[pol.Category].CWE,
-				Endpoint:          pol.Endpoint,
-				Method:            pol.Method,
-				PropertyPath:      pol.PropertyPath,
-				ExpectedAccess:    string(pol.ExpectedAccess),
-				RequiredRole:      allowedIdent.Role,
-				AccessorRole:      testedIdent.Role,
-				AccessorAlias:     testedIdent.Alias,
-				VerificationState: StateInconclusive,
-				Severity:          "INFO",
-				Confidence:        "LOW",
-				EvidenceSummary:   fmt.Sprintf("Authorized baseline request for role %s failed: %v", allowedIdent.Role, err),
-				CreatedAt:         time.Now().UTC(),
+		allowedClient := e.scopedClientFor(actx, allowedIdent, clientCache, perIdentCounts)
+
+		// Step A: Positive Control Baseline Request (Authorized Role) executed once per policy
+		baselineURL := fullURL
+		if pol.DiscoverySource != "" && isWriteTest && pol.ReadBackEndpoint != "" {
+			if rbURL, err := ResolveURL(actx.BaseURL, pol.ReadBackEndpoint); err == nil {
+				baselineURL = rbURL
 			}
-			results = append(results, res)
-			continue
+		}
+		cacheKey := strings.ToUpper(allowedIdent.Alias) + "::" + baselineURL
+		var baseResp ResponseData
+		if pol.DiscoverySource != "" && !isWriteTest {
+			if cached, ok := readBaselineCache[cacheKey]; ok {
+				baseResp = cached
+			}
+		}
+		if baseResp.StatusCode == 0 {
+			fetched, err := e.executeRequest(ctx, allowedClient, "GET", baselineURL, "", allowedIdent)
+			if err != nil {
+				res := Result{
+					ID:                uuid.New().String(),
+					AssessmentID:      actx.AssessmentID,
+					ExecutionID:       actx.ExecutionID,
+					Category:          pol.Category,
+					VulnCode:          string(pol.Category),
+					TestID:            fmt.Sprintf("bopla-%s", pol.PropertyID),
+					TestName:          pol.Name,
+					OWASPRef:          CategoryMetadata[pol.Category].OWASP,
+					CWERef:            CategoryMetadata[pol.Category].CWE,
+					Endpoint:          pol.Endpoint,
+					Method:            pol.Method,
+					PropertyPath:      pol.PropertyPath,
+					ExpectedAccess:    string(pol.ExpectedAccess),
+					RequiredRole:      allowedIdent.Role,
+					AccessorRole:      distinctPairs[0].Role,
+					AccessorAlias:     distinctPairs[0].Alias,
+					VerificationState: StateInconclusive,
+					Severity:          "INFO",
+					Confidence:        "LOW",
+					EvidenceSummary:   fmt.Sprintf("Authorized baseline request for role %s failed: %v", allowedIdent.Role, err),
+					CreatedAt:         time.Now().UTC(),
+				}
+				results = append(results, res)
+				continue
+			}
+			baseResp = fetched
+			if pol.DiscoverySource != "" && !isWriteTest {
+				readBaselineCache[cacheKey] = baseResp
+			}
 		}
 
-		// Step B: Execution based on Read vs Write Mutation
-		if pol.IsStateChanging || pol.Category == CategoryBOPLAPropertyWrite || pol.Category == CategoryBOPLAMassAssignment {
-			// Write Mutation / Mass Assignment workflow
-			payload := pol.MutationPayload
-			if payload == "" {
-				payload = buildMutationPayload(pol.PropertyPath, pol.MutationValue)
+		// Step B: Execute against each distinct restricted identity with isolated transport
+		for _, testedIdent := range distinctPairs {
+			if ctx.Err() != nil {
+				return nil, nil, ctx.Err()
 			}
+			testedClient := e.scopedClientFor(actx, testedIdent, clientCache, perIdentCounts)
 
-			// Execute exactly 1 mutation write request with test identity
-			mutationResp, err := e.executeRequest(ctx, client, pol.Method, fullURL, payload, testedIdent)
-			if err != nil {
+			if isWriteTest {
+				if mutationHaltedReason != "" {
+					res := makeSkippedResult(actx, pol, mutationHaltedReason)
+					res.AccessorRole = testedIdent.Role
+					res.AccessorAlias = testedIdent.Alias
+					results = append(results, res)
+					continue
+				}
+				modTests++
+				payload := pol.MutationPayload
+				if payload == "" {
+					payload = buildMutationPayload(pol.PropertyPath, pol.MutationValue)
+				}
+
+				// Execute bounded mutation write request with isolated test identity
+				mutationResp, err := e.executeRequest(ctx, testedClient, pol.Method, fullURL, payload, testedIdent)
+				if err != nil {
+					res := Result{
+						ID:                uuid.New().String(),
+						AssessmentID:      actx.AssessmentID,
+						ExecutionID:       actx.ExecutionID,
+						Category:          pol.Category,
+						VulnCode:          string(pol.Category),
+						TestID:            fmt.Sprintf("bopla-%s", pol.PropertyID),
+						TestName:          pol.Name,
+						OWASPRef:          CategoryMetadata[pol.Category].OWASP,
+						CWERef:            CategoryMetadata[pol.Category].CWE,
+						Endpoint:          pol.Endpoint,
+						Method:            pol.Method,
+						PropertyPath:      pol.PropertyPath,
+						ExpectedAccess:    string(pol.ExpectedAccess),
+						RequiredRole:      allowedIdent.Role,
+						AccessorRole:      testedIdent.Role,
+						AccessorAlias:     testedIdent.Alias,
+						VerificationState: StateInconclusive,
+						Severity:          "INFO",
+						Confidence:        "LOW",
+						EvidenceSummary:   fmt.Sprintf("Property mutation request failed: %v", err),
+						CreatedAt:         time.Now().UTC(),
+					}
+					results = append(results, res)
+					continue
+				}
+
+				var readBackResp ResponseData
+				var readBackURL, rbMethod string
+				if mutationResp.StatusCode >= 200 && mutationResp.StatusCode < 300 && pol.ReadBackEndpoint != "" {
+					readBackURL = fullURL
+					if rbURL, rbErr := ResolveURL(actx.BaseURL, pol.ReadBackEndpoint); rbErr == nil {
+						readBackURL = rbURL
+					}
+					rbMethod = pol.ReadBackMethod
+					if rbMethod == "" {
+						rbMethod = "GET"
+					}
+
+					// Read-back using tested identity or authorized baseline identity
+					readIdent := testedIdent
+					readClient := testedClient
+					if strings.EqualFold(testedIdent.Role, "anonymous") || strings.EqualFold(testedIdent.Alias, "ANONYMOUS") {
+						readIdent = allowedIdent
+						readClient = allowedClient
+					}
+					readBackData, rbErr := e.executeRequest(ctx, readClient, rbMethod, readBackURL, "", readIdent)
+					if rbErr == nil {
+						readBackResp = readBackData
+					}
+				}
+
+				comp := downgradeIfPolicyUnestablished(
+					ComparePropertyMutation(baseResp, mutationResp, readBackResp, pol, allowedIdent.Role, testedIdent.Role, testedIdent.Alias),
+					pol,
+				)
+
+				// Attempt and verify cleanup when reversible fixture mutation may have persisted
+				var cleanupStatus, cleanupWarning string
+				if mutationResp.StatusCode >= 200 && mutationResp.StatusCode < 300 && comp.State != StateNotVulnerable {
+					if pol.IsReversibleTest && pol.RestorePayload != "" {
+						cleanupStatus, cleanupWarning = e.executeAndVerifyCleanup(ctx, allowedClient, allowedIdent, fullURL, readBackURL, rbMethod, pol)
+					} else if comp.State == StateVerified {
+						cleanupStatus = "CLEANUP_UNAVAILABLE"
+						cleanupWarning = fmt.Sprintf("BOPLA mass assignment persisted on %s [%s] without a baseline restore payload; verify fixture state manually", pol.Endpoint, pol.PropertyPath)
+					}
+					if comp.EvidenceDetails == nil {
+						comp.EvidenceDetails = make(map[string]string)
+					}
+					if cleanupStatus != "" {
+						comp.EvidenceDetails["cleanup_status"] = cleanupStatus
+					}
+					if cleanupWarning != "" {
+						comp.EvidenceDetails["cleanup_warning"] = cleanupWarning
+					}
+				}
+
 				res := Result{
 					ID:                uuid.New().String(),
 					AssessmentID:      actx.AssessmentID,
@@ -385,71 +637,59 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 					RequiredRole:      allowedIdent.Role,
 					AccessorRole:      testedIdent.Role,
 					AccessorAlias:     testedIdent.Alias,
-					VerificationState: StateInconclusive,
-					Severity:          "INFO",
-					Confidence:        "LOW",
-					EvidenceSummary:   fmt.Sprintf("Property mutation request failed: %v", err),
+					VerificationState: comp.State,
+					Severity:          comp.Severity,
+					Confidence:        comp.Confidence,
+					ObservedStatus:    mutationResp.StatusCode,
+					CleanupStatus:     cleanupStatus,
+					CleanupWarning:    cleanupWarning,
+					EvidenceSummary:   comp.EvidenceSummary,
+					EvidenceDetails:   comp.EvidenceDetails,
 					CreatedAt:         time.Now().UTC(),
 				}
+				if comp.State == StateVerified || comp.State == StateCandidate {
+					res.Finding = buildFinding(res, pol, comp, fullURL)
+				}
 				results = append(results, res)
-				continue
-			}
-
-			var readBackResp ResponseData
-			// If mutation returned 2xx, execute independent read-back verification ONLY if ReadBackEndpoint is configured
-			if mutationResp.StatusCode >= 200 && mutationResp.StatusCode < 300 && pol.ReadBackEndpoint != "" {
-				readBackURL := fullURL
-				rbURL, err := ResolveURL(actx.BaseURL, pol.ReadBackEndpoint)
-				if err == nil {
-					readBackURL = rbURL
-				}
-				rbMethod := pol.ReadBackMethod
-				if rbMethod == "" {
-					rbMethod = "GET"
+				if cleanupStatus == "CLEANUP_FAILED" || cleanupStatus == "CLEANUP_UNVERIFIED" {
+					mutationHaltedReason = fmt.Sprintf("State-changing property probe stopped due to prior restoration failure (%s: %s)", cleanupStatus, RedactText(cleanupWarning))
 				}
 
-				// Perform read-back using authorized identity (or test identity if readable)
-				readBackData, err := e.executeRequest(ctx, client, rbMethod, readBackURL, "", allowedIdent)
-				if err == nil {
-					readBackResp = readBackData
+			} else {
+				exposureTests++
+				testResp, err := e.executeRequest(ctx, testedClient, pol.Method, fullURL, "", testedIdent)
+				if err != nil {
+					res := Result{
+						ID:                uuid.New().String(),
+						AssessmentID:      actx.AssessmentID,
+						ExecutionID:       actx.ExecutionID,
+						Category:          pol.Category,
+						VulnCode:          string(pol.Category),
+						TestID:            fmt.Sprintf("bopla-%s", pol.PropertyID),
+						TestName:          pol.Name,
+						OWASPRef:          CategoryMetadata[pol.Category].OWASP,
+						CWERef:            CategoryMetadata[pol.Category].CWE,
+						Endpoint:          pol.Endpoint,
+						Method:            pol.Method,
+						PropertyPath:      pol.PropertyPath,
+						ExpectedAccess:    string(pol.ExpectedAccess),
+						RequiredRole:      allowedIdent.Role,
+						AccessorRole:      testedIdent.Role,
+						AccessorAlias:     testedIdent.Alias,
+						VerificationState: StateInconclusive,
+						Severity:          "INFO",
+						Confidence:        "LOW",
+						EvidenceSummary:   fmt.Sprintf("Test request for role %s failed: %v", testedIdent.Role, err),
+						CreatedAt:         time.Now().UTC(),
+					}
+					results = append(results, res)
+					continue
 				}
-			}
 
-			comp := ComparePropertyMutation(baseResp, mutationResp, readBackResp, pol, allowedIdent.Role, testedIdent.Role, testedIdent.Alias)
-			res := Result{
-				ID:                uuid.New().String(),
-				AssessmentID:      actx.AssessmentID,
-				ExecutionID:       actx.ExecutionID,
-				Category:          pol.Category,
-				VulnCode:          string(pol.Category),
-				TestID:            fmt.Sprintf("bopla-%s", pol.PropertyID),
-				TestName:          pol.Name,
-				OWASPRef:          CategoryMetadata[pol.Category].OWASP,
-				CWERef:            CategoryMetadata[pol.Category].CWE,
-				Endpoint:          pol.Endpoint,
-				Method:            pol.Method,
-				PropertyPath:      pol.PropertyPath,
-				ExpectedAccess:    string(pol.ExpectedAccess),
-				RequiredRole:      allowedIdent.Role,
-				AccessorRole:      testedIdent.Role,
-				AccessorAlias:     testedIdent.Alias,
-				VerificationState: comp.State,
-				Severity:          comp.Severity,
-				Confidence:        comp.Confidence,
-				ObservedStatus:    mutationResp.StatusCode,
-				EvidenceSummary:   comp.EvidenceSummary,
-				EvidenceDetails:   comp.EvidenceDetails,
-				CreatedAt:         time.Now().UTC(),
-			}
-			if comp.State == StateVerified || comp.State == StateCandidate {
-				res.Finding = buildFinding(res, pol, comp, fullURL)
-			}
-			results = append(results, res)
-
-		} else {
-			// Read / Excessive Exposure / Representation Bypass workflow
-			testResp, err := e.executeRequest(ctx, client, pol.Method, fullURL, "", testedIdent)
-			if err != nil {
+				comp := downgradeIfPolicyUnestablished(
+					ComparePropertyRead(baseResp, testResp, pol, allowedIdent.Role, testedIdent.Role, testedIdent.Alias),
+					pol,
+				)
 				res := Result{
 					ID:                uuid.New().String(),
 					AssessmentID:      actx.AssessmentID,
@@ -467,50 +707,23 @@ func (e *Engine) Assess(ctx context.Context, actx *AssessmentContext) ([]Result,
 					RequiredRole:      allowedIdent.Role,
 					AccessorRole:      testedIdent.Role,
 					AccessorAlias:     testedIdent.Alias,
-					VerificationState: StateInconclusive,
-					Severity:          "INFO",
-					Confidence:        "LOW",
-					EvidenceSummary:   fmt.Sprintf("Test request for role %s failed: %v", testedIdent.Role, err),
+					VerificationState: comp.State,
+					Severity:          comp.Severity,
+					Confidence:        comp.Confidence,
+					ObservedStatus:    testResp.StatusCode,
+					EvidenceSummary:   comp.EvidenceSummary,
+					EvidenceDetails:   comp.EvidenceDetails,
 					CreatedAt:         time.Now().UTC(),
 				}
+				if comp.State == StateVerified || comp.State == StateCandidate {
+					res.Finding = buildFinding(res, pol, comp, fullURL)
+				}
 				results = append(results, res)
-				continue
 			}
-
-			comp := ComparePropertyRead(baseResp, testResp, pol, allowedIdent.Role, testedIdent.Role, testedIdent.Alias)
-			res := Result{
-				ID:                uuid.New().String(),
-				AssessmentID:      actx.AssessmentID,
-				ExecutionID:       actx.ExecutionID,
-				Category:          pol.Category,
-				VulnCode:          string(pol.Category),
-				TestID:            fmt.Sprintf("bopla-%s", pol.PropertyID),
-				TestName:          pol.Name,
-				OWASPRef:          CategoryMetadata[pol.Category].OWASP,
-				CWERef:            CategoryMetadata[pol.Category].CWE,
-				Endpoint:          pol.Endpoint,
-				Method:            pol.Method,
-				PropertyPath:      pol.PropertyPath,
-				ExpectedAccess:    string(pol.ExpectedAccess),
-				RequiredRole:      allowedIdent.Role,
-				AccessorRole:      testedIdent.Role,
-				AccessorAlias:     testedIdent.Alias,
-				VerificationState: comp.State,
-				Severity:          comp.Severity,
-				Confidence:        comp.Confidence,
-				ObservedStatus:    testResp.StatusCode,
-				EvidenceSummary:   comp.EvidenceSummary,
-				EvidenceDetails:   comp.EvidenceDetails,
-				CreatedAt:         time.Now().UTC(),
-			}
-			if comp.State == StateVerified || comp.State == StateCandidate {
-				res.Finding = buildFinding(res, pol, comp, fullURL)
-			}
-			results = append(results, res)
 		}
 	}
 
-	summary := compileSummary(results)
+	summary := compileSummaryWithContext(results, policies, exposureTests, modTests)
 	return results, summary, nil
 }
 
@@ -617,6 +830,52 @@ func selectIdentities(pol PropertyPolicy, identities []TestIdentity) (*TestIdent
 	return allowed, tested
 }
 
+func selectRestrictedIdentities(pol PropertyPolicy, identities []TestIdentity, allowed *TestIdentity) []*TestIdentity {
+	var out []*TestIdentity
+	for i := range identities {
+		id := &identities[i]
+		if allowed != nil && !AreIdentitiesDistinct(*id, *allowed) {
+			continue
+		}
+		restrictedMatch := false
+		for _, rr := range pol.RestrictedRoles {
+			if strings.EqualFold(id.Role, rr) || strings.EqualFold(id.Alias, rr) {
+				restrictedMatch = true
+				break
+			}
+		}
+		if !restrictedMatch && len(pol.RestrictedRoles) == 0 {
+			allowedMatch := false
+			for _, ar := range pol.AllowedRoles {
+				if strings.EqualFold(id.Role, ar) || strings.EqualFold(id.Alias, ar) {
+					allowedMatch = true
+					break
+				}
+			}
+			restrictedMatch = !allowedMatch
+		}
+		if restrictedMatch || (allowed != nil && strings.EqualFold(id.Role, allowed.Role) == false) {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+func downgradeIfPolicyUnestablished(comp ComparisonResult, pol PropertyPolicy) ComparisonResult {
+	if !pol.PolicyUnestablished || comp.State != StateVerified {
+		return comp
+	}
+	if comp.EvidenceDetails == nil {
+		comp.EvidenceDetails = make(map[string]string)
+	}
+	comp.EvidenceDetails["policy_unestablished"] = "true"
+	comp.State = StateCandidate
+	comp.Severity = "MEDIUM"
+	comp.Confidence = "POSSIBLE"
+	comp.EvidenceSummary = strings.TrimSpace(comp.EvidenceSummary) + " (Note: property sensitivity/expectation was inferred without authoritative schema or cross-role differential; downgraded from VERIFIED to CANDIDATE.)"
+	return comp
+}
+
 func buildMutationPayload(path string, val any) string {
 	parts := strings.Split(path, ".")
 	if len(parts) == 1 {
@@ -648,8 +907,59 @@ func buildFinding(res Result, pol PropertyPolicy, comp ComparisonResult, targetU
 	}
 
 	evidence := RedactText(comp.EvidenceSummary)
+	findingStatus := report.FindingStatusSuspected
+	verStatus := report.VerificationDetected
+	detectionStatus := "CANDIDATE"
+	confidenceScore := 55
+	if res.VerificationState == StateVerified {
+		findingStatus = report.FindingStatusConfirmed
+		verStatus = report.VerificationVerified
+		detectionStatus = "CONFIRMED"
+		confidenceScore = 95
+	}
+
+	details := map[string]string{
+		"category":              string(res.Category),
+		"vuln_code":             res.VulnCode,
+		"property_path":         pol.PropertyPath,
+		"expected_access":       string(pol.ExpectedAccess),
+		"required_role":         res.RequiredRole,
+		"accessor_role":         res.AccessorRole,
+		"accessor_alias":        res.AccessorAlias,
+		"verification_state":    string(res.VerificationState),
+		"authz_engine_verified": "true",
+	}
+	if pol.PropertyClassification != "" {
+		details["property_classification"] = pol.PropertyClassification
+	}
+	if pol.DiscoverySource != "" {
+		details["discovery_source"] = pol.DiscoverySource
+	}
+	if pol.DiscoveryConfidence != "" {
+		details["discovery_confidence"] = pol.DiscoveryConfidence
+	}
+	if pol.PolicyEvidence != "" {
+		details["policy_evidence"] = RedactText(pol.PolicyEvidence)
+	}
+	if pol.PolicyUnestablished {
+		details["policy_unestablished"] = "true"
+	}
+	if res.CleanupStatus != "" {
+		details["cleanup_status"] = res.CleanupStatus
+	}
+	if res.CleanupWarning != "" {
+		details["cleanup_warning"] = RedactText(res.CleanupWarning)
+		evidence = fmt.Sprintf("%s [CLEANUP WARNING: %s]", evidence, RedactText(res.CleanupWarning))
+	}
+	remediation := fmt.Sprintf("Enforce property-level authorization checks at the data serialization and model binding layers. Ensure restricted property %q is omitted or masked from unauthorized responses, and forbid mass assignment on mutating endpoints.", pol.PropertyPath)
+	if res.CleanupStatus == "CLEANUP_FAILED" || res.CleanupStatus == "CLEANUP_UNVERIFIED" {
+		remediation = fmt.Sprintf("%s Additionally, automated restoration of %q reported %s (%s); verify and reset target fixture state manually.", remediation, pol.PropertyPath, res.CleanupStatus, RedactText(res.CleanupWarning))
+	}
+
 	return &report.Finding{
 		ID:          uuid.New().String(),
+		RuleID:      "VULN-BOPLA-001",
+		Status:      findingStatus,
 		Title:       fmt.Sprintf("[%s] %s on %s [%s]", res.VulnCode, meta.Name, res.Endpoint, pol.PropertyPath),
 		Category:    fmt.Sprintf("%s / %s", meta.OWASP, meta.Name),
 		Severity:    res.Severity,
@@ -660,29 +970,87 @@ func buildFinding(res Result, pol PropertyPolicy, comp ComparisonResult, targetU
 		Description: fmt.Sprintf("[%s / %s] %s", res.VulnCode, meta.OWASP, meta.Description),
 		Evidence:    evidence,
 		EvidenceDetails: report.EvidenceDetails{
-			Observation:     evidence,
-			Location:        sanitizedEndpoint,
-			HTTPMethod:      res.Method,
-			HTTPStatus:      res.ObservedStatus,
-			DetectionMethod: "BOPLA_VERIFICATION_ENGINE",
-			Details: map[string]string{
-				"category":        string(res.Category),
-				"vuln_code":       res.VulnCode,
-				"property_path":   pol.PropertyPath,
-				"expected_access": string(pol.ExpectedAccess),
-				"required_role":   res.RequiredRole,
-				"accessor_role":   res.AccessorRole,
-				"accessor_alias":  res.AccessorAlias,
-			},
+			Observation:      evidence,
+			Location:         sanitizedEndpoint,
+			HTTPMethod:       res.Method,
+			HTTPStatus:       res.ObservedStatus,
+			DetectionMethod:  "BOPLA_VERIFICATION_ENGINE",
+			DetectionStatus:  detectionStatus,
+			ExpectedBehavior: fmt.Sprintf("Property %q should enforce %s for role %s", pol.PropertyPath, pol.ExpectedAccess, res.AccessorRole),
+			ObservedBehavior: evidence,
+			Details:          details,
 		},
-		Remediation: fmt.Sprintf("Enforce property-level authorization checks at the data serialization and model binding layers. Ensure restricted property %q is omitted or masked from unauthorized responses, and forbid mass assignment on mutating endpoints.", pol.PropertyPath),
+		Verification: report.VerificationRecord{
+			Status:             verStatus,
+			DetectionStatus:    detectionStatus,
+			Result:             evidence,
+			Rationale:          RedactText(pol.PolicyEvidence),
+			PolicyID:           pol.PropertyID,
+			VerificationMethod: "DIFFERENTIAL_PROPERTY_AUTHORIZATION",
+			AnalysisMethod:     "ACTIVE_VERIFICATION",
+			ConfidenceScore:    confidenceScore,
+			Attempted:          true,
+		},
+		Remediation: remediation,
 	}
 }
 
+// executeAndVerifyCleanup restores a mutated reversible property and verifies persistence reverted cleanly.
+func (e *Engine) executeAndVerifyCleanup(
+	ctx context.Context,
+	allowedClient *http.Client,
+	allowedIdent *TestIdentity,
+	fullURL, readBackURL, rbMethod string,
+	pol PropertyPolicy,
+) (string, string) {
+	restoreResp, restoreErr := e.executeRequest(ctx, allowedClient, pol.Method, fullURL, pol.RestorePayload, allowedIdent)
+	if restoreErr != nil {
+		return "CLEANUP_FAILED", fmt.Sprintf("BOPLA cleanup failed for %s [%s]: restore request error: %v", pol.Endpoint, pol.PropertyPath, restoreErr)
+	}
+	if restoreResp.StatusCode < 200 || restoreResp.StatusCode >= 300 {
+		return "CLEANUP_FAILED", fmt.Sprintf("BOPLA cleanup failed for %s [%s]: restore returned non-2xx HTTP %d", pol.Endpoint, pol.PropertyPath, restoreResp.StatusCode)
+	}
+
+	if readBackURL != "" && pol.PropertyPath != "" {
+		if rbMethod == "" {
+			rbMethod = "GET"
+		}
+		postResp, rbErr := e.executeRequest(ctx, allowedClient, rbMethod, readBackURL, "", allowedIdent)
+		if rbErr != nil {
+			return "CLEANUP_UNVERIFIED", fmt.Sprintf("BOPLA restore returned HTTP %d for %s [%s], but post-restore verification read-back failed: %v", restoreResp.StatusCode, pol.Endpoint, pol.PropertyPath, rbErr)
+		}
+		if postResp.StatusCode < 200 || postResp.StatusCode >= 300 {
+			return "CLEANUP_UNVERIFIED", fmt.Sprintf("BOPLA restore returned HTTP %d for %s [%s], but post-restore verification read-back returned HTTP %d", restoreResp.StatusCode, pol.Endpoint, pol.PropertyPath, postResp.StatusCode)
+		}
+		var postData any
+		if err := json.Unmarshal(postResp.Body, &postData); err != nil {
+			return "CLEANUP_UNVERIFIED", fmt.Sprintf("BOPLA restore returned HTTP %d for %s [%s], but post-restore verification read-back returned non-JSON body", restoreResp.StatusCode, pol.Endpoint, pol.PropertyPath)
+		}
+		if postVal, found := ExtractProperty(postData, pol.PropertyPath); found && IsPropertyEqual(postVal, pol.MutationValue) {
+			return "CLEANUP_FAILED", fmt.Sprintf("BOPLA cleanup failed for %s [%s]: restore returned HTTP %d, but post-restore read-back still observed injected value %q", pol.Endpoint, pol.PropertyPath, restoreResp.StatusCode, RedactValue(pol.MutationValue))
+		}
+	}
+
+	return "RESTORED", ""
+}
+
 func compileSummary(results []Result) *Summary {
+	return compileSummaryWithContext(results, nil, 0, 0)
+}
+
+func compileSummaryWithContext(results []Result, policies []PropertyPolicy, exposureTests, modTests int) *Summary {
 	summary := &Summary{
-		TotalTests:  len(results),
-		CoverageMap: make(map[string]CategoryCoverage),
+		TotalTests:           len(results),
+		PropertiesDiscovered: len(policies),
+		ExposureTests:        exposureTests,
+		ModificationTests:    modTests,
+		CoverageMap:          make(map[string]CategoryCoverage),
+	}
+
+	for _, pol := range policies {
+		if !pol.PolicyUnestablished && pol.ExpectedAccess != "" {
+			summary.PropertiesWithPolicy++
+		}
 	}
 
 	// Initialize all categories in coverage map
@@ -724,9 +1092,28 @@ func compileSummary(results []Result) *Summary {
 			}
 		case StateSkipped:
 			summary.BlockedCount++
+			summary.SkippedCount++
 			cov.Blocked++
 			if cov.Status == CoverageUntested {
 				cov.Status = CoverageBlockedMissingPrereq
+			}
+		}
+
+		switch r.CleanupStatus {
+		case "RESTORED":
+			summary.CleanupAttempted++
+			summary.CleanupRestored++
+		case "CLEANUP_FAILED":
+			summary.CleanupAttempted++
+			summary.CleanupFailed++
+			if r.CleanupWarning != "" {
+				summary.CleanupWarnings = append(summary.CleanupWarnings, r.CleanupWarning)
+			}
+		case "CLEANUP_UNVERIFIED":
+			summary.CleanupAttempted++
+			summary.CleanupUnverified++
+			if r.CleanupWarning != "" {
+				summary.CleanupWarnings = append(summary.CleanupWarnings, r.CleanupWarning)
 			}
 		}
 

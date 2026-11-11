@@ -348,6 +348,8 @@ const htmlReportTemplate = `<!DOCTYPE html>
   .badge-NOT_VERIFIED { background: var(--bg-elevated); color: var(--text-muted); border: 1px solid var(--border-default); }
   .badge-NOT_EXPOSED, .badge-DEFENDED { background: var(--defended-bg); color: var(--defended); border: 1px solid var(--defended-border); }
   .badge-CONFIRMED { background: var(--verified-bg); color: var(--verified); border: 1px solid var(--verified-border); }
+  .badge-HIGH_CONFIDENCE { background: rgba(45, 212, 191, 0.14); color: #2dd4bf; border: 1px solid rgba(45, 212, 191, 0.35); }
+  .badge-NOT_REACHABLE, .badge-INVALID { background: var(--crit-bg); color: var(--crit); border: 1px solid var(--crit-border); }
   .badge-SUSPECTED { background: var(--med-bg); color: var(--med); border: 1px solid var(--med-border); }
   .badge-NOT_TESTED { background: var(--bg-elevated); color: var(--text-muted); border: 1px solid var(--border-default); }
   .badge-ERROR { background: var(--crit-bg); color: var(--crit); border: 1px solid var(--crit-border); }
@@ -1867,11 +1869,12 @@ const htmlReportTemplate = `<!DOCTYPE html>
       </div>
 
       <!-- Preserved Story Narrative & Fallback Card -->
-      <div class="story-card" style="border-left-color: {{if eq $p.Status "VERIFIED"}}var(--verified){{else if eq $p.Status "CANDIDATE"}}var(--med){{else}}var(--info){{end}};">
+      <div class="story-card" style="border-left-color: {{if or (eq $p.Status "VERIFIED") (eq $p.Status "CONFIRMED")}}var(--verified){{else if eq $p.Status "HIGH_CONFIDENCE"}}#2dd4bf{{else if eq $p.Status "CANDIDATE"}}var(--med){{else if or (eq $p.Status "NOT_REACHABLE") (eq $p.Status "INVALID")}}var(--crit){{else}}var(--info){{end}};">
         <div class="item-header">
           <div class="item-title">{{if $p.SyntheticFixture}}<span class="badge badge-INFO">[SYNTHETIC FIXTURE]</span> {{end}}{{$p.Title}}</div>
           <div style="display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap;">
             <span class="badge badge-{{$p.Status}}">{{$p.Status}}</span>
+            {{if $p.ReachabilityStatus}}<span class="badge badge-INFO">Reachability: {{$p.ReachabilityStatus}}</span>{{end}}
             <span class="badge badge-{{$p.CombinedRiskLevel}}">{{severityBadge $p.CombinedRiskLevel}} ({{$p.CombinedRiskScore}}/100)</span>
             <span class="badge badge-INFO">Conf: {{$p.Confidence}}</span>
           </div>
@@ -1899,7 +1902,69 @@ const htmlReportTemplate = `<!DOCTYPE html>
           <strong>Target Asset:</strong> {{$p.TargetAsset}}
           {{if $p.EntryPoint}}&bull; <strong>Entry Point:</strong> {{$p.EntryPoint}}{{end}}
           &bull; <strong>Primary Weakness:</strong> {{$p.PrimaryWeakness}}
+          {{if $p.IdentityContext}}&bull; <strong>Identity Context:</strong> {{$p.IdentityContext}}{{end}}
         </div>
+
+        {{if $p.DemonstratedImpact}}
+        <div style="font-size: 0.85rem; font-weight: 600; color: var(--verified); margin-bottom: 0.25rem;">Demonstrated Security Impact:</div>
+        <p style="font-size: 0.9rem; margin-bottom: 0.6rem; color: var(--text-secondary);">{{$p.DemonstratedImpact}}</p>
+        {{end}}
+
+        {{if $p.UnverifiedImpact}}
+        <div style="font-size: 0.85rem; font-weight: 600; color: var(--med); margin-bottom: 0.25rem;">Unverified / Hypothetical Impact (Not Proven):</div>
+        <p style="font-size: 0.9rem; margin-bottom: 0.6rem; color: var(--text-muted);">{{$p.UnverifiedImpact}}</p>
+        {{end}}
+
+        {{if $p.ConfidenceRationale}}
+        <p style="font-size: 0.86rem; color: var(--text-secondary); margin-bottom: 0.6rem;"><strong>Confidence Rationale:</strong> {{$p.ConfidenceRationale}}</p>
+        {{end}}
+
+        {{if $p.StepVerifications}}
+        <div style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 0.35rem;">Step-by-Step Reachability &amp; Transition Verification ({{$p.VerifiedTransitions}} verified / {{$p.UnverifiedTransitions}} unverified):</div>
+        <div style="overflow-x: auto; margin-bottom: 0.75rem;">
+          <table class="data-table" style="width: 100%; font-size: 0.82rem;">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Entry Condition</th>
+                <th>Identity &amp; Permissions</th>
+                <th>Target Resource</th>
+                <th>Expected vs Observed</th>
+                <th>Evidence Refs</th>
+                <th>Reachability</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{range $p.StepVerifications}}
+              <tr>
+                <td>{{.StepIndex}}</td>
+                <td>{{.EntryCondition}}</td>
+                <td><code>{{.RequiredIdentity}}</code> ({{.RequiredPermissions}})</td>
+                <td><code>{{.Method}} {{.TargetResource}}</code></td>
+                <td><strong>Exp:</strong> {{.ExpectedResult}}<br/><strong>Obs:</strong> {{.ObservedResult}}</td>
+                <td>{{range .EvidenceRefs}}<code>{{.}}</code> {{end}}</td>
+                <td><span class="badge badge-{{.ValidationStatus}}">{{.NextStepReachable}} ({{.ValidationStatus}})</span></td>
+              </tr>
+              {{end}}
+            </tbody>
+          </table>
+        </div>
+        {{end}}
+
+        {{if $p.CredentialValidations}}
+        <div style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 0.35rem;">Credential Relationship Validations (Fingerprinted Only — Zero Raw Secrets):</div>
+        <ul class="story-list">
+          {{range $p.CredentialValidations}}
+          <li>
+            <span class="badge badge-{{.Status}}">{{.Status}}</span>
+            <code>{{.SourceFindingID}}</code> {{if .TokenFingerprint}}({{.TokenKind}} {{.TokenFingerprint}}){{end}}
+            &mdash; Identity: <code>{{.IntendedIdentity}}</code>{{if .ObservedIdentity}} &rarr; Observed: <code>{{.ObservedIdentity}}</code>{{end}}
+            {{if .PlaceholderReason}}[Placeholder Rejected: {{.PlaceholderReason}}]{{end}}
+            {{if .Limitation}} &mdash; {{.Limitation}}{{end}}
+          </li>
+          {{end}}
+        </ul>
+        {{end}}
 
         <div style="font-size: 0.85rem; font-weight: 600; color: var(--crit); margin-bottom: 0.25rem;">Terminal Impact:</div>
         <p style="font-size: 0.9rem; margin-bottom: 0.75rem; color: var(--text-secondary);">{{$p.TerminalImpact}}</p>
@@ -1931,6 +1996,17 @@ const htmlReportTemplate = `<!DOCTYPE html>
           <strong>Missing Evidence / Verification Gaps:</strong>
           <ul style="padding-left: 1.25rem; margin-top: 0.25rem;">
             {{range $p.MissingEvidence}}
+            <li>{{.}}</li>
+            {{end}}
+          </ul>
+        </div>
+        {{end}}
+
+        {{if $p.Limitations}}
+        <div class="negative-block" style="margin-bottom: 0.75rem;">
+          <strong>Validation Limitations:</strong>
+          <ul style="padding-left: 1.25rem; margin-top: 0.25rem;">
+            {{range $p.Limitations}}
             <li>{{.}}</li>
             {{end}}
           </ul>
@@ -2200,6 +2276,122 @@ const htmlReportTemplate = `<!DOCTYPE html>
         </tbody>
       </table>
     </div>
+    {{end}}
+  </section>
+  {{end}}
+
+  {{if .AuthorizationReport}}
+  <section id="authorization-assessment">
+    <h2>Authorization Assessment &amp; Identity Coverage</h2>
+    <p style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 1rem;">
+      Differential object (BOLA), function (BFLA), and property (BOPLA) authorization evaluation using isolated identity transports.
+      Overall status: <strong>{{.AuthorizationReport.Status}}</strong>
+      &bull; Checks: <strong>{{.AuthorizationReport.QuantitativeCoverage.TotalChecksExecuted}}/{{.AuthorizationReport.QuantitativeCoverage.TotalChecksPlanned}}</strong> ({{printf "%.1f" .AuthorizationReport.QuantitativeCoverage.ExecutionCoveragePct}}% executed)
+      &bull; Determinative: <strong>{{printf "%.1f" .AuthorizationReport.QuantitativeCoverage.DeterminativeOutcomePct}}%</strong>
+      {{if .AuthorizationReport.FixtureVerification}}&bull; Fixture Gate: <strong>{{.AuthorizationReport.FixtureVerification.Method}}</strong>{{end}}
+      {{if .AuthorizationReport.Limitation}}&bull; {{.AuthorizationReport.Limitation}}{{end}}
+    </p>
+    <div style="font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 1rem;">
+      Quantitative Totals &mdash; Endpoints Observed: <strong>{{.AuthorizationReport.QuantitativeCoverage.EndpointsObserved}}</strong>
+      &bull; Verified: <strong>{{.AuthorizationReport.QuantitativeCoverage.VerifiedTotal}}</strong>
+      &bull; Candidates: <strong>{{.AuthorizationReport.QuantitativeCoverage.CandidateTotal}}</strong>
+      &bull; Safe: <strong>{{.AuthorizationReport.QuantitativeCoverage.NotVulnerableTotal}}</strong>
+      &bull; Inconclusive: {{.AuthorizationReport.QuantitativeCoverage.InconclusiveTotal}}
+      &bull; Skipped: {{.AuthorizationReport.QuantitativeCoverage.SkippedTotal}}
+      &bull; Excluded Destructive: {{.AuthorizationReport.QuantitativeCoverage.ExcludedDestructiveCount}}
+    </div>
+
+    {{if .AuthorizationReport.IdentityCoverage}}
+    <div style="overflow-x: auto; margin-bottom: 1.5rem; border: 1px solid var(--border-card); border-radius: 6px;">
+      <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.85rem;">
+        <thead>
+          <tr style="border-bottom: 1px solid var(--border-card); background: rgba(255,255,255,0.03);">
+            <th style="padding: 0.65rem 1rem;">Identity</th>
+            <th style="padding: 0.65rem 1rem;">Role</th>
+            <th style="padding: 0.65rem 1rem;">Scheme</th>
+            <th style="padding: 0.65rem 1rem;">Status</th>
+            <th style="padding: 0.65rem 1rem;">Crawled</th>
+            <th style="padding: 0.65rem 1rem;">Authz Tests</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .AuthorizationReport.IdentityCoverage}}
+          <tr style="border-bottom: 1px solid var(--border-card);">
+            <td style="padding: 0.65rem 1rem; font-family: monospace;">{{.Identity}}</td>
+            <td style="padding: 0.65rem 1rem;">{{.Role}}</td>
+            <td style="padding: 0.65rem 1rem;">{{if .CredentialScheme}}{{.CredentialScheme}}{{else}}none{{end}}</td>
+            <td style="padding: 0.65rem 1rem;">{{if not .Configured}}NOT_CONFIGURED{{else if .Verified}}VERIFIED{{else}}CONFIGURED{{end}}</td>
+            <td style="padding: 0.65rem 1rem;">{{.CrawledEndpoints}}</td>
+            <td style="padding: 0.65rem 1rem;">{{.TestsExecuted}}</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    {{end}}
+
+    <div class="summary-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
+      {{if .AuthorizationReport.BOLA}}
+      <div class="card" style="padding: 1rem; border: 1px solid var(--border-card); border-radius: 6px;">
+        <h3 style="margin-top: 0;">BOLA / IDOR ({{.AuthorizationReport.BOLA.Status}})</h3>
+        <div style="font-size: 0.85rem; color: var(--text-secondary);">
+          Objects Discovered: <strong>{{.AuthorizationReport.BOLA.ObjectsDiscovered}}</strong> (Ownership: {{.AuthorizationReport.BOLA.ObjectsWithOwnership}})<br>
+          Tests: {{.AuthorizationReport.BOLA.TotalTests}} &bull; Verified: <strong>{{.AuthorizationReport.BOLA.VerifiedCount}}</strong> &bull; Candidates: {{.AuthorizationReport.BOLA.CandidateCount}}<br>
+          Not Vulnerable: {{.AuthorizationReport.BOLA.NotVulnerableCount}} &bull; Inconclusive: {{.AuthorizationReport.BOLA.InconclusiveCount}} &bull; Skipped: {{.AuthorizationReport.BOLA.SkippedCount}}
+        </div>
+      </div>
+      {{end}}
+      {{if .AuthorizationReport.BFLA}}
+      <div class="card" style="padding: 1rem; border: 1px solid var(--border-card); border-radius: 6px;">
+        <h3 style="margin-top: 0;">BFLA ({{.AuthorizationReport.BFLA.Status}})</h3>
+        <div style="font-size: 0.85rem; color: var(--text-secondary);">
+          Functions Discovered: <strong>{{.AuthorizationReport.BFLA.FunctionsDiscovered}}</strong> (Established Role: {{.AuthorizationReport.BFLA.FunctionsWithEstablishedRole}})<br>
+          Tests: {{.AuthorizationReport.BFLA.TotalTests}} &bull; Verified: <strong>{{.AuthorizationReport.BFLA.VerifiedCount}}</strong> &bull; Candidates: {{.AuthorizationReport.BFLA.CandidateCount}}<br>
+          Not Vulnerable: {{.AuthorizationReport.BFLA.NotVulnerableCount}} &bull; Inconclusive: {{.AuthorizationReport.BFLA.InconclusiveCount}} &bull; Skipped: {{.AuthorizationReport.BFLA.SkippedCount}}
+        </div>
+      </div>
+      {{end}}
+      {{if .AuthorizationReport.BOPLA}}
+      <div class="card" style="padding: 1rem; border: 1px solid var(--border-card); border-radius: 6px;">
+        <h3 style="margin-top: 0;">BOPLA ({{.AuthorizationReport.BOPLA.Status}})</h3>
+        <div style="font-size: 0.85rem; color: var(--text-secondary);">
+          Properties Discovered: <strong>{{.AuthorizationReport.BOPLA.PropertiesDiscovered}}</strong> (Policy: {{.AuthorizationReport.BOPLA.PropertiesWithPolicy}})<br>
+          Tests: {{.AuthorizationReport.BOPLA.TotalTests}} &bull; Verified: <strong>{{.AuthorizationReport.BOPLA.VerifiedCount}}</strong> &bull; Candidates: {{.AuthorizationReport.BOPLA.CandidateCount}}<br>
+          Not Vulnerable: {{.AuthorizationReport.BOPLA.NotVulnerableCount}} &bull; Inconclusive: {{.AuthorizationReport.BOPLA.InconclusiveCount}} &bull; Skipped: {{.AuthorizationReport.BOPLA.SkippedCount}}
+          {{if gt .AuthorizationReport.BOPLA.CleanupAttempted 0}}<br>Cleanup: {{.AuthorizationReport.BOPLA.CleanupRestored}}/{{.AuthorizationReport.BOPLA.CleanupAttempted}} restored (Failed: <strong>{{.AuthorizationReport.BOPLA.CleanupFailed}}</strong>, Unverified: {{.AuthorizationReport.BOPLA.CleanupUnverified}}){{end}}
+        </div>
+      </div>
+      {{end}}
+    </div>
+
+    {{if .AuthorizationReport.CoverageItems}}
+    <details style="margin-bottom: 1.5rem;">
+      <summary style="cursor: pointer; font-weight: 600; font-size: 0.9rem;">Authorization Coverage Matrix ({{len .AuthorizationReport.CoverageItems}} evaluated items)</summary>
+      <div style="overflow-x: auto; margin-top: 0.75rem; border: 1px solid var(--border-card); border-radius: 6px;">
+        <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.82rem;">
+          <thead>
+            <tr style="border-bottom: 1px solid var(--border-card); background: rgba(255,255,255,0.03);">
+              <th style="padding: 0.55rem 0.75rem;">Engine</th>
+              <th style="padding: 0.55rem 0.75rem;">Target / Item</th>
+              <th style="padding: 0.55rem 0.75rem;">Source</th>
+              <th style="padding: 0.55rem 0.75rem;">Outcome</th>
+              <th style="padding: 0.55rem 0.75rem;">Reason</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .AuthorizationReport.CoverageItems}}
+            <tr style="border-bottom: 1px solid var(--border-card);">
+              <td style="padding: 0.55rem 0.75rem; font-family: monospace;">{{.Engine}}</td>
+              <td style="padding: 0.55rem 0.75rem; font-family: monospace;">{{if .Method}}{{.Method}} {{end}}{{.Item}}</td>
+              <td style="padding: 0.55rem 0.75rem;">{{.DiscoverySource}}</td>
+              <td style="padding: 0.55rem 0.75rem;"><strong>{{.Outcome}}</strong></td>
+              <td style="padding: 0.55rem 0.75rem; color: var(--text-secondary);">{{.Reason}}</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+    </details>
     {{end}}
   </section>
   {{end}}
