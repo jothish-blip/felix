@@ -528,40 +528,46 @@ func TestSignature_Scenario11_VerificationBypassAttempts_FailClosed(t *testing.T
 
 // Scenario 12: Compromised signer in keyring is strictly rejected even if validly signed
 func TestSignature_Scenario12_CompromisedSignerInKeyring_StrictlyRejected(t *testing.T) {
-	// Read the known compromised key fixture
-	keysDir := filepath.Join("..", "..", "scripts", "packaging", "keys")
-	privPath := filepath.Join(keysDir, "apt-signing-key.priv.asc")
-	if _, err := os.Stat(privPath); os.IsNotExist(err) {
-		t.Skip("compromised key fixture not found relative to pkg/update")
+	if CompromisedKeyFingerprint != "8ABF68D0253A139577CA06E7154B088FE357A53D" {
+		t.Fatalf("unexpected CompromisedKeyFingerprint constant: %s", CompromisedKeyFingerprint)
+	}
+	if !isCompromisedFingerprint(CompromisedKeyFingerprint) {
+		t.Fatalf("expected isCompromisedFingerprint to reject %s", CompromisedKeyFingerprint)
 	}
 
-	keyData, err := os.ReadFile(privPath)
-	if err != nil {
-		t.Fatalf("failed reading compromised key fixture: %v", err)
-	}
-
-	compromisedEntity, err := LoadArmoredPublicKeyring(keyData)
-	if err != nil {
-		// If private key block, read entity via openpgp
-		var blockErr error
-		compromisedEntity, blockErr = openpgp.ReadArmoredKeyRing(bytes.NewReader(keyData))
-		if blockErr != nil {
-			t.Fatalf("failed parsing compromised entity: %v", blockErr)
-		}
-	}
+	compromisedEntity := generateTestEntity(t, "Compromised Signer", "Test Blocklist", "revoked@example.invalid")
+	fp := strings.ToUpper(fmt.Sprintf("%X", compromisedEntity.PrimaryKey.Fingerprint))
+	testExtraCompromisedKeyFingerprints[fp] = true
+	t.Cleanup(func() {
+		delete(testExtraCompromisedKeyFingerprints, fp)
+	})
 
 	manifest := []byte("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  felix.tar.gz\n")
-	sig := signManifest(t, compromisedEntity[0], manifest)
+	sig := signManifest(t, compromisedEntity, manifest)
 
 	// Even if an operator or attacker injects the compromised key into the trusted keyring:
-	keyring := openpgp.EntityList{compromisedEntity[0]}
+	keyring := openpgp.EntityList{compromisedEntity}
 
-	_, err = VerifyManifestSignature(manifest, sig, keyring, "")
+	_, err := VerifyManifestSignature(manifest, sig, keyring, "")
 	if err == nil {
 		t.Fatal("CRITICAL: VerifyManifestSignature allowed signature from known compromised key!")
 	}
 	if !strings.Contains(err.Error(), "security violation: signature signed by known compromised key") {
 		t.Errorf("expected security violation error, got: %v", err)
+	}
+
+	// Verify LoadArmoredPublicKeyring also rejects compromised key material
+	var pubBuf bytes.Buffer
+	w, err := armor.Encode(&pubBuf, openpgp.PublicKeyType, nil)
+	if err != nil {
+		t.Fatalf("armor encode failed: %v", err)
+	}
+	if err := compromisedEntity.Serialize(w); err != nil {
+		t.Fatalf("serialize failed: %v", err)
+	}
+	w.Close()
+	if _, err := LoadArmoredPublicKeyring(pubBuf.Bytes()); err == nil || !strings.Contains(err.Error(), "security violation: keyring contains known permanently compromised key fingerprint") {
+		t.Errorf("expected LoadArmoredPublicKeyring to reject compromised fingerprint, got: %v", err)
 	}
 }
 
@@ -645,21 +651,66 @@ func TestSignature_Scenario13_UntrustedManifestCannotOverrideTrustRoot(t *testin
 	}
 }
 
-// Scenario 14: LoadKeyringFile strictly rejects keyrings containing the compromised key
+// Scenario 14: LoadKeyringFile rejects keyrings containing compromised fingerprints and loads the replacement repo keyring
 func TestSignature_Scenario14_LoadKeyringFile_RejectsCompromisedKey(t *testing.T) {
-	keysDir := filepath.Join("..", "..", "scripts", "packaging", "keys")
-	pubKeyPath := filepath.Join(keysDir, "felix.gpg")
-	if _, err := os.Stat(pubKeyPath); os.IsNotExist(err) {
-		t.Skip("felix.gpg public key fixture not found")
+	// 1. Verify binary and armored keyrings containing a compromised fingerprint are strictly rejected
+	tempDir := t.TempDir()
+	compromisedEntity := generateTestEntity(t, "Compromised Ring", "Test", "revoked@example.invalid")
+	fp := strings.ToUpper(fmt.Sprintf("%X", compromisedEntity.PrimaryKey.Fingerprint))
+	testExtraCompromisedKeyFingerprints[fp] = true
+	t.Cleanup(func() {
+		delete(testExtraCompromisedKeyFingerprints, fp)
+	})
+
+	binKeyringPath := filepath.Join(tempDir, "compromised.gpg")
+	var binBuf bytes.Buffer
+	if err := compromisedEntity.Serialize(&binBuf); err != nil {
+		t.Fatalf("serialize binary key failed: %v", err)
+	}
+	if err := os.WriteFile(binKeyringPath, binBuf.Bytes(), 0644); err != nil {
+		t.Fatalf("write binary keyring failed: %v", err)
+	}
+	if _, err := LoadKeyringFile(binKeyringPath); err == nil || !strings.Contains(err.Error(), "security violation: keyring contains known permanently compromised key fingerprint") {
+		t.Fatalf("CRITICAL: LoadKeyringFile loaded binary keyring with compromised fingerprint: %v", err)
 	}
 
-	// Attempt to load felix.gpg which has the compromised fingerprint
-	_, err := LoadKeyringFile(pubKeyPath)
-	if err == nil {
-		t.Fatal("CRITICAL: LoadKeyringFile loaded public key with compromised fingerprint!")
+	armoredKeyringPath := filepath.Join(tempDir, "compromised.asc")
+	var armBuf bytes.Buffer
+	w, err := armor.Encode(&armBuf, openpgp.PublicKeyType, nil)
+	if err != nil {
+		t.Fatalf("armor encode failed: %v", err)
 	}
-	if !strings.Contains(err.Error(), "security violation: keyring contains known permanently compromised key fingerprint") {
-		t.Errorf("expected security violation error message, got: %v", err)
+	if err := compromisedEntity.Serialize(w); err != nil {
+		t.Fatalf("serialize armored key failed: %v", err)
+	}
+	w.Close()
+	if err := os.WriteFile(armoredKeyringPath, armBuf.Bytes(), 0644); err != nil {
+		t.Fatalf("write armored keyring failed: %v", err)
+	}
+	if _, err := LoadKeyringFile(armoredKeyringPath); err == nil || !strings.Contains(err.Error(), "security violation: keyring contains known permanently compromised key fingerprint") {
+		t.Fatalf("CRITICAL: LoadKeyringFile loaded armored keyring with compromised fingerprint: %v", err)
+	}
+
+	// 2. Verify repository public keyrings load cleanly with the replacement production key and zero compromised keys
+	keysDir := filepath.Join("..", "..", "scripts", "packaging", "keys")
+	if _, err := os.Stat(filepath.Join(keysDir, "apt-signing-key.priv.asc")); !os.IsNotExist(err) {
+		t.Fatalf("compromised private key apt-signing-key.priv.asc must not exist in scripts/packaging/keys")
+	}
+
+	const expectedReplacementFP = "09688145E2E9EA7E8DA7D3F2B2D54E928F5C3920"
+	for _, ringName := range []string{"felix.gpg", "felix-archive-keyring.gpg"} {
+		ringPath := filepath.Join(keysDir, ringName)
+		loaded, err := LoadKeyringFile(ringPath)
+		if err != nil {
+			t.Fatalf("expected repository keyring %s to load cleanly, got: %v", ringName, err)
+		}
+		if len(loaded) != 1 {
+			t.Fatalf("expected 1 key in %s, got %d", ringName, len(loaded))
+		}
+		gotFP := strings.ToUpper(fmt.Sprintf("%X", loaded[0].PrimaryKey.Fingerprint))
+		if gotFP != expectedReplacementFP {
+			t.Errorf("%s fingerprint mismatch: expected %s, got %s", ringName, expectedReplacementFP, gotFP)
+		}
 	}
 }
 

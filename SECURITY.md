@@ -108,13 +108,13 @@ Felix's update subsystem (`pkg/update`) protects against software supply-chain t
 
 ### Package Repository Signing Key Isolation & Release Blocker (P12.10)
 
-During security audits (Phase 12.7), an OpenPGP private key was identified within historical repository commits (`scripts/packaging/keys/apt-signing-key.priv.asc`).
-To maintain absolute supply-chain integrity:
-- **Repository Keys are Fixtures Only:** Any private key files in the repository tree are treated strictly as test fixtures and are permanently disabled for production artifact signing.
-- **CI Secret Isolation:** Production APT release signatures require dynamic injection of `FELIX_APT_SIGNING_KEY` exclusively from protected GitHub Actions repository secrets (`${{ secrets.FELIX_APT_SIGNING_KEY }}`).
-- **Archive Leakage Defense:** Release packaging pipelines are strictly verified to ensure distribution archives (`.zip`, `.tar.gz`, `.deb`) contain zero private key files (`.asc`, `.key`, `.priv`, `.pem`), continuously enforced by automated regression testing.
-- **Open Release Blocker (P12.10):** Detached RFC 4880 OpenPGP signing (`SHA256SUMS.asc`) and updater verification have been implemented and verified across 16 security scenarios. However, full production signing key rotation, subkey revocation, and APT repository re-initialization remain an open release blocker for Phase 12.10 pending repository owner key provisioning and Git history scrubbing.
-- **Operator Direction:** Operators on Debian/Ubuntu/Kali are advised to install standalone `.deb` packages verified directly via `SHA256SUMS` and detached OpenPGP signatures once rotated production keys are active.
+During security audits, an OpenPGP private key (`8ABF68D0253A139577CA06E7154B088FE357A53D`) was found committed in historical revision `f8f2f59d90fb3d02a4664c357e87f7528d3677ab` (`scripts/packaging/keys/apt-signing-key.priv.asc`).
+To maintain strict supply-chain isolation:
+- **Compromised Key Removed from Working Tree & Blocked in Code:** `scripts/packaging/keys/apt-signing-key.priv.asc` has been removed from the current source tree (the historical commit remains in the private repository because Git history rewriting was not performed). Both `scripts/packaging/deb.go` (`CompromisedAptKeyFingerprint`) and `pkg/update/signature.go` (`CompromisedKeyFingerprint`) strictly reject `8ABF68D0253A139577CA06E7154B088FE357A53D`.
+- **Replacement Public Keyrings & Passphrase Support:** `scripts/packaging/keys/felix.gpg` (armored) and `scripts/packaging/keys/felix-archive-keyring.gpg` (binary) distribute only the replacement public key (`09688145E2E9EA7E8DA7D3F2B2D54E928F5C3920`; unverified UID `<security@felix-security.org>`). Production signing requires `FELIX_APT_SIGNING_KEY` (with optional `FELIX_APT_SIGNING_KEY_PASSPHRASE` for encrypted private keys) injected from GitHub Actions secrets.
+- **Test Fixture Isolation:** Automated tests generate ephemeral keys inside `t.TempDir()` and never bundle private key material in repository key directories.
+- **Archive Leakage Defense:** Release packaging pipelines exclude private key files (`.asc`, `.key`, `.priv`, `.pem`) from distribution archives (`.zip`, `.tar.gz`, `.deb`), enforced by automated regression testing.
+- **Remaining Owner Actions (P12.10):** A GPG revocation certificate for `8ABF68D0253A139577CA06E7154B088FE357A53D` and the replacement signing keypair exist locally outside the repository, but CI secret provisioning (`FELIX_APT_SIGNING_KEY`), passphrase hardening (replacing initial local `%no-protection`), external revocation notice/keyserver publication, and Git history scrubbing (`git-filter-repo`) before any future public release remain **BLOCKED — OWNER ACTION REQUIRED**.
 
 ---
 

@@ -16,6 +16,15 @@ import (
 // that must be strictly rejected even if present in a keyring.
 const CompromisedKeyFingerprint = "8ABF68D0253A139577CA06E7154B088FE357A53D"
 
+// testExtraCompromisedKeyFingerprints allows unit tests to inject ephemeral compromised
+// fingerprints without storing compromised private key fixtures on disk.
+var testExtraCompromisedKeyFingerprints = map[string]bool{}
+
+func isCompromisedFingerprint(fp string) bool {
+	clean := strings.ToUpper(strings.ReplaceAll(fp, " ", ""))
+	return clean == CompromisedKeyFingerprint || testExtraCompromisedKeyFingerprints[clean]
+}
+
 // VerifyManifestSignature verifies an armored detached OpenPGP signature for a given manifest.
 // It enforces that:
 // 1. Both manifest and signature data are non-empty.
@@ -50,8 +59,8 @@ func VerifyManifestSignature(manifestData, sigData []byte, keyring openpgp.KeyRi
 	actualFP := fmt.Sprintf("%X", signer.PrimaryKey.Fingerprint)
 
 	// Invariant: strictly reject known compromised key
-	if strings.EqualFold(actualFP, CompromisedKeyFingerprint) {
-		return nil, fmt.Errorf("security violation: signature signed by known compromised key (%s)", CompromisedKeyFingerprint)
+	if isCompromisedFingerprint(actualFP) {
+		return nil, fmt.Errorf("security violation: signature signed by known compromised key (%s)", actualFP)
 	}
 
 	// Validate expected fingerprint if specified
@@ -85,8 +94,8 @@ func LoadArmoredPublicKeyring(armoredKey []byte) (openpgp.EntityList, error) {
 	for _, entity := range el {
 		if entity != nil && entity.PrimaryKey != nil {
 			fp := fmt.Sprintf("%X", entity.PrimaryKey.Fingerprint)
-			if strings.EqualFold(fp, CompromisedKeyFingerprint) {
-				return nil, fmt.Errorf("security violation: keyring contains known permanently compromised key fingerprint (%s)", CompromisedKeyFingerprint)
+			if isCompromisedFingerprint(fp) {
+				return nil, fmt.Errorf("security violation: keyring contains known permanently compromised key fingerprint (%s)", fp)
 			}
 		}
 	}
@@ -121,8 +130,8 @@ func LoadKeyringFile(path string) (openpgp.EntityList, error) {
 	for _, entity := range el {
 		if entity != nil && entity.PrimaryKey != nil {
 			fp := fmt.Sprintf("%X", entity.PrimaryKey.Fingerprint)
-			if strings.EqualFold(fp, CompromisedKeyFingerprint) {
-				return nil, fmt.Errorf("security violation: keyring contains known permanently compromised key fingerprint (%s)", CompromisedKeyFingerprint)
+			if isCompromisedFingerprint(fp) {
+				return nil, fmt.Errorf("security violation: keyring contains known permanently compromised key fingerprint (%s)", fp)
 			}
 		}
 	}

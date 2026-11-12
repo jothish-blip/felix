@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"crypto"
 	"crypto/md5"
 	"fmt"
 	"io"
@@ -16,7 +17,9 @@ import (
 	"time"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
+	"github.com/ProtonMail/go-crypto/openpgp/armor"
 	"github.com/ProtonMail/go-crypto/openpgp/clearsign"
+	"github.com/ProtonMail/go-crypto/openpgp/packet"
 )
 
 func TestBuildDebAndAptRepo(t *testing.T) {
@@ -321,56 +324,206 @@ func TestLoadPersistentGpgSigner(t *testing.T) {
 	}
 }
 
+func encodeArmoredPrivateKeyForTest(t *testing.T, entity *openpgp.Entity) string {
+	t.Helper()
+	var buf bytes.Buffer
+	arm, err := armor.Encode(&buf, openpgp.PrivateKeyType, nil)
+	if err != nil {
+		t.Fatalf("armor.Encode failed: %v", err)
+	}
+	if err := entity.SerializePrivateWithoutSigning(arm, nil); err != nil {
+		t.Fatalf("SerializePrivateWithoutSigning failed: %v", err)
+	}
+	if err := arm.Close(); err != nil {
+		t.Fatalf("armor close failed: %v", err)
+	}
+	return buf.String()
+}
+
 func TestCompromisedKeyRejection(t *testing.T) {
-	keysDir := filepath.Join("keys")
-	privPath := filepath.Join(keysDir, "apt-signing-key.priv.asc")
-	if _, err := os.Stat(privPath); os.IsNotExist(err) {
-		t.Skip("persistent keys directory not found relative to test runner")
+	if CompromisedAptKeyFingerprint != "8ABF68D0253A139577CA06E7154B088FE357A53D" {
+		t.Fatalf("unexpected CompromisedAptKeyFingerprint constant: %s", CompromisedAptKeyFingerprint)
 	}
 
-	data, err := os.ReadFile(privPath)
-	if err != nil {
-		t.Fatalf("failed to read key fixture: %v", err)
+	// Compromised private key must not exist in repository working tree
+	repoPrivPath := filepath.Join("keys", "apt-signing-key.priv.asc")
+	if _, err := os.Stat(repoPrivPath); !os.IsNotExist(err) {
+		t.Fatalf("security violation: compromised key file still exists at %s", repoPrivPath)
 	}
 
-	entity, err := LoadGpgEntityFromArmored(data)
-	if err != nil {
-		t.Fatalf("LoadGpgEntityFromArmored failed: %v", err)
+	// Generate an ephemeral entity and mark its fingerprint as compromised via test hook
+	cfg := &packet.Config{
+		DefaultHash:            crypto.SHA256,
+		DefaultCipher:          packet.CipherAES256,
+		DefaultCompressionAlgo: packet.CompressionZIP,
+		RSABits:                2048,
 	}
+	entity, err := openpgp.NewEntity("Compromised Fixture", "Test", "revoked@example.invalid", cfg)
+	if err != nil {
+		t.Fatalf("openpgp.NewEntity failed: %v", err)
+	}
+	fp := strings.ToUpper(fmt.Sprintf("%X", entity.PrimaryKey.Fingerprint))
+	testExtraCompromisedAptFingerprints[fp] = true
+	t.Cleanup(func() {
+		delete(testExtraCompromisedAptFingerprints, fp)
+	})
+
+	armoredPriv := encodeArmoredPrivateKeyForTest(t, entity)
 
 	if !IsCompromisedKey(entity) {
-		t.Errorf("expected IsCompromisedKey to return true for compromised key %s", entity.PrimaryKey.KeyIdString())
+		t.Errorf("expected IsCompromisedKey to return true for registered compromised key %s", entity.PrimaryKey.KeyIdString())
 	}
 
 	// Test 1: Production loader fails if FELIX_APT_SIGNING_KEY is absent
 	t.Setenv("FELIX_APT_SIGNING_KEY", "")
+	t.Setenv("FELIX_APT_SIGNING_KEY_PASSPHRASE", "")
 	if _, err := LoadProductionGpgSigner(); err == nil {
 		t.Errorf("expected LoadProductionGpgSigner to fail when env var is empty")
 	}
 
 	// Test 2: Production loader strictly rejects compromised key even if supplied in FELIX_APT_SIGNING_KEY
-	t.Setenv("FELIX_APT_SIGNING_KEY", string(data))
+	t.Setenv("FELIX_APT_SIGNING_KEY", armoredPriv)
 	if _, err := LoadProductionGpgSigner(); err == nil {
 		t.Errorf("expected LoadProductionGpgSigner to reject compromised key, but it succeeded!")
 	} else if !strings.Contains(err.Error(), "security violation: FELIX_APT_SIGNING_KEY matches known compromised key") {
 		t.Errorf("unexpected error message: %v", err)
 	}
 
-	// Test 3: LoadOrCreateGpgSigner fails closed in production mode when compromised key or missing key
+	// Test 3: LoadOrCreateGpgSigner fails closed in production mode when missing or compromised
+	tempKeysDir := t.TempDir()
 	t.Setenv("FELIX_REQUIRE_PRODUCTION_SIGNING", "true")
 	t.Setenv("FELIX_APT_SIGNING_KEY", "")
-	if _, err := LoadOrCreateGpgSigner(keysDir, "Name", "Comment", "email@example.com"); err == nil {
+	if _, err := LoadOrCreateGpgSigner(tempKeysDir, "Name", "Comment", "email@example.com"); err == nil {
 		t.Errorf("expected LoadOrCreateGpgSigner to fail closed in production mode when secret is missing")
 	}
 
-	// Test 4: LoadTestFixtureGpgSigner strictly rejects legacy compromised key if present in keysDir
+	// Test 4: LoadTestFixtureGpgSigner strictly rejects compromised fixture if present on disk
 	t.Setenv("FELIX_REQUIRE_PRODUCTION_SIGNING", "false")
 	t.Setenv("GITHUB_ACTIONS", "false")
 	t.Setenv("FELIX_APT_SIGNING_KEY", "")
-	if _, err := LoadTestFixtureGpgSigner(keysDir, "Name", "Comment", "email@example.com"); err == nil {
-		t.Errorf("expected LoadTestFixtureGpgSigner to reject compromised apt-signing-key.priv.asc, but it succeeded!")
+	compromisedFixturePath := filepath.Join(tempKeysDir, "test-fixture-signing-key.priv.asc")
+	if err := os.WriteFile(compromisedFixturePath, []byte(armoredPriv), 0600); err != nil {
+		t.Fatalf("failed writing temp compromised fixture: %v", err)
+	}
+	if _, err := LoadTestFixtureGpgSigner(tempKeysDir, "Name", "Comment", "email@example.com"); err == nil {
+		t.Errorf("expected LoadTestFixtureGpgSigner to reject compromised test-fixture-signing-key.priv.asc, but it succeeded!")
 	} else if !strings.Contains(err.Error(), "security violation") {
 		t.Errorf("expected security violation error, got: %v", err)
+	}
+}
+
+func TestLoadProductionGpgSigner_PassphraseEncryptedKey(t *testing.T) {
+	cfg := &packet.Config{
+		DefaultHash:            crypto.SHA256,
+		DefaultCipher:          packet.CipherAES256,
+		DefaultCompressionAlgo: packet.CompressionZIP,
+		RSABits:                2048,
+	}
+	entity, err := openpgp.NewEntity("Felix CI Key", "Passphrase Test", "ci-test@example.invalid", cfg)
+	if err != nil {
+		t.Fatalf("openpgp.NewEntity failed: %v", err)
+	}
+
+	passphrase := []byte("correct-horse-battery-staple-99!")
+	if err := entity.PrivateKey.Encrypt(passphrase); err != nil {
+		t.Fatalf("encrypting primary key: %v", err)
+	}
+	for i := range entity.Subkeys {
+		if entity.Subkeys[i].PrivateKey != nil {
+			if err := entity.Subkeys[i].PrivateKey.Encrypt(passphrase); err != nil {
+				t.Fatalf("encrypting subkey: %v", err)
+			}
+		}
+	}
+
+	armoredEncrypted := encodeArmoredPrivateKeyForTest(t, entity)
+	t.Setenv("FELIX_APT_SIGNING_KEY", armoredEncrypted)
+
+	// Missing passphrase must fail closed
+	t.Setenv("FELIX_APT_SIGNING_KEY_PASSPHRASE", "")
+	if _, err := LoadProductionGpgSigner(); err == nil || !strings.Contains(err.Error(), "FELIX_APT_SIGNING_KEY_PASSPHRASE is required") {
+		t.Fatalf("expected fail-closed error for missing passphrase, got: %v", err)
+	}
+
+	// Wrong passphrase must fail closed
+	t.Setenv("FELIX_APT_SIGNING_KEY_PASSPHRASE", "wrong-passphrase")
+	if _, err := LoadProductionGpgSigner(); err == nil {
+		t.Fatalf("expected error for wrong passphrase, got nil")
+	}
+
+	// Correct passphrase must decrypt entity and allow RFC 4880 signing
+	t.Setenv("FELIX_APT_SIGNING_KEY_PASSPHRASE", string(passphrase))
+	loaded, err := LoadProductionGpgSigner()
+	if err != nil {
+		t.Fatalf("LoadProductionGpgSigner with valid passphrase failed: %v", err)
+	}
+	if loaded.PrivateKey == nil || loaded.PrivateKey.Encrypted {
+		t.Fatalf("expected decrypted primary private key, got encrypted=%v", loaded.PrivateKey != nil && loaded.PrivateKey.Encrypted)
+	}
+
+	var sigBuf bytes.Buffer
+	if err := openpgp.ArmoredDetachSign(&sigBuf, loaded, strings.NewReader("release-manifest\n"), nil); err != nil {
+		t.Fatalf("ArmoredDetachSign with decrypted key failed: %v", err)
+	}
+	if err := VerifyArmoredSignatureRFC4880(sigBuf.String()); err != nil {
+		t.Fatalf("VerifyArmoredSignatureRFC4880 failed on signature from decrypted key: %v", err)
+	}
+}
+
+func TestRepoKeyringsAndPrivateKeyAbsence(t *testing.T) {
+	keysDir := filepath.Join("keys")
+	entries, err := os.ReadDir(keysDir)
+	if err != nil {
+		t.Fatalf("failed reading scripts/packaging/keys: %v", err)
+	}
+
+	for _, entry := range entries {
+		name := entry.Name()
+		lower := strings.ToLower(name)
+		if strings.Contains(lower, ".priv") || strings.HasSuffix(lower, ".key") || strings.HasSuffix(lower, ".pem") {
+			t.Errorf("forbidden private key filename found in repo keys dir: %s", name)
+		}
+		if !entry.IsDir() {
+			data, err := os.ReadFile(filepath.Join(keysDir, name))
+			if err != nil {
+				t.Fatalf("reading %s: %v", name, err)
+			}
+			if bytes.Contains(data, []byte("PRIVATE KEY BLOCK")) {
+				t.Errorf("private key material found inside %s", name)
+			}
+		}
+	}
+
+	const expectedFP = "09688145E2E9EA7E8DA7D3F2B2D54E928F5C3920"
+
+	armoredData, err := os.ReadFile(filepath.Join(keysDir, "felix.gpg"))
+	if err != nil {
+		t.Fatalf("reading keys/felix.gpg: %v", err)
+	}
+	armoredList, err := openpgp.ReadArmoredKeyRing(bytes.NewReader(armoredData))
+	if err != nil || len(armoredList) != 1 {
+		t.Fatalf("parsing keys/felix.gpg failed: len=%d err=%v", len(armoredList), err)
+	}
+	if IsCompromisedKey(armoredList[0]) {
+		t.Fatalf("keys/felix.gpg contains compromised key fingerprint")
+	}
+	if got := strings.ToUpper(fmt.Sprintf("%X", armoredList[0].PrimaryKey.Fingerprint)); got != expectedFP {
+		t.Errorf("keys/felix.gpg fingerprint mismatch: expected %s, got %s", expectedFP, got)
+	}
+
+	binData, err := os.ReadFile(filepath.Join(keysDir, "felix-archive-keyring.gpg"))
+	if err != nil {
+		t.Fatalf("reading keys/felix-archive-keyring.gpg: %v", err)
+	}
+	binList, err := openpgp.ReadKeyRing(bytes.NewReader(binData))
+	if err != nil || len(binList) != 1 {
+		t.Fatalf("parsing keys/felix-archive-keyring.gpg failed: len=%d err=%v", len(binList), err)
+	}
+	if IsCompromisedKey(binList[0]) {
+		t.Fatalf("keys/felix-archive-keyring.gpg contains compromised key fingerprint")
+	}
+	if got := strings.ToUpper(fmt.Sprintf("%X", binList[0].PrimaryKey.Fingerprint)); got != expectedFP {
+		t.Errorf("keys/felix-archive-keyring.gpg fingerprint mismatch: expected %s, got %s", expectedFP, got)
 	}
 }
 

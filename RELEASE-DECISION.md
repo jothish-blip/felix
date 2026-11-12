@@ -47,7 +47,7 @@
 
 | Blocker ID | Severity | Description | Local Remediation Status | Private Milestone Status | Future Public Release Requirement |
 |---|---|---|---|---|---|
-| **BLK-01** | **CRITICAL** | Compromised Debian APT OpenPGP private key committed to Git history (`f8f2f59d90fb3d02a4664c357e87f7528d3677ab`). | **RESOLVED LOCALLY:** Production packaging strictly fails closed if `FELIX_APT_SIGNING_KEY` is absent; code explicitly rejects compromised fingerprint `8ABF68D0253A139577CA06E7154B088FE357A53D`; test fixture key isolated from production release paths. | **ACCEPTED FOR PRIVATE MILESTONE:** Key is disabled in code; repository is private. | Requires GPG revocation certificate publication and `git-filter-repo` scrubbing before any future public distribution. |
+| **BLK-01** | **CRITICAL** | Compromised Debian APT OpenPGP private key committed to Git history (`f8f2f59d90fb3d02a4664c357e87f7528d3677ab`). | **REMEDIATED IN WORKING TREE; OWNER ACTIONS OPEN:** `apt-signing-key.priv.asc` removed from current working tree; `felix.gpg` / `felix-archive-keyring.gpg` rotated to replacement public key `09688145E2E9EA7E8DA7D3F2B2D54E928F5C3920`; compromised fingerprint `8ABF68D0253A139577CA06E7154B088FE357A53D` strictly blocked; revocation cert + replacement keypair prepared locally; `LoadProductionGpgSigner` supports encrypted keys via `FELIX_APT_SIGNING_KEY_PASSPHRASE`. | **PRIVATE MILESTONE — OWNER CI PROVISIONING PENDING:** Key disabled in code and absent from HEAD; repository is private. | Publish revocation externally, add passphrase protection if keeping replacement key, provision `FELIX_APT_SIGNING_KEY` in GitHub Secrets, and run `git-filter-repo` before any public release. |
 | **BLK-02** | **CRITICAL** | Unauthenticated release archives (`.zip` / `.tar.gz`) relying solely on unauthenticated `SHA256SUMS`. | **RESOLVED LOCALLY:** Packaging generates detached OpenPGP signature `SHA256SUMS.asc`; updater enforces detached signature verification in `pkg/update/signature.go`; 16 automated test scenarios pass. | **ACCEPTED FOR PRIVATE MILESTONE:** Manifest signing pipeline complete; binaries accurately marked as unsigned (`"signed": false`). | Azure Trusted Signing and Apple Developer secrets required before future public binary distribution. |
 | **BLK-03** | **MANDATORY** | Incomplete runtime validation on non-x86_64 platforms (`linux/arm64`, `darwin/arm64`, `darwin/amd64`). | **DOCUMENTED:** Platforms explicitly categorized as "Cross-Compiled Only (Runtime Unvalidated)" in `VALIDATION-MATRIX.md` and release documentation. | **ACCEPTED FOR PRIVATE MILESTONE:** Tier 2 cross-compiled support policy formally accepted. | Physical ARM64 / macOS CI runner validation recommended for future public distribution. |
 | **BLK-04** | **MANDATORY** | Installer/updater safety, rollback verification, and test hook isolation. | **RESOLVED LOCALLY:** Decompression bounds (64MB), ZipSlip validation, atomic rollback tested; `FELIX_TEST_FAIL_VERSION` test hook restricted to `TestBuild` builds and ignored in production releases. | **RESOLVED & VERIFIED** | None. |
@@ -58,10 +58,10 @@
 ## 4. Deep-Dive Security Analysis: BLK-01 (Debian APT Signing Key)
 
 ### Compromise Forensic Evidence
-- **File Location:** `scripts/packaging/keys/apt-signing-key.priv.asc`
-- **Key Fingerprint:** `8ABF68D0253A139577CA06E7154B088FE357A53D`
-- **Identity:** `Felix Security Auditor (Official APT Repository Key) <jothishgandham2@gmail.com>`
-- **Key Specifications:** RSA 4096-bit, created Monday, October 12, 2026.
+- **Historical File Location:** `scripts/packaging/keys/apt-signing-key.priv.asc` (removed from current working tree; still present in historical commit `f8f2f59d90fb3d02a4664c357e87f7528d3677ab`)
+- **Compromised Key Fingerprint:** `8ABF68D0253A139577CA06E7154B088FE357A53D`
+- **Replacement Public Key Fingerprint:** `09688145E2E9EA7E8DA7D3F2B2D54E928F5C3920` (unverified self-asserted UID `<security@felix-security.org>`, now exported in `scripts/packaging/keys/felix.gpg` and `scripts/packaging/keys/felix-archive-keyring.gpg`)
+- **Historical Key Specifications:** RSA 4096-bit (`Felix Security Auditor (Official APT Repository Key) <jothishgandham2@gmail.com>`), created October 12, 2026.
 - **Commit of Introduction:** Commit `f8f2f59d90fb3d02a4664c357e87f7528d3677ab` on branch `main`.
 
 ### Release Tag Forensics
@@ -70,30 +70,13 @@
 - **Conclusion:** Commit `f8f2f59d` is **NOT** an ancestor of `v2.0.0`. Official release `v2.0.0` was never signed by this compromised key. However, the key has been public on `origin/main` and must be considered completely compromised by all threat models.
 
 ### Software Controls Implemented in Code
-1. **Production Fail-Closed Guard (`scripts/packaging/deb.go` & `main.go`):**
-   ```go
-   const CompromisedAptKeyFingerprint = "8ABF68D0253A139577CA06E7154B088FE357A53D"
-
-   func LoadProductionGpgSigner() (*openpgp.Entity, error) {
-       envKey := strings.TrimSpace(os.Getenv("FELIX_APT_SIGNING_KEY"))
-       if envKey == "" {
-           return nil, fmt.Errorf("FELIX_APT_SIGNING_KEY is required for production release packaging (fail closed)")
-       }
-       entity, err := LoadGpgEntityFromArmored([]byte(envKey))
-       if err != nil {
-           return nil, fmt.Errorf("decoding FELIX_APT_SIGNING_KEY: %w", err)
-       }
-       if IsCompromisedKey(entity) {
-           return nil, fmt.Errorf("security violation: FELIX_APT_SIGNING_KEY matches known compromised key fingerprint (%s)", CompromisedAptKeyFingerprint)
-       }
-       return entity, nil
-   }
-   ```
-2. **Explicit Fixture Isolation & Compromised Key Refusal (`scripts/packaging/deb.go`):**
-   - Non-production packaging falls back to `LoadTestFixtureGpgSigner` which uses an isolated test key (`test-fixture-signing-key.priv.asc`).
-   - If any signer matches `CompromisedAptKeyFingerprint`, it is strictly rejected across all paths (`LoadProductionGpgSigner`, `LoadTestFixtureGpgSigner`, and `LoadOrCreateGpgSigner`).
-   - In any production environment (`GITHUB_ACTIONS=true` or `FELIX_REQUIRE_PRODUCTION_SIGNING=true`), any missing key or attempt to supply the compromised key terminates packaging immediately with exit code 1.
-3. **Automated Verification:** Verified in `scripts/packaging/deb_test.go:TestCompromisedKeyRejection`, `TestLoadPersistentGpgSigner`, and `scripts/packaging/archive_test.go:TestPackaging_ProductionReleaseSigningFailClosed`.
+1. **Production Fail-Closed Guard & Passphrase Support (`scripts/packaging/deb.go` & `main.go`):**
+   - `LoadProductionGpgSigner()` loads `FELIX_APT_SIGNING_KEY`, strictly rejects `CompromisedAptKeyFingerprint` (`8ABF68D0253A139577CA06E7154B088FE357A53D`), and decrypts encrypted OpenPGP primary/signing keys using `FELIX_APT_SIGNING_KEY_PASSPHRASE` (failing closed if encrypted and passphrase is missing or incorrect).
+2. **Working-Tree Key Cleanup & Compromised Key Refusal (`scripts/packaging/deb.go` & `pkg/update/signature.go`):**
+   - `scripts/packaging/keys/apt-signing-key.priv.asc` has been removed from the working tree (`scripts/packaging/keys/` contains only the replacement public keyrings `felix.gpg` and `felix-archive-keyring.gpg` for `09688145E2E9EA7E8DA7D3F2B2D54E928F5C3920`).
+   - Non-production packaging falls back to `LoadTestFixtureGpgSigner` using ephemeral test fixtures generated in caller-specified directories (`t.TempDir()` in tests).
+   - If any signer or keyring matches `CompromisedAptKeyFingerprint` / `CompromisedKeyFingerprint`, it is strictly rejected across all paths (`LoadProductionGpgSigner`, `LoadTestFixtureGpgSigner`, `LoadOrCreateGpgSigner`, `VerifyManifestSignature`, `LoadArmoredPublicKeyring`, and `LoadKeyringFile`).
+3. **Automated Verification:** Verified in `scripts/packaging/deb_test.go` (`TestCompromisedKeyRejection`, `TestLoadProductionGpgSigner_PassphraseEncryptedKey`, `TestRepoKeyringsAndPrivateKeyAbsence`), `scripts/packaging/archive_test.go`, and `pkg/update/signature_test.go`.
 
 ---
 
@@ -299,11 +282,11 @@ git push origin --force --tags
 ## 11. Conditions for Closing P12.10 and Declaring Release Readiness
 
 Work Package P12.10 may be marked `DONE — RELEASE READY` only when:
-1. [ ] Revocation certificate for `8ABF68D0253A139577CA06E7154B088FE357A53D` is confirmed on `keyserver.ubuntu.com`.
-2. [ ] New production signing key is generated in secure KMS and configured as `FELIX_APT_SIGNING_KEY` in GitHub Secrets.
+1. [ ] Revocation certificate for `8ABF68D0253A139577CA06E7154B088FE357A53D` (generated locally outside repo) is published externally (e.g., OpenPGP keyservers / advisory notice) and confirmed.
+2. [ ] Production signing key (with passphrase protection replacing initial local `%no-protection`, or HSM/KMS-backed key) is configured as `FELIX_APT_SIGNING_KEY` (and `FELIX_APT_SIGNING_KEY_PASSPHRASE` if encrypted) in GitHub Secrets.
 3. [ ] Azure Trusted Signing or Apple Developer secrets are configured, or unsigned binaries are explicitly accepted by policy.
-4. [ ] Repository history is scrubbed of the compromised private key file.
-5. [ ] A staging release tag `v2.0.1-rc1` successfully executes the CI release pipeline, generating and cryptographically verifying all 10 release assets.
+4. [ ] Repository history is scrubbed of historical commit `f8f2f59d90fb3d02a4664c357e87f7528d3677ab` (`git-filter-repo`) before any future public repository exposure or public distribution.
+5. [ ] A staging release tag `v2.0.1-rc1` successfully executes the CI release pipeline, generating and cryptographically verifying all release assets.
 
 ---
 

@@ -908,17 +908,51 @@ func GenerateGpgSigner(name, comment, email string) (*openpgp.Entity, error) {
 // This key must be strictly rejected from any production signing workflow.
 const CompromisedAptKeyFingerprint = "8ABF68D0253A139577CA06E7154B088FE357A53D"
 
+// testExtraCompromisedAptFingerprints allows regression tests to verify compromised-key
+// enforcement without storing compromised private key material in the repository.
+var testExtraCompromisedAptFingerprints = map[string]bool{}
+
 // IsCompromisedKey returns true if the entity matches the known compromised key fingerprint.
 func IsCompromisedKey(entity *openpgp.Entity) bool {
 	if entity == nil || entity.PrimaryKey == nil {
 		return false
 	}
-	return strings.EqualFold(fmt.Sprintf("%X", entity.PrimaryKey.Fingerprint), CompromisedAptKeyFingerprint)
+	fp := strings.ToUpper(fmt.Sprintf("%X", entity.PrimaryKey.Fingerprint))
+	return fp == CompromisedAptKeyFingerprint || testExtraCompromisedAptFingerprints[fp]
+}
+
+// decryptEntityPrivateKeys decrypts encrypted primary and signing subkeys using the
+// provided passphrase, failing closed if any encrypted key cannot be decrypted.
+func decryptEntityPrivateKeys(entity *openpgp.Entity, passphrase []byte) error {
+	if entity == nil {
+		return fmt.Errorf("cannot decrypt nil OpenPGP entity")
+	}
+	if entity.PrivateKey != nil && entity.PrivateKey.Encrypted {
+		if len(passphrase) == 0 {
+			return fmt.Errorf("FELIX_APT_SIGNING_KEY is encrypted: FELIX_APT_SIGNING_KEY_PASSPHRASE is required (fail closed)")
+		}
+		if err := entity.PrivateKey.Decrypt(passphrase); err != nil {
+			return fmt.Errorf("decrypting FELIX_APT_SIGNING_KEY primary key: %w", err)
+		}
+	}
+	for i := range entity.Subkeys {
+		sub := entity.Subkeys[i].PrivateKey
+		if sub != nil && sub.Encrypted {
+			if len(passphrase) == 0 {
+				return fmt.Errorf("FELIX_APT_SIGNING_KEY subkey is encrypted: FELIX_APT_SIGNING_KEY_PASSPHRASE is required (fail closed)")
+			}
+			if err := sub.Decrypt(passphrase); err != nil {
+				return fmt.Errorf("decrypting FELIX_APT_SIGNING_KEY subkey: %w", err)
+			}
+		}
+	}
+	return nil
 }
 
 // LoadProductionGpgSigner loads the GPG signing entity strictly from the FELIX_APT_SIGNING_KEY
-// environment variable. It fails closed if the secret is absent, empty, malformed, or matches
-// the known compromised key fingerprint.
+// environment variable. If the private key is passphrase-protected, FELIX_APT_SIGNING_KEY_PASSPHRASE
+// is required to decrypt it. It fails closed if the secret is absent, empty, malformed, cannot be
+// decrypted, or matches the known compromised key fingerprint.
 func LoadProductionGpgSigner() (*openpgp.Entity, error) {
 	envKey := strings.TrimSpace(os.Getenv("FELIX_APT_SIGNING_KEY"))
 	if envKey == "" {
@@ -930,6 +964,10 @@ func LoadProductionGpgSigner() (*openpgp.Entity, error) {
 	}
 	if IsCompromisedKey(entity) {
 		return nil, fmt.Errorf("security violation: FELIX_APT_SIGNING_KEY matches known compromised key fingerprint (%s)", CompromisedAptKeyFingerprint)
+	}
+	passphrase := []byte(os.Getenv("FELIX_APT_SIGNING_KEY_PASSPHRASE"))
+	if err := decryptEntityPrivateKeys(entity, passphrase); err != nil {
+		return nil, err
 	}
 	return entity, nil
 }
@@ -948,19 +986,6 @@ func LoadTestFixtureGpgSigner(keysDir, name, comment, email string) (*openpgp.En
 			return nil, fmt.Errorf("security violation: test fixture matches known permanently compromised key fingerprint (%s)", CompromisedAptKeyFingerprint)
 		}
 		return entity, nil
-	}
-
-	// Also check fallback path if legacy fixture exists, but verify it is NOT compromised
-	legacyPath := filepath.Join(keysDir, "apt-signing-key.priv.asc")
-	if data, err := os.ReadFile(legacyPath); err == nil && len(data) > 0 {
-		entity, err := LoadGpgEntityFromArmored(data)
-		if err == nil {
-			if IsCompromisedKey(entity) {
-				// Immediately reject the compromised key
-				return nil, fmt.Errorf("security violation: signer matches known permanently compromised key fingerprint (%s)", CompromisedAptKeyFingerprint)
-			}
-			return entity, nil
-		}
 	}
 
 	// Generate isolated persistent test key

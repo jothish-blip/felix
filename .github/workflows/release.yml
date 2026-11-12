@@ -91,6 +91,7 @@ jobs:
       - name: Build Multi-Platform Artifacts
         env:
           FELIX_APT_SIGNING_KEY: ${{ secrets.FELIX_APT_SIGNING_KEY }}
+          FELIX_APT_SIGNING_KEY_PASSPHRASE: ${{ secrets.FELIX_APT_SIGNING_KEY_PASSPHRASE }}
         run: |
           VERSION="${{ steps.version_check.outputs.version }}"
           chmod +x scripts/release/build.sh
@@ -112,6 +113,7 @@ jobs:
       - name: Windows Signing Status & Repackaging
         env:
           FELIX_APT_SIGNING_KEY: ${{ secrets.FELIX_APT_SIGNING_KEY }}
+          FELIX_APT_SIGNING_KEY_PASSPHRASE: ${{ secrets.FELIX_APT_SIGNING_KEY_PASSPHRASE }}
         run: |
           VERSION="${{ steps.version_check.outputs.version }}"
           if [ -z "${{ secrets.AZURE_CLIENT_ID }}" ]; then
