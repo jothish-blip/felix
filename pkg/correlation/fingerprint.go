@@ -422,7 +422,7 @@ func extractHardeningDiscriminator(f report.Finding, details map[string]string) 
 		}
 	}
 
-	cat := strings.ToLower(report.NormalizeCategory(f.Category))
+	cat := strings.ToLower(report.NormalizeCategory(f.Category) + " " + f.Title + " " + f.ID)
 	switch {
 	case strings.Contains(cat, "csp") || strings.Contains(cat, "content-security-policy"):
 		return "header:content-security-policy"
@@ -503,7 +503,7 @@ func extractSecretDiscriminator(f report.Finding, details map[string]string) str
 
 // extractHTTPDiscriminator identifies the specific vulnerable parameter, field, or bypass method.
 func extractHTTPDiscriminator(f report.Finding, details map[string]string) string {
-	keys := []string{"parameter", "param", "field", "vulnerable_parameter", "param_name", "object_id_param", "header"}
+	keys := []string{"parameter", "param", "field", "vulnerable_parameter", "param_name", "object_id_param", "property_path", "header"}
 	for _, k := range keys {
 		if v, ok := details[k]; ok && strings.TrimSpace(v) != "" {
 			return fmt.Sprintf("param:%s", strings.ToLower(strings.TrimSpace(v)))

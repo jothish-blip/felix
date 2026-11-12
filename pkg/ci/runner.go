@@ -159,12 +159,38 @@ func Run(ctx context.Context, cfg *Config, store *assessment.SQLiteStore) (*Resu
 		now := time.Now().UTC()
 		validFrom := now.Add(-1 * time.Hour)
 		validUntil := now.Add(24 * time.Hour)
+		partyName := strings.TrimSpace(cfg.AuthorizingParty)
+		authMethod := "PIPELINE_AUTHORIZATION"
+		if partyName == "" {
+			partyName = "CI Security Automation Pipeline"
+		}
+		if strings.TrimSpace(cfg.ScopeManifest) != "" {
+			authMethod = "SIGNED_SCOPE_MANIFEST"
+		}
+		if !cfg.WindowStart.IsZero() {
+			validFrom = cfg.WindowStart.UTC()
+		}
+		if !cfg.WindowEnd.IsZero() {
+			validUntil = cfg.WindowEnd.UTC()
+		}
+		for i := range cfg.ScopeExclusions {
+			ex := cfg.ScopeExclusions[i]
+			ex.AssessmentID = asm.ID
+			if ex.ID == "" {
+				ex.ID = "excl-ci-" + uuid.New().String()[:8]
+			}
+			if ex.CreatedAt.IsZero() {
+				ex.CreatedAt = now
+			}
+			_ = store.AddExclusion(&ex)
+		}
 		_ = store.SetAuthorization(&assessment.AuthorizationRecord{
 			ID:                  "auth-ci-" + uuid.New().String()[:8],
 			AssessmentID:        asm.ID,
-			AuthorizingParty:    "CI Security Automation Pipeline",
-			AuthorizationMethod: "PIPELINE_AUTHORIZATION",
+			AuthorizingParty:    partyName,
+			AuthorizationMethod: authMethod,
 			Status:              assessment.AuthApproved,
+			ScopeDocRef:         cfg.ScopeDocRef,
 			DateReceived:        now,
 			ValidFrom:           &validFrom,
 			ValidUntil:          &validUntil,

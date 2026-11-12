@@ -8,9 +8,12 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
+	"felix/pkg/assessment"
 	"felix/pkg/ci"
 	"felix/pkg/clierror"
+	"felix/pkg/validation"
 )
 
 // runCI executes the "felix ci" subcommand optimized for continuous integration pipelines.
@@ -52,6 +55,7 @@ func runCI(args []string) int {
 		requireSHA256         bool
 		allowLoopback         bool
 		allowPrivate          bool
+		scopeManifest         string
 		prComment             bool
 		prInline              bool
 		prNumber              int
@@ -188,6 +192,11 @@ func runCI(args []string) int {
 				githubAPIBaseURL = subArgs[i+1]
 				i++
 			}
+		case "--scope-manifest":
+			if i+1 < len(subArgs) {
+				scopeManifest = subArgs[i+1]
+				i++
+			}
 		case "--quiet", "-q":
 			quiet = true
 		case "--verbose", "-v":
@@ -196,6 +205,10 @@ func runCI(args []string) int {
 			printCIHelp()
 			return clierror.ExitSuccess
 		default:
+			if strings.HasPrefix(arg, "--scope-manifest=") {
+				scopeManifest = strings.TrimPrefix(arg, "--scope-manifest=")
+				continue
+			}
 			if !strings.HasPrefix(arg, "-") && targetURL == "" && assessmentRef == "" {
 				if strings.HasPrefix(arg, "http://") || strings.HasPrefix(arg, "https://") {
 					targetURL = arg
@@ -216,6 +229,56 @@ func runCI(args []string) int {
 			fmt.Printf("[✓] Binary verification succeeded for: %s\n", verifyBinPath)
 		}
 		return clierror.ExitSuccess
+	}
+
+	var (
+		authParty       string
+		scopeDocRef     string
+		winStart        time.Time
+		winEnd          time.Time
+		scopeExclusions []assessment.Exclusion
+	)
+	if strings.TrimSpace(scopeManifest) != "" {
+		raw, readErr := os.ReadFile(scopeManifest)
+		if readErr != nil {
+			fmt.Fprintf(os.Stderr, "[-] Authorization gate failed: could not read --scope-manifest %q: %v\n", scopeManifest, readErr)
+			return clierror.ExitOperational
+		}
+		contract, cm, parseErr := validation.ParseAuthOrCampaignManifest(raw)
+		if parseErr != nil {
+			fmt.Fprintf(os.Stderr, "[-] Authorization gate failed: invalid --scope-manifest %q: %v\n", scopeManifest, parseErr)
+			return clierror.ExitOperational
+		}
+		checkTarget := targetURL
+		if checkTarget == "" && cm != nil {
+			checkTarget = cm.TargetURL
+		}
+		if checkTarget == "" && len(contract.AuthorizedTargets) > 0 {
+			checkTarget = contract.AuthorizedTargets[0]
+		}
+		if gateErr := validation.ValidateAuthorizationGate(contract, checkTarget, time.Now().UTC()); gateErr != nil {
+			fmt.Fprintf(os.Stderr, "[-] Authorization gate failed: %v\n", gateErr)
+			return clierror.ExitOperational
+		}
+		authParty = contract.AuthorizingParty
+		scopeDocRef = contract.AuthorizationRef
+		winStart = contract.WindowStart.UTC()
+		winEnd = contract.WindowEnd.UTC()
+		for _, p := range contract.ExcludedPaths {
+			if clean := strings.TrimSpace(p); clean != "" {
+				scopeExclusions = append(scopeExclusions, assessment.Exclusion{ExclusionType: "PATH_PREFIX", Pattern: clean, Reason: "scope manifest path exclusion"})
+			}
+		}
+		for _, u := range contract.ExcludedURLs {
+			if clean := strings.TrimSpace(u); clean != "" {
+				scopeExclusions = append(scopeExclusions, assessment.Exclusion{ExclusionType: "EXACT_URL", Pattern: clean, Reason: "scope manifest URL exclusion"})
+			}
+		}
+		for _, h := range contract.ExcludedHosts {
+			if clean := strings.TrimSpace(h); clean != "" {
+				scopeExclusions = append(scopeExclusions, assessment.Exclusion{ExclusionType: "HOSTNAME", Pattern: clean, Reason: "scope manifest host exclusion"})
+			}
+		}
 	}
 
 	cfg := &ci.Config{
@@ -239,6 +302,12 @@ func runCI(args []string) int {
 		RequireSHA256:         requireSHA256,
 		AllowLoopback:         allowLoopback,
 		AllowPrivateIPs:       allowPrivate,
+		ScopeManifest:         scopeManifest,
+		AuthorizingParty:      authParty,
+		ScopeDocRef:           scopeDocRef,
+		WindowStart:           winStart,
+		WindowEnd:             winEnd,
+		ScopeExclusions:       scopeExclusions,
 		PRComment:             prComment,
 		PRInline:              prInline,
 		PRNumber:              prNumber,
@@ -252,6 +321,11 @@ func runCI(args []string) int {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	if !winEnd.IsZero() {
+		var cancelWin context.CancelFunc
+		ctx, cancelWin = context.WithDeadline(ctx, winEnd)
+		defer cancelWin()
+	}
 
 	res, _ := ci.Run(ctx, cfg, nil)
 	if !quiet && res != nil {

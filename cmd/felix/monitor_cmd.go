@@ -46,10 +46,11 @@ func runMonitor(args []string) int {
 }
 
 type monitorCommonFlags struct {
-	profilePath string
-	stateDir    string
-	jsonOutput  bool
-	quiet       bool
+	profilePath   string
+	stateDir      string
+	scopeManifest string
+	jsonOutput    bool
+	quiet         bool
 }
 
 func parseMonitorFlags(args []string) (monitorCommonFlags, map[string]string, error) {
@@ -84,6 +85,18 @@ func parseMonitorFlags(args []string) (monitorCommonFlags, map[string]string, er
 		}
 		if strings.HasPrefix(arg, "--state-dir=") {
 			flags.stateDir = strings.TrimPrefix(arg, "--state-dir=")
+			continue
+		}
+		if arg == "--scope-manifest" {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				return flags, extra, fmt.Errorf("%s requires a file path argument", arg)
+			}
+			i++
+			flags.scopeManifest = args[i]
+			continue
+		}
+		if strings.HasPrefix(arg, "--scope-manifest=") {
+			flags.scopeManifest = strings.TrimPrefix(arg, "--scope-manifest=")
 			continue
 		}
 		if arg == "--json" {
@@ -143,6 +156,22 @@ func loadProfileAndEngine(flags monitorCommonFlags) (*api.TargetProfile, *monito
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[-] Failed to load target profile %s: %v\n", flags.profilePath, err)
 		return nil, nil, clierror.ExitOperational
+	}
+
+	if strings.TrimSpace(flags.scopeManifest) != "" {
+		nowUTC := time.Now().UTC()
+		targetsToCheck := prof.Target.BaseURLs
+		if len(targetsToCheck) == 0 && strings.TrimSpace(prof.Target.Name) != "" {
+			targetsToCheck = []string{prof.Target.Name}
+		}
+		for _, tgt := range targetsToCheck {
+			if _, _, _, scopeErr := buildAssessScopePolicy(&AssessOptions{
+				ScopeManifest: flags.scopeManifest,
+			}, tgt, nowUTC); scopeErr != nil {
+				fmt.Fprintf(os.Stderr, "[-] Authorization gate failed: %v\n", scopeErr)
+				return nil, nil, clierror.ExitOperational
+			}
+		}
 	}
 
 	engine, err := monitor.NewMonitorEngine(prof, flags.stateDir)

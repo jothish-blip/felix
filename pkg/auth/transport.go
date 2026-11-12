@@ -159,12 +159,13 @@ type AuthenticatedTransport struct {
 
 // AuthenticatedTransportOptions configures the authenticated transport.
 type AuthenticatedTransportOptions struct {
-	BaseTransport   http.RoundTripper
-	TargetURL       string
-	ScopeAllowed    func(string) bool
-	AllowLoopback   bool
-	AllowPrivate    bool
-	DefaultIdentity IdentityContext
+	BaseTransport      http.RoundTripper
+	TargetURL          string
+	ScopeAllowed       func(string) bool
+	AllowLoopback      bool
+	AllowPrivate       bool
+	InsecureSkipVerify bool
+	DefaultIdentity    IdentityContext
 }
 
 // NewAuthenticatedTransport constructs a secure, identity-isolated transport.
@@ -177,7 +178,10 @@ func NewAuthenticatedTransport(opts AuthenticatedTransportOptions) (*Authenticat
 	base := opts.BaseTransport
 	if base == nil {
 		base = &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig: &tls.Config{
+				MinVersion:         tls.VersionTLS12,
+				InsecureSkipVerify: opts.InsecureSkipVerify,
+			},
 			DialContext: crawler.NewSafeDialContext(crawler.SafeDialerOptions{
 				Timeout:         15 * time.Second,
 				AllowLoopback:   opts.AllowLoopback,
@@ -416,12 +420,13 @@ type IdentityManager struct {
 
 // IdentityManagerOptions configures the IdentityManager.
 type IdentityManagerOptions struct {
-	TargetURL       string
-	ScopeAllowed    func(string) bool
-	AllowLoopback   bool
-	AllowPrivate    bool
-	Timeout         time.Duration
-	DefaultIdentity IdentityContext
+	TargetURL          string
+	ScopeAllowed       func(string) bool
+	AllowLoopback      bool
+	AllowPrivate       bool
+	InsecureSkipVerify bool
+	Timeout            time.Duration
+	DefaultIdentity    IdentityContext
 }
 
 // NewIdentityManager initializes an IdentityManager for a target URL.
@@ -436,11 +441,12 @@ func NewIdentityManager(opts IdentityManagerOptions) (*IdentityManager, error) {
 	}
 
 	transport, err := NewAuthenticatedTransport(AuthenticatedTransportOptions{
-		TargetURL:       opts.TargetURL,
-		ScopeAllowed:    opts.ScopeAllowed,
-		AllowLoopback:   opts.AllowLoopback,
-		AllowPrivate:    opts.AllowPrivate,
-		DefaultIdentity: opts.DefaultIdentity,
+		TargetURL:          opts.TargetURL,
+		ScopeAllowed:       opts.ScopeAllowed,
+		AllowLoopback:      opts.AllowLoopback,
+		AllowPrivate:       opts.AllowPrivate,
+		InsecureSkipVerify: opts.InsecureSkipVerify,
+		DefaultIdentity:    opts.DefaultIdentity,
 	})
 	if err != nil {
 		return nil, err
@@ -670,9 +676,16 @@ func (m *IdentityManager) BuildClient(defaultID IdentityContext) *http.Client {
 		Transport: tr,
 		Timeout:   m.timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			// 1. Max redirects
+			// 1. Max redirects & URL scheme/userinfo safety
 			if len(via) >= 10 {
 				return fmt.Errorf("stopped after 10 redirects")
+			}
+			scheme := strings.ToLower(req.URL.Scheme)
+			if scheme != "http" && scheme != "https" {
+				return fmt.Errorf("redirect to disallowed scheme %q blocked", req.URL.Scheme)
+			}
+			if req.URL.User != nil {
+				return fmt.Errorf("redirect containing embedded userinfo blocked")
 			}
 
 			// 2. Scope policy validation

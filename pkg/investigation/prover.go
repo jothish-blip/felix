@@ -18,6 +18,7 @@ import (
 type SafeProver struct {
 	AssessmentID string
 	SafeMode     bool
+	IsRetest     bool
 	Timeout      time.Duration
 }
 
@@ -30,11 +31,42 @@ func NewSafeProver(assessmentID string, safeMode bool) *SafeProver {
 	}
 }
 
+func resolveFindingURL(f report.Finding) string {
+	ep := strings.TrimSpace(f.Endpoint)
+	tgt := strings.TrimSpace(f.Target)
+	if strings.HasPrefix(ep, "http://") || strings.HasPrefix(ep, "https://") {
+		return ep
+	}
+	if tgt == "" {
+		return ep
+	}
+	if ep == "" || ep == "/" {
+		return tgt
+	}
+	baseU, err := url.Parse(tgt)
+	if err != nil || baseU == nil || baseU.Scheme == "" || baseU.Host == "" {
+		return strings.TrimRight(tgt, "/") + "/" + strings.TrimLeft(ep, "/")
+	}
+	relU, rErr := url.Parse(ep)
+	if rErr != nil {
+		return tgt
+	}
+	if strings.HasPrefix(ep, "/") {
+		if strings.TrimRight(baseU.Path, "/") == strings.TrimRight(relU.Path, "/") && relU.RawQuery == "" && baseU.RawQuery != "" {
+			return tgt
+		}
+		origin := url.URL{Scheme: baseU.Scheme, Host: baseU.Host}
+		return origin.ResolveReference(relU).String()
+	}
+	return baseU.ResolveReference(relU).String()
+}
+
 // ExecuteBoundedProof applies the least invasive proof procedure for the candidate finding.
 func (p *SafeProver) ExecuteBoundedProof(ctx context.Context, f report.Finding, client *http.Client) (*EvidenceBundle, ValidationStatus, string, error) {
 	now := time.Now().UTC()
 	cat := strings.ToUpper(f.Category)
 	title := strings.ToUpper(f.Title)
+	resolvedTarget := resolveFindingURL(f)
 
 	// Check if already in safe mode or finding is purely informative
 	if p.SafeMode {
@@ -45,10 +77,10 @@ func (p *SafeProver) ExecuteBoundedProof(ctx context.Context, f report.Finding, 
 			ModuleID:            f.Source,
 			TestIdentifier:      "SAFE_MODE_INSPECTION",
 			ValidationTime:      now,
-			SanitizedRequest:    f.Method + " " + f.Target,
+			SanitizedRequest:    f.Method + " " + resolvedTarget,
 			SanitizedResponse:   SanitizeHTTPContent(f.Evidence),
 			ReproductionSteps:   []string{"1. Safe mode active: passive evidence collected during initial crawl"},
-			SafeCurlCommand:     FormatSafeCurl(f.Method, f.Target, nil, ""),
+			SafeCurlCommand:     FormatSafeCurl(f.Method, resolvedTarget, nil, ""),
 			ProofSummary:        "Passive evidence recorded. Active validation skipped due to safe mode constraint.",
 			LeastInvasiveMethod: "PASSIVE_METADATA_INSPECTION",
 		}
@@ -112,7 +144,24 @@ func (p *SafeProver) ExecuteBoundedProof(ctx context.Context, f report.Finding, 
 		return p.proveSecrets(ctx, f, client)
 	}
 
-	// 10. Business Logic Tampering
+	// 10. Command Injection (Benign shell token concatenation negative/differential control)
+	if strings.Contains(cat, "COMMAND INJECTION") || strings.Contains(cat, "CMDI") || strings.Contains(title, "COMMAND INJECTION") || strings.Contains(title, "CMDI") {
+		return p.proveCMDI(ctx, f, client)
+	}
+
+	// 11. Security Headers & Clickjacking (Live HTTP response header verification)
+	if strings.Contains(cat, "HEADER") || strings.Contains(cat, "CLICKJACKING") ||
+		strings.Contains(title, "MISSING CONTENT-SECURITY-POLICY") || strings.Contains(title, "STRICT TRANSPORT SECURITY") ||
+		strings.Contains(title, "X-CONTENT-TYPE-OPTIONS") || strings.Contains(title, "X-FRAME-OPTIONS") {
+		return p.proveHeaders(ctx, f, client)
+	}
+
+	// 12. Sensitive Exposure / Info Disclosure (.env, .git, stack traces)
+	if strings.Contains(cat, "INFORMATION DISCLOSURE") || strings.Contains(title, "EXPOSED ENVIRONMENT") || strings.Contains(title, "EXPOSED GIT") {
+		return p.proveInfoDisclosure(ctx, f, client)
+	}
+
+	// 13. Business Logic Tampering
 	if strings.Contains(cat, "BUSINESS") || strings.Contains(cat, "LOGIC") || strings.Contains(title, "BUSINESS LOGIC") {
 		return p.proveBusinessLogic(ctx, f, client)
 	}
@@ -125,10 +174,10 @@ func (p *SafeProver) ExecuteBoundedProof(ctx context.Context, f report.Finding, 
 		ModuleID:            f.Source,
 		TestIdentifier:      "UNTESTED_CATEGORY_PROCEDURE",
 		ValidationTime:      now,
-		SanitizedRequest:    f.Method + " " + f.Target,
+		SanitizedRequest:    f.Method + " " + resolvedTarget,
 		SanitizedResponse:   SanitizeHTTPContent(f.Evidence),
 		ReproductionSteps:   []string{"1. Manual verification required: category does not permit safe automated proof without risking target state"},
-		SafeCurlCommand:     FormatSafeCurl(f.Method, f.Target, nil, ""),
+		SafeCurlCommand:     FormatSafeCurl(f.Method, resolvedTarget, nil, ""),
 		ProofSummary:        "No safe bounded automated proof procedure exists for this category. Finding retained as POTENTIAL.",
 		LeastInvasiveMethod: "MANUAL_VERIFICATION_RECOMMENDED",
 	}
@@ -144,10 +193,7 @@ func (p *SafeProver) ExecuteBoundedProof(ctx context.Context, f report.Finding, 
 // Strictly non-destructive: never runs DROP, INSERT, UPDATE, or data extraction.
 func (p *SafeProver) proveSQLi(ctx context.Context, f report.Finding, client *http.Client) (*EvidenceBundle, ValidationStatus, string, error) {
 	now := time.Now().UTC()
-	targetURL := f.Target
-	if targetURL == "" || !strings.Contains(targetURL, "?") {
-		targetURL = f.Endpoint
-	}
+	targetURL := resolveFindingURL(f)
 
 	dbSignatures := []string{
 		"sql syntax", "sqlite3.operationalerror", "psycopg2", "mysql_fetch",
@@ -259,10 +305,7 @@ func (p *SafeProver) proveSQLi(ctx context.Context, f report.Finding, client *ht
 // Strictly non-destructive: uses harmless unique marker tokens, never executes malicious payload.
 func (p *SafeProver) proveXSS(ctx context.Context, f report.Finding, client *http.Client) (*EvidenceBundle, ValidationStatus, string, error) {
 	now := time.Now().UTC()
-	targetURL := f.Target
-	if targetURL == "" || !strings.Contains(targetURL, "?") {
-		targetURL = f.Endpoint
-	}
+	targetURL := resolveFindingURL(f)
 
 	// 1. Live target probe execution if client is available
 	if client != nil && strings.HasPrefix(targetURL, "http") && strings.Contains(targetURL, "?") {
@@ -389,10 +432,7 @@ func (p *SafeProver) proveXSS(ctx context.Context, f report.Finding, client *htt
 // Strictly prohibits access to cloud metadata (169.254.169.254) or unauthorized private networks.
 func (p *SafeProver) proveSSRF(ctx context.Context, f report.Finding, client *http.Client) (*EvidenceBundle, ValidationStatus, string, error) {
 	now := time.Now().UTC()
-	targetURL := f.Target
-	if targetURL == "" || !strings.Contains(targetURL, "?") {
-		targetURL = f.Endpoint
-	}
+	targetURL := resolveFindingURL(f)
 	evidence := f.Evidence
 
 	// 1. Live target probe execution if client is available
@@ -522,16 +562,50 @@ func (p *SafeProver) proveSSRF(ctx context.Context, f report.Finding, client *ht
 	return bundle, StatusPotential, bundle.ProofSummary, nil
 }
 
+func expandPlaceholderWithObjectID(rawURL, objID string) string {
+	if strings.TrimSpace(objID) == "" || strings.TrimSpace(rawURL) == "" {
+		return rawURL
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	escapedID := url.PathEscape(strings.TrimSpace(objID))
+	rawPath := u.EscapedPath()
+	replaced := false
+	segs := strings.Split(rawPath, "/")
+	for i, seg := range segs {
+		decoded, derr := url.PathUnescape(seg)
+		if derr == nil && strings.HasPrefix(decoded, "{") && strings.HasSuffix(decoded, "}") {
+			segs[i] = escapedID
+			replaced = true
+		} else if strings.HasPrefix(seg, "{") && strings.HasSuffix(seg, "}") {
+			segs[i] = escapedID
+			replaced = true
+		}
+	}
+	if replaced {
+		u.RawPath = strings.Join(segs, "/")
+		if p, perr := url.PathUnescape(u.RawPath); perr == nil {
+			u.Path = p
+		}
+	}
+	return u.String()
+}
+
 // proveBOLA verifies Broken Object Level Authorization using controlled dual-identity comparison.
 // Uses two test IDs; never exposes or dumps customer tenant data.
 func (p *SafeProver) proveBOLA(ctx context.Context, f report.Finding, client *http.Client) (*EvidenceBundle, ValidationStatus, string, error) {
 	now := time.Now().UTC()
-	targetURL := f.Target
 	evidence := f.Evidence
 	details := f.EvidenceDetails.Details
+	targetURL := resolveFindingURL(f)
+	if details != nil && strings.TrimSpace(details["object_id"]) != "" {
+		targetURL = expandPlaceholderWithObjectID(targetURL, details["object_id"])
+	}
 
-	// Preserve empirical proof produced by the Phase 2/4 isolated multi-identity BOLA engine
-	if details != nil && details["authz_engine_verified"] == "true" {
+	// Preserve empirical proof produced by the Phase 2/4 isolated multi-identity BOLA engine on initial assessment
+	if !p.IsRetest && details != nil && details["authz_engine_verified"] == "true" {
 		steps := []string{
 			fmt.Sprintf("1. Isolated authorized identity (%s) established ownership baseline on %s", details["owner_alias"], f.Endpoint),
 			fmt.Sprintf("2. Isolated secondary identity (%s / %s) accessed %s %s with different principal context", details["accessor_alias"], details["accessor_role"], f.Method, f.Endpoint),
@@ -573,22 +647,47 @@ func (p *SafeProver) proveBOLA(ctx context.Context, f report.Finding, client *ht
 		return bundle, StatusPotential, bundle.ProofSummary, nil
 	}
 
-	// Live check (legacy fallback)
+	accessorToken := ""
+	if details != nil {
+		accessorToken = strings.TrimSpace(details["accessor_token"])
+	}
+	if p.IsRetest && details != nil && details["authz_engine_verified"] == "true" {
+		method := strings.ToUpper(strings.TrimSpace(f.Method))
+		if method == "" {
+			method = "GET"
+		}
+		if method != "GET" && method != "HEAD" {
+			return p.untestedRetestBundle(f, targetURL, "bola", "BOLA retest skipped for non-read HTTP method "+method+" to preserve target state"), StatusNotTested, "BOLA retest skipped for mutating HTTP method", nil
+		}
+		if accessorToken == "" || accessorToken == "[REDACTED]" {
+			return p.untestedRetestBundle(f, targetURL, "bola", "Secondary identity credentials unavailable during --retest (supply --auth-user-b)"), StatusNotTested, "Secondary identity credentials required to verify BOLA remediation", nil
+		}
+	}
+
+	// Fail closed if endpoint still has unexpanded template placeholder during retest
+	if p.IsRetest && (strings.Contains(targetURL, "{") || strings.Contains(strings.ToLower(targetURL), "%7b")) {
+		return p.untestedRetestBundle(f, targetURL, "bola", "BOLA endpoint retains unexpanded path template placeholder without concrete object_id"), StatusNotTested, "Concrete object identifier unavailable to replay BOLA route safely", nil
+	}
+
+	// Live check
 	if client != nil && strings.HasPrefix(targetURL, "http") {
-		req, err := http.NewRequestWithContext(ctx, "GET", targetURL, nil)
+		method := strings.ToUpper(strings.TrimSpace(f.Method))
+		if method != "HEAD" {
+			method = "GET"
+		}
+		req, err := http.NewRequestWithContext(ctx, method, targetURL, nil)
 		if err == nil {
-			accessorToken := ""
-			if f.EvidenceDetails.Details != nil {
-				accessorToken = f.EvidenceDetails.Details["accessor_token"]
-			}
-			if accessorToken == "" {
+			if accessorToken == "" || accessorToken == "[REDACTED]" {
 				accessorToken = "Bearer test_token_identity_a"
 			}
 			req.Header.Set("Authorization", accessorToken)
 			resp, doErr := client.Do(req)
 			if doErr == nil {
 				defer resp.Body.Close()
-				if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound {
+				if resp.StatusCode == http.StatusNotFound {
+					return p.untestedRetestBundle(f, targetURL, "bola", "Server returned HTTP 404 Not Found during BOLA retest; object absence cannot independently confirm authorization fix"), StatusNotTested, "HTTP 404 returned for target object during BOLA retest (inconclusive)", nil
+				}
+				if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 					bundle := &EvidenceBundle{
 						ID:                  "ev_bola_clean_" + f.ID,
 						FindingID:           f.ID,
@@ -596,19 +695,28 @@ func (p *SafeProver) proveBOLA(ctx context.Context, f report.Finding, client *ht
 						ModuleID:            "bola",
 						TestIdentifier:      "BOLA_ACCESS_DENIED_SAFE",
 						ValidationTime:      now,
-						SanitizedRequest:    "GET " + targetURL,
-						SanitizedResponse:   fmt.Sprintf("HTTP %d Forbidden", resp.StatusCode),
-						ReproductionSteps:   []string{"1. Cross-tenant request sent with non-owner User B credentials: server rejected with 403 Forbidden"},
+						SanitizedRequest:    method + " " + targetURL,
+						SanitizedResponse:   fmt.Sprintf("HTTP %d", resp.StatusCode),
+						ReproductionSteps:   []string{fmt.Sprintf("1. Cross-tenant request sent with secondary credentials: server rejected with HTTP %d", resp.StatusCode)},
 						ProofSummary:        "Object-level authorization enforced: cross-tenant access was properly rejected.",
 						LeastInvasiveMethod: "DUAL_PRINCIPAL_OBJECT_COMPARISON",
 					}
 					bundle.EvidenceHash = ComputeEvidenceHash(bundle.SanitizedRequest, bundle.SanitizedResponse, strings.Join(bundle.ReproductionSteps, "\n"))
 					return bundle, StatusNotValidated, bundle.ProofSummary, nil
 				}
-				if resp.StatusCode == http.StatusOK {
-					bodyBytes, _ := io.ReadAll(resp.Body)
+				if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+					bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 					bodyStr := string(bodyBytes)
-					if strings.Contains(bodyStr, "mail1@mail.com") || strings.Contains(bodyStr, "name1") {
+					lowerBody := strings.ToLower(bodyStr)
+					isHTML := looksLikeHTMLPage(lowerBody)
+					isAuthzDeny := strings.Contains(lowerBody, `"unauthorized"`) || strings.Contains(lowerBody, `"forbidden"`) || strings.Contains(lowerBody, `"access denied"`)
+					hasLegacyCanary := strings.Contains(bodyStr, "mail1@mail.com") || strings.Contains(bodyStr, "name1")
+					objID := ""
+					if details != nil {
+						objID = strings.TrimSpace(details["object_id"])
+					}
+					authzStillExposed := p.IsRetest && details != nil && details["authz_engine_verified"] == "true" && !isHTML && !isAuthzDeny && len(strings.TrimSpace(bodyStr)) > 0 && (objID == "" || strings.Contains(bodyStr, objID) || strings.HasPrefix(strings.TrimSpace(bodyStr), "{"))
+					if hasLegacyCanary || authzStillExposed {
 						bundle := &EvidenceBundle{
 							ID:                  "ev_bola_" + f.ID,
 							FindingID:           f.ID,
@@ -616,16 +724,16 @@ func (p *SafeProver) proveBOLA(ctx context.Context, f report.Finding, client *ht
 							ModuleID:            "bola",
 							TestIdentifier:      "BOLA_DUAL_IDENTITY_DEMONSTRATED",
 							ValidationTime:      now,
-							SanitizedRequest:    "GET " + targetURL,
+							SanitizedRequest:    method + " " + targetURL,
 							SanitizedResponse:   SanitizeHTTPContent(bodyStr),
-							ReproductionSteps:   []string{
-								"1. Authenticate as Test User A and verify authorized access to Test Object 1",
-								"2. Authenticate as Test User B and request Test Object 1 without tenancy grant",
-								"3. Server returned 200 OK with Test Object 1 contents across boundary",
+							ReproductionSteps: []string{
+								"1. Identify target object route " + f.Endpoint,
+								"2. Request object with secondary identity credentials",
+								fmt.Sprintf("3. Server returned HTTP %d with object payload across authorization boundary", resp.StatusCode),
 							},
-							SafeCurlCommand:     FormatSafeCurl("GET", targetURL, nil, ""),
-							ProofSummary:        "Empirical proof: Cross-tenant access demonstrated using controlled test identities. Zero external tenant data exposed.",
-							CanaryUsed:          "test_account_b_object_1",
+							SafeCurlCommand:     FormatSafeCurl(method, targetURL, nil, ""),
+							ProofSummary:        "Empirical proof: Cross-tenant access demonstrated using secondary test identity credentials.",
+							CanaryUsed:          objID,
 							LeastInvasiveMethod: "DUAL_PRINCIPAL_OBJECT_COMPARISON",
 						}
 						bundle.EvidenceHash = ComputeEvidenceHash(bundle.SanitizedRequest, bundle.SanitizedResponse, strings.Join(bundle.ReproductionSteps, "\n"))
@@ -636,7 +744,7 @@ func (p *SafeProver) proveBOLA(ctx context.Context, f report.Finding, client *ht
 		}
 	}
 
-	if details != nil && details["unauthorized_access"] == "true" {
+	if !p.IsRetest && details != nil && details["unauthorized_access"] == "true" {
 		bundle := &EvidenceBundle{
 			ID:                  "ev_bola_" + f.ID,
 			FindingID:           f.ID,
@@ -680,12 +788,12 @@ func (p *SafeProver) proveBOLA(ctx context.Context, f report.Finding, client *ht
 // proveBFLA verifies Broken Function Level Authorization by testing lower-privilege access to administrative functions.
 func (p *SafeProver) proveBFLA(ctx context.Context, f report.Finding, client *http.Client) (*EvidenceBundle, ValidationStatus, string, error) {
 	now := time.Now().UTC()
-	targetURL := f.Target
+	targetURL := resolveFindingURL(f)
 	evidence := f.Evidence
 	details := f.EvidenceDetails.Details
 
-	// Preserve empirical proof produced by the Phase 2/4 isolated multi-identity BFLA engine
-	if details != nil && details["authz_engine_verified"] == "true" {
+	// Preserve empirical proof produced by the Phase 2/4 isolated multi-identity BFLA engine on initial assessment
+	if !p.IsRetest && details != nil && details["authz_engine_verified"] == "true" {
 		steps := []string{
 			fmt.Sprintf("1. Positive control established with authorized role (%s) on %s %s", details["required_role"], f.Method, f.Endpoint),
 			fmt.Sprintf("2. Isolated restricted identity (%s / role: %s) invoked %s %s", details["accessor_alias"], details["accessor_role"], f.Method, f.Endpoint),
@@ -726,11 +834,35 @@ func (p *SafeProver) proveBFLA(ctx context.Context, f report.Finding, client *ht
 		return bundle, StatusPotential, bundle.ProofSummary, nil
 	}
 
-	// Live check (legacy fallback)
+	accessorToken := ""
+	if details != nil {
+		accessorToken = strings.TrimSpace(details["accessor_token"])
+	}
+	if p.IsRetest && details != nil && details["authz_engine_verified"] == "true" {
+		method := strings.ToUpper(strings.TrimSpace(f.Method))
+		if method == "" {
+			method = "GET"
+		}
+		if method != "GET" && method != "HEAD" {
+			return p.untestedRetestBundle(f, targetURL, "bfla", "BFLA retest skipped for non-read HTTP method "+method+" to preserve target state"), StatusNotTested, "BFLA retest skipped for mutating HTTP method", nil
+		}
+		if accessorToken == "" || accessorToken == "[REDACTED]" {
+			return p.untestedRetestBundle(f, targetURL, "bfla", "Lower-privilege identity credentials unavailable during --retest (supply --auth / --auth-user-b)"), StatusNotTested, "Restricted identity credentials required to verify BFLA remediation", nil
+		}
+	}
+
+	// Live check
 	if client != nil && strings.HasPrefix(targetURL, "http") {
-		req, err := http.NewRequestWithContext(ctx, "GET", targetURL, nil)
+		method := strings.ToUpper(strings.TrimSpace(f.Method))
+		if method != "HEAD" {
+			method = "GET"
+		}
+		req, err := http.NewRequestWithContext(ctx, method, targetURL, nil)
 		if err == nil {
-			req.Header.Set("Authorization", "Bearer standard_user_token")
+			if accessorToken == "" || accessorToken == "[REDACTED]" {
+				accessorToken = "Bearer standard_user_token"
+			}
+			req.Header.Set("Authorization", accessorToken)
 			resp, doErr := client.Do(req)
 			if doErr == nil {
 				defer resp.Body.Close()
@@ -742,20 +874,47 @@ func (p *SafeProver) proveBFLA(ctx context.Context, f report.Finding, client *ht
 						ModuleID:            "bfla",
 						TestIdentifier:      "BFLA_ACCESS_DENIED_SAFE",
 						ValidationTime:      now,
-						SanitizedRequest:    "GET " + targetURL,
-						SanitizedResponse:   fmt.Sprintf("HTTP %d Forbidden", resp.StatusCode),
-						ReproductionSteps:   []string{"1. Administrative route probed with non-admin token: access denied with 403"},
+						SanitizedRequest:    method + " " + targetURL,
+						SanitizedResponse:   fmt.Sprintf("HTTP %d", resp.StatusCode),
+						ReproductionSteps:   []string{fmt.Sprintf("1. Administrative route probed with restricted token: access denied with HTTP %d", resp.StatusCode)},
 						ProofSummary:        "Function-level access control enforced: non-administrative request properly rejected.",
 						LeastInvasiveMethod: "ROLE_DIFFERENTIAL_PROBE",
 					}
 					bundle.EvidenceHash = ComputeEvidenceHash(bundle.SanitizedRequest, bundle.SanitizedResponse, strings.Join(bundle.ReproductionSteps, "\n"))
 					return bundle, StatusNotValidated, bundle.ProofSummary, nil
 				}
+				if p.IsRetest && details != nil && details["authz_engine_verified"] == "true" && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+					bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+					bodyStr := string(bodyBytes)
+					lowerBody := strings.ToLower(bodyStr)
+					if !looksLikeHTMLPage(lowerBody) && !strings.Contains(lowerBody, `"unauthorized"`) && !strings.Contains(lowerBody, `"forbidden"`) {
+						bundle := &EvidenceBundle{
+							ID:                  "ev_bfla_" + f.ID,
+							FindingID:           f.ID,
+							AssessmentID:        p.AssessmentID,
+							ModuleID:            "bfla",
+							TestIdentifier:      "BFLA_ADMIN_BYPASS_CONFIRMED",
+							ValidationTime:      now,
+							SanitizedRequest:    method + " " + targetURL,
+							SanitizedResponse:   SanitizeHTTPContent(bodyStr),
+							ReproductionSteps: []string{
+								"1. Authenticate with standard non-administrative test credentials",
+								"2. Submit request to administrative route (" + f.Endpoint + ")",
+								fmt.Sprintf("3. Server returned HTTP %d without enforcing role restriction", resp.StatusCode),
+							},
+							SafeCurlCommand:     FormatSafeCurl(method, targetURL, nil, ""),
+							ProofSummary:        "Empirical proof: Administrative function accessed successfully using non-admin credentials.",
+							LeastInvasiveMethod: "ROLE_DIFFERENTIAL_PROBE",
+						}
+						bundle.EvidenceHash = ComputeEvidenceHash(bundle.SanitizedRequest, bundle.SanitizedResponse, strings.Join(bundle.ReproductionSteps, "\n"))
+						return bundle, StatusConfirmed, bundle.ProofSummary, nil
+					}
+				}
 			}
 		}
 	}
 
-	if details != nil && details["admin_bypass_confirmed"] == "true" {
+	if !p.IsRetest && details != nil && details["admin_bypass_confirmed"] == "true" {
 		bundle := &EvidenceBundle{
 			ID:                  "ev_bfla_" + f.ID,
 			FindingID:           f.ID,
@@ -797,9 +956,9 @@ func (p *SafeProver) proveBFLA(ctx context.Context, f report.Finding, client *ht
 
 // proveBOPLA preserves verified or candidate property-level authorization findings produced
 // by the isolated BOPLA engine without downgrading or misrouting into proveAuth.
-func (p *SafeProver) proveBOPLA(_ context.Context, f report.Finding, _ *http.Client) (*EvidenceBundle, ValidationStatus, string, error) {
+func (p *SafeProver) proveBOPLA(ctx context.Context, f report.Finding, client *http.Client) (*EvidenceBundle, ValidationStatus, string, error) {
 	now := time.Now().UTC()
-	targetURL := f.Target
+	targetURL := resolveFindingURL(f)
 	evidence := f.Evidence
 	details := f.EvidenceDetails.Details
 
@@ -808,7 +967,7 @@ func (p *SafeProver) proveBOPLA(_ context.Context, f report.Finding, _ *http.Cli
 		propPath = details["property_path"]
 	}
 
-	if details != nil && details["authz_engine_verified"] == "true" {
+	if !p.IsRetest && details != nil && details["authz_engine_verified"] == "true" {
 		steps := []string{
 			fmt.Sprintf("1. Isolated authorized role (%s) baseline evaluated for property %q on %s", details["required_role"], propPath, f.Endpoint),
 			fmt.Sprintf("2. Isolated restricted identity (%s / role: %s) tested against property %q (%s)", details["accessor_alias"], details["accessor_role"], propPath, details["expected_access"]),
@@ -851,6 +1010,100 @@ func (p *SafeProver) proveBOPLA(_ context.Context, f report.Finding, _ *http.Cli
 		return bundle, StatusPotential, bundle.ProofSummary, nil
 	}
 
+	if p.IsRetest {
+		method := strings.ToUpper(strings.TrimSpace(f.Method))
+		if method == "" {
+			method = "GET"
+		}
+		if method != "GET" && method != "HEAD" {
+			return p.untestedRetestBundle(f, targetURL, "bopla", "BOPLA mass-assignment retest skipped for mutating HTTP method "+method), StatusNotTested, "BOPLA write retest skipped to preserve target state", nil
+		}
+		accessorToken := ""
+		if details != nil {
+			accessorToken = strings.TrimSpace(details["accessor_token"])
+		}
+		if details != nil && details["authz_engine_verified"] == "true" && (accessorToken == "" || accessorToken == "[REDACTED]") {
+			return p.untestedRetestBundle(f, targetURL, "bopla", "Identity credentials unavailable during --retest for BOPLA verification"), StatusNotTested, "Credentials required to verify BOPLA remediation", nil
+		}
+		if client != nil && strings.HasPrefix(targetURL, "http") && propPath != "" {
+			req, err := http.NewRequestWithContext(ctx, method, targetURL, nil)
+			if err == nil {
+				if accessorToken != "" && accessorToken != "[REDACTED]" {
+					req.Header.Set("Authorization", accessorToken)
+				}
+				resp, doErr := client.Do(req)
+				if doErr == nil {
+					defer resp.Body.Close()
+					if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound {
+						bundle := &EvidenceBundle{
+							ID:                  "ev_bopla_clean_" + f.ID,
+							FindingID:           f.ID,
+							AssessmentID:        p.AssessmentID,
+							ModuleID:            "bopla",
+							TestIdentifier:      "BOPLA_ACCESS_DENIED_SAFE",
+							ValidationTime:      now,
+							SanitizedRequest:    method + " " + targetURL,
+							SanitizedResponse:   fmt.Sprintf("HTTP %d", resp.StatusCode),
+							ReproductionSteps:   []string{fmt.Sprintf("1. Request sent during retest returned HTTP %d", resp.StatusCode)},
+							ProofSummary:        "Property-level authorization enforced: restricted endpoint denied access.",
+							CanaryUsed:          propPath,
+							LeastInvasiveMethod: "PROPERTY_SCHEMA_INSPECTION",
+						}
+						bundle.EvidenceHash = ComputeEvidenceHash(bundle.SanitizedRequest, bundle.SanitizedResponse, strings.Join(bundle.ReproductionSteps, "\n"))
+						return bundle, StatusNotValidated, bundle.ProofSummary, nil
+					}
+					if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+						bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+						bodyStr := string(bodyBytes)
+						propLeaf := propPath
+						if idx := strings.LastIndex(propPath, "."); idx >= 0 {
+							propLeaf = propPath[idx+1:]
+						}
+						propLeaf = strings.TrimSuffix(strings.TrimSpace(propLeaf), "[]")
+						if propLeaf != "" && !looksLikeHTMLPage(strings.ToLower(bodyStr)) {
+							if strings.Contains(bodyStr, `"`+propLeaf+`"`) {
+								bundle := &EvidenceBundle{
+									ID:                  "ev_bopla_" + f.ID,
+									FindingID:           f.ID,
+									AssessmentID:        p.AssessmentID,
+									ModuleID:            "bopla",
+									TestIdentifier:      "BOPLA_PROPERTY_EXPOSURE_CONFIRMED",
+									ValidationTime:      now,
+									SanitizedRequest:    method + " " + targetURL,
+									SanitizedResponse:   SanitizeHTTPContent(bodyStr),
+									ReproductionSteps:   []string{fmt.Sprintf("1. Requested %s and observed sensitive property %q in JSON response", f.Endpoint, propPath)},
+									SafeCurlCommand:     FormatSafeCurl(method, targetURL, nil, ""),
+									ProofSummary:        fmt.Sprintf("Empirical proof: Property %q remains exposed in HTTP response.", propPath),
+									CanaryUsed:          propPath,
+									LeastInvasiveMethod: "PROPERTY_SCHEMA_INSPECTION",
+								}
+								bundle.EvidenceHash = ComputeEvidenceHash(bundle.SanitizedRequest, bundle.SanitizedResponse, strings.Join(bundle.ReproductionSteps, "\n"))
+								return bundle, StatusConfirmed, bundle.ProofSummary, nil
+							}
+							bundle := &EvidenceBundle{
+								ID:                  "ev_bopla_removed_" + f.ID,
+								FindingID:           f.ID,
+								AssessmentID:        p.AssessmentID,
+								ModuleID:            "bopla",
+								TestIdentifier:      "BOPLA_PROPERTY_REDACTED",
+								ValidationTime:      now,
+								SanitizedRequest:    method + " " + targetURL,
+								SanitizedResponse:   SanitizeHTTPContent(bodyStr),
+								ReproductionSteps:   []string{fmt.Sprintf("1. Requested %s; property %q is no longer present in response", f.Endpoint, propPath)},
+								ProofSummary:        fmt.Sprintf("Excessive property %q is no longer returned by the endpoint.", propPath),
+								CanaryUsed:          propPath,
+								LeastInvasiveMethod: "PROPERTY_SCHEMA_INSPECTION",
+							}
+							bundle.EvidenceHash = ComputeEvidenceHash(bundle.SanitizedRequest, bundle.SanitizedResponse, strings.Join(bundle.ReproductionSteps, "\n"))
+							return bundle, StatusNotValidated, bundle.ProofSummary, nil
+						}
+					}
+				}
+			}
+		}
+		return p.untestedRetestBundle(f, targetURL, "bopla", "BOPLA retest could not conclusively verify property exposure state"), StatusNotTested, "BOPLA retest inconclusive", nil
+	}
+
 	bundle := &EvidenceBundle{
 		ID:                  "ev_bopla_pot_" + f.ID,
 		FindingID:           f.ID,
@@ -873,10 +1126,7 @@ func (p *SafeProver) proveBOPLA(_ context.Context, f report.Finding, _ *http.Cli
 // Strictly avoids reading sensitive system files like /etc/shadow or Windows SAM.
 func (p *SafeProver) proveTraversal(ctx context.Context, f report.Finding, client *http.Client) (*EvidenceBundle, ValidationStatus, string, error) {
 	now := time.Now().UTC()
-	targetURL := f.Target
-	if targetURL == "" || !strings.Contains(targetURL, "?") {
-		targetURL = f.Endpoint
-	}
+	targetURL := resolveFindingURL(f)
 	evidence := f.Evidence
 
 	// Live check
@@ -977,8 +1227,10 @@ func (p *SafeProver) proveTraversal(ctx context.Context, f report.Finding, clien
 // proveAuth verifies unauthenticated access on protected endpoints.
 func (p *SafeProver) proveAuth(ctx context.Context, f report.Finding, client *http.Client) (*EvidenceBundle, ValidationStatus, string, error) {
 	now := time.Now().UTC()
-	targetURL := f.Target
+	targetURL := resolveFindingURL(f)
 	evidence := f.Evidence
+	lowerTitle := strings.ToLower(f.Title)
+	isUnauthFinding := strings.Contains(lowerTitle, "unauthenticated") || strings.Contains(lowerTitle, "missing auth")
 
 	// Live check
 	if client != nil && strings.HasPrefix(targetURL, "http") {
@@ -1004,11 +1256,39 @@ func (p *SafeProver) proveAuth(ctx context.Context, f report.Finding, client *ht
 					bundle.EvidenceHash = ComputeEvidenceHash(bundle.SanitizedRequest, bundle.SanitizedResponse, strings.Join(bundle.ReproductionSteps, "\n"))
 					return bundle, StatusNotValidated, bundle.ProofSummary, nil
 				}
+				if p.IsRetest && isUnauthFinding && resp.StatusCode == http.StatusOK {
+					bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 32*1024))
+					if !looksLikeHTMLPage(strings.ToLower(string(bodyBytes))) {
+						bundle := &EvidenceBundle{
+							ID:                  "ev_auth_" + f.ID,
+							FindingID:           f.ID,
+							AssessmentID:        p.AssessmentID,
+							ModuleID:            "auth",
+							TestIdentifier:      "UNAUTHENTICATED_ACCESS_PROVED",
+							ValidationTime:      now,
+							SanitizedRequest:    f.Method + " " + targetURL,
+							SanitizedResponse:   SanitizeHTTPContent(string(bodyBytes)),
+							ReproductionSteps: []string{
+								"1. Issue unauthenticated GET request to " + f.Endpoint,
+								"2. Server returned HTTP 200 OK without requiring authentication challenge",
+							},
+							SafeCurlCommand:     FormatSafeCurl(f.Method, targetURL, nil, ""),
+							ProofSummary:        "Empirical proof: Protected endpoint accessed successfully with zero authentication credentials.",
+							LeastInvasiveMethod: "UNAUTHENTICATED_HTTP_PROBE",
+						}
+						bundle.EvidenceHash = ComputeEvidenceHash(bundle.SanitizedRequest, bundle.SanitizedResponse, strings.Join(bundle.ReproductionSteps, "\n"))
+						return bundle, StatusConfirmed, bundle.ProofSummary, nil
+					}
+				}
 			}
 		}
 	}
 
-	if f.EvidenceDetails.HTTPStatus == 200 && (strings.Contains(strings.ToLower(f.Title), "unauthenticated") || strings.Contains(strings.ToLower(f.Title), "missing auth")) {
+	if p.IsRetest {
+		return p.untestedRetestBundle(f, targetURL, "auth", "Authentication weakness retest could not conclusively verify live status"), StatusNotTested, "Auth retest inconclusive", nil
+	}
+
+	if f.EvidenceDetails.HTTPStatus == 200 && isUnauthFinding {
 		bundle := &EvidenceBundle{
 			ID:                  "ev_auth_" + f.ID,
 			FindingID:           f.ID,
@@ -1050,7 +1330,7 @@ func (p *SafeProver) proveAuth(ctx context.Context, f report.Finding, client *ht
 // proveCORS verifies dangerous CORS policies allowing wildcard origins with credentials.
 func (p *SafeProver) proveCORS(ctx context.Context, f report.Finding, client *http.Client) (*EvidenceBundle, ValidationStatus, string, error) {
 	now := time.Now().UTC()
-	targetURL := f.Target
+	targetURL := resolveFindingURL(f)
 	evidence := f.Evidence
 
 	// Live check
@@ -1101,6 +1381,10 @@ func (p *SafeProver) proveCORS(ctx context.Context, f report.Finding, client *ht
 		}
 	}
 
+	if p.IsRetest {
+		return p.untestedRetestBundle(f, targetURL, "cors", "CORS policy did not expose credentialed reflection on retest"), StatusNotTested, "CORS credentialed reflection not reproduced on retest", nil
+	}
+
 	if strings.Contains(evidence, "Access-Control-Allow-Origin: *") && strings.Contains(evidence, "Access-Control-Allow-Credentials: true") {
 		bundle := &EvidenceBundle{
 			ID:                  "ev_cors_" + f.ID,
@@ -1143,7 +1427,7 @@ func (p *SafeProver) proveCORS(ctx context.Context, f report.Finding, client *ht
 // proveSecrets verifies exposed high-entropy credentials with automatic masking.
 func (p *SafeProver) proveSecrets(ctx context.Context, f report.Finding, client *http.Client) (*EvidenceBundle, ValidationStatus, string, error) {
 	now := time.Now().UTC()
-	targetURL := f.Target
+	targetURL := resolveFindingURL(f)
 	evidence := f.Evidence
 	candTok := ""
 	if f.EvidenceDetails.Details != nil {
@@ -1254,8 +1538,12 @@ func (p *SafeProver) proveSecrets(ctx context.Context, f report.Finding, client 
 // proveBusinessLogic verifies workflow tampering or unauthorized state transition.
 func (p *SafeProver) proveBusinessLogic(ctx context.Context, f report.Finding, client *http.Client) (*EvidenceBundle, ValidationStatus, string, error) {
 	now := time.Now().UTC()
-	targetURL := f.Target
+	targetURL := resolveFindingURL(f)
 	evidence := f.Evidence
+
+	if p.IsRetest {
+		return p.untestedRetestBundle(f, targetURL, "businesslogic", "Business logic retest skipped to avoid mutating application state via POST"), StatusNotTested, "Business logic retest requires safe domain verification", nil
+	}
 
 	// Live check
 	if client != nil && strings.HasPrefix(targetURL, "http") {
@@ -1347,4 +1635,376 @@ func (p *SafeProver) proveBusinessLogic(ctx context.Context, f report.Finding, c
 	}
 	bundle.EvidenceHash = ComputeEvidenceHash(bundle.SanitizedRequest, bundle.SanitizedResponse, strings.Join(bundle.ReproductionSteps, "\n"))
 	return bundle, StatusPotential, bundle.ProofSummary, nil
+}
+
+func (p *SafeProver) untestedRetestBundle(f report.Finding, targetURL, moduleID, summary string) *EvidenceBundle {
+	now := time.Now().UTC()
+	method := strings.TrimSpace(f.Method)
+	if method == "" {
+		method = "GET"
+	}
+	bundle := &EvidenceBundle{
+		ID:                  "ev_retest_untested_" + f.ID,
+		FindingID:           f.ID,
+		AssessmentID:        p.AssessmentID,
+		ModuleID:            moduleID,
+		TestIdentifier:      "UNTESTED_CATEGORY_PROCEDURE",
+		ValidationTime:      now,
+		SanitizedRequest:    method + " " + secrets.SanitizeURL(targetURL),
+		SanitizedResponse:   SanitizeHTTPContent(f.Evidence),
+		ReproductionSteps:   []string{"1. " + summary},
+		SafeCurlCommand:     FormatSafeCurl(method, targetURL, nil, ""),
+		ProofSummary:        summary,
+		LeastInvasiveMethod: "MANUAL_VERIFICATION_RECOMMENDED",
+	}
+	bundle.EvidenceHash = ComputeEvidenceHash(bundle.SanitizedRequest, bundle.SanitizedResponse, strings.Join(bundle.ReproductionSteps, "\n"))
+	return bundle
+}
+
+func looksLikeHTMLPage(lowerBody string) bool {
+	trimmed := strings.TrimSpace(lowerBody)
+	if trimmed == "" {
+		return false
+	}
+	return strings.HasPrefix(trimmed, "<!doctype html") ||
+		strings.HasPrefix(trimmed, "<html") ||
+		strings.Contains(trimmed, "<app-root") ||
+		strings.Contains(trimmed, "<div id=\"root\"") ||
+		strings.Contains(trimmed, "<div id=\"app\"")
+}
+
+// proveCMDI verifies command injection using benign negative control + differential shell concatenation canaries.
+func (p *SafeProver) proveCMDI(ctx context.Context, f report.Finding, client *http.Client) (*EvidenceBundle, ValidationStatus, string, error) {
+	now := time.Now().UTC()
+	targetURL := resolveFindingURL(f)
+	if client == nil || !strings.HasPrefix(targetURL, "http") {
+		return p.untestedRetestBundle(f, targetURL, "cmdi", "Live HTTP client required for differential CMDI proof"), StatusNotTested, "Live HTTP client required for CMDI verification", nil
+	}
+
+	parsed, err := url.Parse(targetURL)
+	if err != nil {
+		return p.untestedRetestBundle(f, targetURL, "cmdi", "Invalid target URL for CMDI verification"), StatusNotTested, "Invalid target URL for CMDI verification", nil
+	}
+	q := parsed.Query()
+	paramName := ""
+	if f.EvidenceDetails.Details != nil {
+		paramName = strings.TrimSpace(f.EvidenceDetails.Details["param"])
+	}
+	if paramName == "" {
+		for k := range q {
+			paramName = k
+			break
+		}
+	}
+	if paramName == "" {
+		return p.untestedRetestBundle(f, targetURL, "cmdi", "No injectable query parameter available for safe CMDI verification"), StatusNotTested, "No query parameter available for safe CMDI verification", nil
+	}
+
+	sendParam := func(val string) (int, string, error) {
+		uCopy := *parsed
+		qCopy := uCopy.Query()
+		qCopy.Set(paramName, val)
+		uCopy.RawQuery = qCopy.Encode()
+		req, reqErr := http.NewRequestWithContext(ctx, "GET", uCopy.String(), nil)
+		if reqErr != nil {
+			return 0, "", reqErr
+		}
+		resp, doErr := client.Do(req)
+		if doErr != nil {
+			return 0, "", doErr
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		return resp.StatusCode, string(body), nil
+	}
+
+	// Negative control: plain token without shell syntax
+	ctrlStatus, ctrlBody, ctrlErr := sendParam("felix_cmdi_ctrl_7319")
+	if ctrlErr != nil {
+		return p.untestedRetestBundle(f, targetURL, "cmdi", fmt.Sprintf("CMDI negative control request failed: %v", ctrlErr)), StatusNotTested, "CMDI baseline request failed", nil
+	}
+	// If baseline already unexpectedly evaluates/contains our marker, fail closed
+	if strings.Contains(ctrlBody, "felixcmdiproof7319") {
+		return p.untestedRetestBundle(f, targetURL, "cmdi", "Baseline control already contained marker token; cannot establish differential proof"), StatusNotTested, "CMDI baseline ambiguous", nil
+	}
+
+	// Differential shell concatenation/formatting payloads: output "felixcmdiproof7319" never appears verbatim in the payload
+	canaries := []string{
+		";printf felix%s 7319",
+		"$(printf felix%s 7319)",
+		"|printf felix%s 7319",
+	}
+	for _, payload := range canaries {
+		uCopy := *parsed
+		qCopy := uCopy.Query()
+		// Use distinctive joined output token felixcmdiproof7319 produced from printf parts
+		qCopy.Set(paramName, strings.ReplaceAll(payload, "felix%s 7319", "felixcmdi%s 7319"))
+		uCopy.RawQuery = qCopy.Encode()
+		req, reqErr := http.NewRequestWithContext(ctx, "GET", uCopy.String(), nil)
+		if reqErr != nil {
+			continue
+		}
+		resp, doErr := client.Do(req)
+		if doErr != nil {
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		resp.Body.Close()
+		bodyStr := string(body)
+		if resp.StatusCode >= 200 && resp.StatusCode < 500 &&
+			strings.Contains(bodyStr, "felixcmdi7319") &&
+			!strings.Contains(bodyStr, "felixcmdi%s") &&
+			!strings.Contains(ctrlBody, "felixcmdi7319") {
+			bundle := &EvidenceBundle{
+				ID:                  "ev_cmdi_" + f.ID,
+				FindingID:           f.ID,
+				AssessmentID:        p.AssessmentID,
+				ModuleID:            "cmdi",
+				TestIdentifier:      "CMDI_DIFFERENTIAL_EXECUTION_CONFIRMED",
+				ValidationTime:      now,
+				SanitizedRequest:    "GET " + secrets.SanitizeURL(uCopy.String()),
+				SanitizedResponse:   SanitizeHTTPContent(bodyStr),
+				ReproductionSteps:   []string{"1. Send negative control to " + paramName, "2. Send differential printf canary and confirm evaluated token without raw format string"},
+				SafeCurlCommand:     FormatSafeCurl("GET", uCopy.String(), nil, ""),
+				ProofSummary:        fmt.Sprintf("Empirical proof: Differential shell formatting canary evaluated via parameter %q.", paramName),
+				CanaryUsed:          "felixcmdi7319",
+				LeastInvasiveMethod: "DIFFERENTIAL_BENIGN_PRINTF_CANARY",
+			}
+			bundle.EvidenceHash = ComputeEvidenceHash(bundle.SanitizedRequest, bundle.SanitizedResponse, strings.Join(bundle.ReproductionSteps, "\n"))
+			return bundle, StatusConfirmed, bundle.ProofSummary, nil
+		}
+	}
+
+	if ctrlStatus >= 200 && ctrlStatus < 500 {
+		bundle := &EvidenceBundle{
+			ID:                  "ev_cmdi_clean_" + f.ID,
+			FindingID:           f.ID,
+			AssessmentID:        p.AssessmentID,
+			ModuleID:            "cmdi",
+			TestIdentifier:      "CMDI_NEGATIVE_CONTROL_CLEAN",
+			ValidationTime:      now,
+			SanitizedRequest:    "GET " + secrets.SanitizeURL(targetURL),
+			SanitizedResponse:   fmt.Sprintf("HTTP %d (differential shell canaries not evaluated)", ctrlStatus),
+			ReproductionSteps:   []string{"1. Sent negative control and benign shell formatting canaries", "2. Server did not execute shell formatting tokens"},
+			ProofSummary:        "Command injection not reproduced: differential shell concatenation controls returned no execution output.",
+			LeastInvasiveMethod: "DIFFERENTIAL_BENIGN_PRINTF_CANARY",
+		}
+		bundle.EvidenceHash = ComputeEvidenceHash(bundle.SanitizedRequest, bundle.SanitizedResponse, strings.Join(bundle.ReproductionSteps, "\n"))
+		return bundle, StatusNotValidated, bundle.ProofSummary, nil
+	}
+
+	return p.untestedRetestBundle(f, targetURL, "cmdi", "CMDI verification could not establish clean baseline"), StatusNotTested, "CMDI verification inconclusive", nil
+}
+
+// proveHeaders verifies missing/misconfigured security headers live via HTTP GET.
+func (p *SafeProver) proveHeaders(ctx context.Context, f report.Finding, client *http.Client) (*EvidenceBundle, ValidationStatus, string, error) {
+	now := time.Now().UTC()
+	targetURL := resolveFindingURL(f)
+	if client == nil || !strings.HasPrefix(targetURL, "http") {
+		return p.untestedRetestBundle(f, targetURL, "headers", "Live HTTP client required for security header verification"), StatusNotTested, "Live HTTP client required for header verification", nil
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", targetURL, nil)
+	if err != nil {
+		return p.untestedRetestBundle(f, targetURL, "headers", fmt.Sprintf("Failed to construct header check request: %v", err)), StatusNotTested, "Header verification request invalid", nil
+	}
+	resp, doErr := client.Do(req)
+	if doErr != nil {
+		return p.untestedRetestBundle(f, targetURL, "headers", fmt.Sprintf("Header check request failed: %v", doErr)), StatusNotTested, "Header verification request failed", nil
+	}
+	defer resp.Body.Close()
+
+	hint := ""
+	if f.EvidenceDetails.Details != nil {
+		hint = strings.ToLower(strings.TrimSpace(f.EvidenceDetails.Details["header"]))
+	}
+	combined := hint + " " + strings.ToLower(f.ID+" "+f.Title+" "+f.Category)
+
+	stillMissing := false
+	headerName := "Security-Header"
+	observedVal := ""
+
+	switch {
+	case strings.Contains(combined, "content-security-policy") || strings.Contains(combined, "hdr-csp") || strings.Contains(combined, " csp"):
+		headerName = "Content-Security-Policy"
+		observedVal = strings.TrimSpace(resp.Header.Get("Content-Security-Policy"))
+		stillMissing = observedVal == ""
+	case strings.Contains(combined, "strict-transport-security") || strings.Contains(combined, "hdr-hsts") || strings.Contains(combined, "hsts"):
+		headerName = "Strict-Transport-Security"
+		observedVal = strings.TrimSpace(resp.Header.Get("Strict-Transport-Security"))
+		stillMissing = strings.HasPrefix(strings.ToLower(targetURL), "https://") && observedVal == ""
+	case strings.Contains(combined, "x-content-type-options") || strings.Contains(combined, "hdr-nosniff") || strings.Contains(combined, "nosniff"):
+		headerName = "X-Content-Type-Options"
+		observedVal = strings.TrimSpace(resp.Header.Get("X-Content-Type-Options"))
+		stillMissing = !strings.EqualFold(observedVal, "nosniff")
+	case strings.Contains(combined, "x-frame-options") || strings.Contains(combined, "hdr-xfo") || strings.Contains(combined, "clickjacking"):
+		headerName = "X-Frame-Options"
+		observedVal = strings.TrimSpace(resp.Header.Get("X-Frame-Options"))
+		cspVal := strings.ToLower(resp.Header.Get("Content-Security-Policy"))
+		stillMissing = observedVal == "" && !strings.Contains(cspVal, "frame-ancestors")
+	default:
+		return p.untestedRetestBundle(f, targetURL, "headers", "Unrecognized security header finding type for live verification"), StatusNotTested, "Header finding type unrecognized", nil
+	}
+
+	if stillMissing {
+		bundle := &EvidenceBundle{
+			ID:                  "ev_hdr_" + f.ID,
+			FindingID:           f.ID,
+			AssessmentID:        p.AssessmentID,
+			ModuleID:            "headers",
+			TestIdentifier:      "SECURITY_HEADER_MISSING_CONFIRMED",
+			ValidationTime:      now,
+			SanitizedRequest:    "GET " + targetURL,
+			SanitizedResponse:   fmt.Sprintf("HTTP %d (%s=%q)", resp.StatusCode, headerName, observedVal),
+			ReproductionSteps:   []string{fmt.Sprintf("1. Send GET %s and inspect response headers", targetURL), fmt.Sprintf("2. Observe missing/weak %s header", headerName)},
+			SafeCurlCommand:     FormatSafeCurl("GET", targetURL, nil, ""),
+			ProofSummary:        fmt.Sprintf("Empirical proof: Live HTTP response still lacks secure %s header.", headerName),
+			LeastInvasiveMethod: "LIVE_RESPONSE_HEADER_INSPECTION",
+		}
+		bundle.EvidenceHash = ComputeEvidenceHash(bundle.SanitizedRequest, bundle.SanitizedResponse, strings.Join(bundle.ReproductionSteps, "\n"))
+		return bundle, StatusConfirmed, bundle.ProofSummary, nil
+	}
+
+	bundle := &EvidenceBundle{
+		ID:                  "ev_hdr_clean_" + f.ID,
+		FindingID:           f.ID,
+		AssessmentID:        p.AssessmentID,
+		ModuleID:            "headers",
+		TestIdentifier:      "SECURITY_HEADER_PRESENT_REMEDIATED",
+		ValidationTime:      now,
+		SanitizedRequest:    "GET " + targetURL,
+		SanitizedResponse:   fmt.Sprintf("HTTP %d (%s: %s)", resp.StatusCode, headerName, observedVal),
+		ReproductionSteps:   []string{fmt.Sprintf("1. Send GET %s and observe %s header present (%s)", targetURL, headerName, observedVal)},
+		ProofSummary:        fmt.Sprintf("Remediation confirmed: %s header is now properly configured.", headerName),
+		LeastInvasiveMethod: "LIVE_RESPONSE_HEADER_INSPECTION",
+	}
+	bundle.EvidenceHash = ComputeEvidenceHash(bundle.SanitizedRequest, bundle.SanitizedResponse, strings.Join(bundle.ReproductionSteps, "\n"))
+	return bundle, StatusNotValidated, bundle.ProofSummary, nil
+}
+
+// proveInfoDisclosure verifies exposed artifacts (.env, .git/config) against soft-404 / SPA HTML catch-all baselines.
+func (p *SafeProver) proveInfoDisclosure(ctx context.Context, f report.Finding, client *http.Client) (*EvidenceBundle, ValidationStatus, string, error) {
+	now := time.Now().UTC()
+	targetURL := resolveFindingURL(f)
+	if client == nil || !strings.HasPrefix(targetURL, "http") {
+		return p.untestedRetestBundle(f, targetURL, "infodisclosure", "Live HTTP client required for information disclosure check"), StatusNotTested, "Live HTTP client required", nil
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", targetURL, nil)
+	if err != nil {
+		return p.untestedRetestBundle(f, targetURL, "infodisclosure", "Invalid URL for information disclosure verification"), StatusNotTested, "Invalid target URL", nil
+	}
+	resp, doErr := client.Do(req)
+	if doErr != nil {
+		return p.untestedRetestBundle(f, targetURL, "infodisclosure", fmt.Sprintf("Disclosure verification request failed: %v", doErr)), StatusNotTested, "Verification request failed", nil
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	bodyStr := string(body)
+	lowerBody := strings.ToLower(bodyStr)
+
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized || resp.StatusCode >= 400 {
+		bundle := &EvidenceBundle{
+			ID:                  "ev_info_clean_" + f.ID,
+			FindingID:           f.ID,
+			AssessmentID:        p.AssessmentID,
+			ModuleID:            "infodisclosure",
+			TestIdentifier:      "INFO_DISCLOSURE_NOT_EXPOSED",
+			ValidationTime:      now,
+			SanitizedRequest:    "GET " + secrets.SanitizeURL(targetURL),
+			SanitizedResponse:   fmt.Sprintf("HTTP %d", resp.StatusCode),
+			ReproductionSteps:   []string{fmt.Sprintf("1. Request %s returned HTTP %d", targetURL, resp.StatusCode)},
+			ProofSummary:        "Sensitive resource is not exposed (server returned non-200 error response).",
+			LeastInvasiveMethod: "SOFT_404_CONTROLLED_GET",
+		}
+		bundle.EvidenceHash = ComputeEvidenceHash(bundle.SanitizedRequest, bundle.SanitizedResponse, strings.Join(bundle.ReproductionSteps, "\n"))
+		return bundle, StatusNotValidated, bundle.ProofSummary, nil
+	}
+
+	if looksLikeHTMLPage(lowerBody) {
+		bundle := &EvidenceBundle{
+			ID:                  "ev_info_spa_" + f.ID,
+			FindingID:           f.ID,
+			AssessmentID:        p.AssessmentID,
+			ModuleID:            "infodisclosure",
+			TestIdentifier:      "INFO_DISCLOSURE_SOFT_404_HTML",
+			ValidationTime:      now,
+			SanitizedRequest:    "GET " + secrets.SanitizeURL(targetURL),
+			SanitizedResponse:   "HTTP 200 HTML shell fallback detected",
+			ReproductionSteps:   []string{"1. Server returned an HTML/SPA shell rather than a sensitive configuration artifact"},
+			ProofSummary:        "Response is a catch-all HTML/SPA page rather than exposed sensitive data.",
+			LeastInvasiveMethod: "SOFT_404_CONTROLLED_GET",
+		}
+		bundle.EvidenceHash = ComputeEvidenceHash(bundle.SanitizedRequest, bundle.SanitizedResponse, strings.Join(bundle.ReproductionSteps, "\n"))
+		return bundle, StatusNotValidated, bundle.ProofSummary, nil
+	}
+
+	// Compare against non-existent sibling control URL to rule out non-HTML soft-404 catch-alls
+	if u, parseErr := url.Parse(targetURL); parseErr == nil {
+		u.Path = "/felix-nonexistent-soft404-canary-94821"
+		u.RawQuery = ""
+		if ctrlReq, reqErr := http.NewRequestWithContext(ctx, "GET", u.String(), nil); reqErr == nil {
+			if ctrlResp, ctrlErr := client.Do(ctrlReq); ctrlErr == nil {
+				ctrlBytes, _ := io.ReadAll(io.LimitReader(ctrlResp.Body, 16*1024))
+				ctrlResp.Body.Close()
+				if ctrlResp.StatusCode == http.StatusOK && string(ctrlBytes) == bodyStr {
+					bundle := &EvidenceBundle{
+						ID:                  "ev_info_soft404_" + f.ID,
+						FindingID:           f.ID,
+						AssessmentID:        p.AssessmentID,
+						ModuleID:            "infodisclosure",
+						TestIdentifier:      "INFO_DISCLOSURE_SOFT_404_MATCH",
+						ValidationTime:      now,
+						SanitizedRequest:    "GET " + secrets.SanitizeURL(targetURL),
+						SanitizedResponse:   "Response matches non-existent canary soft-404 baseline",
+						ReproductionSteps:   []string{"1. Compare target URL with non-existent sibling canary", "2. Responses are identical (soft-404 catch-all)"},
+						ProofSummary:        "Target matches non-existent route soft-404 baseline; sensitive artifact not exposed.",
+						LeastInvasiveMethod: "SOFT_404_CONTROLLED_GET",
+					}
+					bundle.EvidenceHash = ComputeEvidenceHash(bundle.SanitizedRequest, bundle.SanitizedResponse, strings.Join(bundle.ReproductionSteps, "\n"))
+					return bundle, StatusNotValidated, bundle.ProofSummary, nil
+				}
+			}
+		}
+	}
+
+	lowerTarget := strings.ToLower(targetURL + " " + f.Title)
+	confirmed := false
+	switch {
+	case strings.Contains(lowerTarget, ".git/config") || strings.Contains(lowerTarget, "git config"):
+		confirmed = strings.Contains(bodyStr, "[core]") || strings.Contains(bodyStr, "[remote")
+	case strings.Contains(lowerTarget, ".env") || strings.Contains(lowerTarget, "environment file"):
+		for _, line := range strings.Split(bodyStr, "\n") {
+			trimmed := strings.TrimSpace(line)
+			if trimmed != "" && !strings.HasPrefix(trimmed, "#") && !strings.HasPrefix(trimmed, "<") && strings.Contains(trimmed, "=") {
+				confirmed = true
+				break
+			}
+		}
+	default:
+		if f.EvidenceDetails.Details != nil && f.EvidenceDetails.Details["matched_marker"] != "" {
+			confirmed = strings.Contains(bodyStr, f.EvidenceDetails.Details["matched_marker"])
+		}
+	}
+
+	if confirmed {
+		bundle := &EvidenceBundle{
+			ID:                  "ev_info_" + f.ID,
+			FindingID:           f.ID,
+			AssessmentID:        p.AssessmentID,
+			ModuleID:            "infodisclosure",
+			TestIdentifier:      "INFO_DISCLOSURE_ARTIFACT_CONFIRMED",
+			ValidationTime:      now,
+			SanitizedRequest:    "GET " + secrets.SanitizeURL(targetURL),
+			SanitizedResponse:   secrets.RedactText(SanitizeHTTPContent(bodyStr)),
+			ReproductionSteps:   []string{fmt.Sprintf("1. Request %s and verify non-HTML sensitive artifact content vs soft-404 baseline", targetURL)},
+			SafeCurlCommand:     FormatSafeCurl("GET", targetURL, nil, ""),
+			ProofSummary:        "Empirical proof: Sensitive artifact remains exposed and distinct from soft-404 baseline.",
+			LeastInvasiveMethod: "SOFT_404_CONTROLLED_GET",
+		}
+		bundle.EvidenceHash = ComputeEvidenceHash(bundle.SanitizedRequest, bundle.SanitizedResponse, strings.Join(bundle.ReproductionSteps, "\n"))
+		return bundle, StatusConfirmed, bundle.ProofSummary, nil
+	}
+
+	return p.untestedRetestBundle(f, targetURL, "infodisclosure", "Live response did not contain confirmed sensitive disclosure markers"), StatusNotTested, "Disclosure markers not confirmed", nil
 }

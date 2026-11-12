@@ -293,6 +293,17 @@ func RecalculateReportRisk(rep *Report) {
 	rep.RiskScoreAvailable = true
 	rep.Summary.ScoreAvailable = true
 
+	rep.Summary = Summarize(rep.Findings)
+	rep.Summary.ScoreAvailable = true
+
+	prioritized := Prioritize(rep.Findings)
+	topCount := 5
+	if len(prioritized) < topCount {
+		topCount = len(prioritized)
+	}
+	rep.TopPriorities = make([]Finding, topCount)
+	copy(rep.TopPriorities, prioritized[:topCount])
+
 	score, level := CalculateReportRisk(rep.Findings, rep.SecurityStories)
 	rep.RiskScore = score
 	rep.RiskLevel = level

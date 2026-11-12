@@ -609,74 +609,74 @@ func ensureAuthzDiscovery(rt *AssessmentRuntimeContext) *authzDiscoveryCache {
 		}
 	}
 
-	// Bounded read-only discovery enrichment:
-	// 1) Check common OpenAPI/Swagger endpoints once if not already observed.
-	// 2) Fetch up to 12 un-fetched API GET candidates across configured identities so JSON payloads & ownership markers are observable.
-	if !rt.Opts.SafeMode {
-		identMap, _, _, _, _ := collectIdentityProfiles(rt)
-		baseTrimmed := strings.TrimRight(rt.TargetURL, "/")
-
-		// Prioritize ADMIN -> USER_A -> USER_B -> ANONYMOUS when probing OpenAPI schema once
+	// Ensure OpenAPI 3.x / Swagger 2.0 specification is discovered and parsed once into rt.
+	ensureOpenAPISpecIngested(rt)
+	if len(rt.OpenAPISpecBody) > 0 && rt.OpenAPISpecURL != "" {
+		specPath := normalizeAuthzURLPath(rt.OpenAPISpecURL)
+		if specPath == "" {
+			specPath = "/openapi.json"
+		}
 		preferredSpecIdent := "ANONYMOUS"
+		identMap, _, _, _, _ := collectIdentityProfiles(rt)
 		for _, pref := range []string{"ADMIN", "USER_A", "USER_B", "ANONYMOUS"} {
 			if identMap[pref] != nil {
 				preferredSpecIdent = pref
 				break
 			}
 		}
-
-		openAPICandidates := []string{"/openapi.json", "/swagger.json", "/api/openapi.json", "/api/swagger.json"}
-		for _, sp := range openAPICandidates {
-			if int(rt.AuthzDispatchedRequests) >= rt.Opts.AuthzMaxRequests && rt.Opts.AuthzMaxRequests > 0 {
-				break
-			}
-			specURL := baseTrimmed + sp
-			if rt.ScopeAllowed != nil && !rt.ScopeAllowed(specURL) {
-				continue
-			}
-			alreadyFetched := false
-			for ident := range identMap {
-				if seenObs[ident+"::GET::"+sp] && len(fetchedAssetMap[ident+"::"+sp].Content) > 0 {
-					alreadyFetched = true
-					break
-				}
-			}
-			if alreadyFetched {
-				continue
-			}
-			code, ct, body, err := safeAuthzGET(identMap[preferredSpecIdent], specURL, rt.Opts.Timeout, &rt.AuthzDispatchedRequests)
-			if err == nil && code >= 200 && code < 300 && strings.Contains(strings.ToLower(ct+string(body[:minIntLocal(len(body), 128)])), "openapi") ||
-				(err == nil && code >= 200 && code < 300 && strings.Contains(string(body[:minIntLocal(len(body), 128)]), `"swagger"`)) {
-				cache.Observations = append(cache.Observations, authzObservation{
-					Identity:        preferredSpecIdent,
-					URL:             specURL,
-					Path:            sp,
-					Method:          "GET",
-					StatusCode:      code,
-					ContentType:     ct,
-					Body:            body,
-					DiscoveryMethod: "OPENAPI_SPEC",
-					Classification:  string(crawler.ClassificationConfirmedEndpoint),
-				})
-				seenObs[preferredSpecIdent+"::GET::"+sp] = true
-				break
-			}
+		specKey := preferredSpecIdent + "::GET::" + specPath
+		if !seenObs[specKey] {
+			seenObs[specKey] = true
+			cache.Observations = append(cache.Observations, authzObservation{
+				Identity:        preferredSpecIdent,
+				URL:             rt.OpenAPISpecURL,
+				Path:            specPath,
+				Method:          "GET",
+				StatusCode:      200,
+				ContentType:     rt.OpenAPISpecContentType,
+				Body:            rt.OpenAPISpecBody,
+				DiscoveryMethod: "OPENAPI_SPEC",
+				Classification:  string(crawler.ClassificationConfirmedEndpoint),
+			})
 		}
+	}
 
-		// Collect candidate API GET paths that lacked fetched JSON bodies
+	// Bounded read-only discovery enrichment:
+	// Fetch up to 24 un-fetched safe API GET candidates (including OpenAPI parameterless GET routes)
+	// across configured identities so collection JSON payloads & ownership markers are observable.
+	if !rt.Opts.SafeMode {
+		identMap, _, _, _, _ := collectIdentityProfiles(rt)
+
+		hasBodyByPath := make(map[string]bool)
 		candSet := make(map[string]bool)
 		for _, obs := range cache.Observations {
+			if obs.Method == "GET" && len(obs.Body) > 0 {
+				hasBodyByPath[obs.Path] = true
+			}
 			if obs.Method == "GET" && len(obs.Body) == 0 && isSafeCandidateGETPath(obs.Path) {
 				candSet[obs.Path] = true
 			}
 		}
+		for _, op := range rt.OpenAPISpecOps {
+			m := strings.ToUpper(strings.TrimSpace(op.Method))
+			if (m == "" || m == "GET") && isSafeCandidateGETPath(op.Path) && !hasBodyByPath[op.Path] {
+				candSet[op.Path] = true
+			}
+		}
+		for _, ep := range rt.DiscoveredEndpoints {
+			m := strings.ToUpper(strings.TrimSpace(ep.Method))
+			if (m == "" || m == "GET") && isSafeCandidateGETPath(ep.Path) && !hasBodyByPath[ep.Path] {
+				candSet[ep.Path] = true
+			}
+		}
+
 		var candPaths []string
 		for p := range candSet {
 			candPaths = append(candPaths, p)
 		}
 		sort.Strings(candPaths)
-		if len(candPaths) > 12 {
-			candPaths = candPaths[:12]
+		if len(candPaths) > 24 {
+			candPaths = candPaths[:24]
 		}
 
 		var identOrder []string
@@ -686,13 +686,17 @@ func ensureAuthzDiscovery(rt *AssessmentRuntimeContext) *authzDiscoveryCache {
 		sort.Strings(identOrder)
 
 		for _, cp := range candPaths {
-			targetEndpoint := baseTrimmed + cp
+			targetEndpoint := resolveTargetEndpointURL(rt.TargetURL, cp)
 			if rt.ScopeAllowed != nil && !rt.ScopeAllowed(targetEndpoint) {
 				continue
 			}
 			for _, ident := range identOrder {
 				if rt.Opts.AuthzMaxRequests > 0 && int(rt.AuthzDispatchedRequests) >= rt.Opts.AuthzMaxRequests {
 					break
+				}
+				obsKey := ident + "::GET::" + cp
+				if seenObs[obsKey] {
+					continue
 				}
 				client := identMap[ident]
 				if client == nil {
@@ -702,6 +706,7 @@ func ensureAuthzDiscovery(rt *AssessmentRuntimeContext) *authzDiscoveryCache {
 				if err != nil {
 					continue
 				}
+				seenObs[obsKey] = true
 				cache.Observations = append(cache.Observations, authzObservation{
 					Identity:        ident,
 					URL:             targetEndpoint,
@@ -773,11 +778,19 @@ func isSafeCandidateGETPath(p string) bool {
 	if bfla.IsDestructiveFunction("GET", low) {
 		return false
 	}
+	for _, stateReset := range []string{"/createdb", "/initdb", "/resetdb", "/reset-db"} {
+		if low == stateReset || strings.HasSuffix(low, stateReset) {
+			return false
+		}
+	}
 	if strings.HasSuffix(low, ".js") || strings.HasSuffix(low, ".css") || strings.HasSuffix(low, ".png") ||
 		strings.HasSuffix(low, ".svg") || strings.HasSuffix(low, ".ico") || strings.HasSuffix(low, ".html") {
 		return false
 	}
-	apiHints := []string{"/api", "/v1/", "/v2/", "/user", "/order", "/profile", "/account", "/admin", "/internal", "/invoice", "/document", "/project", "/tenant", "/settings"}
+	if low == "/me" || low == "/whoami" || strings.HasSuffix(low, "/me") || strings.HasSuffix(low, "/whoami") {
+		return true
+	}
+	apiHints := []string{"/api", "/v1/", "/v2/", "/user", "/book", "/order", "/profile", "/account", "/admin", "/internal", "/invoice", "/document", "/project", "/tenant", "/settings", "/rest/", "/identity/", "/workshop/", "/community/", "/_debug"}
 	for _, h := range apiHints {
 		if strings.Contains(low, h) {
 			return true

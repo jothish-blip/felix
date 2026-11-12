@@ -1,6 +1,7 @@
 package webvuln
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -607,12 +609,29 @@ func (e *Engine) assessNoSQLi(ctx context.Context, actx *AssessmentContext, clie
 	var findings []report.Finding
 
 	for _, ep := range actx.Endpoints {
+		if isStaticAsset(ep.Path) {
+			continue
+		}
 		params := ep.Parameters
 		if len(params) == 0 {
 			params = []string{"username", "user", "filter"}
 		}
 
 		for _, p := range params {
+			baseURL := buildEndpointURL(actx.BaseURL, ep.Path, nil)
+			if actx.IsAllowed != nil && !actx.IsAllowed(baseURL) {
+				continue
+			}
+
+			var baseBytes []byte
+			if reqBase, err := http.NewRequestWithContext(ctx, "GET", baseURL, nil); err == nil {
+				reqBase.Header.Set("User-Agent", e.config.UserAgent)
+				if respBase, err := client.Do(reqBase); err == nil {
+					baseBytes, _ = io.ReadAll(io.LimitReader(respBase.Body, e.config.MaxBodyReadBytes))
+					respBase.Body.Close()
+				}
+			}
+
 			// Test 1: $ne query parameter probe
 			neURL := buildEndpointURL(actx.BaseURL, ep.Path, map[string]string{p + "[$ne]": "__felix_nonexistent__"})
 			eqURL := buildEndpointURL(actx.BaseURL, ep.Path, map[string]string{p + "[$eq]": "__felix_nonexistent__"})
@@ -652,8 +671,10 @@ func (e *Engine) assessNoSQLi(ctx context.Context, actx *AssessmentContext, clie
 				CreatedAt:      time.Now().UTC(),
 			}
 
-			// If $ne returns 200 with substantial content while $eq returns 404 or empty collection
-			if respNE.StatusCode == 200 && (respEQ.StatusCode == 404 || len(neBytes) > len(eqBytes)+200) {
+			// If $ne returns 200 with substantial content different from baseline while $eq returns 404 or empty collection
+			isHTMLResp := strings.Contains(strings.ToLower(respNE.Header.Get("Content-Type")), "text/html")
+			matchesBaseline := len(baseBytes) > 0 && bytes.Equal(bytes.TrimSpace(neBytes), bytes.TrimSpace(baseBytes))
+			if respNE.StatusCode == 200 && !matchesBaseline && !(isHTMLResp && bytes.Equal(bytes.TrimSpace(neBytes), bytes.TrimSpace(eqBytes))) && (respEQ.StatusCode == 404 || len(neBytes) > len(eqBytes)+200) {
 				r.VerificationState = StateVerified
 				r.Severity = report.SeverityHigh
 				r.Confidence = report.ConfidenceHigh
@@ -704,6 +725,8 @@ func (e *Engine) assessNoSQLi(ctx context.Context, actx *AssessmentContext, clie
 // Category 4: OS Command Injection (CmdI)
 // -------------------------------------------------------------------------
 
+var cmdIDOutputPattern = regexp.MustCompile(`\buid=\d+\([a-zA-Z0-9_.-]+\)\s+gid=\d+\([a-zA-Z0-9_.-]+\)`)
+
 func (e *Engine) assessCmdi(ctx context.Context, actx *AssessmentContext, client *http.Client) ([]Result, []report.Finding, CategoryCoverage) {
 	meta := CategoryMetadata[CategoryCmdi]
 	cov := CategoryCoverage{
@@ -726,13 +749,48 @@ func (e *Engine) assessCmdi(ctx context.Context, actx *AssessmentContext, client
 		if isStaticAsset(ep.Path) {
 			continue
 		}
-		params := ep.Parameters
-		if len(params) == 0 {
-			params = []string{"cmd", "command", "exec", "run", "ping", "host", "ip", "username"}
+		if len(ep.Parameters) == 0 {
+			continue
 		}
-		for _, p := range params {
+		for _, p := range ep.Parameters {
 			if !cmdParamNames[strings.ToLower(p)] {
 				continue
+			}
+
+			baseURL := buildEndpointURL(actx.BaseURL, ep.Path, nil)
+			if actx.IsExcluded != nil && actx.IsExcluded(baseURL) {
+				continue
+			}
+			if actx.IsAllowed != nil && !actx.IsAllowed(baseURL) {
+				continue
+			}
+
+			// Fetch unparameterized baseline response
+			var baseBody string
+			var baseStatus int
+			if reqBase, err := http.NewRequestWithContext(ctx, "GET", baseURL, nil); err == nil {
+				reqBase.Header.Set("User-Agent", e.config.UserAgent)
+				if respBase, err := client.Do(reqBase); err == nil {
+					bBase, _ := io.ReadAll(io.LimitReader(respBase.Body, e.config.MaxBodyReadBytes))
+					baseBody = string(bBase)
+					baseStatus = respBase.StatusCode
+					respBase.Body.Close()
+				}
+			}
+
+			// Fetch negative control response with benign token to filter static/reflected text
+			ctrlToken := "felix_cmd_ctrl_8472"
+			ctrlURL := buildEndpointURL(actx.BaseURL, ep.Path, map[string]string{p: ctrlToken})
+			var ctrlBody string
+			var ctrlStatus int
+			if reqCtrl, err := http.NewRequestWithContext(ctx, "GET", ctrlURL, nil); err == nil {
+				reqCtrl.Header.Set("User-Agent", e.config.UserAgent)
+				if respCtrl, err := client.Do(reqCtrl); err == nil {
+					bCtrl, _ := io.ReadAll(io.LimitReader(respCtrl.Body, e.config.MaxBodyReadBytes))
+					ctrlBody = string(bCtrl)
+					ctrlStatus = respCtrl.StatusCode
+					respCtrl.Body.Close()
+				}
 			}
 
 			targetURL := buildEndpointURL(actx.BaseURL, ep.Path, map[string]string{p: "127.0.0.1"})
@@ -756,10 +814,14 @@ func (e *Engine) assessCmdi(ctx context.Context, actx *AssessmentContext, client
 				if err == nil {
 					body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 					resp.Body.Close()
-					if strings.Contains(string(body), "FLX_SYNTHETIC_CMDI_ACK") {
+					if strings.Contains(string(body), "FLX_SYNTHETIC_CMDI_ACK") &&
+						!strings.Contains(baseBody, "FLX_SYNTHETIC_CMDI_ACK") &&
+						!strings.Contains(ctrlBody, "FLX_SYNTHETIC_CMDI_ACK") {
 						r.VerificationState = StateVerified
 						r.Severity = report.SeverityCritical
 						r.Confidence = report.ConfidenceHigh
+						r.Endpoint = syntheticURL
+						r.ObservedStatus = resp.StatusCode
 						r.EvidenceSummary = "Synthetic test harness fixture verified command execution emulation"
 						fnd := e.createFinding(actx, r, fmt.Sprintf("OS Command Injection (Synthetic Fixture) on %s", ep.Path),
 							r.EvidenceSummary, report.SeverityCritical, 95)
@@ -773,22 +835,72 @@ func (e *Engine) assessCmdi(ctx context.Context, actx *AssessmentContext, client
 				}
 			}
 
-			// Safe live check: test if benign whoami output is reflected
-			probeURL := buildEndpointURL(actx.BaseURL, ep.Path, map[string]string{p: "whoami"})
-			reqProbe, _ := http.NewRequestWithContext(ctx, "GET", probeURL, nil)
-			if respProbe, err := client.Do(reqProbe); err == nil {
+			// Safe bounded differential command execution probes (never relies on usernames/HTML words like "root" or "lenovo").
+			// Quote/escape concat proves shell evaluation because literal reflection preserves the separator characters.
+			type cmdProofProbe struct {
+				payload   string
+				expected  string
+				regex     *regexp.Regexp
+				technique string
+			}
+			proofProbes := []cmdProofProbe{
+				{payload: "127.0.0.1;echo FLX_CMD_9182''7364", expected: "FLX_CMD_91827364", technique: "posix_shell_concat"},
+				{payload: "127.0.0.1&echo FLX_CMD_9182^7364", expected: "FLX_CMD_91827364", technique: "win_cmd_escape_concat"},
+				{payload: "id", regex: cmdIDOutputPattern, technique: "posix_id_signature"},
+			}
+
+			verifiedCmdi := false
+			for _, pp := range proofProbes {
+				probeURL := buildEndpointURL(actx.BaseURL, ep.Path, map[string]string{p: pp.payload})
+				reqProbe, err := http.NewRequestWithContext(ctx, "GET", probeURL, nil)
+				if err != nil {
+					continue
+				}
+				reqProbe.Header.Set("User-Agent", e.config.UserAgent)
+				respProbe, err := client.Do(reqProbe)
+				if err != nil {
+					continue
+				}
 				bProbe, _ := io.ReadAll(io.LimitReader(respProbe.Body, 4096))
 				respProbe.Body.Close()
-				sProbeLower := strings.ToLower(string(bProbe))
-				if strings.Contains(sProbeLower, "lenovo") || strings.Contains(sProbeLower, "root") || strings.Contains(sProbeLower, "administrator") || strings.Contains(sProbeLower, "nt authority") {
+				probeCT := strings.ToLower(respProbe.Header.Get("Content-Type"))
+				sProbe := string(bProbe)
+
+				// Static JS/CSS bundles can never confirm backend OS command execution
+				if strings.Contains(probeCT, "javascript") || strings.Contains(probeCT, "text/css") {
+					continue
+				}
+
+				matched := ""
+				if pp.expected != "" {
+					if strings.Contains(sProbe, pp.expected) &&
+						!strings.Contains(sProbe, pp.payload) &&
+						!strings.Contains(baseBody, pp.expected) &&
+						!strings.Contains(ctrlBody, pp.expected) {
+						matched = pp.expected
+					}
+				} else if pp.regex != nil {
+					if loc := pp.regex.FindString(sProbe); loc != "" &&
+						!pp.regex.MatchString(baseBody) &&
+						!pp.regex.MatchString(ctrlBody) {
+						matched = loc
+					}
+				}
+
+				if matched != "" {
 					r.VerificationState = StateVerified
 					r.Severity = report.SeverityCritical
 					r.Confidence = report.ConfidenceHigh
 					r.Endpoint = probeURL
-					r.EvidenceSummary = fmt.Sprintf("Confirmed OS command execution output in response via parameter '%s' on %s (whoami probe returned active account)", p, ep.Path)
+					r.ObservedStatus = respProbe.StatusCode
+					r.EvidenceSummary = fmt.Sprintf("Confirmed OS command evaluation via parameter '%s' on %s (%s matched %q, absent from baseline and negative control)", p, ep.Path, pp.technique, matched)
 					r.EvidenceDetails = map[string]string{
-						"parameter": p,
-						"probe":     "whoami",
+						"parameter":       p,
+						"technique":       pp.technique,
+						"matched_output":  matched,
+						"baseline_status": strconv.Itoa(baseStatus),
+						"control_status":  strconv.Itoa(ctrlStatus),
+						"probe_status":    strconv.Itoa(respProbe.StatusCode),
 					}
 					fnd := e.createFinding(actx, r, fmt.Sprintf("Remote OS Command Injection via Parameter %s on %s", p, ep.Path),
 						r.EvidenceSummary, report.SeverityCritical, 95)
@@ -797,19 +909,25 @@ func (e *Engine) assessCmdi(ctx context.Context, actx *AssessmentContext, client
 					cov.Verified++
 					cov.Status = CoverageVerifiedIssueFound
 					results = append(results, r)
-					continue
+					verifiedCmdi = true
+					break
 				}
 			}
+			if verifiedCmdi {
+				continue
+			}
 
-			// Mandatory safety: Live targets strictly reported as CANDIDATE or OBSERVED
+			// Mandatory safety: Unconfirmed live parameter reported as CANDIDATE only (zero critical findings)
 			r.VerificationState = StateCandidate
 			r.Severity = report.SeverityMedium
 			r.Confidence = report.ConfidenceMedium
-			r.EvidenceSummary = fmt.Sprintf("High-risk command parameter pattern detected ('%s'); live execution strictly prohibited by safety policy", p)
+			r.EvidenceSummary = fmt.Sprintf("Command-like parameter '%s' tested against baseline and negative controls without execution proof; retained as CANDIDATE", p)
 			r.EvidenceDetails = map[string]string{
-				"parameter":   p,
-				"safety_rule": "live_os_command_prohibited",
-				"remediation": "Implement strict input allowlisting and avoid shell execution wrappers",
+				"parameter":       p,
+				"safety_rule":     "differential_cmdi_not_confirmed",
+				"baseline_status": strconv.Itoa(baseStatus),
+				"control_status":  strconv.Itoa(ctrlStatus),
+				"remediation":     "Implement strict input allowlisting and avoid shell execution wrappers",
 			}
 			cov.Candidates++
 			results = append(results, r)
@@ -817,7 +935,7 @@ func (e *Engine) assessCmdi(ctx context.Context, actx *AssessmentContext, client
 	}
 
 	cov.TestsRun = len(results)
-	cov.Explanation = fmt.Sprintf("Assessed %d command execution candidate surfaces (zero live destructive payloads)", cov.TestsRun)
+	cov.Explanation = fmt.Sprintf("Assessed %d command execution candidate surfaces (differential baseline verified; zero live destructive payloads)", cov.TestsRun)
 	return results, findings, cov
 }
 
@@ -892,6 +1010,17 @@ func (e *Engine) assessPathTraversal(ctx context.Context, actx *AssessmentContex
 				}
 			}
 
+			// Fetch unparameterized baseline response so static/SPA text cannot trigger false positives
+			var baseBody string
+			if reqBase, err := http.NewRequestWithContext(ctx, "GET", buildEndpointURL(actx.BaseURL, ep.Path, nil), nil); err == nil {
+				reqBase.Header.Set("User-Agent", e.config.UserAgent)
+				if respBase, err := client.Do(reqBase); err == nil {
+					bBase, _ := io.ReadAll(io.LimitReader(respBase.Body, 4096))
+					baseBody = string(bBase)
+					respBase.Body.Close()
+				}
+			}
+
 			// Live safe probe: test benign read-only win.ini or system canary
 			winURL := buildEndpointURL(actx.BaseURL, ep.Path, map[string]string{p: "../../../../Windows/win.ini"})
 			reqWin, _ := http.NewRequestWithContext(ctx, "GET", winURL, nil)
@@ -900,7 +1029,11 @@ func (e *Engine) assessPathTraversal(ctx context.Context, actx *AssessmentContex
 				bWin, _ := io.ReadAll(io.LimitReader(respWin.Body, 4096))
 				respWin.Body.Close()
 				sWin := string(bWin)
-				if strings.Contains(sWin, "[fonts]") || strings.Contains(sWin, "16-bit app support") || strings.Contains(sWin, "[extensions]") || strings.Contains(sWin, "MAPI=1") {
+				if respWin.StatusCode == http.StatusOK &&
+					((strings.Contains(sWin, "[fonts]") && !strings.Contains(baseBody, "[fonts]")) ||
+						(strings.Contains(sWin, "16-bit app support") && !strings.Contains(baseBody, "16-bit app support")) ||
+						(strings.Contains(sWin, "[extensions]") && !strings.Contains(baseBody, "[extensions]")) ||
+						(strings.Contains(sWin, "MAPI=1") && !strings.Contains(baseBody, "MAPI=1"))) {
 					r := Result{
 						ID:                uuid.New().String(),
 						AssessmentID:      actx.AssessmentID,
@@ -1072,12 +1205,36 @@ func (e *Engine) assessSSTI(ctx context.Context, actx *AssessmentContext, client
 	}
 
 	for _, ep := range actx.Endpoints {
+		if isStaticAsset(ep.Path) {
+			continue
+		}
 		params := ep.Parameters
 		if len(params) == 0 {
 			params = []string{"name", "template", "msg", "q"}
 		}
 
+		var baseBody string
+		if reqBase, err := http.NewRequestWithContext(ctx, "GET", buildEndpointURL(actx.BaseURL, ep.Path, nil), nil); err == nil {
+			reqBase.Header.Set("User-Agent", e.config.UserAgent)
+			if respBase, err := client.Do(reqBase); err == nil {
+				bBase, _ := io.ReadAll(io.LimitReader(respBase.Body, e.config.MaxBodyReadBytes))
+				baseBody = string(bBase)
+				respBase.Body.Close()
+			}
+		}
+
 		for _, p := range params {
+			var ctrlBody string
+			ctrlURL := buildEndpointURL(actx.BaseURL, ep.Path, map[string]string{p: "felix_ssti_ctrl_9182"})
+			if reqCtrl, err := http.NewRequestWithContext(ctx, "GET", ctrlURL, nil); err == nil {
+				reqCtrl.Header.Set("User-Agent", e.config.UserAgent)
+				if respCtrl, err := client.Do(reqCtrl); err == nil {
+					bCtrl, _ := io.ReadAll(io.LimitReader(respCtrl.Body, e.config.MaxBodyReadBytes))
+					ctrlBody = string(bCtrl)
+					respCtrl.Body.Close()
+				}
+			}
+
 			for _, ap := range arithmeticProbes {
 				probeURL := buildEndpointURL(actx.BaseURL, ep.Path, map[string]string{p: ap.probe})
 				if actx.IsAllowed != nil && !actx.IsAllowed(probeURL) {
@@ -1111,9 +1268,11 @@ func (e *Engine) assessSSTI(ctx context.Context, actx *AssessmentContext, client
 				}
 
 				// Verification logic:
-				// If calculated product (6383) appears and input expression does NOT appear literally -> VERIFIED!
-				// If expression appears literally -> NOT_VULNERABLE (plain literal reflection).
-				if strings.Contains(bodyStr, ap.expected) && !strings.Contains(bodyStr, ap.probe) {
+				// Calculated product (6383) must appear ONLY when expression is absent from probe output, baseline, and benign control
+				if strings.Contains(bodyStr, ap.expected) &&
+					!strings.Contains(bodyStr, ap.probe) &&
+					!strings.Contains(baseBody, ap.expected) &&
+					!strings.Contains(ctrlBody, ap.expected) {
 					r.VerificationState = StateVerified
 					r.Severity = report.SeverityHigh
 					r.Confidence = report.ConfidenceHigh
@@ -1563,6 +1722,32 @@ func (e *Engine) assessInfoDisclosure(ctx context.Context, actx *AssessmentConte
 	var results []Result
 	var findings []report.Finding
 
+	// Establish SPA soft-404 / wildcard catch-all baseline before checking sensitive configuration paths
+	soft404Status := 0
+	soft404CT := ""
+	soft404Len := ""
+	nonExistentURL := buildEndpointURL(actx.BaseURL, "/__felix_nonexistent_check_9f3a1b__", nil)
+	if actx.IsAllowed == nil || actx.IsAllowed(nonExistentURL) {
+		if req404, err := http.NewRequestWithContext(ctx, "HEAD", nonExistentURL, nil); err == nil {
+			req404.Header.Set("User-Agent", e.config.UserAgent)
+			if resp404, err := client.Do(req404); err == nil {
+				if resp404.StatusCode == http.StatusMethodNotAllowed {
+					resp404.Body.Close()
+					if req404Get, errGet := http.NewRequestWithContext(ctx, "GET", nonExistentURL, nil); errGet == nil {
+						req404Get.Header.Set("User-Agent", e.config.UserAgent)
+						if resp404Get, err2 := client.Do(req404Get); err2 == nil {
+							resp404 = resp404Get
+						}
+					}
+				}
+				soft404Status = resp404.StatusCode
+				soft404CT = strings.ToLower(strings.TrimSpace(resp404.Header.Get("Content-Type")))
+				soft404Len = strings.TrimSpace(resp404.Header.Get("Content-Length"))
+				resp404.Body.Close()
+			}
+		}
+	}
+
 	// 1. Sensitive file endpoints check (.env, .git/config, /server-status)
 	sensitivePaths := []string{"/.env", "/.git/config", "/server-status"}
 	for _, p := range sensitivePaths {
@@ -1620,7 +1805,18 @@ func (e *Engine) assessInfoDisclosure(ctx context.Context, actx *AssessmentConte
 		}
 
 		if resp.StatusCode == 200 {
-			if isSecretFile && !actx.SyntheticFixture {
+			respCT := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Type")))
+			respCL := strings.TrimSpace(resp.Header.Get("Content-Length"))
+			isSPACatchAll := strings.Contains(respCT, "text/html") ||
+				strings.Contains(respCT, "application/xhtml+xml") ||
+				(soft404Status == http.StatusOK && soft404CT != "" && respCT == soft404CT && (soft404Len == "" || soft404Len == respCL))
+
+			if isSecretFile && !actx.SyntheticFixture && isSPACatchAll {
+				r.VerificationState = StateNotVulnerable
+				r.Severity = report.SeverityInfo
+				r.Confidence = report.ConfidenceHigh
+				r.EvidenceSummary = fmt.Sprintf("Path %s returned HTML/SPA catch-all fallback matching nonexistent route (Content-Type: %s); sensitive file not exposed", p, resp.Header.Get("Content-Type"))
+			} else if isSecretFile && !actx.SyntheticFixture {
 				// LIVE TARGET: Metadata-only check; DO NOT download or retain live file content
 				r.VerificationState = StateCandidate
 				r.Severity = report.SeverityHigh
@@ -1690,7 +1886,13 @@ func (e *Engine) assessInfoDisclosure(ctx context.Context, actx *AssessmentConte
 
 	// 2. Unhandled Stack Trace Check
 	for _, ep := range actx.Endpoints {
+		if isStaticAsset(ep.Path) {
+			continue
+		}
 		errURL := buildEndpointURL(actx.BaseURL, ep.Path, map[string]string{"debug_probe": "\x00\xff"})
+		if actx.IsAllowed != nil && !actx.IsAllowed(errURL) {
+			continue
+		}
 		req, err := http.NewRequestWithContext(ctx, "GET", errURL, nil)
 		if err != nil {
 			continue
@@ -2054,15 +2256,42 @@ func (e *Engine) compileSummary(results []Result, coverage map[string]CategoryCo
 }
 
 func buildEndpointURL(base, path string, queryParams map[string]string) string {
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-	base = strings.TrimRight(base, "/")
-	full := base + path
+	trimmedPath := strings.TrimSpace(path)
+	baseURL, err := url.Parse(base)
+	var u *url.URL
 
-	u, err := url.Parse(full)
-	if err != nil {
-		return full
+	if err == nil && baseURL.Scheme != "" && baseURL.Host != "" {
+		switch {
+		case trimmedPath == "" || trimmedPath == ".":
+			u = &url.URL{}
+			*u = *baseURL
+		case trimmedPath == "/":
+			u = &url.URL{}
+			*u = *baseURL
+			if u.Path == "" {
+				u.Path = "/"
+			}
+		case strings.HasPrefix(trimmedPath, "http://") || strings.HasPrefix(trimmedPath, "https://"):
+			if parsedAbs, absErr := url.Parse(trimmedPath); absErr == nil {
+				u = parsedAbs
+			}
+		default:
+			if ref, refErr := url.Parse(trimmedPath); refErr == nil {
+				u = baseURL.ResolveReference(ref)
+			}
+		}
+	}
+
+	if u == nil {
+		if !strings.HasPrefix(trimmedPath, "/") {
+			trimmedPath = "/" + trimmedPath
+		}
+		full := strings.TrimRight(base, "/") + trimmedPath
+		parsed, pErr := url.Parse(full)
+		if pErr != nil {
+			return full
+		}
+		u = parsed
 	}
 
 	if len(queryParams) > 0 {
@@ -2223,8 +2452,15 @@ func isInsideScriptContext(body, probe string) bool {
 }
 
 func isStaticAsset(path string) bool {
-	lower := strings.ToLower(path)
-	for _, ext := range []string{".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff", ".woff2", ".ttf"} {
+	lower := strings.ToLower(strings.TrimSpace(path))
+	if idx := strings.IndexAny(lower, "?#"); idx != -1 {
+		lower = lower[:idx]
+	}
+	for _, ext := range []string{
+		".js", ".mjs", ".cjs", ".map",
+		".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico",
+		".woff", ".woff2", ".ttf", ".eot", ".otf", ".webp", ".avif", ".wasm",
+	} {
 		if strings.HasSuffix(lower, ext) {
 			return true
 		}

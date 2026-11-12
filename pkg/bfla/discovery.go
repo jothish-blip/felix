@@ -94,8 +94,8 @@ func isPublicOrAuthBoilerplate(p string) bool {
 func looksLikePrivilegedPath(p string) bool {
 	low := strings.ToLower(p)
 	privilegedHints := []string{
-		"/admin", "/administrator", "/superadmin", "/internal", "/debug",
-		"/metrics", "/audit", "/system", "/config", "/settings", "/staff",
+		"/admin", "/_admin", "/administrator", "/superadmin", "/internal", "/_internal", "/debug", "/_debug",
+		"/metrics", "/_metrics", "/audit", "/system", "/config", "/_config", "/settings", "/staff",
 		"/manage", "/management", "/roles", "/permissions", "/export",
 		"/impersonate", "/purge", "/logs", "/diagnostics", "/tenants",
 	}

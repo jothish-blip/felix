@@ -245,7 +245,7 @@ func (l *JSLexer) Tokenize() ([]Token, error) {
 			continue
 		}
 
-		// Single-line and multi-line comments
+		// Single-line, multi-line comments, and context-aware RegExp literals (/pattern/flags)
 		if ch == '/' {
 			nextCh := l.peekNext()
 			if nextCh == '/' {
@@ -264,6 +264,17 @@ func (l *JSLexer) Tokenize() ([]Token, error) {
 						break
 					}
 				}
+				continue
+			} else if l.canStartRegex() {
+				reLine, reCol := l.line, l.col
+				regexVal, regexRaw := l.scanRegex()
+				l.tokens = append(l.tokens, Token{
+					Type:  tokRegex,
+					Value: regexVal,
+					Raw:   regexRaw,
+					Line:  reLine,
+					Col:   reCol,
+				})
 				continue
 			}
 		}
@@ -417,10 +428,94 @@ func (l *JSLexer) scanString(quote rune) (string, string, error) {
 			continue
 		}
 
+		if ch == '\n' || ch == '\r' {
+			// Unescaped line terminator cannot appear inside a JS quoted string literal; stop early to prevent EOF consumption.
+			return sb.String(), raw.String(), errors.New("unterminated string")
+		}
+
 		sb.WriteRune(ch)
 	}
 
 	return sb.String(), raw.String(), errors.New("unterminated string")
+}
+
+func (l *JSLexer) canStartRegex() bool {
+	if len(l.tokens) == 0 {
+		return true
+	}
+	prev := l.tokens[len(l.tokens)-1]
+	switch prev.Type {
+	case tokPunctuator:
+		switch prev.Value {
+		case ")", "]", "}", "++", "--":
+			return false
+		default:
+			return true
+		}
+	case tokKeyword:
+		switch prev.Value {
+		case "this", "super":
+			return false
+		default:
+			return true
+		}
+	default:
+		return false
+	}
+}
+
+func (l *JSLexer) scanRegex() (string, string) {
+	l.next() // consume opening '/'
+	var pattern strings.Builder
+	var raw strings.Builder
+	raw.WriteRune('/')
+	inCharClass := false
+
+	for l.pos < l.length {
+		ch := l.peek()
+		if ch == '\n' || ch == '\r' {
+			break
+		}
+		l.next()
+		raw.WriteRune(ch)
+
+		if ch == '\\' {
+			if l.pos < l.length && l.peek() != '\n' && l.peek() != '\r' {
+				esc := l.next()
+				raw.WriteRune(esc)
+				pattern.WriteRune('\\')
+				pattern.WriteRune(esc)
+			}
+			continue
+		}
+		if ch == '[' {
+			inCharClass = true
+			pattern.WriteRune(ch)
+			continue
+		}
+		if ch == ']' && inCharClass {
+			inCharClass = false
+			pattern.WriteRune(ch)
+			continue
+		}
+		if ch == '/' && !inCharClass {
+			break
+		}
+		pattern.WriteRune(ch)
+	}
+
+	// Consume regex flags (e.g. g, i, m, s, u, y, d, v)
+	for l.pos < l.length {
+		f := l.peek()
+		if unicode.IsLetter(f) {
+			l.next()
+			raw.WriteRune(f)
+		} else {
+			break
+		}
+	}
+
+	return pattern.String(), raw.String()
 }
 
 func (l *JSLexer) scanTemplate(startLine, startCol int) {
@@ -929,8 +1024,8 @@ func (p *JSParser) parsePrimary() ASTNode {
 		return expr
 	}
 
-	// Number / other tokens
-	if tok.Type == tokNumber {
+	// Number / RegExp / other tokens
+	if tok.Type == tokNumber || tok.Type == tokRegex {
 		p.next()
 		return nil
 	}

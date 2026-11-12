@@ -158,8 +158,8 @@ func TestCLI_FelixReport_FromAPKScanJSON(t *testing.T) {
 	outSARIF := filepath.Join(tmpDir, "report-from-scan.sarif")
 
 	codeReport := runReport([]string{scanJSON, "--html", outHTML, "--sarif", outSARIF})
-	if codeReport != 0 {
-		t.Fatalf("expected felix report exit code 0, got %d", codeReport)
+	if codeReport != 1 {
+		t.Fatalf("expected felix report exit code 1 (ExitSecurityFail) when APK findings exist, got %d", codeReport)
 	}
 
 	// Verify HTML contains mobile assessment summary

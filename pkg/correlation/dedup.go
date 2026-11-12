@@ -633,6 +633,13 @@ func mergeDuplicateIntoCanonical(canonical *report.Finding, dup report.Finding) 
 
 
 			switch k {
+			case "cleanup_status":
+				if oldV == "CLEANUP_FAILED" || v == "CLEANUP_FAILED" {
+					canonical.EvidenceDetails.Details[k] = "CLEANUP_FAILED"
+				} else if !has {
+					canonical.EvidenceDetails.Details[k] = v
+				}
+				continue
 			// A. Test execution / coverage flags: if either detector tested it, the test was attempted
 			case "unauth_bypass_tested":
 				if oldV == "true" || v == "true" {

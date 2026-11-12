@@ -7859,6 +7859,10 @@ func runAssessmentBusinessLogic(args []string) int {
 			fmt.Fprintf(os.Stderr, "[-] Assessment %s is NOT authorized. Client authorization required before running active testing.\n", asm.Ref)
 			return 1
 		}
+		if valid, reason := asm.Authorization.IsCurrentlyValid(time.Now().UTC()); !valid {
+			fmt.Fprintf(os.Stderr, "[-] Security refusal: authorization invalid: %s\n", reason)
+			return 1
+		}
 		if len(asm.Targets) == 0 {
 			fmt.Fprintf(os.Stderr, "[-] Error: assessment requires at least one target URL in %s\n", asm.Ref)
 			return 1
@@ -7884,11 +7888,15 @@ func runAssessmentBusinessLogic(args []string) int {
 			targetURLs = append(targetURLs, t.TargetURL)
 		}
 		scopeVal := assessment.NewScopeValidator(asm.ScopeMode, targetURLs, asm.ScopeRules, asm.Exclusions)
-		blogicHTTPClient := &http.Client{
-			Transport: crawler.NewRateLimitedTransport(crawler.NewSafeTransport(crawler.SafeTransportOptions{
-				Timeout: cfg.Timeout,
-			}), crawler.RateLimitOptions{}),
+		var blogicTransport http.RoundTripper = crawler.NewRateLimitedTransport(crawler.NewSafeTransport(crawler.SafeTransportOptions{
 			Timeout: cfg.Timeout,
+		}), crawler.RateLimitOptions{})
+		if asm.Authorization.ValidUntil != nil && !asm.Authorization.ValidUntil.IsZero() {
+			blogicTransport = wrapWindowGuard(blogicTransport, context.Background(), asm.Authorization.ValidUntil.UTC())
+		}
+		blogicHTTPClient := &http.Client{
+			Transport: blogicTransport,
+			Timeout:   cfg.Timeout,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= 10 {
 					return fmt.Errorf("stopped after 10 redirects")

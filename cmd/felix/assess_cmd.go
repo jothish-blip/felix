@@ -11,14 +11,18 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
+	"felix/pkg/api"
 	"felix/pkg/apisec"
+	"felix/pkg/assessment"
 	"felix/pkg/auth"
 	"felix/pkg/commercial"
 	"felix/pkg/crawler"
@@ -28,6 +32,7 @@ import (
 	"felix/pkg/oast"
 	"felix/pkg/report"
 	"felix/pkg/secrets"
+	"felix/pkg/validation"
 	"felix/pkg/webvuln"
 	"github.com/google/uuid"
 )
@@ -49,9 +54,13 @@ type AssessOptions struct {
 	ReportFormat     string
 	Modules          []string
 	ExcludeModules   []string
-	SafeMode         bool
-	DryRun           bool
-	ConfigFile       string
+	ExcludePaths     []string
+	ExcludeURLs      []string
+	ScopeManifest    string
+	SafeMode            bool
+	DryRun              bool
+	InsecureSkipVerify  bool
+	ConfigFile          string
 	AllowLoopback    bool
 	AllowPrivate     bool
 	AuthConfirm      bool
@@ -111,8 +120,242 @@ func resolveProfileModules(profile string, customModules []string, excluded []st
 	return active, nil
 }
 
+// buildAssessScopePolicy constructs target scope and path/URL exclusion callbacks and
+// enforces --scope-manifest authorization, testing-window, and scope boundaries.
+func buildAssessScopePolicy(opts *AssessOptions, targetURL string, now time.Time) (func(string) bool, func(string) bool, time.Time, error) {
+	parsedTarget, err := url.Parse(strings.TrimSpace(targetURL))
+	if err != nil || parsedTarget.Hostname() == "" {
+		return nil, nil, time.Time{}, fmt.Errorf("invalid target URL %q", targetURL)
+	}
+	targetHost := parsedTarget.Hostname()
+	var windowEnd time.Time
+
+	var contract validation.AuthorizationContract
+	hasContract := false
+	if opts != nil && strings.TrimSpace(opts.ScopeManifest) != "" {
+		raw, readErr := os.ReadFile(opts.ScopeManifest)
+		if readErr != nil {
+			return nil, nil, time.Time{}, fmt.Errorf("failed reading --scope-manifest %q: %w", opts.ScopeManifest, readErr)
+		}
+		parsedContract, _, parseErr := validation.ParseAuthOrCampaignManifest(raw)
+		if parseErr != nil {
+			return nil, nil, time.Time{}, fmt.Errorf("failed parsing --scope-manifest %q: %w", opts.ScopeManifest, parseErr)
+		}
+		contract = parsedContract
+		hasContract = true
+		if err := validation.ValidateAuthorizationGate(contract, targetURL, now); err != nil {
+			return nil, nil, time.Time{}, err
+		}
+		windowEnd = contract.WindowEnd.UTC()
+		if strings.TrimSpace(opts.AuthorizingParty) == "" {
+			opts.AuthorizingParty = contract.AuthorizingParty
+		}
+		if contract.Confirmed {
+			opts.AuthConfirm = true
+		}
+	}
+
+	var exclusions []assessment.Exclusion
+	if hasContract {
+		for _, p := range contract.ExcludedPaths {
+			if clean := strings.TrimSpace(p); clean != "" {
+				exclusions = append(exclusions, assessment.Exclusion{ExclusionType: "PATH_PREFIX", Pattern: clean, Reason: "scope manifest path exclusion"})
+			}
+		}
+		for _, u := range contract.ExcludedURLs {
+			if clean := strings.TrimSpace(u); clean != "" {
+				exclusions = append(exclusions, assessment.Exclusion{ExclusionType: "EXACT_URL", Pattern: clean, Reason: "scope manifest URL exclusion"})
+			}
+		}
+		for _, h := range contract.ExcludedHosts {
+			if clean := strings.TrimSpace(h); clean != "" {
+				exclusions = append(exclusions, assessment.Exclusion{ExclusionType: "HOSTNAME", Pattern: clean, Reason: "scope manifest host exclusion"})
+			}
+		}
+	}
+	if opts != nil {
+		for _, p := range opts.ExcludePaths {
+			if clean := strings.TrimSpace(p); clean != "" {
+				exclusions = append(exclusions, assessment.Exclusion{ExclusionType: "PATH_PREFIX", Pattern: clean, Reason: "CLI --exclude-paths"})
+			}
+		}
+		for _, u := range opts.ExcludeURLs {
+			if clean := strings.TrimSpace(u); clean != "" {
+				exclusions = append(exclusions, assessment.Exclusion{ExclusionType: "EXACT_URL", Pattern: clean, Reason: "CLI --exclude-urls"})
+			}
+		}
+	}
+
+	scopeValidator := assessment.NewScopeValidator("same-origin", []string{targetURL}, nil, exclusions)
+	normalizeCandidate := func(u string) string {
+		trimmed := strings.TrimSpace(u)
+		if trimmed == "" {
+			return targetURL
+		}
+		if p, perr := url.Parse(trimmed); perr == nil && p.Hostname() == "" {
+			return resolveTargetEndpointURL(targetURL, trimmed)
+		}
+		return trimmed
+	}
+
+	scopeExcluded := func(u string) bool {
+		if len(exclusions) == 0 {
+			return false
+		}
+		excl, _ := scopeValidator.IsExcluded(normalizeCandidate(u))
+		return excl
+	}
+
+	scopeAllowed := func(u string) bool {
+		cand := normalizeCandidate(u)
+		if scopeExcluded(cand) {
+			return false
+		}
+		p, err := url.Parse(cand)
+		if err != nil {
+			return false
+		}
+		currHost := p.Hostname()
+		if currHost == "" {
+			return false
+		}
+		if opts == nil || strings.TrimSpace(opts.ScopePattern) == "" {
+			return scopeValidator.IsAllowed(cand)
+		}
+		if !strings.EqualFold(p.Scheme, parsedTarget.Scheme) {
+			return false
+		}
+		matchedPattern := false
+		if strings.HasPrefix(opts.ScopePattern, "*.") {
+			base := strings.TrimPrefix(opts.ScopePattern, "*.")
+			matchedPattern = strings.HasSuffix(strings.ToLower(currHost), "."+strings.ToLower(base)) || strings.EqualFold(currHost, targetHost)
+		} else {
+			matchedPattern = strings.EqualFold(currHost, opts.ScopePattern) || strings.EqualFold(currHost, targetHost)
+		}
+		if !matchedPattern {
+			return false
+		}
+		if hasContract && len(contract.AuthorizedTargets) > 0 {
+			for _, authT := range contract.AuthorizedTargets {
+				if authP, perr := url.Parse(authT); perr == nil && strings.EqualFold(authP.Hostname(), currHost) {
+					return true
+				}
+			}
+			return false
+		}
+		return true
+	}
+
+	return scopeAllowed, scopeExcluded, windowEnd, nil
+}
+
+// windowGuardTransport enforces cancellation and authorization testing window expiration
+// immediately before every outbound HTTP round-trip.
+type windowGuardTransport struct {
+	inner     http.RoundTripper
+	windowEnd time.Time
+	ctx       context.Context
+}
+
+func (w *windowGuardTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if w.ctx != nil && w.ctx.Err() != nil {
+		return nil, w.ctx.Err()
+	}
+	if !w.windowEnd.IsZero() && !time.Now().UTC().Before(w.windowEnd) {
+		return nil, fmt.Errorf("authorization testing window expired at %s; halting outbound request", w.windowEnd.UTC().Format(time.RFC3339))
+	}
+	return w.inner.RoundTrip(req)
+}
+
+func wrapWindowGuard(inner http.RoundTripper, ctx context.Context, windowEnd time.Time) http.RoundTripper {
+	if existing, ok := inner.(*windowGuardTransport); ok {
+		return existing
+	}
+	return &windowGuardTransport{inner: inner, ctx: ctx, windowEnd: windowEnd}
+}
+
+// buildSafeRedirectPolicy constructs an http.Client CheckRedirect callback that enforces
+// redirect depth limits, HTTP(S) schemes, no embedded userinfo, scope boundaries, SSRF IP checks,
+// and credential header stripping across origins or TLS downgrades.
+func buildSafeRedirectPolicy(originURL string, scopeAllowed, scopeExcluded func(string) bool, allowLoop, allowPriv bool) func(*http.Request, []*http.Request) error {
+	originParsed, _ := url.Parse(originURL)
+	return func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 redirects")
+		}
+		scheme := strings.ToLower(req.URL.Scheme)
+		if scheme != "http" && scheme != "https" {
+			return fmt.Errorf("redirect to disallowed scheme %q blocked", req.URL.Scheme)
+		}
+		if req.URL.User != nil {
+			return fmt.Errorf("redirect containing embedded userinfo blocked")
+		}
+		if scopeExcluded != nil && scopeExcluded(req.URL.String()) {
+			return fmt.Errorf("redirect to excluded destination %s blocked by policy", req.URL.String())
+		}
+		if scopeAllowed != nil && !scopeAllowed(req.URL.String()) {
+			return fmt.Errorf("redirect to out-of-scope destination %s blocked by policy", req.URL.String())
+		}
+		ips, _ := net.LookupIP(req.URL.Hostname())
+		for _, rip := range ips {
+			if prohibited, reason := crawler.ProhibitedIPReason(rip, allowLoop, allowPriv); prohibited {
+				return fmt.Errorf("redirect to prohibited destination %s (%s: %s) blocked", req.URL.String(), rip.String(), reason)
+			}
+		}
+		if originParsed != nil && (!auth.IsSameOrigin(req.URL, originParsed) || (len(via) > 0 && strings.EqualFold(via[len(via)-1].URL.Scheme, "https") && scheme == "http")) {
+			req.Header.Del("Authorization")
+			req.Header.Del("Proxy-Authorization")
+			req.Header.Del("Cookie")
+		}
+		return nil
+	}
+}
+
+// writePrivateFile atomically writes sensitive assessment deliverables with 0600 permissions.
+func writePrivateFile(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			return err
+		}
+	}
+	tmp, err := os.CreateTemp(dir, ".felix-out-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
+}
+
 // AssessmentRuntimeContext coordinates state, discovery inventory, and coverage tracking across modules.
 type AssessmentRuntimeContext struct {
+	Ctx                 context.Context
+	WindowEnd           time.Time
 	TargetURL           string
 	Host                string
 	StatusCode          int
@@ -122,6 +365,7 @@ type AssessmentRuntimeContext struct {
 	Client              *http.Client
 	Opts                AssessOptions
 	ScopeAllowed        func(string) bool
+	ScopeExcluded       func(string) bool
 	Tracker             *intelligence.CoverageTracker
 	TargetAssetID       string
 	DiscoveredEndpoints []webvuln.TargetEndpoint
@@ -137,14 +381,320 @@ type AssessmentRuntimeContext struct {
 	AuthzReport             *report.AuthorizationReportSummary
 	FixtureVerification     *report.FixtureVerificationSummary
 	AuthzDispatchedRequests int32
+	OpenAPIChecked          bool
+	OpenAPISpecURL          string
+	OpenAPISpecContentType  string
+	OpenAPISpecBody         []byte
+	OpenAPISpecMeta         *api.SpecMetadata
+	OpenAPISpecOps          []api.DocumentedOperation
+	SpecParseWarnings       []string
+}
+
+func (rt *AssessmentRuntimeContext) ctx() context.Context {
+	if rt != nil && rt.Ctx != nil {
+		return rt.Ctx
+	}
+	return context.Background()
 }
 
 // ClientFor returns an http.Client pre-configured for the specified identity context.
 func (rt *AssessmentRuntimeContext) ClientFor(id auth.IdentityContext) *http.Client {
 	if rt.IdentityMgr != nil {
-		return rt.IdentityMgr.ClientFor(id)
+		c := rt.IdentityMgr.ClientFor(id)
+		if c != nil && c.Transport != nil && (rt.Ctx != nil || !rt.WindowEnd.IsZero()) {
+			c.Transport = wrapWindowGuard(c.Transport, rt.Ctx, rt.WindowEnd)
+		}
+		return c
 	}
 	return rt.Client
+}
+
+// resolveTargetEndpointURL resolves a path against targetURL while preserving non-root base paths
+// for relative routes and preventing prefix duplication on root-relative API paths.
+func resolveTargetEndpointURL(targetURL, rawPath string) string {
+	trimmedPath := strings.TrimSpace(rawPath)
+	if strings.HasPrefix(trimmedPath, "http://") || strings.HasPrefix(trimmedPath, "https://") {
+		return trimmedPath
+	}
+	baseU, err := url.Parse(strings.TrimSpace(targetURL))
+	if err != nil || baseU == nil || baseU.Scheme == "" || baseU.Host == "" {
+		if trimmedPath == "" {
+			return strings.TrimRight(targetURL, "/")
+		}
+		if !strings.HasPrefix(trimmedPath, "/") {
+			trimmedPath = "/" + trimmedPath
+		}
+		return strings.TrimRight(targetURL, "/") + trimmedPath
+	}
+	if trimmedPath == "" {
+		return baseU.String()
+	}
+	if trimmedPath == "/" {
+		if baseU.Path != "" && baseU.Path != "/" {
+			return baseU.String()
+		}
+		origin := url.URL{Scheme: baseU.Scheme, Host: baseU.Host, Path: "/"}
+		return origin.String()
+	}
+	relU, err := url.Parse(trimmedPath)
+	if err != nil {
+		return strings.TrimRight(targetURL, "/") + trimmedPath
+	}
+	if strings.HasPrefix(trimmedPath, "/") {
+		origin := url.URL{Scheme: baseU.Scheme, Host: baseU.Host}
+		return origin.ResolveReference(relU).String()
+	}
+	baseCopy := *baseU
+	if !strings.HasSuffix(baseCopy.Path, "/") {
+		baseCopy.Path += "/"
+	}
+	return baseCopy.ResolveReference(relU).String()
+}
+
+// buildBaseAndOriginCandidateURLs generates candidate URLs resolved both relative to targetURL's base directory
+// (when targetURL has a non-root prefix) and against the scheme://host origin root, deduplicated in priority order.
+func buildBaseAndOriginCandidateURLs(targetURL string, relPaths ...string) []string {
+	var candidates []string
+	seen := make(map[string]bool)
+	add := func(u string) {
+		if u == "" || seen[u] {
+			return
+		}
+		seen[u] = true
+		candidates = append(candidates, u)
+	}
+	baseU, err := url.Parse(strings.TrimSpace(targetURL))
+	if err != nil || baseU == nil || baseU.Scheme == "" || baseU.Host == "" {
+		baseTrimmed := strings.TrimRight(targetURL, "/")
+		for _, rp := range relPaths {
+			if !strings.HasPrefix(rp, "/") {
+				rp = "/" + rp
+			}
+			add(baseTrimmed + rp)
+		}
+		return candidates
+	}
+	origin := url.URL{Scheme: baseU.Scheme, Host: baseU.Host}
+	hasSubPath := baseU.Path != "" && baseU.Path != "/"
+	baseDir := *baseU
+	if !strings.HasSuffix(baseDir.Path, "/") {
+		baseDir.Path += "/"
+	}
+	baseDir.RawQuery = ""
+	baseDir.Fragment = ""
+
+	for _, rp := range relPaths {
+		rpTrimmed := strings.TrimSpace(rp)
+		if rpTrimmed == "" {
+			continue
+		}
+		if hasSubPath {
+			subRel := strings.TrimLeft(rpTrimmed, "/")
+			if uRel, uErr := url.Parse(subRel); uErr == nil {
+				add(baseDir.ResolveReference(uRel).String())
+			}
+		}
+		rootRel := rpTrimmed
+		if !strings.HasPrefix(rootRel, "/") {
+			rootRel = "/" + rootRel
+		}
+		if uRel, uErr := url.Parse(rootRel); uErr == nil {
+			add(origin.ResolveReference(uRel).String())
+		}
+	}
+	return candidates
+}
+
+func looksLikeHTMLSpecFallback(ct string, body []byte) bool {
+	ctLow := strings.ToLower(ct)
+	if strings.Contains(ctLow, "text/html") || strings.Contains(ctLow, "application/xhtml") {
+		return true
+	}
+	headLen := len(body)
+	if headLen > 512 {
+		headLen = 512
+	}
+	head := strings.ToLower(strings.TrimSpace(string(body[:headLen])))
+	return strings.HasPrefix(head, "<!doctype html") || strings.HasPrefix(head, "<html")
+}
+
+func looksLikeOpenAPISpec(ct string, body []byte) bool {
+	if len(body) == 0 || looksLikeHTMLSpecFallback(ct, body) {
+		return false
+	}
+	headLen := len(body)
+	if headLen > 512 {
+		headLen = 512
+	}
+	head := strings.ToLower(string(body[:headLen]))
+	return strings.Contains(head, `"openapi"`) ||
+		strings.Contains(head, `"swagger"`) ||
+		strings.Contains(head, "\nopenapi:") ||
+		strings.HasPrefix(strings.TrimSpace(head), "openapi:") ||
+		strings.Contains(head, "\nswagger:") ||
+		strings.HasPrefix(strings.TrimSpace(head), "swagger:")
+}
+
+// ensureOpenAPISpecIngested discovers, fetches (once), parses, and merges OpenAPI 3.x / Swagger 2.0
+// operations into rt.DiscoveredEndpoints, rt.DiscoveredAPIs, rt.DiscoveredResources, and rt.Tracker.
+func ensureOpenAPISpecIngested(rt *AssessmentRuntimeContext) {
+	if rt == nil || rt.OpenAPIChecked {
+		return
+	}
+	rt.OpenAPIChecked = true
+
+	var specURL, specCT string
+	var specBody []byte
+
+	// 1. Check already-fetched crawler assets first (works even in SafeMode)
+	if rt.MultiCrawlResult != nil {
+		for _, cr := range rt.MultiCrawlResult.PerIdentity {
+			if cr == nil {
+				continue
+			}
+			for _, a := range cr.AssetsForInventory {
+				if looksLikeOpenAPISpec(a.ContentType, a.Content) {
+					specURL = a.URL
+					specCT = a.ContentType
+					specBody = a.Content
+					break
+				}
+			}
+			if len(specBody) > 0 {
+				break
+			}
+		}
+	}
+
+	// 2. Otherwise probe well-known OpenAPI/Swagger endpoints relative to base and origin root
+	if len(specBody) == 0 && !rt.Opts.SafeMode {
+		specClient := rt.Client
+		if rt.IdentityMgr != nil {
+			for _, pref := range []auth.IdentityContext{auth.IdentityAdmin, auth.IdentityUserA, auth.IdentityUserB, auth.IdentityUnauthenticated} {
+				if rt.IdentityMgr.HasIdentity(pref) {
+					if c := rt.IdentityMgr.ClientFor(pref); c != nil {
+						specClient = c
+						break
+					}
+				}
+			}
+		}
+		if specClient != nil {
+			specPaths := []string{
+				"/openapi.json", "/swagger.json", "/api/openapi.json", "/api/swagger.json",
+				"/v3/api-docs", "/v2/api-docs", "/openapi.yaml", "/swagger.yaml", "/api-docs",
+			}
+			for _, candURL := range buildBaseAndOriginCandidateURLs(rt.TargetURL, specPaths...) {
+				if rt.ScopeAllowed != nil && !rt.ScopeAllowed(candURL) {
+					continue
+				}
+				ctx, cancel := context.WithTimeout(rt.ctx(), rt.Opts.Timeout)
+				req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, candURL, nil)
+				if reqErr != nil {
+					cancel()
+					continue
+				}
+				req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; Felix-Auditor/1.0)")
+				req.Header.Set("Accept", "application/json,application/yaml,text/yaml,*/*")
+				resp, doErr := specClient.Do(req)
+				if doErr != nil {
+					cancel()
+					continue
+				}
+				body, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
+				ct := resp.Header.Get("Content-Type")
+				code := resp.StatusCode
+				resp.Body.Close()
+				cancel()
+				if code >= 200 && code < 300 && looksLikeOpenAPISpec(ct, body) {
+					specURL = candURL
+					specCT = ct
+					specBody = body
+					break
+				}
+			}
+		}
+	}
+
+	if len(specBody) == 0 {
+		return
+	}
+
+	rt.OpenAPISpecURL = specURL
+	rt.OpenAPISpecContentType = specCT
+	rt.OpenAPISpecBody = specBody
+
+	parser := api.NewSpecParser()
+	ops, meta, parseErr := parser.ParseSpecificationData(specBody, specURL)
+	if meta != nil {
+		rt.OpenAPISpecMeta = meta
+		rt.SpecParseWarnings = append(rt.SpecParseWarnings, meta.Warnings...)
+	}
+	if parseErr != nil {
+		rt.SpecParseWarnings = append(rt.SpecParseWarnings, parseErr.Error())
+	}
+	if len(ops) == 0 {
+		return
+	}
+	rt.OpenAPISpecOps = ops
+
+	seenEP := make(map[string]bool, len(rt.DiscoveredEndpoints)+len(ops))
+	for _, ep := range rt.DiscoveredEndpoints {
+		seenEP[strings.ToUpper(ep.Method)+" "+ep.Path] = true
+	}
+	seenAPI := make(map[string]bool, len(rt.DiscoveredAPIs)+len(ops))
+	for _, ap := range rt.DiscoveredAPIs {
+		seenAPI[strings.ToUpper(ap.Method)+" "+ap.Path] = true
+	}
+	seenRes := make(map[string]bool, len(rt.DiscoveredResources)+len(ops))
+	for _, dr := range rt.DiscoveredResources {
+		seenRes[strings.ToUpper(dr.HTTPMethod)+" "+dr.Path] = true
+	}
+
+	for _, op := range ops {
+		epMethod := strings.ToUpper(strings.TrimSpace(op.Method))
+		if epMethod == "" {
+			epMethod = "GET"
+		}
+		epPath := op.Path
+		if epPath == "" {
+			continue
+		}
+		fullEPURL := resolveTargetEndpointURL(rt.TargetURL, epPath)
+		inScope := rt.ScopeAllowed == nil || rt.ScopeAllowed(fullEPURL)
+		if rt.Tracker != nil {
+			rt.Tracker.RecordDiscoveredAsset("API_ROUTE", epMethod+" "+epPath, "OPENAPI_SPEC", inScope)
+		}
+		if isDestr, _ := crawler.IsDestructiveURL(epPath, nil); isDestr {
+			continue
+		}
+		key := epMethod + " " + epPath
+		if !seenEP[key] {
+			seenEP[key] = true
+			rt.DiscoveredEndpoints = append(rt.DiscoveredEndpoints, webvuln.TargetEndpoint{
+				Method:     epMethod,
+				Path:       epPath,
+				Parameters: op.Parameters,
+				Source:     "openapi_spec",
+			})
+		}
+		if !seenAPI[key] {
+			seenAPI[key] = true
+			analyzed := apisec.AnalyzeEndpoint(epMethod, epPath, "openapi_spec")
+			rt.DiscoveredAPIs = append(rt.DiscoveredAPIs, analyzed)
+		}
+		if !seenRes[key] {
+			seenRes[key] = true
+			rt.DiscoveredResources = append(rt.DiscoveredResources, crawler.DiscoveredResource{
+				URL:             fullEPURL,
+				Path:            epPath,
+				HTTPMethod:      epMethod,
+				QueryParams:     op.Parameters,
+				DiscoveryMethod: "OPENAPI_SPEC",
+				Classification:  crawler.ClassificationConfirmedEndpoint,
+			})
+		}
+	}
 }
 
 // runAssess executes the unified "felix assess" command.
@@ -309,10 +859,49 @@ func runAssess(args []string) int {
 				}
 				i++
 			}
+		case arg == "--exclude-paths":
+			if i+1 < len(args) {
+				for _, p := range strings.Split(args[i+1], ",") {
+					if trimmed := strings.TrimSpace(p); trimmed != "" {
+						opts.ExcludePaths = append(opts.ExcludePaths, trimmed)
+					}
+				}
+				i++
+			}
+		case strings.HasPrefix(arg, "--exclude-paths="):
+			for _, p := range strings.Split(strings.TrimPrefix(arg, "--exclude-paths="), ",") {
+				if trimmed := strings.TrimSpace(p); trimmed != "" {
+					opts.ExcludePaths = append(opts.ExcludePaths, trimmed)
+				}
+			}
+		case arg == "--exclude-urls":
+			if i+1 < len(args) {
+				for _, u := range strings.Split(args[i+1], ",") {
+					if trimmed := strings.TrimSpace(u); trimmed != "" {
+						opts.ExcludeURLs = append(opts.ExcludeURLs, trimmed)
+					}
+				}
+				i++
+			}
+		case strings.HasPrefix(arg, "--exclude-urls="):
+			for _, u := range strings.Split(strings.TrimPrefix(arg, "--exclude-urls="), ",") {
+				if trimmed := strings.TrimSpace(u); trimmed != "" {
+					opts.ExcludeURLs = append(opts.ExcludeURLs, trimmed)
+				}
+			}
+		case arg == "--scope-manifest":
+			if i+1 < len(args) {
+				opts.ScopeManifest = args[i+1]
+				i++
+			}
+		case strings.HasPrefix(arg, "--scope-manifest="):
+			opts.ScopeManifest = strings.TrimPrefix(arg, "--scope-manifest=")
 		case arg == "--safe":
 			opts.SafeMode = true
 		case arg == "--dry-run":
 			opts.DryRun = true
+		case arg == "--insecure":
+			opts.InsecureSkipVerify = true
 		case arg == "--config":
 			if i+1 < len(args) {
 				opts.ConfigFile = args[i+1]
@@ -456,16 +1045,8 @@ func runAssess(args []string) int {
 		loadRolesConfigFile(&opts)
 	}
 
-	// 2. Authorisation Certification Enforcement
-	if !opts.DryRun && !opts.AuthConfirm && opts.AuthorizingParty == "" {
-		fmt.Fprintf(os.Stderr, "[-] Security refusal: Active security assessment requires explicit authorization certification.\n")
-		fmt.Fprintf(os.Stderr, "    Unified assessment execution never assumes authorization.\n")
-		fmt.Fprintf(os.Stderr, "    Specify --authorizing-party <name> or --auth-confirm to certify explicit authorization to test the target.\n\n")
-		return 2
-	}
-
-	// 3. URL Normalization & SSRF/Scope Protection
-	targetURL := opts.TargetURL
+	// Normalize target URL early so authorization manifest & scope policies validate against canonical origin
+	targetURL := strings.TrimSpace(opts.TargetURL)
 	if !strings.HasPrefix(targetURL, "http://") && !strings.HasPrefix(targetURL, "https://") {
 		if strings.HasPrefix(targetURL, "localhost") || strings.HasPrefix(targetURL, "127.0.0.1") {
 			targetURL = "http://" + targetURL
@@ -480,6 +1061,21 @@ func runAssess(args []string) int {
 		return 2
 	}
 
+	scopeAllowed, scopeExcluded, windowEnd, scopeErr := buildAssessScopePolicy(&opts, targetURL, time.Now().UTC())
+	if scopeErr != nil {
+		fmt.Fprintf(os.Stderr, "[-] Security refusal: %v\n", scopeErr)
+		return 2
+	}
+
+	// 2. Authorisation Certification Enforcement
+	if !opts.DryRun && !opts.AuthConfirm && opts.AuthorizingParty == "" {
+		fmt.Fprintf(os.Stderr, "[-] Security refusal: Active security assessment requires explicit authorization certification.\n")
+		fmt.Fprintf(os.Stderr, "    Unified assessment execution never assumes authorization.\n")
+		fmt.Fprintf(os.Stderr, "    Specify --authorizing-party <name>, --auth-confirm, or --scope-manifest <file> to certify explicit authorization to test the target.\n\n")
+		return 2
+	}
+
+	// 3. SSRF/Private-Range Protection
 	host := parsed.Hostname()
 	ips, _ := net.LookupIP(host)
 	allowLoop := opts.AllowLoopback || os.Getenv("FELIX_ALLOW_LOOPBACK") == "true"
@@ -493,30 +1089,6 @@ func runAssess(args []string) int {
 				return 2
 			}
 		}
-	}
-
-	// Scope validator helper: ensures discovered endpoints, subdomains, and redirects do not escape target scope
-	scopeAllowed := func(u string) bool {
-		p, err := url.Parse(u)
-		if err != nil {
-			return false
-		}
-		currHost := p.Hostname()
-		if currHost == "" {
-			// Relative URLs or paths on the target origin are in-scope
-			return true
-		}
-		if strings.EqualFold(currHost, host) {
-			return true
-		}
-		if opts.ScopePattern != "" {
-			if strings.HasPrefix(opts.ScopePattern, "*.") {
-				base := strings.TrimPrefix(opts.ScopePattern, "*.")
-				return strings.HasSuffix(strings.ToLower(currHost), "."+strings.ToLower(base))
-			}
-			return strings.EqualFold(currHost, opts.ScopePattern)
-		}
-		return false
 	}
 
 	// 4. Entitlement & Licensing Check
@@ -600,9 +1172,17 @@ func runAssess(args []string) int {
 	}
 	fmt.Println("===========================================================")
 
-	if err := os.MkdirAll(opts.OutputDir, 0755); err != nil {
+	if err := os.MkdirAll(opts.OutputDir, 0700); err != nil {
 		fmt.Fprintf(os.Stderr, "[-] Error creating output directory %q: %v\n", opts.OutputDir, err)
 		return 2
+	}
+
+	baseCtx, stopSig := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSig()
+	if !windowEnd.IsZero() {
+		var cancelWin context.CancelFunc
+		baseCtx, cancelWin = context.WithDeadline(baseCtx, windowEnd)
+		defer cancelWin()
 	}
 
 	startTime := time.Now()
@@ -616,12 +1196,13 @@ func runAssess(args []string) int {
 	}
 
 	idMgr, err := auth.NewIdentityManager(auth.IdentityManagerOptions{
-		TargetURL:       targetURL,
-		ScopeAllowed:    scopeAllowed,
-		AllowLoopback:   allowLoop,
-		AllowPrivate:    allowPriv,
-		Timeout:         opts.Timeout,
-		DefaultIdentity: defaultID,
+		TargetURL:          targetURL,
+		ScopeAllowed:       scopeAllowed,
+		AllowLoopback:      allowLoop,
+		AllowPrivate:       allowPriv,
+		InsecureSkipVerify: opts.InsecureSkipVerify,
+		Timeout:            opts.Timeout,
+		DefaultIdentity:    defaultID,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[-] Error initializing identity manager: %v\n", err)
@@ -661,11 +1242,12 @@ func runAssess(args []string) int {
 	}
 
 	httpClient := idMgr.BuildClient(defaultID)
+	httpClient.Transport = wrapWindowGuard(httpClient.Transport, baseCtx, windowEnd)
 
 	// Live Identity Verification: Validate credentials against target before active assessment
 	var authVerification *auth.AuthVerificationResult
 	if defaultID == auth.IdentityUserA {
-		verRes, err := idMgr.VerifyIdentity(context.Background(), auth.IdentityUserA, targetURL)
+		verRes, err := idMgr.VerifyIdentity(baseCtx, auth.IdentityUserA, targetURL)
 		if err == nil {
 			authVerification = verRes
 			if !verRes.Verified {
@@ -681,7 +1263,7 @@ func runAssess(args []string) int {
 	targetAssetID := coverageTracker.RecordDiscoveredAsset("HOST", targetURL, "TARGET_SEED", true)
 
 	// Initial Probe (automatically carries User A credentials if configured, or unauthenticated if not)
-	req, _ := http.NewRequestWithContext(context.Background(), "GET", targetURL, nil)
+	req, _ := http.NewRequestWithContext(baseCtx, "GET", targetURL, nil)
 	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; Felix-Auditor/1.0)")
 	for _, h := range opts.CustomHeaders {
 		parts := strings.SplitN(h, ":", 2)
@@ -696,17 +1278,19 @@ func runAssess(args []string) int {
 	statusCode := 0
 
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[!] Warning: initial request to target failed: %v\n", err)
-	} else {
-		defer resp.Body.Close()
-		statusCode = resp.StatusCode
-		respHeader = resp.Header
-		bodyBytes, _ = io.ReadAll(io.LimitReader(resp.Body, 5*1024*1024))
+		fmt.Fprintf(os.Stderr, "[-] Target %s unreachable or security/TLS policy check failed: %v\n", targetURL, err)
+		return 2
 	}
+	defer resp.Body.Close()
+	statusCode = resp.StatusCode
+	respHeader = resp.Header
+	bodyBytes, _ = io.ReadAll(io.LimitReader(resp.Body, 5*1024*1024))
 
 	htmlContent := string(bodyBytes)
 
 	rtCtx := &AssessmentRuntimeContext{
+		Ctx:              baseCtx,
+		WindowEnd:        windowEnd,
 		TargetURL:        targetURL,
 		Host:             host,
 		StatusCode:       statusCode,
@@ -716,6 +1300,7 @@ func runAssess(args []string) int {
 		Client:           httpClient,
 		Opts:             opts,
 		ScopeAllowed:     scopeAllowed,
+		ScopeExcluded:    scopeExcluded,
 		Tracker:          coverageTracker,
 		TargetAssetID:    targetAssetID,
 		IdentityMgr:      idMgr,
@@ -732,10 +1317,18 @@ func runAssess(args []string) int {
 
 	// Execute modules in sequence
 	for _, m := range runnableModules {
+		if baseCtx.Err() != nil {
+			fmt.Fprintf(os.Stderr, "[-] Assessment halted before module [%s]: %v\n", m, baseCtx.Err())
+			return 2
+		}
 		fmt.Printf("[*] Executing module: [%s] ... ", m)
 		mFindings := executeModule(m, rtCtx)
+		if baseCtx.Err() != nil {
+			fmt.Fprintf(os.Stderr, "\n[-] Assessment halted during module [%s]: %v\n", m, baseCtx.Err())
+			return 2
+		}
 		for _, f := range mFindings {
-			inf, err := liveSession.ProcessFinding(context.Background(), f, httpClient)
+			inf, err := liveSession.ProcessFinding(baseCtx, f, httpClient)
 			if err == nil && inf != nil {
 				rawFindings = append(rawFindings, inf.Finding)
 			} else {
@@ -759,7 +1352,9 @@ func runAssess(args []string) int {
 	// 7. Build Consolidated Report & Execute Phase 5 Attack Path Correlation + Validation
 	rep := report.BuildReport(targetURL, rawFindings)
 	liveSession.EnrichReport(&rep)
-	phase5Out := runPhase5AttackPathPipeline(context.Background(), rtCtx, rawFindings, &rep)
+	rep.Findings = report.Prioritize(report.DeduplicateFindings(rep.Findings))
+	phase5Out := runPhase5AttackPathPipeline(baseCtx, rtCtx, rep.Findings, &rep)
+	report.RecalculateReportRisk(&rep)
 	attackChains := phase5Out.ValidatedChains
 	investigatedFindings = sanitizeInvestigatedSlice(investigatedFindings)
 
@@ -808,7 +1403,7 @@ func runAssess(args []string) int {
 	if format == "all" || strings.Contains(format, "html") {
 		htmlPath := filepath.Join(opts.OutputDir, "assessment_report.html")
 		if htmlContent, err := report.GenerateHTML(rep); err == nil {
-			if err := os.WriteFile(htmlPath, []byte(htmlContent), 0644); err == nil {
+			if err := writePrivateFile(htmlPath, []byte(htmlContent)); err == nil {
 				generatedReports = append(generatedReports, htmlPath)
 			}
 		}
@@ -817,7 +1412,7 @@ func runAssess(args []string) int {
 	if format == "all" || strings.Contains(format, "json") {
 		jsonPath := filepath.Join(opts.OutputDir, "assessment_report.json")
 		if jsonBytes, err := report.GenerateJSON(rep); err == nil {
-			if err := os.WriteFile(jsonPath, jsonBytes, 0644); err == nil {
+			if err := writePrivateFile(jsonPath, jsonBytes); err == nil {
 				generatedReports = append(generatedReports, jsonPath)
 			}
 		}
@@ -826,7 +1421,7 @@ func runAssess(args []string) int {
 	if format == "all" || strings.Contains(format, "sarif") {
 		sarifPath := filepath.Join(opts.OutputDir, "assessment_report.sarif")
 		if sarifBytes, err := report.GenerateSARIF(rep); err == nil {
-			if err := os.WriteFile(sarifPath, sarifBytes, 0644); err == nil {
+			if err := writePrivateFile(sarifPath, sarifBytes); err == nil {
 				generatedReports = append(generatedReports, sarifPath)
 			}
 		}
@@ -835,7 +1430,7 @@ func runAssess(args []string) int {
 	// Standalone machine-readable coverage matrix
 	covPath := filepath.Join(opts.OutputDir, "coverage_matrix.json")
 	if covBytes, err := json.MarshalIndent(coverageMatrix, "", "  "); err == nil {
-		if err := os.WriteFile(covPath, covBytes, 0644); err == nil {
+		if err := writePrivateFile(covPath, covBytes); err == nil {
 			generatedReports = append(generatedReports, covPath)
 		}
 	}
@@ -850,7 +1445,7 @@ func runAssess(args []string) int {
 			"resources_count":   len(rtCtx.DiscoveredResources),
 		}
 		if discBytes, err := json.MarshalIndent(discPayload, "", "  "); err == nil {
-			if err := os.WriteFile(discPath, discBytes, 0644); err == nil {
+			if err := writePrivateFile(discPath, discBytes); err == nil {
 				generatedReports = append(generatedReports, discPath)
 			}
 		}
@@ -860,7 +1455,7 @@ func runAssess(args []string) int {
 	if rep.AuthorizationReport != nil {
 		authzPath := filepath.Join(opts.OutputDir, "authorization_summary.json")
 		if authzBytes, err := json.MarshalIndent(rep.AuthorizationReport, "", "  "); err == nil {
-			if err := os.WriteFile(authzPath, authzBytes, 0644); err == nil {
+			if err := writePrivateFile(authzPath, authzBytes); err == nil {
 				generatedReports = append(generatedReports, authzPath)
 			}
 		}
@@ -868,7 +1463,7 @@ func runAssess(args []string) int {
 
 	rdmPath := filepath.Join(opts.OutputDir, "remediation_roadmap.json")
 	if rdmBytes, err := json.MarshalIndent(remediationRoadmap, "", "  "); err == nil {
-		if err := os.WriteFile(rdmPath, rdmBytes, 0644); err == nil {
+		if err := writePrivateFile(rdmPath, rdmBytes); err == nil {
 			generatedReports = append(generatedReports, rdmPath)
 		}
 	}
@@ -876,7 +1471,7 @@ func runAssess(args []string) int {
 	// Standalone machine-readable attack chains
 	chainPath := filepath.Join(opts.OutputDir, "attack_chains.json")
 	if chainBytes, err := json.MarshalIndent(attackChains, "", "  "); err == nil {
-		if err := os.WriteFile(chainPath, chainBytes, 0644); err == nil {
+		if err := writePrivateFile(chainPath, chainBytes); err == nil {
 			generatedReports = append(generatedReports, chainPath)
 		}
 	}
@@ -884,7 +1479,7 @@ func runAssess(args []string) int {
 	// Standalone machine-readable investigated findings with evidence bundles
 	invPath := filepath.Join(opts.OutputDir, "investigated_findings.json")
 	if invBytes, err := json.MarshalIndent(investigatedFindings, "", "  "); err == nil {
-		if err := os.WriteFile(invPath, invBytes, 0644); err == nil {
+		if err := writePrivateFile(invPath, invBytes); err == nil {
 			generatedReports = append(generatedReports, invPath)
 		}
 	}
@@ -1137,6 +1732,7 @@ func executeModule(m string, rt *AssessmentRuntimeContext) []report.Finding {
 		crawlOpts.AllowLoopback = rt.Opts.AllowLoopback
 		crawlOpts.AllowPrivateIPs = rt.Opts.AllowPrivate
 		crawlOpts.IsAllowed = rt.ScopeAllowed
+		crawlOpts.IsExcluded = rt.ScopeExcluded
 		if rt.Opts.Verbose {
 			crawlOpts.Progress = func(msg string) {
 				fmt.Println("    " + msg)
@@ -1157,7 +1753,7 @@ func executeModule(m string, rt *AssessmentRuntimeContext) []report.Finding {
 			idClientMap["ADMIN"] = rt.ClientFor(auth.IdentityAdmin)
 		}
 
-		multiResult, err := crawler.CrawlMultiIdentity(context.Background(), crawlOpts, idClientMap)
+		multiResult, err := crawler.CrawlMultiIdentity(rt.ctx(), crawlOpts, idClientMap)
 		if err != nil {
 			fmt.Printf("[!] Crawl error: %v\n", err)
 		}
@@ -1178,7 +1774,7 @@ func executeModule(m string, rt *AssessmentRuntimeContext) []report.Finding {
 			Timeout:     rt.Opts.Timeout,
 			MaxAssets:   200,
 		})
-		inv := engine.AnalyzeTarget(context.Background(), "asm-assess", "exec-assess", "tgt-assess", rt.TargetURL, rt.HTMLContent, rt.Header, nil, crawledAssets, rt.ScopeAllowed)
+		inv := engine.AnalyzeTarget(rt.ctx(), "asm-assess", "exec-assess", "tgt-assess", rt.TargetURL, rt.HTMLContent, rt.Header, nil, crawledAssets, rt.ScopeAllowed)
 
 		seenEndpoints := make(map[string]bool)
 
@@ -1303,6 +1899,8 @@ func executeModule(m string, rt *AssessmentRuntimeContext) []report.Finding {
 			}
 		}
 
+		ensureOpenAPISpecIngested(rt)
+
 		totalEndpointsCount := len(rt.DiscoveredEndpoints)
 		if totalEndpointsCount > 0 || inv.Summary().TotalAssets > 0 {
 			desc := fmt.Sprintf("Asset inventory contains %d endpoints, %d forms, and %d parameters.", inv.Summary().EndpointsCount, inv.Summary().FormsCount, inv.Summary().ParametersCount)
@@ -1347,6 +1945,9 @@ func executeModule(m string, rt *AssessmentRuntimeContext) []report.Finding {
 					Method:      "GET",
 					AuthContext: report.AuthContextNoChallenge,
 					Description: "The Content-Security-Policy response header is not set. CSP prevents Cross-Site Scripting (XSS) and data injection attacks.",
+					EvidenceDetails: report.EvidenceDetails{
+						Details: map[string]string{"header": "Content-Security-Policy"},
+					},
 					Timestamp:   now,
 				})
 				rt.Tracker.RecordTest(rt.TargetAssetID, rt.TargetURL, "VULN-MISCONF-HEADERS-001", intelligence.StrategyStaticAnalysis, intelligence.OutcomeVulnerable, "Missing CSP header", 5)
@@ -1367,6 +1968,9 @@ func executeModule(m string, rt *AssessmentRuntimeContext) []report.Finding {
 						Method:      "GET",
 						AuthContext: report.AuthContextNoChallenge,
 						Description: "Strict-Transport-Security enforces HTTPS connections and protects against SSL stripping.",
+						EvidenceDetails: report.EvidenceDetails{
+							Details: map[string]string{"header": "Strict-Transport-Security"},
+						},
 						Timestamp:   now,
 					})
 				}
@@ -1384,6 +1988,9 @@ func executeModule(m string, rt *AssessmentRuntimeContext) []report.Finding {
 					Method:      "GET",
 					AuthContext: report.AuthContextNoChallenge,
 					Description: "X-Content-Type-Options should be set to 'nosniff' to prevent MIME-sniffing vulnerabilities.",
+					EvidenceDetails: report.EvidenceDetails{
+						Details: map[string]string{"header": "X-Content-Type-Options"},
+					},
 					Timestamp:   now,
 				})
 			}
@@ -1400,6 +2007,9 @@ func executeModule(m string, rt *AssessmentRuntimeContext) []report.Finding {
 					Method:      "GET",
 					AuthContext: report.AuthContextNoChallenge,
 					Description: "Neither X-Frame-Options nor CSP frame-ancestors is present, leaving pages susceptible to UI redressing (Clickjacking).",
+					EvidenceDetails: report.EvidenceDetails{
+						Details: map[string]string{"header": "X-Frame-Options"},
+					},
 					Timestamp:   now,
 				})
 			}
@@ -1492,7 +2102,7 @@ func executeModule(m string, rt *AssessmentRuntimeContext) []report.Finding {
 		// CORS Origin verification: Test with unauthenticated baseline first, then authenticated User A context
 		anonClient := rt.ClientFor(auth.IdentityUnauthenticated)
 		for _, u := range corsEndpoints {
-			req, err := http.NewRequestWithContext(context.Background(), "OPTIONS", u, nil)
+			req, err := http.NewRequestWithContext(rt.ctx(), "OPTIONS", u, nil)
 			if err == nil {
 				req.Header.Set("Origin", "https://untrusted-external.example")
 				resp, err := anonClient.Do(req)
@@ -1553,7 +2163,7 @@ func executeModule(m string, rt *AssessmentRuntimeContext) []report.Finding {
 		}
 		for sURL := range scriptURLs {
 			if rt.ScopeAllowed(sURL) {
-				req, err := http.NewRequestWithContext(context.Background(), "GET", sURL, nil)
+				req, err := http.NewRequestWithContext(rt.ctx(), "GET", sURL, nil)
 				if err == nil {
 					resp, err := rt.Client.Do(req)
 					if err == nil {
@@ -1634,9 +2244,10 @@ func executeModule(m string, rt *AssessmentRuntimeContext) []report.Finding {
 				BaseURL:          rt.TargetURL,
 				Endpoints:        webEndpoints,
 				IsAllowed:        rt.ScopeAllowed,
-				SyntheticFixture: rt.Opts.AllowLoopback,
+				IsExcluded:       rt.ScopeExcluded,
+				SyntheticFixture: rt.Opts.SyntheticFixture,
 			}
-			_, wFindings, wSummary, err := webEngine.Assess(context.Background(), actx)
+			_, wFindings, wSummary, err := webEngine.Assess(rt.ctx(), actx)
 			if err == nil {
 				findings = append(findings, wFindings...)
 				for _, f := range wFindings {
@@ -1655,6 +2266,7 @@ func executeModule(m string, rt *AssessmentRuntimeContext) []report.Finding {
 		}
 
 	case "api":
+		ensureOpenAPISpecIngested(rt)
 		var apiEndpoints []apisec.APIEndpoint
 		for _, ep := range rt.DiscoveredEndpoints {
 			if isDestr, _ := crawler.IsDestructiveURL(ep.Path, nil); isDestr {
@@ -1690,7 +2302,7 @@ func executeModule(m string, rt *AssessmentRuntimeContext) []report.Finding {
 			Endpoints:    apiEndpoints,
 			IsAllowed:    rt.ScopeAllowed,
 		}
-		_, aFindings, aSummary, err := apiEngine.Assess(context.Background(), actx)
+		_, aFindings, aSummary, err := apiEngine.Assess(rt.ctx(), actx)
 		if err == nil {
 			findings = append(findings, aFindings...)
 			if len(aFindings) == 0 && aSummary != nil {
@@ -1702,8 +2314,8 @@ func executeModule(m string, rt *AssessmentRuntimeContext) []report.Finding {
 		// Also check business logic bypass on discovered sensitive business flows
 		for _, ep := range apiEndpoints {
 			if ep.IsBusinessFlow || strings.Contains(ep.Path, "checkout") {
-				bizURL := strings.TrimRight(rt.TargetURL, "/") + ep.Path
-				reqBiz, err := http.NewRequestWithContext(context.Background(), "POST", bizURL, nil)
+				bizURL := resolveTargetEndpointURL(rt.TargetURL, ep.Path)
+				reqBiz, err := http.NewRequestWithContext(rt.ctx(), "POST", bizURL, nil)
 				if err == nil {
 					respBiz, err := rt.ClientFor(auth.IdentityUserA).Do(reqBiz)
 					if err == nil {
@@ -1836,15 +2448,11 @@ func runRetest(opts AssessOptions) int {
 		return 2
 	}
 
-	// 1. Authorisation Certification Enforcement
-	if !opts.DryRun && !opts.AuthConfirm && opts.AuthorizingParty == "" {
-		fmt.Fprintf(os.Stderr, "[-] Security refusal: Active retesting requires explicit authorization certification.\n")
-		fmt.Fprintf(os.Stderr, "    Rerunning validation probes against target %s never assumes authorization.\n", targetURL)
-		fmt.Fprintf(os.Stderr, "    Specify --authorizing-party <name> or --auth-confirm to certify explicit authorization.\n\n")
-		return 2
+	// 0. Load multi-role config & normalize target before authorization/scope gates
+	if opts.RolesConfigFile != "" {
+		loadRolesConfigFile(&opts)
 	}
 
-	// 2. URL Normalization & SSRF/Scope Protection
 	if !strings.HasPrefix(targetURL, "http://") && !strings.HasPrefix(targetURL, "https://") {
 		if strings.HasPrefix(targetURL, "localhost") || strings.HasPrefix(targetURL, "127.0.0.1") {
 			targetURL = "http://" + targetURL
@@ -1859,6 +2467,21 @@ func runRetest(opts AssessOptions) int {
 		return 2
 	}
 
+	scopeAllowed, scopeExcluded, windowEnd, scopeErr := buildAssessScopePolicy(&opts, targetURL, time.Now().UTC())
+	if scopeErr != nil {
+		fmt.Fprintf(os.Stderr, "[-] Security refusal: %v\n", scopeErr)
+		return 2
+	}
+
+	// 1. Authorisation Certification Enforcement
+	if !opts.DryRun && !opts.AuthConfirm && opts.AuthorizingParty == "" {
+		fmt.Fprintf(os.Stderr, "[-] Security refusal: Active retesting requires explicit authorization certification.\n")
+		fmt.Fprintf(os.Stderr, "    Rerunning validation probes against target %s never assumes authorization.\n", targetURL)
+		fmt.Fprintf(os.Stderr, "    Specify --authorizing-party <name>, --auth-confirm, or --scope-manifest <file> to certify explicit authorization.\n\n")
+		return 2
+	}
+
+	// 2. SSRF/Scope Protection
 	host := parsed.Hostname()
 	ips, _ := net.LookupIP(host)
 	allowLoop := opts.AllowLoopback || os.Getenv("FELIX_ALLOW_LOOPBACK") == "true"
@@ -1903,6 +2526,14 @@ func runRetest(opts AssessOptions) int {
 	}
 	fmt.Println("===========================================================")
 
+	ctx, stopSig := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSig()
+	if !windowEnd.IsZero() {
+		var cancelWin context.CancelFunc
+		ctx, cancelWin = context.WithDeadline(ctx, windowEnd)
+		defer cancelWin()
+	}
+
 	// Safe HTTP Client Setup with authenticated transport and identity isolation
 	defaultRetestID := auth.IdentityUnauthenticated
 	if opts.AuthToken != "" || opts.AuthUserA != "" {
@@ -1910,11 +2541,13 @@ func runRetest(opts AssessOptions) int {
 	}
 
 	idMgr, err := auth.NewIdentityManager(auth.IdentityManagerOptions{
-		TargetURL:       targetURL,
-		AllowLoopback:   allowLoop,
-		AllowPrivate:    allowPriv,
-		Timeout:         opts.Timeout,
-		DefaultIdentity: defaultRetestID,
+		TargetURL:          targetURL,
+		ScopeAllowed:       scopeAllowed,
+		AllowLoopback:      allowLoop,
+		AllowPrivate:       allowPriv,
+		InsecureSkipVerify: opts.InsecureSkipVerify,
+		Timeout:            opts.Timeout,
+		DefaultIdentity:    defaultRetestID,
 	})
 	var httpClient *http.Client
 	if err == nil {
@@ -1933,7 +2566,10 @@ func runRetest(opts AssessOptions) int {
 		httpClient = idMgr.BuildClient(defaultRetestID)
 	} else {
 		tr := &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig: &tls.Config{
+				MinVersion:         tls.VersionTLS12,
+				InsecureSkipVerify: opts.InsecureSkipVerify,
+			},
 			DialContext: crawler.NewSafeDialContext(crawler.SafeDialerOptions{
 				Timeout:         opts.Timeout,
 				AllowLoopback:   allowLoop,
@@ -1941,13 +2577,16 @@ func runRetest(opts AssessOptions) int {
 			}),
 		}
 		httpClient = &http.Client{
-			Transport: tr,
-			Timeout:   opts.Timeout,
+			Transport:     tr,
+			Timeout:       opts.Timeout,
+			CheckRedirect: buildSafeRedirectPolicy(targetURL, scopeAllowed, scopeExcluded, allowLoop, allowPriv),
 		}
 	}
+	httpClient.Transport = wrapWindowGuard(httpClient.Transport, ctx, windowEnd)
 
 	assessmentID := fmt.Sprintf("retest_%s", uuid.New().String()[:12])
 	prover := investigation.NewSafeProver(assessmentID, opts.SafeMode)
+	prover.IsRetest = true
 	retestEngine := investigation.NewRetestEngine(prover)
 
 	var (
@@ -1958,21 +2597,78 @@ func runRetest(opts AssessOptions) int {
 		inconclusiveCnt int
 	)
 
-	ctx := context.Background()
-
 	for i, f := range rep.Findings {
+		if ctx.Err() != nil {
+			fmt.Fprintf(os.Stderr, "\n[-] Retest halted: %v\n", ctx.Err())
+			return 2
+		}
+		if f.Endpoint != "" && scopeExcluded != nil && scopeExcluded(f.Endpoint) {
+			verdicts = append(verdicts, &investigation.RetestVerdict{
+				FindingID:       f.ID,
+				TargetURL:       targetURL,
+				OriginalStatus:  investigation.StatusNotTested,
+				RetestStatus:    investigation.RetestInconclusive,
+				Explanation:     "Skipped: finding endpoint matches excluded scope rule",
+				RetestTimestamp: time.Now().UTC(),
+			})
+			inconclusiveCnt++
+			continue
+		}
+		if f.Endpoint != "" && scopeAllowed != nil && !scopeAllowed(f.Endpoint) {
+			verdicts = append(verdicts, &investigation.RetestVerdict{
+				FindingID:       f.ID,
+				TargetURL:       targetURL,
+				OriginalStatus:  investigation.StatusNotTested,
+				RetestStatus:    investigation.RetestInconclusive,
+				Explanation:     "Skipped: finding endpoint is outside authorized target scope",
+				RetestTimestamp: time.Now().UTC(),
+			})
+			inconclusiveCnt++
+			continue
+		}
+		if strings.TrimSpace(opts.TargetURL) != "" {
+			if strings.TrimSpace(f.Endpoint) == "" {
+				if origU, parseErr := url.Parse(f.Target); parseErr == nil && origU.RequestURI() != "" {
+					f.Endpoint = origU.RequestURI()
+				}
+			} else if strings.HasPrefix(f.Endpoint, "http://") || strings.HasPrefix(f.Endpoint, "https://") {
+				if epU, parseErr := url.Parse(f.Endpoint); parseErr == nil && epU.RequestURI() != "" {
+					f.Endpoint = epU.RequestURI()
+				}
+			}
+			f.Target = targetURL
+		}
 		if f.EvidenceDetails.Details == nil {
 			f.EvidenceDetails.Details = make(map[string]string)
 		}
 		if (f.EvidenceDetails.Details["accessor_token"] == "" || f.EvidenceDetails.Details["accessor_token"] == "[REDACTED]") {
-			if opts.AuthUserB != "" {
-				tokB := strings.TrimSpace(opts.AuthUserB)
-				if !strings.HasPrefix(strings.ToLower(tokB), "bearer ") {
-					tokB = "Bearer " + tokB
+			pickToken := ""
+			alias := strings.ToUpper(strings.TrimSpace(f.EvidenceDetails.Details["accessor_alias"]))
+			switch alias {
+			case "USER_A":
+				if opts.AuthUserA != "" {
+					pickToken = opts.AuthUserA
 				}
-				f.EvidenceDetails.Details["accessor_token"] = tokB
-			} else if opts.AuthToken != "" {
-				tok := strings.TrimSpace(opts.AuthToken)
+			case "ADMIN":
+				if opts.AuthAdmin != "" {
+					pickToken = opts.AuthAdmin
+				}
+			case "USER_B":
+				if opts.AuthUserB != "" {
+					pickToken = opts.AuthUserB
+				}
+			}
+			if pickToken == "" {
+				if opts.AuthUserB != "" {
+					pickToken = opts.AuthUserB
+				} else if opts.AuthToken != "" {
+					pickToken = opts.AuthToken
+				} else if opts.AuthUserA != "" {
+					pickToken = opts.AuthUserA
+				}
+			}
+			if pickToken != "" {
+				tok := strings.TrimSpace(pickToken)
 				if !strings.HasPrefix(strings.ToLower(tok), "bearer ") {
 					tok = "Bearer " + tok
 				}
@@ -1980,12 +2676,22 @@ func runRetest(opts AssessOptions) int {
 			}
 		}
 
-		origStatus := investigation.ValidationStatus(f.Verification.Status)
-		if origStatus == "" {
-			if strings.EqualFold(string(f.Verification.Status), "CONFIRMED") || f.Verification.Attempted {
+		origStatus := investigation.StatusPotential
+		rawStatus := strings.ToUpper(strings.TrimSpace(string(f.Verification.Status)))
+		if rawStatus == string(investigation.StatusHighConfidence) || rawStatus == "HIGH_CONFIDENCE" {
+			origStatus = investigation.StatusHighConfidence
+		} else {
+			switch report.NormalizeVerificationStatus(f.Verification.Status) {
+			case report.VerificationVerified:
 				origStatus = investigation.StatusConfirmed
-			} else {
+			case report.VerificationDetected:
 				origStatus = investigation.StatusPotential
+			case report.VerificationNotVerified, report.VerificationNotExposed:
+				origStatus = investigation.StatusNotValidated
+			default:
+				if f.Verification.Attempted {
+					origStatus = investigation.StatusConfirmed
+				}
 			}
 		}
 
@@ -2062,7 +2768,7 @@ func runRetest(opts AssessOptions) int {
 		outDir = filepath.Dir(opts.RetestReport)
 	}
 	if outDir != "" {
-		_ = os.MkdirAll(outDir, 0755)
+		_ = os.MkdirAll(outDir, 0700)
 		retestFilePath := filepath.Join(outDir, "retest_report.json")
 		retestReportData := map[string]any{
 			"assessment_id":       assessmentID,
@@ -2077,7 +2783,7 @@ func runRetest(opts AssessOptions) int {
 			"verdicts":            verdicts,
 		}
 		if rBytes, err := json.MarshalIndent(retestReportData, "", "  "); err == nil {
-			_ = os.WriteFile(retestFilePath, rBytes, 0644)
+			_ = writePrivateFile(retestFilePath, rBytes)
 			if !opts.JSONOutput {
 				fmt.Printf("\n[+] Retest report saved to: %s\n", retestFilePath)
 			}
@@ -2144,7 +2850,10 @@ func printAssessHelp() {
 	fmt.Println("\nOperational Flags:")
 	fmt.Println("  --modules, -m <list>     Comma-separated module list for custom profile")
 	fmt.Println("  --exclude <list>         Comma-separated list of modules to omit")
+	fmt.Println("  --exclude-paths <list>   Comma-separated URL path prefixes strictly excluded from testing")
+	fmt.Println("  --exclude-urls <list>    Comma-separated exact URLs strictly excluded from testing")
 	fmt.Println("  --scope <pattern>        Explicit scope domain or wildcard pattern (e.g. *.example.com)")
+	fmt.Println("  --scope-manifest <path>  JSON authorization/scope manifest (targets, exclusions, testing window)")
 	fmt.Println("  --headers, -H <h:v>      Custom HTTP header (repeatable)")
 	fmt.Println("  --timeout <duration>     Per-request HTTP timeout (default: 30s)")
 	fmt.Println("  --concurrency, -c <n>    Concurrent assessment workers (default: 5)")
@@ -2158,6 +2867,7 @@ func printAssessHelp() {
 	fmt.Println("  --dry-run                Print planned execution sequence and deliverables without testing")
 	fmt.Println("  --allow-loopback         Permit assessment of loopback/localhost targets (testing only)")
 	fmt.Println("  --allow-private          Permit assessment of RFC 1918 private network targets")
+	fmt.Println("  --insecure               Allow insecure/self-signed TLS certificates (not recommended)")
 	fmt.Println("  --allow-state-changing   Enable opted-in reversible state-changing authz probes (BOPLA/BFLA/BOLA)")
 	fmt.Println("  --synthetic-fixture      Confirm target is an isolated synthetic test fixture (required for mutations)")
 	fmt.Println("  --fixture-hosts <hosts>  Comma-separated explicitly authorized fixture hosts/host:ports")

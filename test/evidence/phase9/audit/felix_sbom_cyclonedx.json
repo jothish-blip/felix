@@ -1,0 +1,374 @@
+﻿{
+    "bomFormat":  "CycloneDX",
+    "specVersion":  "1.5",
+    "serialNumber":  "urn:uuid:b4d85051-8277-4972-9c3f-a5ce547b1543",
+    "version":  1,
+    "metadata":  {
+                     "timestamp":  "2026-11-12T12:15:00Z",
+                     "component":  {
+                                       "type":  "application",
+                                       "name":  "felix",
+                                       "version":  "2.0.0-phase9-rc",
+                                       "purl":  "pkg:golang/felix@v2.0.0"
+                                   },
+                     "tools":  [
+                                   {
+                                       "name":  "go version go1.27.0 windows/amd64",
+                                       "vendor":  "Go"
+                                   }
+                               ]
+                 },
+    "components":  [
+                       {
+                           "type":  "library",
+                           "name":  "github.com/Masterminds/semver/v3",
+                           "version":  "v3.5.0",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/github.com/Masterminds/semver/v3@v3.5.0",
+                           "indirect":  true,
+                           "dir":  "v3@v3.5.0"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "github.com/ProtonMail/go-crypto",
+                           "version":  "v1.5.2",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/github.com/ProtonMail/go-crypto@v1.5.2",
+                           "indirect":  true,
+                           "dir":  "go-crypto@v1.5.2"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "github.com/bwesterb/go-ristretto",
+                           "version":  "v1.2.3",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/github.com/bwesterb/go-ristretto@v1.2.3",
+                           "indirect":  true,
+                           "dir":  ""
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "github.com/chromedp/cdproto",
+                           "version":  "v0.157.8",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/github.com/chromedp/cdproto@v0.157.8",
+                           "indirect":  true,
+                           "dir":  "cdproto@v0.157.8"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "github.com/chromedp/chromedp",
+                           "version":  "v0.21.0",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/github.com/chromedp/chromedp@v0.21.0",
+                           "indirect":  true,
+                           "dir":  "chromedp@v0.21.0"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "github.com/cloudflare/circl",
+                           "version":  "v1.6.3",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/github.com/cloudflare/circl@v1.6.3",
+                           "indirect":  true,
+                           "dir":  "circl@v1.6.3"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "github.com/dustin/go-humanize",
+                           "version":  "v1.0.1",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/github.com/dustin/go-humanize@v1.0.1",
+                           "indirect":  true,
+                           "dir":  "go-humanize@v1.0.1"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "github.com/go-json-experiment/json",
+                           "version":  "v0.0.0-20260213210345-44df1a37e875",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/github.com/go-json-experiment/json@v0.0.0-20260213210345-44df1a37e875",
+                           "indirect":  true,
+                           "dir":  "json@v0.0.0-20260213210345-44df1a37e875"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "github.com/google/pprof",
+                           "version":  "v0.0.0-20260802141513-ef3492d7dac3",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/github.com/google/pprof@v0.0.0-20260802141513-ef3492d7dac3",
+                           "indirect":  true,
+                           "dir":  "pprof@v0.0.0-20260802141513-ef3492d7dac3"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "github.com/google/uuid",
+                           "version":  "v1.6.0",
+                           "scope":  "required",
+                           "purl":  "pkg:golang/github.com/google/uuid@v1.6.0",
+                           "indirect":  false,
+                           "dir":  "uuid@v1.6.0"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "github.com/hashicorp/golang-lru/v2",
+                           "version":  "v2.0.7",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/github.com/hashicorp/golang-lru/v2@v2.0.7",
+                           "indirect":  true,
+                           "dir":  "v2@v2.0.7"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "github.com/mattn/go-isatty",
+                           "version":  "v0.0.24",
+                           "scope":  "required",
+                           "purl":  "pkg:golang/github.com/mattn/go-isatty@v0.0.24",
+                           "indirect":  false,
+                           "dir":  "go-isatty@v0.0.24"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "github.com/ncruces/go-strftime",
+                           "version":  "v1.0.0",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/github.com/ncruces/go-strftime@v1.0.0",
+                           "indirect":  true,
+                           "dir":  "go-strftime@v1.0.0"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "github.com/remyoudompheng/bigfft",
+                           "version":  "v0.0.0-20230129092748-24d4a6f8daec",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/github.com/remyoudompheng/bigfft@v0.0.0-20230129092748-24d4a6f8daec",
+                           "indirect":  true,
+                           "dir":  "bigfft@v0.0.0-20230129092748-24d4a6f8daec"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "github.com/santhosh-tekuri/jsonschema/v5",
+                           "version":  "v5.3.1",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/github.com/santhosh-tekuri/jsonschema/v5@v5.3.1",
+                           "indirect":  true,
+                           "dir":  "v5@v5.3.1"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "golang.org/x/crypto",
+                           "version":  "v0.58.0",
+                           "scope":  "required",
+                           "purl":  "pkg:golang/golang.org/x/crypto@v0.58.0",
+                           "indirect":  false,
+                           "dir":  "crypto@v0.58.0"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "golang.org/x/mod",
+                           "version":  "v0.41.0",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/golang.org/x/mod@v0.41.0",
+                           "indirect":  true,
+                           "dir":  "mod@v0.41.0"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "golang.org/x/net",
+                           "version":  "v0.60.0",
+                           "scope":  "required",
+                           "purl":  "pkg:golang/golang.org/x/net@v0.60.0",
+                           "indirect":  false,
+                           "dir":  "net@v0.60.0"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "golang.org/x/sync",
+                           "version":  "v0.23.0",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/golang.org/x/sync@v0.23.0",
+                           "indirect":  true,
+                           "dir":  "sync@v0.23.0"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "golang.org/x/sys",
+                           "version":  "v0.49.0",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/golang.org/x/sys@v0.49.0",
+                           "indirect":  true,
+                           "dir":  "sys@v0.49.0"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "golang.org/x/term",
+                           "version":  "v0.47.0",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/golang.org/x/term@v0.47.0",
+                           "indirect":  true,
+                           "dir":  ""
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "golang.org/x/text",
+                           "version":  "v0.43.0",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/golang.org/x/text@v0.43.0",
+                           "indirect":  true,
+                           "dir":  ""
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "golang.org/x/tools",
+                           "version":  "v0.50.0",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/golang.org/x/tools@v0.50.0",
+                           "indirect":  true,
+                           "dir":  "tools@v0.50.0"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "gopkg.in/check.v1",
+                           "version":  "v0.0.0-20161208181325-20d25e280405",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/gopkg.in/check.v1@v0.0.0-20161208181325-20d25e280405",
+                           "indirect":  true,
+                           "dir":  ""
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "gopkg.in/yaml.v3",
+                           "version":  "v3.0.1",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/gopkg.in/yaml.v3@v3.0.1",
+                           "indirect":  true,
+                           "dir":  "yaml.v3@v3.0.1"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "modernc.org/cc/v4",
+                           "version":  "v4.29.7",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/modernc.org/cc/v4@v4.29.7",
+                           "indirect":  true,
+                           "dir":  "v4@v4.29.7"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "modernc.org/ccgo/v4",
+                           "version":  "v4.36.1",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/modernc.org/ccgo/v4@v4.36.1",
+                           "indirect":  true,
+                           "dir":  "v4@v4.36.1"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "modernc.org/fileutil",
+                           "version":  "v1.4.0",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/modernc.org/fileutil@v1.4.0",
+                           "indirect":  true,
+                           "dir":  "fileutil@v1.4.0"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "modernc.org/gc/v2",
+                           "version":  "v2.6.5",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/modernc.org/gc/v2@v2.6.5",
+                           "indirect":  true,
+                           "dir":  "v2@v2.6.5"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "modernc.org/gc/v3",
+                           "version":  "v3.1.5",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/modernc.org/gc/v3@v3.1.5",
+                           "indirect":  true,
+                           "dir":  "v3@v3.1.5"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "modernc.org/goabi0",
+                           "version":  "v0.2.0",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/modernc.org/goabi0@v0.2.0",
+                           "indirect":  true,
+                           "dir":  "goabi0@v0.2.0"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "modernc.org/libc",
+                           "version":  "v1.77.1",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/modernc.org/libc@v1.77.1",
+                           "indirect":  true,
+                           "dir":  "libc@v1.77.1"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "modernc.org/mathutil",
+                           "version":  "v1.7.1",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/modernc.org/mathutil@v1.7.1",
+                           "indirect":  true,
+                           "dir":  "mathutil@v1.7.1"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "modernc.org/memory",
+                           "version":  "v1.12.1",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/modernc.org/memory@v1.12.1",
+                           "indirect":  true,
+                           "dir":  "memory@v1.12.1"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "modernc.org/opt",
+                           "version":  "v0.2.0",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/modernc.org/opt@v0.2.0",
+                           "indirect":  true,
+                           "dir":  "opt@v0.2.0"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "modernc.org/sortutil",
+                           "version":  "v1.2.1",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/modernc.org/sortutil@v1.2.1",
+                           "indirect":  true,
+                           "dir":  "sortutil@v1.2.1"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "modernc.org/sqlite",
+                           "version":  "v1.60.1",
+                           "scope":  "required",
+                           "purl":  "pkg:golang/modernc.org/sqlite@v1.60.1",
+                           "indirect":  false,
+                           "dir":  "sqlite@v1.60.1"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "modernc.org/strutil",
+                           "version":  "v1.2.1",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/modernc.org/strutil@v1.2.1",
+                           "indirect":  true,
+                           "dir":  "strutil@v1.2.1"
+                       },
+                       {
+                           "type":  "library",
+                           "name":  "modernc.org/token",
+                           "version":  "v1.1.0",
+                           "scope":  "optional",
+                           "purl":  "pkg:golang/modernc.org/token@v1.1.0",
+                           "indirect":  true,
+                           "dir":  "token@v1.1.0"
+                       }
+                   ]
+}

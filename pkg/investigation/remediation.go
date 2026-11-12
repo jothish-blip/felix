@@ -123,7 +123,13 @@ func GenerateRemediationIntelligence(f report.Finding, targetTech string) *Remed
 		}
 		developerVerification = "Submit a request to the privileged endpoint with a standard user authentication token. Assert the request is rejected with HTTP 403 Forbidden."
 		retestInstructions = "Rerun assessment with low-privilege token. Confirm administrative functions fail closed."
-		codeSnippet = "// Express RBAC middleware:\napp.use('/api/admin/*', requireAuth, requireRole('ADMIN'));"
+		if strings.Contains(tech, "python") || strings.Contains(tech, "flask") || strings.Contains(tech, "django") {
+			codeSnippet = "# Python RBAC decorator:\n@require_role('ADMIN')\ndef admin_handler(): ..."
+		} else if strings.Contains(tech, "node") || strings.Contains(tech, "express") {
+			codeSnippet = "// Express RBAC middleware:\napp.use('/api/admin/*', requireAuth, requireRole('ADMIN'));"
+		} else {
+			codeSnippet = "// Enforce server-side authorization guard before handler execution:\nif !caller.HasRole(\"ADMIN\") { return HTTP 403 Forbidden }"
+		}
 
 	case strings.Contains(cat, "BOPLA") || strings.Contains(title, "BOPLA") ||
 		strings.Contains(cat, "PROPERTY LEVEL") || strings.Contains(title, "PROPERTY LEVEL") ||
@@ -164,7 +170,13 @@ func GenerateRemediationIntelligence(f report.Finding, targetTech string) *Remed
 		}
 		developerVerification = "Issue an unauthenticated HTTP GET/POST to the route. Verify the server returns HTTP 401 Unauthorized."
 		retestInstructions = "Issue unauthenticated request. Verify HTTP 401 Unauthorized."
-		codeSnippet = "// Default-deny authentication routing:\napp.use(authenticateToken); // Protect all routes by default\napp.use('/api/public', publicRouter); // Explicit opt-in for public routes"
+		if strings.Contains(tech, "python") || strings.Contains(tech, "flask") || strings.Contains(tech, "django") {
+			codeSnippet = "# Flask / Python auth guard:\n@require_authenticated_user\ndef protected_route(): ..."
+		} else if strings.Contains(tech, "node") || strings.Contains(tech, "express") {
+			codeSnippet = "// Default-deny authentication routing:\napp.use(authenticateToken); // Protect all routes by default\napp.use('/api/public', publicRouter); // Explicit opt-in for public routes"
+		} else {
+			codeSnippet = "// Require verified authentication token on all non-public routes by default (return HTTP 401 on missing/invalid credentials)."
+		}
 
 	case strings.Contains(cat, "SECRET") || strings.Contains(title, "CREDENTIAL") || strings.Contains(title, "TOKEN"):
 		priority = PriorityHigh

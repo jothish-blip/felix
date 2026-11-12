@@ -974,8 +974,27 @@ func (ac *ActiveCrawler) analyzeJavaScriptBundle(
 		}
 
 		fullURL := norm.NormalizedPath
-		if strings.HasPrefix(fullURL, "/") && parsedTarget != nil {
-			fullURL = fmt.Sprintf("%s://%s%s", parsedTarget.Scheme, parsedTarget.Host, fullURL)
+		if parsedTarget != nil {
+			if relU, rErr := url.Parse(norm.NormalizedPath); rErr == nil {
+				if strings.HasPrefix(norm.NormalizedPath, "/") && strings.HasPrefix(strings.TrimSpace(cand.RawPath), "/") {
+					origin := url.URL{Scheme: parsedTarget.Scheme, Host: parsedTarget.Host}
+					fullURL = origin.ResolveReference(relU).String()
+				} else if strings.HasPrefix(norm.NormalizedPath, "/") {
+					// Relative JS route (e.g. "identity/api/auth/login"): keep target path if non-root, otherwise origin root
+					if parsedTarget.Path != "" && parsedTarget.Path != "/" && !strings.HasPrefix(cand.RawPath, "/") {
+						baseCopy := *parsedTarget
+						if !strings.HasSuffix(baseCopy.Path, "/") {
+							baseCopy.Path += "/"
+						}
+						if subRel, sErr := url.Parse(strings.TrimPrefix(norm.NormalizedPath, "/")); sErr == nil {
+							fullURL = baseCopy.ResolveReference(subRel).String()
+						}
+					} else {
+						origin := url.URL{Scheme: parsedTarget.Scheme, Host: parsedTarget.Host}
+						fullURL = origin.ResolveReference(relU).String()
+					}
+				}
+			}
 		}
 
 		classification := ClassificationEndpointCandidate
@@ -1084,32 +1103,40 @@ func CrawlMultiIdentity(
 		}
 
 		// Merge combined resources
+		seenSummary := make(map[string]bool)
+		for _, dr := range res.CombinedResources {
+			seenSummary[fmt.Sprintf("%s:%s", dr.HTTPMethod, dr.NormalizedURL)] = true
+		}
 		for _, dr := range singleRes.Resources {
 			comboKey := fmt.Sprintf("%s:%s:%s", dr.IdentityContext, dr.HTTPMethod, dr.NormalizedURL)
 			if !seenCombined[comboKey] {
 				seenCombined[comboKey] = true
 				res.CombinedResources = append(res.CombinedResources, dr)
 
-				// Update Summary
-				switch dr.Classification {
-				case ClassificationConfirmedEndpoint:
-					res.Summary.TotalConfirmedEndpoints++
-					if dr.AssetType == "page" || strings.Contains(dr.ContentType, "html") {
-						res.Summary.TotalPagesDiscovered++
+				summaryKey := fmt.Sprintf("%s:%s", dr.HTTPMethod, dr.NormalizedURL)
+				if !seenSummary[summaryKey] {
+					seenSummary[summaryKey] = true
+					// Update Summary deduplicated across identities
+					switch dr.Classification {
+					case ClassificationConfirmedEndpoint:
+						res.Summary.TotalConfirmedEndpoints++
+						if dr.AssetType == "page" || strings.Contains(dr.ContentType, "html") {
+							res.Summary.TotalPagesDiscovered++
+						}
+					case ClassificationEndpointCandidate:
+						res.Summary.TotalEndpointCandidates++
+					case ClassificationObservedForm:
+						res.Summary.TotalFormsAndInputs++
+					case ClassificationStaticAsset:
+						res.Summary.TotalStaticAssets++
+						if dr.AssetType == AssetJavaScript {
+							res.Summary.TotalJavaScriptBundles++
+						}
+					case ClassificationInaccessible:
+						res.Summary.TotalInaccessibleResources++
+					case ClassificationExcludedDestructive, ClassificationOutOfScope:
+						res.Summary.TotalExcludedResources++
 					}
-				case ClassificationEndpointCandidate:
-					res.Summary.TotalEndpointCandidates++
-				case ClassificationObservedForm:
-					res.Summary.TotalFormsAndInputs++
-				case ClassificationStaticAsset:
-					res.Summary.TotalStaticAssets++
-					if dr.AssetType == AssetJavaScript {
-						res.Summary.TotalJavaScriptBundles++
-					}
-				case ClassificationInaccessible:
-					res.Summary.TotalInaccessibleResources++
-				case ClassificationExcludedDestructive, ClassificationOutOfScope:
-					res.Summary.TotalExcludedResources++
 				}
 			}
 		}

@@ -15,6 +15,7 @@ import (
 	"felix/pkg/assessment"
 	"felix/pkg/config"
 	"felix/pkg/report"
+	"felix/pkg/validation"
 )
 
 // runAPK executes the "felix apk" subcommand for APK intake, structural validation, and isolation.
@@ -34,6 +35,7 @@ func runAPK(args []string) int {
 		scopeMode        string
 		exclusions       []string
 		authorizingParty string
+		scopeManifest    string
 		authConfirm      bool
 		allowInferred    bool
 		allowThirdParty  bool
@@ -244,6 +246,19 @@ func runAPK(args []string) int {
 		}
 		if arg == "--auth-confirm" {
 			authConfirm = true
+			continue
+		}
+		if arg == "--scope-manifest" {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				fmt.Fprintf(os.Stderr, "[-] error: --scope-manifest requires a file path argument\n")
+				return 2
+			}
+			i++
+			scopeManifest = args[i]
+			continue
+		}
+		if strings.HasPrefix(arg, "--scope-manifest=") {
+			scopeManifest = strings.TrimPrefix(arg, "--scope-manifest=")
 			continue
 		}
 		if arg == "--allow-inferred" {
@@ -538,6 +553,80 @@ func runAPK(args []string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
+	// Pre-flight validation for --scope-manifest & active backend assessment before touching APK artifacts or network
+	var (
+		apkWinStart      time.Time
+		apkWinEnd        time.Time
+		apkScopeRef      string
+		apkScopeExcl     []assessment.Exclusion
+		hasScopeManifest = strings.TrimSpace(scopeManifest) != ""
+	)
+	if hasScopeManifest {
+		if len(scopeTargets) == 0 {
+			fmt.Fprintf(os.Stderr, "[-] Security refusal: --scope-manifest requires explicit --target <url> scope boundary checks.\n")
+			return 2
+		}
+		raw, readErr := os.ReadFile(scopeManifest)
+		if readErr != nil {
+			fmt.Fprintf(os.Stderr, "[-] Authorization gate failed: could not read --scope-manifest %q: %v\n", scopeManifest, readErr)
+			return 2
+		}
+		contract, _, parseErr := validation.ParseAuthOrCampaignManifest(raw)
+		if parseErr != nil {
+			fmt.Fprintf(os.Stderr, "[-] Authorization gate failed: invalid --scope-manifest %q: %v\n", scopeManifest, parseErr)
+			return 2
+		}
+		nowUTC := time.Now().UTC()
+		for _, tgt := range scopeTargets {
+			if _, _, _, scopeErr := buildAssessScopePolicy(&AssessOptions{
+				ScopeManifest: scopeManifest,
+			}, tgt, nowUTC); scopeErr != nil {
+				fmt.Fprintf(os.Stderr, "[-] Authorization gate failed: %v\n", scopeErr)
+				return 2
+			}
+		}
+		if authorizingParty == "" {
+			authorizingParty = contract.AuthorizingParty
+		}
+		authConfirm = true
+		apkWinStart = contract.WindowStart.UTC()
+		apkWinEnd = contract.WindowEnd.UTC()
+		apkScopeRef = contract.AuthorizationRef
+		if !apkWinEnd.IsZero() {
+			var cancelWin context.CancelFunc
+			ctx, cancelWin = context.WithDeadline(ctx, apkWinEnd)
+			defer cancelWin()
+		}
+		for _, p := range contract.ExcludedPaths {
+			if clean := strings.TrimSpace(p); clean != "" {
+				apkScopeExcl = append(apkScopeExcl, assessment.Exclusion{ExclusionType: "PATH_PREFIX", Pattern: clean, Reason: "scope manifest path exclusion"})
+			}
+		}
+		for _, u := range contract.ExcludedURLs {
+			if clean := strings.TrimSpace(u); clean != "" {
+				apkScopeExcl = append(apkScopeExcl, assessment.Exclusion{ExclusionType: "EXACT_URL", Pattern: clean, Reason: "scope manifest URL exclusion"})
+			}
+		}
+		for _, h := range contract.ExcludedHosts {
+			if clean := strings.TrimSpace(h); clean != "" {
+				apkScopeExcl = append(apkScopeExcl, assessment.Exclusion{ExclusionType: "HOSTNAME", Pattern: clean, Reason: "scope manifest host exclusion"})
+			}
+		}
+	}
+	if assessBackend {
+		if len(scopeTargets) == 0 {
+			fmt.Fprintf(os.Stderr, "[-] Security refusal: Active backend assessment requires explicit authorized scope targets.\n")
+			fmt.Fprintf(os.Stderr, "    Specify approved target URL(s) with --target <url>.\n")
+			fmt.Fprintf(os.Stderr, "    (Endpoints discovered during APK intake never confer automatic testing authorization.)\n")
+			return 2
+		}
+		if authorizingParty == "" && !authConfirm {
+			fmt.Fprintf(os.Stderr, "[-] Security refusal: Missing authorization certification.\n")
+			fmt.Fprintf(os.Stderr, "    Specify --scope-manifest <file>, --authorizing-party <name>, or --auth-confirm to certify explicit authorization.\n")
+			return 2
+		}
+	}
+
 	opts := apk.IntakeOptions{
 		Limits:  limits,
 		Extract: extract || analyzeManifest || analyzeArtifacts || buildInventory, // extract safe entries to enable manifest, artifact, and inventory inspection
@@ -584,26 +673,17 @@ func runAPK(args []string) int {
 		}
 	}
 
-	// Pre-flight validation for active backend assessment
-	if assessBackend {
-		if len(scopeTargets) == 0 {
-			fmt.Fprintf(os.Stderr, "[-] Security refusal: Active backend assessment requires explicit authorized scope targets.\n")
-			fmt.Fprintf(os.Stderr, "    Specify approved target URL(s) with --target <url>.\n")
-			fmt.Fprintf(os.Stderr, "    (Endpoints discovered during APK intake never confer automatic testing authorization.)\n")
-			return 2
-		}
-		if authorizingParty == "" && !authConfirm {
-			fmt.Fprintf(os.Stderr, "[-] Security refusal: Missing authorization certification.\n")
-			fmt.Fprintf(os.Stderr, "    Specify --authorizing-party <name> or --auth-confirm to certify explicit authorization to test the backend.\n")
-			return 2
-		}
-	}
-
 	// Optional authorized backend assessment handoff
 	var handoffReport *apk.HandoffReport
 	if assessBackend && inventoryRes != nil {
 		validFrom := time.Now().Add(-1 * time.Hour)
 		validUntil := time.Now().Add(24 * time.Hour)
+		if !apkWinStart.IsZero() {
+			validFrom = apkWinStart
+		}
+		if !apkWinEnd.IsZero() {
+			validUntil = apkWinEnd
+		}
 		partyName := authorizingParty
 		if partyName == "" {
 			partyName = "CLI Operator (Explicit --auth-confirm)"
@@ -613,6 +693,7 @@ func runAPK(args []string) int {
 			AuthorizingParty:    partyName,
 			AuthorizationMethod: "WRITTEN_CONTRACT",
 			Status:              assessment.AuthApproved,
+			ScopeDocRef:         apkScopeRef,
 			ValidFrom:           &validFrom,
 			ValidUntil:          &validUntil,
 		}
@@ -652,6 +733,7 @@ func runAPK(args []string) int {
 				Reason:        "CLI exclusion rule",
 			})
 		}
+		handoffCfg.Exclusions = append(handoffCfg.Exclusions, apkScopeExcl...)
 
 		hRep, err := apk.ExecuteHandoff(ctx, inventoryRes, handoffCfg)
 		if err != nil {

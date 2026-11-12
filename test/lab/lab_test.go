@@ -7055,8 +7055,8 @@ func TestLocalLab_RealTarget_Assessment(t *testing.T) {
 			t.Fatalf("Report generation failed: %v", runErr)
 		}
 
-		if exitCode != 0 {
-			t.Errorf("Expected exit code 0 for report generation, got %d (stderr: %s)", exitCode, stderr)
+		if exitCode != 1 {
+			t.Errorf("Expected exit code 1 (ExitSecurityFail) for report with CRITICAL finding, got %d (stderr: %s)", exitCode, stderr)
 		}
 
 		// Verify SARIF conforms to JSON syntax and contains runs

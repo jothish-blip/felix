@@ -177,6 +177,37 @@ func isLoopbackHost(host string) bool {
 	return false
 }
 
+// resolveEndpointURL resolves an API path cleanly against baseURL without duplicating non-root base paths.
+func resolveEndpointURL(baseURL, rawPath string) string {
+	trimmedPath := strings.TrimSpace(rawPath)
+	if strings.HasPrefix(trimmedPath, "http://") || strings.HasPrefix(trimmedPath, "https://") {
+		return trimmedPath
+	}
+	baseU, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil || baseU == nil || baseU.Scheme == "" || baseU.Host == "" {
+		return strings.TrimRight(baseURL, "/") + trimmedPath
+	}
+	if trimmedPath == "" {
+		return baseU.String()
+	}
+	if trimmedPath == "/" && baseU.Path != "" && baseU.Path != "/" {
+		return baseU.String()
+	}
+	relU, err := url.Parse(trimmedPath)
+	if err != nil {
+		return strings.TrimRight(baseURL, "/") + trimmedPath
+	}
+	if strings.HasPrefix(trimmedPath, "/") {
+		origin := url.URL{Scheme: baseU.Scheme, Host: baseU.Host}
+		return origin.ResolveReference(relU).String()
+	}
+	baseCopy := *baseU
+	if !strings.HasSuffix(baseCopy.Path, "/") {
+		baseCopy.Path += "/"
+	}
+	return baseCopy.ResolveReference(relU).String()
+}
+
 func (e *Engine) scopedClient(actx *AssessmentContext) *http.Client {
 	return e.ScopedClient(actx)
 }
@@ -625,7 +656,7 @@ func (e *Engine) assessAPI4(ctx context.Context, actx *AssessmentContext, client
 	}
 
 	target := testEndpoints[0]
-	fullURL := actx.BaseURL + target.Path
+	fullURL := resolveEndpointURL(actx.BaseURL, target.Path)
 
 	if actx.IsExcluded != nil && actx.IsExcluded(fullURL) {
 		cov.Status = CoveragePassivelyAssessed
@@ -714,7 +745,7 @@ func (e *Engine) assessAPI4(ctx context.Context, actx *AssessmentContext, client
 				Category:          CategoryAPI4_ResourceConsumption,
 				OWASPCode:         "API4:2023",
 				TestName:          "Pagination Boundary Control Observation",
-				Endpoint:          actx.BaseURL + ep.Path,
+				Endpoint:          resolveEndpointURL(actx.BaseURL, ep.Path),
 				Method:            ep.Method,
 				VerificationState: StateObserved,
 				Severity:          report.SeverityInfo,
@@ -916,7 +947,7 @@ func (e *Engine) assessAPI7(ctx context.Context, actx *AssessmentContext, client
 				}
 
 				if safeDestination {
-					testURL := actx.BaseURL + ep.Path
+					testURL := resolveEndpointURL(actx.BaseURL, ep.Path)
 					if strings.Contains(testURL, "?") {
 						testURL += fmt.Sprintf("&%s=%s", ep.URLParamName, url.QueryEscape(canaryDestination))
 					} else {
@@ -1039,7 +1070,7 @@ func (e *Engine) assessAPI8(ctx context.Context, actx *AssessmentContext, client
 
 	testURL := actx.BaseURL
 	if len(actx.Endpoints) > 0 {
-		testURL = actx.BaseURL + actx.Endpoints[0].Path
+		testURL = resolveEndpointURL(actx.BaseURL, actx.Endpoints[0].Path)
 	}
 
 	if actx.IsExcluded != nil && actx.IsExcluded(testURL) {

@@ -31,6 +31,8 @@ func run(args []string) int {
 	// Unified Assessment Orchestrator
 	case "assess":
 		return runAssess(subArgs)
+	case "validate":
+		return runValidate(subArgs)
 
 	// Core & Meta Commands
 	case "capabilities":
@@ -130,6 +132,8 @@ func run(args []string) int {
 			switch sub {
 			case "assess":
 				return runAssess([]string{"--help"})
+			case "validate":
+				return runValidate([]string{"--help"})
 			case "capabilities":
 				return runCapabilities([]string{"--help"})
 			case "recon":

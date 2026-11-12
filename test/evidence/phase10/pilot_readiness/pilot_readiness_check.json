@@ -1,0 +1,161 @@
+{
+  "schema_version": "felix.phase10a.pilot_readiness.v1",
+  "generated_at": "2026-11-12T13:39:08.7508098Z",
+  "target_url": "https://staging.example-authorized-app.internal",
+  "overall_status": "BLOCKED",
+  "pilot_execution_status": "BLOCKED",
+  "public_release_status": "BLOCKED",
+  "external_requests_sent": 0,
+  "binary_path": "C:\\Jothish\\felix\\felix.exe",
+  "binary_sha256": "sha256:d1f6e83e0127d240bc13e4ddcb785a8c8bc475a16870560530de207dc9348bc2",
+  "ground_truth_sha256": "sha256:6ee7cc535dd6a87355d3952643f3472269f012dd7644f657b5d7304a6e2297b0",
+  "summary": {
+    "BLOCKED": 1,
+    "INVALID": 7,
+    "MISSING": 1,
+    "NOT_CONFIGURED": 1,
+    "READY": 6
+  },
+  "blocking_reasons": [
+    "[3:INVALID] Authorization Contract Structure: Authorization contract contains template placeholders rather than owner-signed data",
+    "[4:INVALID] Campaign Manifest Validity: Campaign manifest contains unedited template placeholder fields",
+    "[5:INVALID] Target Origin Consistency: Target URL \"https://staging.example-authorized-app.internal\" is missing a valid non-placeholder scheme/host",
+    "[6:INVALID] Ground-Truth Registry Structure: Ground-truth metadata contains template placeholders",
+    "[7:INVALID] Ground-Truth SHA-256 Hash Lock: ground_truth_sha256 \"\u003cREQUIRED: Compute with felix validate hash-gt --ground-truth ground_truth.json\u003e\" must use sha256:\u003c64-hex\u003e format",
+    "[9:INVALID] Ground-Truth Timestamp Precedence: ground-truth established_at (2026-11-14T18:00:00Z) is in the future relative to current UTC (2026-11-12T13:39:08Z)",
+    "[11:MISSING] Approved Test Identity Configuration: Ground truth requires authenticated / multi-role identities, but --roles-config was not provided",
+    "[15:INVALID] Retest Prerequisites: Retest expectations file contains template placeholders (\u003cfinding_id\u003e)"
+  ],
+  "checks": [
+    {
+      "number": 1,
+      "id": "binary_integrity",
+      "name": "Binary Integrity",
+      "status": "READY",
+      "blocking": false,
+      "detail": "felix.exe (32551424 bytes, sha256:d1f6e83e0127d240bc13e4ddcb785a8c8bc475a16870560530de207dc9348bc2)"
+    },
+    {
+      "number": 2,
+      "id": "config_availability",
+      "name": "Configuration Availability",
+      "status": "READY",
+      "blocking": false,
+      "detail": "Configuration loaded cleanly (path=C:\\Users\\LENOVO\\.felix\\config.json, timeout=10s, tls_verify=true)"
+    },
+    {
+      "number": 3,
+      "id": "authorization_contract",
+      "name": "Authorization Contract Structure",
+      "status": "INVALID",
+      "blocking": true,
+      "detail": "Authorization contract contains template placeholders rather than owner-signed data",
+      "remediation": "Replace placeholders with real owner signatory, reference ID, and authorized target origin"
+    },
+    {
+      "number": 4,
+      "id": "campaign_manifest",
+      "name": "Campaign Manifest Validity",
+      "status": "INVALID",
+      "blocking": true,
+      "detail": "Campaign manifest contains unedited template placeholder fields"
+    },
+    {
+      "number": 5,
+      "id": "target_origin_consistency",
+      "name": "Target Origin Consistency",
+      "status": "INVALID",
+      "blocking": true,
+      "detail": "Target URL \"https://staging.example-authorized-app.internal\" is missing a valid non-placeholder scheme/host"
+    },
+    {
+      "number": 6,
+      "id": "ground_truth_structure",
+      "name": "Ground-Truth Registry Structure",
+      "status": "INVALID",
+      "blocking": true,
+      "detail": "Ground-truth metadata contains template placeholders"
+    },
+    {
+      "number": 7,
+      "id": "ground_truth_sha256",
+      "name": "Ground-Truth SHA-256 Hash Lock",
+      "status": "INVALID",
+      "blocking": true,
+      "detail": "ground_truth_sha256 \"\u003cREQUIRED: Compute with felix validate hash-gt --ground-truth ground_truth.json\u003e\" must use sha256:\u003c64-hex\u003e format"
+    },
+    {
+      "number": 8,
+      "id": "ground_truth_independence",
+      "name": "Ground-Truth Independence (derived_from_scanner=false)",
+      "status": "READY",
+      "blocking": false,
+      "detail": "derived_from_scanner=false (established_by=\"\u003cREQUIRED: Independent AppSec Reviewer (Non-FELIX)\u003e\")"
+    },
+    {
+      "number": 9,
+      "id": "ground_truth_timestamp_precedence",
+      "name": "Ground-Truth Timestamp Precedence",
+      "status": "INVALID",
+      "blocking": true,
+      "detail": "ground-truth established_at (2026-11-14T18:00:00Z) is in the future relative to current UTC (2026-11-12T13:39:08Z)"
+    },
+    {
+      "number": 10,
+      "id": "exclusion_consistency",
+      "name": "Exclusion Consistency",
+      "status": "READY",
+      "blocking": false,
+      "detail": "4 path/URL/host exclusions validated consistent with target and ground truth"
+    },
+    {
+      "number": 11,
+      "id": "identity_configuration",
+      "name": "Approved Test Identity Configuration",
+      "status": "MISSING",
+      "blocking": true,
+      "detail": "Ground truth requires authenticated / multi-role identities, but --roles-config was not provided"
+    },
+    {
+      "number": 12,
+      "id": "oast_configuration",
+      "name": "Required OAST Configuration",
+      "status": "NOT_CONFIGURED",
+      "blocking": false,
+      "detail": "Not configured (OAST not required by current ground-truth entries)"
+    },
+    {
+      "number": 13,
+      "id": "browser_dom_configuration",
+      "name": "Required Browser-DOM Configuration",
+      "status": "READY",
+      "blocking": false,
+      "detail": "Local headless browser binary detected"
+    },
+    {
+      "number": 14,
+      "id": "output_directory_permissions",
+      "name": "Output Directory Permissions",
+      "status": "READY",
+      "blocking": false,
+      "detail": "Output directory \"test\\\\evidence\\\\phase10\\\\pilot_campaigns\\\\TEMPLATE_CAMPAIGN\" writable with private 0600/0700 file permissions"
+    },
+    {
+      "number": 15,
+      "id": "retest_prerequisites",
+      "name": "Retest Prerequisites",
+      "status": "INVALID",
+      "blocking": true,
+      "detail": "Retest expectations file contains template placeholders (\u003cfinding_id\u003e)"
+    },
+    {
+      "number": 16,
+      "id": "release_and_ci_blockers",
+      "name": "Release \u0026 CI Blockers",
+      "status": "BLOCKED",
+      "blocking": false,
+      "detail": "5 public-release/CI blockers remain open: Windows Authenticode code signing (P12.10); Production APT signing key provisioning + historical key 8ABF68D0253A139577CA06E7154B088FE357A53D revocation + Git history scrub; CI CGO_ENABLED=1 go test -race verification; CI govulncheck verification; External real-world accuracy benchmark (n\u003e=20 controls/class)",
+      "remediation": "Hold public binary distribution until CI signing and external benchmark gates close; does not block controlled owner-authorized pilot if checks 1-15 are READY"
+    }
+  ]
+}

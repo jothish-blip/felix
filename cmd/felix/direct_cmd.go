@@ -10,6 +10,7 @@ import (
 
 	"felix/pkg/assessment"
 	"felix/pkg/crawler"
+	"felix/pkg/validation"
 	"github.com/google/uuid"
 )
 
@@ -30,6 +31,9 @@ func runDirectModule(moduleName string, runner func([]string) int, args []string
 	var (
 		targetURL        string
 		authorizingParty string
+		scopeManifest    string
+		excludePaths     []string
+		excludeURLs      []string
 		authConfirm      bool
 		allowLoopback    bool
 		allowPrivate     bool
@@ -56,6 +60,43 @@ func runDirectModule(moduleName string, runner func([]string) int, args []string
 			}
 		case strings.HasPrefix(arg, "--authorizing-party="):
 			authorizingParty = strings.TrimPrefix(arg, "--authorizing-party=")
+		case arg == "--scope-manifest":
+			if i+1 < len(args) {
+				scopeManifest = args[i+1]
+				i++
+			}
+		case strings.HasPrefix(arg, "--scope-manifest="):
+			scopeManifest = strings.TrimPrefix(arg, "--scope-manifest=")
+		case arg == "--exclude-paths":
+			if i+1 < len(args) {
+				for _, p := range strings.Split(args[i+1], ",") {
+					if clean := strings.TrimSpace(p); clean != "" {
+						excludePaths = append(excludePaths, clean)
+					}
+				}
+				i++
+			}
+		case strings.HasPrefix(arg, "--exclude-paths="):
+			for _, p := range strings.Split(strings.TrimPrefix(arg, "--exclude-paths="), ",") {
+				if clean := strings.TrimSpace(p); clean != "" {
+					excludePaths = append(excludePaths, clean)
+				}
+			}
+		case arg == "--exclude-urls":
+			if i+1 < len(args) {
+				for _, u := range strings.Split(args[i+1], ",") {
+					if clean := strings.TrimSpace(u); clean != "" {
+						excludeURLs = append(excludeURLs, clean)
+					}
+				}
+				i++
+			}
+		case strings.HasPrefix(arg, "--exclude-urls="):
+			for _, u := range strings.Split(strings.TrimPrefix(arg, "--exclude-urls="), ",") {
+				if clean := strings.TrimSpace(u); clean != "" {
+					excludeURLs = append(excludeURLs, clean)
+				}
+			}
 		case arg == "--allow-loopback":
 			allowLoopback = true
 			cleanedArgs = append(cleanedArgs, arg)
@@ -85,10 +126,10 @@ func runDirectModule(moduleName string, runner func([]string) int, args []string
 
 	// 1. Authorisation Certification Enforcement
 	// Active direct target testing NEVER assumes authorization.
-	if !hasDryRun && !authConfirm && authorizingParty == "" {
+	if !hasDryRun && !authConfirm && authorizingParty == "" && strings.TrimSpace(scopeManifest) == "" {
 		fmt.Fprintf(os.Stderr, "[-] Security refusal: Active security assessment requires explicit authorization certification.\n")
 		fmt.Fprintf(os.Stderr, "    Direct target testing never assumes authorization.\n")
-		fmt.Fprintf(os.Stderr, "    Specify --authorizing-party <name> or --auth-confirm to certify explicit authorization to test the target.\n\n")
+		fmt.Fprintf(os.Stderr, "    Specify --scope-manifest <file>, --authorizing-party <name>, or --auth-confirm to certify explicit authorization.\n\n")
 		return 2
 	}
 
@@ -105,6 +146,29 @@ func runDirectModule(moduleName string, runner func([]string) int, args []string
 	if err != nil || parsed.Host == "" {
 		fmt.Fprintf(os.Stderr, "[-] Error: invalid target URL %q\n", targetURL)
 		return 2
+	}
+
+	var manifestContract *validation.AuthorizationContract
+	if strings.TrimSpace(scopeManifest) != "" {
+		raw, readErr := os.ReadFile(scopeManifest)
+		if readErr != nil {
+			fmt.Fprintf(os.Stderr, "[-] Authorization gate failed: could not read --scope-manifest %q: %v\n", scopeManifest, readErr)
+			return 2
+		}
+		parsedContract, _, parseErr := validation.ParseAuthOrCampaignManifest(raw)
+		if parseErr != nil {
+			fmt.Fprintf(os.Stderr, "[-] Authorization gate failed: invalid --scope-manifest %q: %v\n", scopeManifest, parseErr)
+			return 2
+		}
+		if gateErr := validation.ValidateAuthorizationGate(parsedContract, targetURL, time.Now().UTC()); gateErr != nil {
+			fmt.Fprintf(os.Stderr, "[-] %v\n", gateErr)
+			return 2
+		}
+		manifestContract = &parsedContract
+		if authorizingParty == "" {
+			authorizingParty = parsedContract.AuthorizingParty
+		}
+		authConfirm = true
 	}
 
 	// 3. DNS Resolution & SSRF Scope Validation
@@ -178,17 +242,62 @@ func runDirectModule(moduleName string, runner func([]string) int, args []string
 	}
 	_ = store.AddTarget(&target)
 
+	addExcl := func(exclType, pattern, reason string) {
+		clean := strings.TrimSpace(pattern)
+		if clean == "" {
+			return
+		}
+		_ = store.AddExclusion(&assessment.Exclusion{
+			ID:            "excl-" + uuid.New().String()[:8],
+			AssessmentID:  asm.ID,
+			ExclusionType: exclType,
+			Pattern:       clean,
+			Reason:        reason,
+			CreatedAt:     now,
+		})
+	}
+	if manifestContract != nil {
+		for _, p := range manifestContract.ExcludedPaths {
+			addExcl("PATH_PREFIX", p, "scope manifest path exclusion")
+		}
+		for _, eu := range manifestContract.ExcludedURLs {
+			addExcl("EXACT_URL", eu, "scope manifest URL exclusion")
+		}
+		for _, h := range manifestContract.ExcludedHosts {
+			addExcl("HOSTNAME", h, "scope manifest host exclusion")
+		}
+	}
+	for _, p := range excludePaths {
+		addExcl("PATH_PREFIX", p, "CLI --exclude-paths")
+	}
+	for _, eu := range excludeURLs {
+		addExcl("EXACT_URL", eu, "CLI --exclude-urls")
+	}
+
 	past := now.Add(-1 * time.Hour)
 	future := now.Add(24 * time.Hour)
+	authMethod := "CLI_OPERATOR_ACKNOWLEDGEMENT"
+	scopeDocRef := ""
+	if manifestContract != nil {
+		authMethod = "SIGNED_SCOPE_MANIFEST"
+		scopeDocRef = manifestContract.AuthorizationRef
+		if !manifestContract.WindowStart.IsZero() {
+			past = manifestContract.WindowStart.UTC()
+		}
+		if !manifestContract.WindowEnd.IsZero() {
+			future = manifestContract.WindowEnd.UTC()
+		}
+	}
 	authRec := assessment.AuthorizationRecord{
 		ID:                  fmt.Sprintf("auth-%s", u[:8]),
 		AssessmentID:        asm.ID,
 		AuthorizingParty:    partyName,
-		AuthorizationMethod: "CLI_OPERATOR_ACKNOWLEDGEMENT",
+		AuthorizationMethod: authMethod,
 		Status:              assessment.AuthApproved,
 		ValidFrom:           &past,
 		ValidUntil:          &future,
 		DateReceived:        past,
+		ScopeDocRef:         scopeDocRef,
 		CreatedAt:           now,
 		UpdatedAt:           now,
 	}

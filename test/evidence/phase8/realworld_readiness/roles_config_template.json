@@ -1,0 +1,6 @@
+{
+  "_template_notice": "<TEMPLATE ONLY: Replace placeholder tokens locally in a private 0600 file. NEVER commit real credentials to git or include them in evidence folders.>",
+  "user_a": "<REQUIRED: Dedicated Staging Test Token / Cookie for User A (Owner Role)>",
+  "user_b": "<REQUIRED: Dedicated Staging Test Token / Cookie for User B (Cross-Tenant Role)>",
+  "admin": "<OPTIONAL: Dedicated Staging Admin Token if BFLA / Admin controls are in written scope>"
+}

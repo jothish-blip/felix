@@ -141,7 +141,8 @@ func IsDestructiveFunction(method, rawPath string) bool {
 	lower := strings.ToLower(strings.TrimSpace(rawPath))
 	destructiveTokens := []string{
 		"/delete", "/remove", "/suspend", "/disable", "/deactivate",
-		"/password", "/reset", "/payment", "/billing", "/checkout", "/purchase",
+		"/password", "/reset", "/createdb", "/initdb", "/resetdb",
+		"/payment", "/billing", "/checkout", "/purchase",
 		"/restart", "/shutdown", "/reboot", "/wipe", "/purge", "/truncate", "/drop",
 		"/logout", "/signout",
 	}
@@ -1110,11 +1111,24 @@ func compileSummaryWithContext(results []Result, policies []FunctionPolicy, priv
 }
 
 func joinURL(base, path string) string {
-	base = strings.TrimRight(base, "/")
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
+	trimmedPath := strings.TrimSpace(path)
+	if strings.HasPrefix(trimmedPath, "http://") || strings.HasPrefix(trimmedPath, "https://") {
+		return trimmedPath
 	}
-	return base + path
+	if baseU, err := url.Parse(strings.TrimSpace(base)); err == nil && baseU.Scheme != "" && baseU.Host != "" {
+		if !strings.HasPrefix(trimmedPath, "/") {
+			trimmedPath = "/" + trimmedPath
+		}
+		if relU, relErr := url.Parse(trimmedPath); relErr == nil {
+			origin := url.URL{Scheme: baseU.Scheme, Host: baseU.Host}
+			return origin.ResolveReference(relU).String()
+		}
+	}
+	base = strings.TrimRight(base, "/")
+	if !strings.HasPrefix(trimmedPath, "/") {
+		trimmedPath = "/" + trimmedPath
+	}
+	return base + trimmedPath
 }
 
 // DefaultPolicies returns standard representative function policies for BFLA assessment.

@@ -1,5 +1,5 @@
 {
-  "canonical_payload_sha256": "147b85d511d6e08cd3bb534aa6dcf76f2fff5f753b3e81ac08ed7ada1fd5e0b2",
+  "canonical_payload_sha256": "992a4dd3d7beaf1fd20366dc3acaba073ab2c1e98c09f7daeef12659c2e174da",
   "conclusive_status": "PROVEN_VERIFIED",
   "environment": {
     "arch": "amd64",
@@ -31,11 +31,11 @@
       "zip_slip_protection_verified": true
     },
     "atomic_updates": {
-      "dedup_duration_ms": 5.3157,
+      "dedup_duration_ms": 2.563,
       "duplicate_skipped_count": 200,
       "mutation_count": 200,
-      "records_per_sec": 12577.429802219916,
-      "update_duration_ms": 15.9015,
+      "records_per_sec": 46445.7397645201,
+      "update_duration_ms": 4.3061,
       "updated_count": 200
     },
     "integrity_and_recovery": {
@@ -47,9 +47,9 @@
       "sha256_verification_passed": true
     },
     "offline_archive": {
-      "archive_sha256": "71de7c9d9861c5fe51c4f69e6e0b1214b6d4b22f80810b40aa44ae66d96ba993",
-      "creation_duration_ms": 18.6357,
-      "import_duration_ms": 320.3844,
+      "archive_sha256": "fe3f044ea7f5acadd17e2fd56ab9ec3e90b5cb5b946c960a6a56b391713545e1",
+      "creation_duration_ms": 6.6677,
+      "import_duration_ms": 148.6247,
       "inserted_records": 1000,
       "manifest_version": "1.0",
       "skipped_records": 0,
@@ -96,6 +96,6 @@
       "valid_archive_import": "PASS"
     }
   },
-  "sha256_hash": "147b85d511d6e08cd3bb534aa6dcf76f2fff5f753b3e81ac08ed7ada1fd5e0b2",
-  "timestamp": "2026-11-07T16:35:53Z"
+  "sha256_hash": "992a4dd3d7beaf1fd20366dc3acaba073ab2c1e98c09f7daeef12659c2e174da",
+  "timestamp": "2026-11-12T13:54:30Z"
 }

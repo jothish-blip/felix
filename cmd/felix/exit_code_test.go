@@ -391,6 +391,17 @@ func TestCLI_ExitCode_RealExecutableOSCodes(t *testing.T) {
 	data, _ := json.Marshal(rep)
 	_ = os.WriteFile(sampleScan, data, 0644)
 
+	cleanScan := filepath.Join(tempDir, "clean_scan.json")
+	cleanRep := report.Report{
+		Target:           "https://example.com",
+		CompletionStatus: "COMPLETED",
+		Timestamp:        time.Now().UTC().Format(time.RFC3339),
+		Duration:         "1s",
+	}
+	report.RecalculateReportRisk(&cleanRep)
+	cleanData, _ := json.Marshal(cleanRep)
+	_ = os.WriteFile(cleanScan, cleanData, 0644)
+
 	strictPolicy := filepath.Join(tempDir, "strict.json")
 	_ = os.WriteFile(strictPolicy, []byte(`{"version":"1.0","max_high":0,"fail_on_violation":true}`), 0644)
 
@@ -409,7 +420,8 @@ func TestCLI_ExitCode_RealExecutableOSCodes(t *testing.T) {
 		{"OS exit code 1 for policy threshold violation", []string{"report", sampleScan, "--policy", strictPolicy}, 1},
 		{"OS exit code 0 for policy threshold satisfied", []string{"report", sampleScan, "--policy", permPolicy}, 0},
 		{"OS exit code 2 for unreadable policy file", []string{"report", sampleScan, "--policy", filepath.Join(tempDir, "missing.json")}, 2},
-		{"OS exit code 0 for report with valid --sarif", []string{"report", sampleScan, "--sarif", filepath.Join(tempDir, "out.sarif")}, 0},
+		{"OS exit code 0 for report with valid --sarif", []string{"report", cleanScan, "--sarif", filepath.Join(tempDir, "out.sarif")}, 0},
+		{"OS exit code 1 for report with valid --sarif and findings", []string{"report", sampleScan, "--sarif", filepath.Join(tempDir, "out_findings.sarif")}, 1},
 		{"OS exit code 2 for report with unwritable --sarif path", []string{"report", sampleScan, "--sarif", filepath.Join(tempDir, "nonexistent_dir", "out.sarif")}, 2},
 	}
 

@@ -95,10 +95,26 @@ func NormalizeRouteCandidate(rawPath string, scopeHost string) RouteNormalizatio
 		}
 	}
 
-	// Must start with slash for relative API routes
+	// Strip leading dynamic host prefix placeholder (e.g. "${baseUrl}/rest/user/login" or "{param}/api/users")
+	if strings.HasPrefix(trimmed, "${") {
+		if endIdx := strings.Index(trimmed, "}"); endIdx != -1 && endIdx+1 < len(trimmed) && strings.HasPrefix(trimmed[endIdx+1:], "/") {
+			trimmed = trimmed[endIdx+1:]
+			res.StaticallyResolved = false
+		}
+	} else if strings.HasPrefix(trimmed, "{param}/") {
+		trimmed = strings.TrimPrefix(trimmed, "{param}")
+		res.StaticallyResolved = false
+	}
+
+	// Accept recognized relative API routes without leading slash (e.g., "identity/api/auth/login", "api/v2/users")
 	if !strings.HasPrefix(trimmed, "/") {
-		res.Warnings = append(res.Warnings, "Non-slash-prefixed route ignored")
-		return res
+		if hasRecognizedRelativeAPIPrefix(trimmed) {
+			trimmed = "/" + trimmed
+			res.StaticallyResolved = false
+		} else {
+			res.Warnings = append(res.Warnings, "Non-slash-prefixed route ignored")
+			return res
+		}
 	}
 
 	// Separate path from query string / fragment
@@ -146,6 +162,20 @@ func NormalizeRouteCandidate(rawPath string, scopeHost string) RouteNormalizatio
 	}
 
 	return res
+}
+
+func hasRecognizedRelativeAPIPrefix(p string) bool {
+	low := strings.ToLower(strings.TrimSpace(p))
+	for _, pref := range []string{
+		"api/", "v1/", "v2/", "v3/", "rest/", "graphql",
+		"identity/api/", "workshop/api/", "community/api/", "chatbot/",
+		"auth/", "oauth/", "webhook/",
+	} {
+		if strings.HasPrefix(low, pref) || low == strings.TrimSuffix(pref, "/") {
+			return true
+		}
+	}
+	return false
 }
 
 // sanitizeQuerySecrets redacts API keys and auth tokens from URL query strings.

@@ -1,0 +1,33 @@
+{
+  "allow_state_changing": false,
+  "authorization": {
+    "authorization_ref": "P8-EPHEMERAL-CLI-01",
+    "authorized_targets": [
+      "http://127.0.0.1:64375"
+    ],
+    "authorizing_party": "Phase8-Validation-Owner",
+    "confirmed": true,
+    "excluded_paths": [
+      "/admin/reset"
+    ],
+    "scope_mode": "EXPLICIT_ALLOWLIST_WITH_EXCLUSIONS",
+    "signed_by": "Phase8 Harness Lead",
+    "window_end": "2026-11-12T11:34:24Z",
+    "window_start": "2026-11-12T11:04:24Z"
+  },
+  "blind_execution": true,
+  "environment": "EPHEMERAL_HARNESS",
+  "executed_at": "2026-11-12T11:19:24Z",
+  "ground_truth_registered_at": "2026-11-12T11:14:24Z",
+  "ground_truth_registry_id": "gt-phase8-cli-ephemeral-v1",
+  "ground_truth_sha256": "sha256:a70329e9bfebbcf4942c5a191fecc178db7b3daedf78c293c2fd9cb0e07201a8",
+  "manifest_id": "p8-cli-ephemeral-campaign-01",
+  "profile": "full",
+  "roles_configured": [
+    "user_a",
+    "user_b"
+  ],
+  "safe_mode": false,
+  "target_name": "Phase8EphemeralCLIApp",
+  "target_url": "http://127.0.0.1:64375"
+}

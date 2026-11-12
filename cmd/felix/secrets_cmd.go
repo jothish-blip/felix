@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -20,14 +21,16 @@ import (
 // runSecrets executes the "felix secrets" subcommand.
 func runSecrets(args []string) int {
 	var (
-		filePath      string
-		targetURL     string
-		rawString     string
-		jsonOutput    bool
-		outputPath    string
-		allowLoopback bool
-		allowPrivate  bool
-		verbose       bool
+		filePath           string
+		targetURL          string
+		rawString          string
+		jsonOutput         bool
+		outputPath         string
+		allowLoopback      bool
+		allowPrivate       bool
+		insecureSkipVerify bool
+		scopeManifestPath  string
+		verbose            bool
 	)
 
 	for i := 0; i < len(args); i++ {
@@ -53,12 +56,21 @@ func runSecrets(args []string) int {
 				outputPath = args[i+1]
 				i++
 			}
+		case arg == "--scope-manifest":
+			if i+1 < len(args) {
+				scopeManifestPath = args[i+1]
+				i++
+			}
+		case strings.HasPrefix(arg, "--scope-manifest="):
+			scopeManifestPath = strings.TrimPrefix(arg, "--scope-manifest=")
 		case arg == "--json":
 			jsonOutput = true
 		case arg == "--allow-loopback":
 			allowLoopback = true
 		case arg == "--allow-private":
 			allowPrivate = true
+		case arg == "--insecure":
+			insecureSkipVerify = true
 		case arg == "--verbose" || arg == "-v":
 			verbose = true
 		case arg == "--help" || arg == "-h":
@@ -152,6 +164,22 @@ func runSecrets(args []string) int {
 			return 2
 		}
 
+		var (
+			manifestAllowed  func(string) bool
+			manifestExcluded func(string) bool
+			windowEnd        time.Time
+		)
+		if strings.TrimSpace(scopeManifestPath) != "" {
+			var scopeErr error
+			manifestAllowed, manifestExcluded, windowEnd, scopeErr = buildAssessScopePolicy(&AssessOptions{
+				ScopeManifest: scopeManifestPath,
+			}, targetURL, time.Now().UTC())
+			if scopeErr != nil {
+				fmt.Fprintf(os.Stderr, "[-] Authorization gate failed: %v\n", scopeErr)
+				return 2
+			}
+		}
+
 		host := parsed.Hostname()
 		ips, _ := net.LookupIP(host)
 		if len(ips) > 0 {
@@ -163,15 +191,27 @@ func runSecrets(args []string) int {
 			}
 		}
 
-		tr := &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		allowLoop := allowLoopback || os.Getenv("FELIX_ALLOW_LOOPBACK") == "true"
+		allowPriv := allowPrivate || os.Getenv("FELIX_ALLOW_PRIVATE") == "true"
+		var tr http.RoundTripper = &http.Transport{
+			TLSClientConfig: &tls.Config{
+				MinVersion:         tls.VersionTLS12,
+				InsecureSkipVerify: insecureSkipVerify,
+			},
 			DialContext: crawler.NewSafeDialContext(crawler.SafeDialerOptions{
 				Timeout:         10 * time.Second,
-				AllowLoopback:   allowLoopback || os.Getenv("FELIX_ALLOW_LOOPBACK") == "true",
-				AllowPrivateIPs: allowPrivate || os.Getenv("FELIX_ALLOW_PRIVATE") == "true",
+				AllowLoopback:   allowLoop,
+				AllowPrivateIPs: allowPriv,
 			}),
 		}
-		client := &http.Client{Transport: tr, Timeout: 15 * time.Second}
+		if !windowEnd.IsZero() {
+			tr = wrapWindowGuard(tr, context.Background(), windowEnd)
+		}
+		client := &http.Client{
+			Transport:     tr,
+			Timeout:       15 * time.Second,
+			CheckRedirect: buildSafeRedirectPolicy(targetURL, manifestAllowed, manifestExcluded, allowLoop, allowPriv),
+		}
 
 		resp, err := client.Get(targetURL)
 		if err != nil {
@@ -250,7 +290,7 @@ func runSecrets(args []string) int {
 	if outputPath != "" {
 		data, err := json.MarshalIndent(allFindings, "", "  ")
 		if err == nil {
-			_ = os.WriteFile(outputPath, data, 0644)
+			_ = writePrivateFile(outputPath, data)
 			fmt.Printf("[+] Findings exported to: %s\n", outputPath)
 		}
 	}
@@ -269,6 +309,7 @@ func printSecretsHelp() {
 	fmt.Println("  --json                 Output findings formatted as JSON to stdout")
 	fmt.Println("  --allow-loopback       Allow scanning loopback/localhost URLs (testing only)")
 	fmt.Println("  --allow-private        Allow scanning RFC 1918 private IP URLs")
+	fmt.Println("  --insecure             Allow insecure/self-signed TLS certificates (not recommended)")
 	fmt.Println("  --verbose, -v          Show raw evidence snippets")
 	fmt.Println("  --help, -h             Show this help message")
 }

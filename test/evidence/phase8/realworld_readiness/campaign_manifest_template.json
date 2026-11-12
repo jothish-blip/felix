@@ -1,0 +1,30 @@
+{
+  "manifest_id": "pilot-campaign-template-01",
+  "target_name": "<REQUIRED: Target Application Name>",
+  "target_url": "https://staging.example-authorized-app.internal",
+  "environment": "DEPLOYED_AUTHORIZED",
+  "authorization": {
+    "authorizing_party": "<REQUIRED: Application Owner / Legal Entity Name>",
+    "signed_by": "<REQUIRED: Authorized Signatory>",
+    "authorization_ref": "<REQUIRED: Signed Ticket / SOW / RoE Reference ID>",
+    "confirmed": false,
+    "authorized_targets": [
+      "https://staging.example-authorized-app.internal"
+    ],
+    "scope_mode": "EXPLICIT_ALLOWLIST_WITH_EXCLUSIONS",
+    "allowed_methods": ["GET", "HEAD", "OPTIONS"],
+    "excluded_paths": ["/admin/reset", "/admin/shutdown", "/billing/charge", "/logout"],
+    "window_start": "2026-11-15T00:00:00Z",
+    "window_end": "2026-11-16T00:00:00Z",
+    "notes": "Run `felix validate hash-gt` on ground truth BEFORE scan and paste digest into ground_truth_sha256."
+  },
+  "ground_truth_registry_id": "gt-pilot-template-v1",
+  "ground_truth_sha256": "<REQUIRED: Compute with felix validate hash-gt --ground-truth ground_truth.json>",
+  "ground_truth_registered_at": "2026-11-14T18:00:00Z",
+  "blind_execution": true,
+  "profile": "full",
+  "roles_configured": ["user_a", "user_b"],
+  "safe_mode": false,
+  "allow_state_changing": false,
+  "executed_at": "2026-11-15T01:00:00Z"
+}

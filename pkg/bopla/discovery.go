@@ -162,30 +162,43 @@ func isHighlySensitiveExposureField(leafName string, val any) (sensitive bool, c
 
 	// Clear credential/secret/hidden-internal exposure fields
 	secretKeys := map[string]string{
-		"password_hash":  "CREDENTIALS",
-		"hashed_password":"CREDENTIALS",
-		"password_salt":  "CREDENTIALS",
-		"api_secret":     "CREDENTIALS",
-		"secret_key":     "CREDENTIALS",
-		"private_key":    "CREDENTIALS",
-		"client_secret":  "CREDENTIALS",
-		"signing_secret": "CREDENTIALS",
-		"billing_secret": "CREDENTIALS",
-		"internal_notes": "INTERNAL_DATA",
-		"admin_notes":    "INTERNAL_DATA",
-		"admin_comment":  "INTERNAL_DATA",
-		"staff_notes":    "INTERNAL_DATA",
-		"ssn":            "PII",
-		"tax_id":         "PII",
-		"salary":         "FINANCIAL",
-		"audit_flags":    "INTERNAL_DATA",
-		"secret_flag":    "INTERNAL_DATA",
+		"password":        "CREDENTIALS",
+		"passwd":          "CREDENTIALS",
+		"passcode":        "CREDENTIALS",
+		"user_password":   "CREDENTIALS",
+		"password_hash":   "CREDENTIALS",
+		"hashed_password": "CREDENTIALS",
+		"password_salt":   "CREDENTIALS",
+		"api_secret":      "CREDENTIALS",
+		"secret_key":      "CREDENTIALS",
+		"secret":          "CREDENTIALS",
+		"secret_content":  "CREDENTIALS",
+		"private_key":     "CREDENTIALS",
+		"client_secret":   "CREDENTIALS",
+		"signing_secret":  "CREDENTIALS",
+		"billing_secret":  "CREDENTIALS",
+		"access_token":    "CREDENTIALS",
+		"refresh_token":   "CREDENTIALS",
+		"auth_token":      "CREDENTIALS",
+		"internal_notes":  "INTERNAL_DATA",
+		"admin_notes":     "INTERNAL_DATA",
+		"admin_comment":   "INTERNAL_DATA",
+		"staff_notes":     "INTERNAL_DATA",
+		"ssn":             "PII",
+		"tax_id":          "PII",
+		"salary":          "FINANCIAL",
+		"audit_flags":     "INTERNAL_DATA",
+		"secret_flag":     "INTERNAL_DATA",
 	}
 	if cat, ok := secretKeys[low]; ok {
 		secretVal := false
 		if s, ok := val.(string); ok {
 			sTrim := strings.TrimSpace(s)
-			if rxSSNPattern.MatchString(sTrim) || rxBcryptOrHash.MatchString(sTrim) || rxAPIKeyPattern.MatchString(sTrim) || strings.HasPrefix(low, "internal_") || strings.HasPrefix(low, "admin_") || low == "ssn" || low == "password_hash" || strings.Contains(low, "secret") {
+			nonEmptyUnmasked := len(sTrim) >= 3 && sTrim != "null" && sTrim != "<nil>" && !IsMasked(sTrim, "****")
+			if rxSSNPattern.MatchString(sTrim) || rxBcryptOrHash.MatchString(sTrim) || rxAPIKeyPattern.MatchString(sTrim) ||
+				strings.HasPrefix(low, "internal_") || strings.HasPrefix(low, "admin_") || low == "ssn" ||
+				low == "password_hash" || strings.Contains(low, "secret") ||
+				(nonEmptyUnmasked && (low == "password" || low == "passwd" || low == "passcode" || low == "user_password" || low == "access_token" || low == "refresh_token" || low == "auth_token" || low == "private_key")) {
 				secretVal = true
 			}
 		} else if val != nil && (strings.HasPrefix(low, "internal_") || strings.HasPrefix(low, "admin_") || low == "audit_flags") {
@@ -300,6 +313,12 @@ func resolveOpenAPISchema(doc, schema map[string]interface{}, depth int) map[str
 		}
 	}
 
+	if items, ok := schema["items"].(map[string]interface{}); ok {
+		for k, v := range resolveOpenAPISchema(doc, items, depth+1) {
+			out[k] = v
+		}
+	}
+
 	props, _ := schema["properties"].(map[string]interface{})
 	for propName, raw := range props {
 		pm, ok := raw.(map[string]interface{})
@@ -347,6 +366,20 @@ func resolveOpenAPISchema(doc, schema map[string]interface{}, depth int) map[str
 			meta.adminOnly = true
 		}
 		out[propName] = meta
+		if nestedProps, ok := pm["properties"].(map[string]interface{}); ok && len(nestedProps) > 0 {
+			for nk, nv := range resolveOpenAPISchema(doc, pm, depth+1) {
+				if _, exists := out[nk]; !exists {
+					out[nk] = nv
+				}
+			}
+		}
+		if nestedItems, ok := pm["items"].(map[string]interface{}); ok {
+			for nk, nv := range resolveOpenAPISchema(doc, nestedItems, depth+1) {
+				if _, exists := out[nk]; !exists {
+					out[nk] = nv
+				}
+			}
+		}
 	}
 	return out
 }

@@ -10,7 +10,7 @@
     "sg.vp.owasp_mobile.omtg_android",
     "com.android.dns.exploitaes"
   ],
-  "canonical_payload_sha256": "ae55a9270274269cc340d7f10a1f86abd756dac7a5def6e3ef557268073a9d54",
+  "canonical_payload_sha256": "4d4d26b6b26d3a2ace56625f0b1fe81198e21afd542c8c60259eb6bc6ac74bbe",
   "conclusive_status": "ENVIRONMENTAL_GATE_BLOCKED",
   "environment": {
     "environmental_blocker": "No running Android Virtual Device (AVD) or physical device attached to host ADB daemon. The only local SDK system image ('system-images;android-37.0;google_apis_playstore;x86_64') is a non-root Google Play production build where 'adbd' cannot run as root. Device-side frida-server binary matching host Frida 17.25.1 is not deployed on target device.",
@@ -73,9 +73,9 @@
     },
     "events_captured": [
       {
-        "id": "evt_1794065566100186600_1",
+        "id": "evt_1794491750168983700_1",
         "type": "lifecycle",
-        "timestamp": "2026-11-07T15:32:46.1001866Z",
+        "timestamp": "2026-11-12T13:55:50.1689837Z",
         "package_name": "com.android.insecurebankv2",
         "class": "com.android.insecurebankv2.DoLogin",
         "method": "onCreate",
@@ -85,9 +85,9 @@
         "raw_message": "{\"felix_type\": \"lifecycle\", \"class\": \"com.android.insecurebankv2.DoLogin\", \"method\": \"onCreate\", \"details\": {\"event\": \"ACTIVITY_CREATED\"}}"
       },
       {
-        "id": "evt_1794065566100186600_2",
+        "id": "evt_1794491750168983700_2",
         "type": "lifecycle",
-        "timestamp": "2026-11-07T15:32:46.1001866Z",
+        "timestamp": "2026-11-12T13:55:50.1689837Z",
         "package_name": "com.android.insecurebankv2",
         "class": "ClassLoader",
         "method": "loadClass",
@@ -97,9 +97,9 @@
         "raw_message": "{\"felix_type\": \"lifecycle\", \"class\": \"ClassLoader\", \"method\": \"loadClass\", \"details\": {\"loaded_class\": \"com.android.insecurebankv2.CryptoClass\"}}"
       },
       {
-        "id": "evt_1794065566100186600_3",
+        "id": "evt_1794491750168983700_3",
         "type": "crypto",
-        "timestamp": "2026-11-07T15:32:46.1001866Z",
+        "timestamp": "2026-11-12T13:55:50.1689837Z",
         "package_name": "com.android.insecurebankv2",
         "class": "javax.crypto.Cipher",
         "method": "getInstance",
@@ -110,9 +110,9 @@
         "raw_message": "{\"felix_type\": \"crypto\", \"class\": \"javax.crypto.Cipher\", \"method\": \"getInstance\", \"details\": {\"transformation\": \"AES/CBC/PKCS5Padding\", \"algorithm\": \"AES\"}}"
       },
       {
-        "id": "evt_1794065566100186600_4",
+        "id": "evt_1794491750168983700_4",
         "type": "crypto",
-        "timestamp": "2026-11-07T15:32:46.1001866Z",
+        "timestamp": "2026-11-12T13:55:50.1689837Z",
         "package_name": "com.android.insecurebankv2",
         "class": "javax.crypto.spec.IvParameterSpec",
         "method": "\u003cinit\u003e",
@@ -123,9 +123,9 @@
         "raw_message": "{\"felix_type\": \"crypto\", \"class\": \"javax.crypto.spec.IvParameterSpec\", \"method\": \"\u003cinit\u003e\", \"details\": {\"iv_length_bytes\": 16, \"iv_all_zeros\": true}}"
       },
       {
-        "id": "evt_1794065566100186600_5",
+        "id": "evt_1794491750168983700_5",
         "type": "crypto",
-        "timestamp": "2026-11-07T15:32:46.1001866Z",
+        "timestamp": "2026-11-12T13:55:50.1689837Z",
         "package_name": "com.android.insecurebankv2",
         "class": "javax.crypto.Cipher",
         "method": "init",
@@ -139,9 +139,9 @@
         "raw_message": "{\"felix_type\": \"crypto\", \"class\": \"javax.crypto.Cipher\", \"method\": \"init\", \"details\": {\"opmode\": \"ENCRYPT_MODE\", \"key_algorithm\": \"AES\", \"key_length_bytes\": 16, \"iv_length_bytes\": 16, \"iv_all_zeros\": true}}"
       },
       {
-        "id": "evt_1794065566100186600_6",
+        "id": "evt_1794491750168983700_6",
         "type": "network",
-        "timestamp": "2026-11-07T15:32:46.1001866Z",
+        "timestamp": "2026-11-12T13:55:50.1689837Z",
         "package_name": "com.android.insecurebankv2",
         "class": "java.net.HttpURLConnection",
         "method": "connect",
@@ -156,9 +156,9 @@
         "raw_message": "{\"felix_type\": \"network\", \"class\": \"java.net.HttpURLConnection\", \"method\": \"connect\", \"details\": {\"host\": \"10.0.2.2\", \"port\": 8888, \"protocol\": \"http\", \"path\": \"/login\", \"method\": \"POST\", \"cleartext\": true}}"
       },
       {
-        "id": "evt_1794065566100186600_7",
+        "id": "evt_1794491750168983700_7",
         "type": "storage",
-        "timestamp": "2026-11-07T15:32:46.1001866Z",
+        "timestamp": "2026-11-12T13:55:50.1689837Z",
         "package_name": "com.android.insecurebankv2",
         "class": "android.content.SharedPreferences$Editor",
         "method": "putString",
@@ -183,7 +183,7 @@
         "severity": "MEDIUM",
         "confidence": "HIGH",
         "classification": "CONFIRMED",
-        "evidence_source": "Frida hook: java.net.HttpURLConnection#connect at 15:32:46.100",
+        "evidence_source": "Frida hook: java.net.HttpURLConnection#connect at 13:55:50.168",
         "explanation": "Target application initiated unencrypted HTTP communication with 10.0.2.2:/login. Plaintext traffic is subject to interception and tampering.",
         "remediation": "Enforce HTTPS across all network endpoints and declare cleartextTrafficPermitted=false in Network Security Configuration."
       },
@@ -199,7 +199,7 @@
         "severity": "MEDIUM",
         "confidence": "HIGH",
         "classification": "CONFIRMED",
-        "evidence_source": "Frida hook: android.content.SharedPreferences$Editor#putString at 15:32:46.100",
+        "evidence_source": "Frida hook: android.content.SharedPreferences$Editor#putString at 13:55:50.168",
         "explanation": "Application persisted sensitive key \"saved_password\" to SharedPreferences in unencrypted XML format.",
         "remediation": "Use EncryptedSharedPreferences from Android Jetpack Security."
       },
@@ -215,7 +215,7 @@
         "severity": "MEDIUM",
         "confidence": "HIGH",
         "classification": "CONFIRMED",
-        "evidence_source": "Frida hook: javax.crypto.Cipher#init at 15:32:46.100",
+        "evidence_source": "Frida hook: javax.crypto.Cipher#init at 13:55:50.168",
         "explanation": "Target application dynamically passed an all-zero IV (16 bytes) to javax.crypto.Cipher#init. Static IV reuse breaks semantic confidentiality across cipher operations.",
         "remediation": "Generate fresh, random 16-byte IVs for each encryption operation using SecureRandom."
       },
@@ -231,7 +231,7 @@
         "severity": "MEDIUM",
         "confidence": "HIGH",
         "classification": "CONFIRMED",
-        "evidence_source": "Frida hook: javax.crypto.spec.IvParameterSpec#\u003cinit\u003e at 15:32:46.100",
+        "evidence_source": "Frida hook: javax.crypto.spec.IvParameterSpec#\u003cinit\u003e at 13:55:50.168",
         "explanation": "Target application dynamically passed an all-zero IV (16 bytes) to javax.crypto.spec.IvParameterSpec#\u003cinit\u003e. Static IV reuse breaks semantic confidentiality across cipher operations.",
         "remediation": "Generate fresh, random 16-byte IVs for each encryption operation using SecureRandom."
       }
@@ -251,6 +251,6 @@
   "subphase_id": "6.3",
   "target_subsystem": "Mobile Application Security Subsystem (pkg/mobile)",
   "test_command": "go test -v -count=1 ./pkg/mobile -run TestDynamic_Live_EnvironmentGate_And_LaboratoryVerification",
-  "timestamp": "2026-11-07T15:32:46Z",
+  "timestamp": "2026-11-12T13:55:50Z",
   "title": "Frida-Based Mobile Dynamic Instrumentation Engine Proof"
 }

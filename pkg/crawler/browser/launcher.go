@@ -64,7 +64,7 @@ func DefaultConfig() Config {
 		DisableGPU:           true,
 		NoSandbox:            true,
 		DisableDevShmUsage:   true,
-		IgnoreCertErrors:     true,
+		IgnoreCertErrors:     false,
 		AutoCleanUserDataDir: true,
 		AdditionalFlags:      make(map[string]any),
 	}

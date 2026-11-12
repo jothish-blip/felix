@@ -30,8 +30,9 @@ var (
 	// Metro React Native __d pattern
 	rxMetroModule = regexp.MustCompile(`__d\s*\(\s*function\s*\([^)]*\)\s*\{`)
 
-	// Generic API path literals
-	rxDirectAPIPath = regexp.MustCompile(`["'](/(?:api|v[0-9]+|graphql|auth|webhook|oauth)(?:/[a-zA-Z0-9_\-\./{}:$[\]]*)?)["']`)
+	// Generic API path literals (slash-prefixed and framework relative API paths)
+	rxDirectAPIPath   = regexp.MustCompile(`["'](/(?:api|v[0-9]+|rest|graphql|auth|webhook|oauth|identity|workshop|community|chatbot)(?:/[a-zA-Z0-9_\-\./{}:$[\]]*)?)["']`)
+	rxRelativeAPIPath = regexp.MustCompile(`["']((?:api|v[0-9]+|rest|identity/api|workshop/api|community/api|chatbot|graphql)(?:/[a-zA-Z0-9_\-\./{}:$[\]]+))["']`)
 
 	// Source map reference pattern
 	rxAnySourceMapURL = regexp.MustCompile(`(?m)(?://|/\*)[#@]\s*sourceMappingURL=\s*(\S+?)(?:\s*\*\/|\s*$)`)
@@ -284,54 +285,119 @@ func (be *BundleExtractor) extractWebpackChunks(src, assetURL string) []string {
 	return chunkURLs
 }
 
-// collectConstants traverses AST nodes and records variable declarations for static concatenation resolution.
+// isInterestingAPIRoute checks whether a string/concatenated expression represents an API or backend endpoint path.
+func isInterestingAPIRoute(p string) bool {
+	low := strings.ToLower(strings.TrimSpace(p))
+	if low == "" || len(low) > 512 {
+		return false
+	}
+	if strings.HasPrefix(low, "{param}/") {
+		low = strings.TrimPrefix(low, "{param}")
+	}
+	for _, ext := range []string{".js", ".mjs", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff", ".woff2", ".ttf", ".eot", ".map"} {
+		if strings.HasSuffix(low, ext) {
+			return false
+		}
+	}
+	for _, kw := range []string{
+		"/api", "/v1", "/v2", "/v3", "/rest", "/graphql", "/auth/", "/oauth", "/webhook",
+		"/identity/", "/workshop/", "/community/", "/chatbot/",
+	} {
+		if strings.Contains(low, kw) {
+			return true
+		}
+	}
+	return hasRecognizedRelativeAPIPrefix(low)
+}
+
+// collectConstants recursively traverses AST nodes (including Webpack/IIFE closures) and records
+// scalar variable bindings plus object property route maps (e.g., sg.LOGIN = "api/auth/login").
 func (be *BundleExtractor) collectConstants(nodes []ASTNode, constants map[string]string) {
-	for _, n := range nodes {
-		if decl, ok := n.(*VariableDeclarationNode); ok {
-			for _, d := range decl.Declarations {
-				if d.Init != nil {
-					if strLit, isStr := d.Init.(*StringLiteralNode); isStr {
-						constants[d.Name] = strLit.Value
-					} else if tplLit, isTpl := d.Init.(*TemplateLiteralNode); isTpl && len(tplLit.Quasis) == 1 && len(tplLit.Expressions) == 0 {
-						constants[d.Name] = tplLit.Quasis[0]
-					} else if binExpr, isBin := d.Init.(*BinaryExpressionNode); isBin {
-						resolved := be.evalBinaryString(binExpr, constants)
-						if resolved != "" {
-							constants[d.Name] = resolved
+	var walkConst func(n ASTNode, depth int)
+	walkConst = func(n ASTNode, depth int) {
+		if n == nil || depth > 64 {
+			return
+		}
+		switch node := n.(type) {
+		case *VariableDeclarationNode:
+			for _, d := range node.Declarations {
+				if d.Init == nil {
+					continue
+				}
+				if objExpr, isObj := d.Init.(*ObjectExpressionNode); isObj && d.Name != "" {
+					for _, prop := range objExpr.Properties {
+						if val := be.resolveNodeString(prop.Value, constants); val != "" {
+							constants[d.Name+"."+prop.Key] = val
+						} else if prop.Value != nil {
+							walkConst(prop.Value, depth+1)
 						}
 					}
+					continue
 				}
+				if val := be.resolveNodeString(d.Init, constants); val != "" {
+					constants[d.Name] = val
+				} else {
+					walkConst(d.Init, depth+1)
+				}
+			}
+		case *AssignmentExpressionNode:
+			lhs := ""
+			switch l := node.Left.(type) {
+			case *IdentifierNode:
+				lhs = l.Name
+			case *MemberExpressionNode:
+				lhs = be.formatCalleeName(l)
+			}
+			if lhs != "" && node.Right != nil {
+				if objExpr, isObj := node.Right.(*ObjectExpressionNode); isObj {
+					for _, prop := range objExpr.Properties {
+						if val := be.resolveNodeString(prop.Value, constants); val != "" {
+							constants[lhs+"."+prop.Key] = val
+						}
+					}
+				} else if val := be.resolveNodeString(node.Right, constants); val != "" {
+					constants[lhs] = val
+				}
+			}
+			walkConst(node.Right, depth+1)
+		case *FunctionExpressionNode:
+			for _, stmt := range node.Body {
+				walkConst(stmt, depth+1)
+			}
+		case *CallExpressionNode:
+			walkConst(node.Callee, depth+1)
+			for _, arg := range node.Arguments {
+				walkConst(arg, depth+1)
+			}
+		case *ArrayExpressionNode:
+			for _, el := range node.Elements {
+				walkConst(el, depth+1)
+			}
+		case *ObjectExpressionNode:
+			for _, prop := range node.Properties {
+				walkConst(prop.Value, depth+1)
 			}
 		}
 	}
+
+	for _, n := range nodes {
+		walkConst(n, 0)
+	}
 }
 
-// evalBinaryString evaluates a binary addition expression using known constants.
+// evalBinaryString evaluates a binary addition expression using known constants or object members.
 func (be *BundleExtractor) evalBinaryString(bin *BinaryExpressionNode, constants map[string]string) string {
 	if bin.Operator != "+" {
 		return ""
 	}
 
-	evalSide := func(side ASTNode) string {
-		switch s := side.(type) {
-		case *StringLiteralNode:
-			return s.Value
-		case *IdentifierNode:
-			return constants[s.Name]
-		case *BinaryExpressionNode:
-			return be.evalBinaryString(s, constants)
-		case *TemplateLiteralNode:
-			if len(s.Quasis) == 1 && len(s.Expressions) == 0 {
-				return s.Quasis[0]
-			}
-		}
-		return ""
-	}
-
-	left := evalSide(bin.Left)
-	right := evalSide(bin.Right)
+	left := be.resolveNodeString(bin.Left, constants)
+	right := be.resolveNodeString(bin.Right, constants)
 	if left != "" && right != "" {
 		return left + right
+	}
+	if left == "" && isInterestingAPIRoute(right) {
+		return right
 	}
 	return ""
 }
@@ -363,7 +429,7 @@ func (be *BundleExtractor) traverseAST(nodes []ASTNode, constants map[string]str
 		case *BinaryExpressionNode:
 			if node.Operator == "+" {
 				resolved := be.evalBinaryString(node, constants)
-				if strings.HasPrefix(resolved, "/") && (strings.Contains(resolved, "/api") || strings.Contains(resolved, "/v1")) {
+				if isInterestingAPIRoute(resolved) {
 					norm := NormalizeRouteCandidate(resolved, be.options.TargetHost)
 					if norm.NormalizedPath != "" && norm.IsInScope {
 						candidates = append(candidates, RouteCandidate{
@@ -400,6 +466,9 @@ func (be *BundleExtractor) traverseAST(nodes []ASTNode, constants map[string]str
 
 		case *ObjectExpressionNode:
 			for _, prop := range node.Properties {
+				if val := be.resolveNodeString(prop.Value, constants); val != "" && isInterestingAPIRoute(val) {
+					be.addCandidateIfRoute(val, "UNKNOWN", "AST_OBJECT_ROUTE_MAP", SourceTypeJavaScriptAST, prop.Line, prop.Col, assetURL, bundleType, &candidates)
+				}
 				walk(prop.Value)
 			}
 
@@ -538,6 +607,25 @@ func (be *BundleExtractor) inspectCallExpression(call *CallExpressionNode, const
 		}
 		return
 	}
+
+	// 4. Generic Angular / framework HTTP client calls: this.http.get(url), client.post(url), *.request(method, url), xhr.open(method, url)
+	if (strings.HasSuffix(lowerCallee, ".request") || strings.HasSuffix(lowerCallee, ".open")) && len(call.Arguments) >= 2 {
+		reqMethod := strings.ToUpper(strings.TrimSpace(be.resolveNodeString(call.Arguments[0], constants)))
+		rawURL := be.resolveNodeString(call.Arguments[1], constants)
+		if reqMethod == "GET" || reqMethod == "POST" || reqMethod == "PUT" || reqMethod == "DELETE" || reqMethod == "PATCH" {
+			if strings.HasPrefix(rawURL, "/") || strings.HasPrefix(rawURL, "http") || isInterestingAPIRoute(rawURL) {
+				be.addCandidateIfRoute(rawURL, reqMethod, "AST_CALL_HTTP_CLIENT", SourceTypeJavaScriptAST, call.Line, call.Col, assetURL, bundleType, out)
+			}
+		}
+		return
+	}
+	if method != "UNKNOWN" && len(call.Arguments) > 0 {
+		rawURL := be.resolveNodeString(call.Arguments[0], constants)
+		if strings.HasPrefix(rawURL, "/") || strings.HasPrefix(rawURL, "http") || isInterestingAPIRoute(rawURL) {
+			be.addCandidateIfRoute(rawURL, method, "AST_CALL_HTTP_CLIENT", SourceTypeJavaScriptAST, call.Line, call.Col, assetURL, bundleType, out)
+		}
+		return
+	}
 }
 
 // inspectTemplateLiteral extracts API paths embedded in template literals: `/api/v1/users/${id}`
@@ -551,8 +639,8 @@ func (be *BundleExtractor) inspectTemplateLiteral(tpl *TemplateLiteralNode, cons
 		sb.WriteString(q)
 		if i < len(tpl.Expressions) {
 			// If expression resolves to static constant, interpolate it; otherwise placeholder
-			if ident, ok := tpl.Expressions[i].(*IdentifierNode); ok && constants[ident.Name] != "" {
-				sb.WriteString(constants[ident.Name])
+			if resolved := be.resolveNodeString(tpl.Expressions[i], constants); resolved != "" {
+				sb.WriteString(resolved)
 			} else {
 				sb.WriteString("{param}")
 			}
@@ -560,7 +648,10 @@ func (be *BundleExtractor) inspectTemplateLiteral(tpl *TemplateLiteralNode, cons
 	}
 
 	reconstructed := sb.String()
-	if strings.HasPrefix(reconstructed, "/") && (strings.Contains(reconstructed, "/api") || strings.Contains(reconstructed, "/v1") || strings.Contains(reconstructed, "/graphql")) {
+	if strings.HasPrefix(reconstructed, "{param}/") {
+		reconstructed = strings.TrimPrefix(reconstructed, "{param}")
+	}
+	if isInterestingAPIRoute(reconstructed) {
 		be.addCandidateIfRoute(reconstructed, "UNKNOWN", "AST_TEMPLATE_LITERAL", SourceTypeJavaScriptAST, tpl.Line, tpl.Col, assetURL, bundleType, out)
 	}
 }
@@ -588,6 +679,8 @@ func (be *BundleExtractor) resolveNodeString(node ASTNode, constants map[string]
 		return n.Value
 	case *IdentifierNode:
 		return constants[n.Name]
+	case *MemberExpressionNode:
+		return constants[be.formatCalleeName(n)]
 	case *BinaryExpressionNode:
 		return be.evalBinaryString(n, constants)
 	case *TemplateLiteralNode:
@@ -638,25 +731,27 @@ func (be *BundleExtractor) extractDirectStringLiterals(src, assetURL, bundleType
 		seen[c.Path] = true
 	}
 
-	for _, match := range rxDirectAPIPath.FindAllStringSubmatch(src, -1) {
-		if len(match) > 1 {
-			rawPath := match[1]
-			norm := NormalizeRouteCandidate(rawPath, be.options.TargetHost)
-			if norm.NormalizedPath != "" && norm.IsInScope && !seen[norm.NormalizedPath] {
-				seen[norm.NormalizedPath] = true
-				candidates = append(candidates, RouteCandidate{
-					ID:               GenerateRouteCandidateID(norm.NormalizedPath, "UNKNOWN", assetURL),
-					Path:             norm.NormalizedPath,
-					RawPath:          rawPath,
-					HTTPMethod:       "UNKNOWN",
-					OriginatingAsset: assetURL,
-					BundleType:       bundleType,
-					SourceType:       SourceTypeJavaScriptAST,
-					ExtractionMethod: "DIRECT_STRING_LITERAL",
-					Confidence:       ConfidenceConfirmed,
-					IsLiteral:        true,
-					DiscoveredAt:     time.Now().UTC(),
-				})
+	for _, re := range []*regexp.Regexp{rxDirectAPIPath, rxRelativeAPIPath} {
+		for _, match := range re.FindAllStringSubmatch(src, -1) {
+			if len(match) > 1 {
+				rawPath := match[1]
+				norm := NormalizeRouteCandidate(rawPath, be.options.TargetHost)
+				if norm.NormalizedPath != "" && norm.IsInScope && !seen[norm.NormalizedPath] {
+					seen[norm.NormalizedPath] = true
+					candidates = append(candidates, RouteCandidate{
+						ID:               GenerateRouteCandidateID(norm.NormalizedPath, "UNKNOWN", assetURL),
+						Path:             norm.NormalizedPath,
+						RawPath:          rawPath,
+						HTTPMethod:       "UNKNOWN",
+						OriginatingAsset: assetURL,
+						BundleType:       bundleType,
+						SourceType:       SourceTypeJavaScriptAST,
+						ExtractionMethod: "DIRECT_STRING_LITERAL",
+						Confidence:       ConfidenceConfirmed,
+						IsLiteral:        true,
+						DiscoveredAt:     time.Now().UTC(),
+					})
+				}
 			}
 		}
 	}

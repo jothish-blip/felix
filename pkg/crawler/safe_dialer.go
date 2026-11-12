@@ -17,6 +17,21 @@ var (
 	_, cgnatNet, _ = net.ParseCIDR("100.64.0.0/10")
 	// ulaNet: fc00::/7 (RFC 4193 - IPv6 Unique Local Address)
 	_, ulaNet, _ = net.ParseCIDR("fc00::/7")
+	// nat64WellKnown: 64:ff9b::/96 (RFC 6052) and local 64:ff9b:1::/48 (RFC 8215)
+	_, nat64WellKnown, _ = net.ParseCIDR("64:ff9b::/96")
+	_, nat64Local, _     = net.ParseCIDR("64:ff9b:1::/48")
+	// teredoNet: 2001::/32 and 6to4Net: 2002::/16 (transition tunnels that can embed private IPv4)
+	_, teredoNet, _ = net.ParseCIDR("2001::/32")
+	_, sixTo4Net, _ = net.ParseCIDR("2002::/16")
+	// additional non-global reserved IPv4/IPv6 ranges
+	_, ietfProtoNet, _ = net.ParseCIDR("192.0.0.0/24")
+	_, testNet1, _     = net.ParseCIDR("192.0.2.0/24")
+	_, benchmarkNet, _ = net.ParseCIDR("198.18.0.0/15")
+	_, testNet2, _     = net.ParseCIDR("198.51.100.0/24")
+	_, testNet3, _     = net.ParseCIDR("203.0.113.0/24")
+	_, reservedV4, _   = net.ParseCIDR("240.0.0.0/4")
+	_, docV6Net, _     = net.ParseCIDR("2001:db8::/32")
+	_, discardV6Net, _ = net.ParseCIDR("100::/64")
 	// cloudMetadataIPv4: 169.254.169.254/32 (AWS/GCP/Azure/OpenStack metadata)
 	cloudMetadataIPv4 = net.ParseIP("169.254.169.254")
 	// cloudMetadataIPv6: fd00:ec2::254 (AWS IMDSv2 IPv6 metadata endpoint)
@@ -105,7 +120,17 @@ func ProhibitedIPReason(ip net.IP, allowLoopback, allowPrivate bool) (bool, stri
 		}
 	}
 
-	// 9. RFC 1918 Private IPv4 (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
+	// 9. Non-global IPv6 transition/documentation/discard ranges (NAT64, Teredo, 6to4, RFC 3849)
+	if nat64WellKnown.Contains(ip) || nat64Local.Contains(ip) || teredoNet.Contains(ip) || sixTo4Net.Contains(ip) || docV6Net.Contains(ip) || discardV6Net.Contains(ip) {
+		return true, "non-global IPv6 transition or documentation address"
+	}
+
+	// 10. Non-global IPv4 protocol/documentation/benchmarking/reserved ranges
+	if ietfProtoNet.Contains(ip) || testNet1.Contains(ip) || benchmarkNet.Contains(ip) || testNet2.Contains(ip) || testNet3.Contains(ip) || reservedV4.Contains(ip) {
+		return true, "non-global reserved IPv4 range"
+	}
+
+	// 11. RFC 1918 Private IPv4 (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
 	if ip.IsPrivate() {
 		if !allowPrivate {
 			return true, "RFC 1918 private address"

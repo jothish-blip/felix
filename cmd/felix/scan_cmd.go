@@ -127,6 +127,7 @@ func runScan(args []string) int {
 		profilePath          string
 		crossTenant          bool
 		enableSPA            bool
+		scopeManifestPath    string
 		targets              []string
 	)
 
@@ -560,6 +561,21 @@ func runScan(args []string) int {
 			continue
 		}
 
+		// --scope-manifest <path>: Phase 8/10 signed authorization contract & scope boundary manifest
+		if arg == "--scope-manifest" {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				fmt.Fprintf(os.Stderr, "[-] error: --scope-manifest requires a file path argument\n")
+				return 2
+			}
+			i++
+			scopeManifestPath = args[i]
+			continue
+		}
+		if strings.HasPrefix(arg, "--scope-manifest=") {
+			scopeManifestPath = strings.TrimPrefix(arg, "--scope-manifest=")
+			continue
+		}
+
 		// Unknown flag
 		if strings.HasPrefix(arg, "-") {
 			fmt.Fprintf(os.Stderr, "[-] error: unknown flag %q\n\n", arg)
@@ -712,6 +728,29 @@ func runScan(args []string) int {
 	}
 	targets = normalizedTargets
 
+	var (
+		manifestScopeAllowed  []func(string) bool
+		manifestScopeExcluded []func(string) bool
+		manifestWindowEnd     time.Time
+	)
+	if strings.TrimSpace(scopeManifestPath) != "" {
+		nowUTC := time.Now().UTC()
+		for _, tgt := range targets {
+			allowedFn, excludedFn, wEnd, scopeErr := buildAssessScopePolicy(&AssessOptions{
+				ScopeManifest: scopeManifestPath,
+			}, tgt, nowUTC)
+			if scopeErr != nil {
+				fmt.Fprintf(os.Stderr, "[-] Authorization gate failed: %v\n", scopeErr)
+				return 2
+			}
+			manifestScopeAllowed = append(manifestScopeAllowed, allowedFn)
+			manifestScopeExcluded = append(manifestScopeExcluded, excludedFn)
+			if !wEnd.IsZero() && (manifestWindowEnd.IsZero() || wEnd.Before(manifestWindowEnd)) {
+				manifestWindowEnd = wEnd
+			}
+		}
+	}
+
 	startTime := time.Now()
 
 	// Operational Banners / Status
@@ -827,9 +866,29 @@ func runScan(args []string) int {
 		return false
 	}
 
+	manifestMatches := func(u string) bool {
+		for _, exFn := range manifestScopeExcluded {
+			if exFn != nil && exFn(u) {
+				return false
+			}
+		}
+		if len(manifestScopeAllowed) == 0 {
+			return true
+		}
+		for _, alFn := range manifestScopeAllowed {
+			if alFn != nil && alFn(u) {
+				return true
+			}
+		}
+		return false
+	}
+
 	// isPathAuthorized strictly requires target origin and subpath containment.
 	// Similar-prefix escapes (e.g. /hithaone-admin vs /hithaone) and cross-path routes are rejected.
 	isPathAuthorized := func(u string) bool {
+		if !manifestMatches(u) {
+			return false
+		}
 		for _, t := range targets {
 			s, err := crawler.NewScope(t, scopeMode)
 			if err == nil && s.IsPathInScope(u) {
@@ -852,6 +911,9 @@ func runScan(args []string) int {
 	// isTargetAuthorized permits in-path resources and necessary static client assets (JS/CSS)
 	// on the authorized host required for frontend application analysis.
 	isTargetAuthorized := func(u string) bool {
+		if !manifestMatches(u) {
+			return false
+		}
 		for _, t := range targets {
 			s, err := crawler.NewScope(t, scopeMode)
 			if err != nil {
@@ -898,8 +960,12 @@ func runScan(args []string) int {
 		Rate:           rateLimitVal,
 		MaxConcurrency: concurrencyVal,
 	})
+	var scanTransport http.RoundTripper = rateLimitedTransport
+	if !manifestWindowEnd.IsZero() {
+		scanTransport = wrapWindowGuard(rateLimitedTransport, context.Background(), manifestWindowEnd)
+	}
 	safeHTTPClient := &http.Client{
-		Transport: rateLimitedTransport,
+		Transport: scanTransport,
 		Timeout:   timeoutDuration,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= maxRedirects {

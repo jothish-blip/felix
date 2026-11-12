@@ -3,7 +3,9 @@ package ci
 import (
 	"os"
 	"strings"
+	"time"
 
+	"felix/pkg/assessment"
 	"felix/pkg/clierror"
 	"felix/pkg/policy"
 	"felix/pkg/provenance"
@@ -52,6 +54,12 @@ type Config struct {
 	RequireSHA256         bool
 	AllowLoopback         bool
 	AllowPrivateIPs       bool
+	ScopeManifest         string
+	AuthorizingParty      string
+	ScopeDocRef           string
+	WindowStart           time.Time
+	WindowEnd             time.Time
+	ScopeExclusions       []assessment.Exclusion
 	VerifiedBinary        string
 	PRComment             bool   // Publish or update Pull Request summary comment
 	PRInline              bool   // Publish inline review annotations when reliable source locations exist

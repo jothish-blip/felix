@@ -1,0 +1,28 @@
+﻿{
+    "phase":  "Phase 10",
+    "generated_at_utc":  "2026-11-12T13:01:48Z",
+    "pilot_outcome":  "A. PILOT NOT EXECUTED - PREREQUISITES MISSING",
+    "binary":  {
+                   "path":  "felix.exe",
+                   "bin_path":  "bin/felix.exe",
+                   "size_bytes":  32446976,
+                   "sha256":  "d138a17c82be739f3acd5b7ec54e59fe79ff31fd64e5f87fc494687ef199facf",
+                   "bin_sha256":  "d138a17c82be739f3acd5b7ec54e59fe79ff31fd64e5f87fc494687ef199facf",
+                   "version_output":  "Felix Security Auditor\nVersion:      1.0.0\nBuild:        4fc8c8e\nOS:           windows\nArchitecture: amd64\nPlatform:     windows/amd64\nRelease:      FELIX-1.0-Phase10-Gate\nCompiler:     go1.27.0"
+               },
+    "offline_gate_checks":  [
+                                {
+                                    "command":  "felix.exe validate verify-auth --manifest test/evidence/phase8/realworld_readiness/campaign_manifest_template.json --target https://staging.example-authorized-app.internal",
+                                    "exit_code":  2,
+                                    "external_requests_sent":  0,
+                                    "output":  "[-] Authorization gate failed: authorization gate refused: contract.confirmed is false"
+                                },
+                                {
+                                    "command":  "felix.exe assess --target https://staging.example-authorized-app.internal --profile full --scope-manifest test/evidence/phase8/realworld_readiness/campaign_manifest_template.json",
+                                    "exit_code":  2,
+                                    "external_requests_sent":  0,
+                                    "output_dir_created":  false,
+                                    "output":  "[-] Security refusal: authorization gate refused: contract.confirmed is false"
+                                }
+                            ]
+}

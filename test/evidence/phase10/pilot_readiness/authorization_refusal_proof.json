@@ -1,0 +1,126 @@
+﻿{
+    "phase":  "Phase 10A",
+    "verified_at_utc":  "2026-11-12T13:40:58Z",
+    "external_requests_sent":  0,
+    "loopback_httptest_requests_on_refusal":  0,
+    "phase10_gate_test_exit_code":  0,
+    "phase10_gate_tests_output":  [
+                                      "=== RUN   TestPhase10_ValidateVerifyAuth_PlaceholderAndGroundTruthLock",
+                                      "[-] Authorization gate failed: authorization gate refused: contract.confirmed is false",
+                                      "[-] Authorization gate failed: authorization gate refused: contract.confirmed is false",
+                                      "[-] Authorization gate failed: ground_truth_sha256 \"\u003cREQUIRED_PRE_SCAN_GT_SHA256\u003e\" must use sha256:\u003c64-hex\u003e format",
+                                      "[-] Ground-truth digest mismatch: manifest=sha256:0000000000000000000000000000000000000000000000000000000000000000 computed=sha256:45a2568c5d35d6864c5041553471d26971867e4ee1af9e35b322e0387528d98e",
+                                      "[-] Ground-truth integrity check failed: derived_from_scanner=true",
+                                      "[+] Authorization gate verified for https://staging.example.internal (authorizer=Owner Security, ref=SOW-100)",
+                                      "--- PASS: TestPhase10_ValidateVerifyAuth_PlaceholderAndGroundTruthLock (0.09s)",
+                                      "=== RUN   TestPhase10_CLIEntrypoints_RefuseInvalidScopeManifest_ZeroRequests",
+                                      "[-] authorization gate refused: contract.confirmed is false",
+                                      "[-] authorization gate refused: target http://127.0.0.1:52704/admin/users is outside authorized targets or explicitly excluded",
+                                      "[-] Authorization gate failed: authorization gate refused: contract.confirmed is false",
+                                      "[-] Authorization gate failed: authorization gate refused: target http://127.0.0.1:52704/admin/panel is outside authorized targets or explicitly excluded",
+                                      "[-] Authorization gate failed: authorization gate refused: contract.confirmed is false",
+                                      "[-] Authorization gate failed: authorization gate refused: target http://127.0.0.1:52704/admin is outside authorized targets or explicitly excluded",
+                                      "[-] Authorization gate failed: authorization gate refused: contract.confirmed is false",
+                                      "[-] Authorization gate failed: authorization gate refused: target http://127.0.0.1:52704/admin/keys is outside authorized targets or explicitly excluded",
+                                      "--- PASS: TestPhase10_CLIEntrypoints_RefuseInvalidScopeManifest_ZeroRequests (0.03s)",
+                                      "=== RUN   TestPhase10A_AllAdditionalNetworkEntrypoints_RefuseUnauthorizedManifest_ZeroRequests",
+                                      "[-] Authorization gate failed: authorization gate refused: contract.confirmed is false",
+                                      "[-] Authorization gate failed: authorization gate refused: target http://127.0.0.1:52705/admin/Panel is outside authorized targets or explicitly excluded",
+                                      "[-] Authorization gate failed: authorization gate refused: contract.confirmed is false",
+                                      "[-] Authorization gate failed: authorization gate refused: target http://127.0.0.1:52705/admin/check is outside authorized targets or explicitly excluded",
+                                      "[-] Authorization gate failed: authorization gate refused: contract.confirmed is false",
+                                      "[-] Authorization gate failed: authorization gate refused: target http://127.0.0.1:52705/admin/api is outside authorized targets or explicitly excluded",
+                                      "[-] authorization gate refused: contract.confirmed is false",
+                                      "[-] authorization gate refused: contract.confirmed is false",
+                                      "[-] authorization gate refused: contract.confirmed is false",
+                                      "[-] authorization gate refused: contract.confirmed is false",
+                                      "[-] authorization gate refused: contract.confirmed is false",
+                                      "[-] authorization gate refused: contract.confirmed is false",
+                                      "[-] authorization gate refused: contract.confirmed is false",
+                                      "[-] authorization gate refused: contract.confirmed is false",
+                                      "[-] Authorization gate failed: authorization gate refused: contract.confirmed is false",
+                                      "[-] Security refusal: authorization gate refused: contract.confirmed is false",
+                                      "FELIX Pilot Readiness Check: overall=BLOCKED pilot_execution=BLOCKED public_release=BLOCKED (external_requests=0)",
+                                      "  [01] READY          binary_integrity                       felix.test.exe (34720768 bytes, sha256:9a1372d872511a78ab50e96fef2d000ad2b50bec9b465ce1049ec4ddb00d2e48)",
+                                      "  [02] READY          config_availability                    Configuration loaded cleanly (path=C:\\Users\\LENOVO\\.felix\\config.json, timeout=10s, tls_verify=true)",
+                                      "  [03] INVALID        authorization_contract                 Authorization contract contains template placeholders rather than owner-signed data",
+                                      "  [04] INVALID        campaign_manifest                      Campaign manifest contains unedited template placeholder fields",
+                                      "  [05] INVALID        target_origin_consistency              Target URL \"https://staging.example-authorized-app.internal\" is missing a valid non-placeholder scheme/host",
+                                      "  [06] INVALID        ground_truth_structure                 Ground-truth metadata contains template placeholders",
+                                      "  [07] INVALID        ground_truth_sha256                    ground_truth_sha256 \"\u003cREQUIRED: Compute with felix validate hash-gt --ground-truth ground_truth.json\u003e\" must use sha256:\u003c64-hex\u003e format",
+                                      "  [08] READY          ground_truth_independence              derived_from_scanner=false (established_by=\"\u003cREQUIRED: Independent AppSec Reviewer (Non-FELIX)\u003e\")",
+                                      "  [09] INVALID        ground_truth_timestamp_precedence      ground-truth established_at (2026-11-14T18:00:00Z) is in the future relative to current UTC (2026-11-12T13:40:58Z)",
+                                      "  [10] READY          exclusion_consistency                  4 path/URL/host exclusions validated consistent with target and ground truth",
+                                      "  [11] MISSING        identity_configuration                 Ground truth requires authenticated / multi-role identities, but --roles-config was not provided",
+                                      "  [12] NOT_CONFIGURED oast_configuration                     Not configured (OAST not required by current ground-truth entries)",
+                                      "  [13] READY          browser_dom_configuration              Local headless browser binary detected",
+                                      "  [14] READY          output_directory_permissions           Output directory \"C:\\\\Users\\\\LENOVO\\\\AppData\\\\Local\\\\Temp\\\\TestPhase10A_AllAdditionalNetworkEntrypoints_RefuseUnauthorizedM4287854540\\\\001\\\\ready_out\" writable with private 0600/0700 file permissions",
+                                      "  [15] NOT_CONFIGURED retest_prerequisites                   No --retest-expected file supplied (required before post-patch retest evaluation)",
+                                      "  [16] BLOCKED        release_and_ci_blockers                5 public-release/CI blockers remain open: Windows Authenticode code signing (P12.10); Production APT signing key provisioning + historical key 8ABF68D0253A139577CA06E7154B088FE357A53D revocation + Git history scrub; CI CGO_ENABLED=1 go test -race verification; CI govulncheck verification; External real-world accuracy benchmark (n\u003e=20 controls/class)",
+                                      "--- PASS: TestPhase10A_AllAdditionalNetworkEntrypoints_RefuseUnauthorizedManifest_ZeroRequests (0.11s)",
+                                      "PASS",
+                                      "ok  \tfelix/cmd/felix\t0.695s"
+                                  ],
+    "live_cli_refusals":  [
+                              {
+                                  "command":  "felix.exe validate pilot-readiness --manifest campaign_manifest_template.json ... --json",
+                                  "exit_code":  2,
+                                  "status":  "BLOCKED"
+                              },
+                              {
+                                  "command":  "felix.exe validate verify-auth --manifest campaign_manifest_template.json --ground-truth ground_truth_registry_template.json",
+                                  "exit_code":  2,
+                                  "error":  "authorization gate refused: contract.confirmed is false"
+                              },
+                              {
+                                  "command":  "felix.exe assess --target https://example.com --profile standard --output \u003ctmp\u003e --scope-manifest campaign_manifest_template.json",
+                                  "exit_code":  2,
+                                  "error":  "authorization gate refused: contract.confirmed is false"
+                              },
+                              {
+                                  "command":  "felix.exe assess --retest \u003crep.json\u003e --target https://example.com --output \u003ctmp\u003e --scope-manifest campaign_manifest_template.json",
+                                  "exit_code":  2,
+                                  "error":  "authorization gate refused: contract.confirmed is false"
+                              },
+                              {
+                                  "command":  "felix.exe scan --scope-manifest campaign_manifest_template.json https://example.com",
+                                  "exit_code":  2,
+                                  "error":  "authorization gate refused: contract.confirmed is false"
+                              },
+                              {
+                                  "command":  "felix.exe recon --target https://example.com --scope-manifest campaign_manifest_template.json",
+                                  "exit_code":  2,
+                                  "error":  "authorization gate refused: contract.confirmed is false"
+                              },
+                              {
+                                  "command":  "felix.exe secrets --target https://example.com --scope-manifest campaign_manifest_template.json",
+                                  "exit_code":  2,
+                                  "error":  "authorization gate refused: contract.confirmed is false"
+                              },
+                              {
+                                  "command":  "felix.exe ci run --target https://example.com --scope-manifest campaign_manifest_template.json",
+                                  "exit_code":  2,
+                                  "error":  "authorization gate refused: contract.confirmed is false"
+                              },
+                              {
+                                  "command":  "felix.exe cve template run --target https://example.com --scope-manifest campaign_manifest_template.json",
+                                  "exit_code":  2,
+                                  "error":  "authorization gate refused: contract.confirmed is false"
+                              },
+                              {
+                                  "command":  "felix.exe monitor snapshot --profile \u003ctmp.yml\u003e --state-dir \u003ctmp\u003e --scope-manifest campaign_manifest_template.json",
+                                  "exit_code":  2,
+                                  "error":  "authorization gate refused: contract.confirmed is false"
+                              },
+                              {
+                                  "command":  "felix.exe web --target https://example.com --scope-manifest campaign_manifest_template.json",
+                                  "exit_code":  2,
+                                  "error":  "authorization gate refused: contract.confirmed is false"
+                              },
+                              {
+                                  "command":  "felix.exe apk --assess --target https://example.com --scope-manifest campaign_manifest_template.json \u003cdummy.apk\u003e",
+                                  "exit_code":  2,
+                                  "error":  "authorization gate refused: contract.confirmed is false"
+                              }
+                          ]
+}

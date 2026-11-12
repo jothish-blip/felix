@@ -1032,7 +1032,6 @@ func isStateChangingMethod(m string) bool {
 }
 
 func buildTargetURL(baseURL string, ep EndpointTemplate, obj ObjectIdentifier) string {
-	base := strings.TrimRight(baseURL, "/")
 	pattern := ep.PathPattern
 	if !strings.HasPrefix(pattern, "/") {
 		pattern = "/" + pattern
@@ -1058,7 +1057,13 @@ func buildTargetURL(baseURL string, ep EndpointTemplate, obj ObjectIdentifier) s
 		targetPath = strings.ReplaceAll(targetPath, "{tenantId}", url.PathEscape(obj.TenantID))
 	}
 
-	fullURL := base + targetPath
+	fullURL := strings.TrimRight(baseURL, "/") + targetPath
+	if baseU, err := url.Parse(strings.TrimSpace(baseURL)); err == nil && baseU.Scheme != "" && baseU.Host != "" {
+		if relU, relErr := url.Parse(targetPath); relErr == nil {
+			origin := url.URL{Scheme: baseU.Scheme, Host: baseU.Host}
+			fullURL = origin.ResolveReference(relU).String()
+		}
+	}
 	if obj.Location == "query" && obj.ParamName != "" {
 		sep := "?"
 		if strings.Contains(fullURL, "?") {

@@ -1,0 +1,19 @@
+﻿{
+    "go_mod_verify":  "all modules verified",
+    "binary":  {
+                   "binary_sha256":  "13f23c11213470ba9ff2d80f246ed617a8989f8f2883109adc2892057f3617e7",
+                   "binary_bytes":  32418304,
+                   "has_jothish_path":  false,
+                   "has_lenovo_path":  false,
+                   "has_pgp_priv_key":  false,
+                   "has_rsa_priv_key":  false
+               },
+    "sterile_env":  {
+                        "version_exit_code":  0,
+                        "version_output":  "Felix Security Auditor\r\nVersion:      1.0.0\r\nBuild:        4fc8c8e\r\nOS:           windows\r\nArchitecture: amd64\r\nPlatform:     windows/amd64\r\nRelease:      FELIX-1.0-Phase9-RC\r\nCompiler:     go1.27.0",
+                        "doctor_exit_code":  0,
+                        "doctor_output":  "===========================================================\r\n FELIX :: System Diagnostic \u0026 Runtime Readiness\r\n===========================================================\r\n\r\n [PASS]    Executable Integrity             : felix.exe (32418304 bytes) at C:\\Users\\LENOVO\\AppData\\Local\\Temp\\felix-sterile-65f72ba5\\felix.exe\r\n [INFO]    Binary Signature                 : Unsigned (Standard distribution; dev signing available via scripts\\setup-dev.ps1)\r\n [PASS]    Runtime Environment              : windows/amd64 (8 CPUs, go1.27.0)\r\n [PASS]    Configuration Storage            : Defaults active (C:\\Users\\LENOVO\\AppData\\Local\\Temp\\felix-sterile-65f72ba5\\.felix\\config.json not created yet)\r\n [PASS]    Workspace Write Permission       : Writable (C:\\Users\\LENOVO\\AppData\\Local\\Temp\\felix-sterile-65f72ba5)\r\n [PASS]    Network \u0026 TLS Stack              : TLS 1.2+ ready\r\n [PASS]    Report Generation Subsystem      : HTML (Black Mode) \u0026 JSON ready\r\n [PASS]    Command Resolution               : C:\\Users\\LENOVO\\AppData\\Local\\Temp\\felix-sterile-65f72ba5 is not in system PATH (run \u0027felix install\u0027 or add to PATH)\r\n [PASS]    Assessment Storage               : Ready for initialization (C:\\Users\\LENOVO\\AppData\\Local\\Temp\\felix-sterile-65f72ba5\\.felix\\assessments.db)\r\n\r\nResult: PASS — All runtime prerequisites verified successfully.",
+                        "assess_help_code":  0,
+                        "validate_help_code":  0
+                    }
+}

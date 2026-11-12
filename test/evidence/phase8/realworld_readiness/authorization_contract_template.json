@@ -1,0 +1,31 @@
+{
+  "authorizing_party": "<REQUIRED: Application Owner / Legal Entity Name>",
+  "signed_by": "<REQUIRED: Authorized Signatory Name & Title>",
+  "authorization_ref": "<REQUIRED: Signed Ticket / SOW / RoE Reference ID>",
+  "confirmed": false,
+  "authorized_targets": [
+    "https://staging.example-authorized-app.internal"
+  ],
+  "scope_mode": "EXPLICIT_ALLOWLIST_WITH_EXCLUSIONS",
+  "allowed_methods": [
+    "GET",
+    "HEAD",
+    "OPTIONS"
+  ],
+  "excluded_paths": [
+    "/admin/reset",
+    "/admin/shutdown",
+    "/billing/charge",
+    "/api/webhooks/destructive",
+    "/logout"
+  ],
+  "excluded_urls": [
+    "https://staging.example-authorized-app.internal/admin/reset"
+  ],
+  "excluded_hosts": [
+    "payments.thirdparty.example"
+  ],
+  "window_start": "2026-11-15T00:00:00Z",
+  "window_end": "2026-11-16T00:00:00Z",
+  "notes": "TEMPLATE ONLY: confirmed MUST be set to true after owner sign-off and target URL/window updated before FELIX will transmit any traffic."
+}

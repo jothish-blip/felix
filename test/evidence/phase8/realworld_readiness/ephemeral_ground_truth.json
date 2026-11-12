@@ -1,0 +1,59 @@
+{
+  "application": "Phase8EphemeralCLIApp",
+  "derived_from_scanner": false,
+  "entries": [
+    {
+      "description": "Cross-user BOLA on /api/items/{item_id}",
+      "endpoint_pattern": "/api/items/{item_id}",
+      "expected_status": "VULNERABLE",
+      "id": "GT-BOLA-ITEMS",
+      "in_scope": true,
+      "method": "GET",
+      "requires_config": "MULTI_ROLE",
+      "vuln_class": "BOLA"
+    },
+    {
+      "description": "Content-Security-Policy missing on root",
+      "endpoint_pattern": "/",
+      "expected_status": "VULNERABLE",
+      "id": "GT-HDR-CSP",
+      "in_scope": true,
+      "matcher": {
+        "title_contains": [
+          "Content-Security-Policy"
+        ]
+      },
+      "method": "GET",
+      "vuln_class": "SECURITY_HEADERS"
+    },
+    {
+      "description": "X-Content-Type-Options: nosniff enforced",
+      "endpoint_pattern": "/",
+      "expected_status": "SECURE_NEGATIVE_CONTROL",
+      "id": "GT-HDR-NOSNIFF-NC",
+      "in_scope": true,
+      "matcher": {
+        "title_contains": [
+          "X-Content-Type-Options"
+        ]
+      },
+      "method": "GET",
+      "vuln_class": "SECURITY_HEADERS"
+    },
+    {
+      "description": "Excluded administrative reset endpoint",
+      "endpoint_pattern": "/admin/reset",
+      "expected_status": "EXCLUDED_SCOPE",
+      "id": "GT-EXCL-RESET",
+      "in_scope": false,
+      "method": "POST",
+      "vuln_class": "BFLA"
+    }
+  ],
+  "established_at": "2026-11-12T11:14:24Z",
+  "established_by": "Independent-Harness-Spec",
+  "provenance_note": "Created from ephemeral httptest router before invoking felix.exe",
+  "registry_id": "gt-phase8-cli-ephemeral-v1",
+  "target_origin": "http://127.0.0.1:64375",
+  "version": "1.0.0-harness"
+}

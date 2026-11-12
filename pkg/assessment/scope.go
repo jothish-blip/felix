@@ -3,10 +3,41 @@ package assessment
 import (
 	"fmt"
 	"net/url"
+	"path"
 	"strings"
 
 	"felix/pkg/crawler"
 )
+
+// normalizeScopePath canonicalizes URL paths for exclusion and scope checks,
+// defeating dot-segment traversal (/foo/../admin), duplicate slashes (/admin//reset),
+// backslash substitution (\admin\reset), and percent-encoding bypasses (/%61dmin, /%2e%2e).
+func normalizeScopePath(parsed *url.URL) string {
+	if parsed == nil {
+		return "/"
+	}
+	raw := parsed.EscapedPath()
+	if raw == "" {
+		raw = parsed.Path
+	}
+	for pass := 0; pass < 2; pass++ {
+		if decoded, err := url.PathUnescape(raw); err == nil {
+			raw = decoded
+		}
+	}
+	raw = strings.ReplaceAll(raw, "\\", "/")
+	for strings.Contains(raw, "//") {
+		raw = strings.ReplaceAll(raw, "//", "/")
+	}
+	if !strings.HasPrefix(raw, "/") {
+		raw = "/" + raw
+	}
+	cleaned := path.Clean(raw)
+	if !strings.HasPrefix(cleaned, "/") {
+		cleaned = "/" + cleaned
+	}
+	return cleaned
+}
 
 // ValidateTargetURL validates an assessment target URL according to strict security rules.
 // Delegates to crawler.ValidateTargetURL for unified validation logic.
@@ -69,11 +100,15 @@ func (v *ScopeValidator) IsExcluded(rawURL string) (bool, string) {
 	}
 
 	host := strings.ToLower(parsed.Hostname())
-	path := parsed.Path
-	if path == "" {
-		path = "/"
+	rawPath := parsed.Path
+	if rawPath == "" {
+		rawPath = "/"
 	}
+	normPath := normalizeScopePath(parsed)
+	lowNormPath := strings.ToLower(normPath)
+	lowRawPath := strings.ToLower(rawPath)
 	fullURL := parsed.String()
+	normFullURL := strings.ToLower(parsed.Scheme + "://" + parsed.Host + normPath)
 
 	for _, exc := range v.Exclusions {
 		pattern := strings.TrimSpace(exc.Pattern)
@@ -94,32 +129,58 @@ func (v *ScopeValidator) IsExcluded(rawURL string) (bool, string) {
 			}
 
 		case "PATH_PREFIX":
-			cleanPattern := strings.TrimSpace(pattern)
+			cleanPattern := strings.ReplaceAll(strings.TrimSpace(pattern), "\\", "/")
 			if !strings.HasPrefix(cleanPattern, "/") {
 				cleanPattern = "/" + cleanPattern
 			}
-			cleanPrefix := strings.TrimRight(strings.TrimRight(cleanPattern, "*"), "/")
+			cleanPattern = path.Clean(cleanPattern)
+			cleanPrefix := strings.ToLower(strings.TrimRight(strings.TrimRight(cleanPattern, "*"), "/"))
 			if cleanPrefix == "" {
-				return true, fmt.Sprintf("path %s matches excluded prefix %s (reason: %s)", path, pattern, exc.Reason)
+				return true, fmt.Sprintf("path %s matches excluded prefix %s (reason: %s)", normPath, pattern, exc.Reason)
 			}
-			if path == cleanPrefix || strings.HasPrefix(path, cleanPrefix+"/") {
-				return true, fmt.Sprintf("path %s matches excluded prefix %s (reason: %s)", path, pattern, exc.Reason)
+			if lowNormPath == cleanPrefix || strings.HasPrefix(lowNormPath, cleanPrefix+"/") ||
+				lowRawPath == cleanPrefix || strings.HasPrefix(lowRawPath, cleanPrefix+"/") {
+				return true, fmt.Sprintf("path %s matches excluded prefix %s (reason: %s)", normPath, pattern, exc.Reason)
 			}
 
 		case "EXACT_URL":
-			if strings.EqualFold(fullURL, pattern) {
+			if excParsed, perr := url.Parse(pattern); perr == nil && excParsed.Host != "" {
+				excNormFull := strings.ToLower(excParsed.Scheme + "://" + excParsed.Host + normalizeScopePath(excParsed))
+				if normFullURL == excNormFull || strings.EqualFold(fullURL, pattern) {
+					return true, fmt.Sprintf("URL exactly matches exclusion %s (reason: %s)", pattern, exc.Reason)
+				}
+			} else if strings.EqualFold(fullURL, pattern) {
 				return true, fmt.Sprintf("URL exactly matches exclusion %s (reason: %s)", pattern, exc.Reason)
 			}
 
 		default:
-			// Fallback: check if host or path contains pattern
-			if strings.EqualFold(host, pattern) || strings.HasPrefix(path, pattern) {
+			// Fallback: check if host or normalized path matches pattern
+			lowPat := strings.ToLower(pattern)
+			if strings.EqualFold(host, pattern) || strings.HasPrefix(lowNormPath, lowPat) || strings.HasPrefix(lowRawPath, lowPat) {
 				return true, fmt.Sprintf("URL matches exclusion pattern %s (reason: %s)", pattern, exc.Reason)
 			}
 		}
 	}
 
 	return false, ""
+}
+
+func sameTargetOrigin(candidate, target *url.URL) bool {
+	if candidate == nil || target == nil {
+		return false
+	}
+	candHost := strings.ToLower(candidate.Hostname())
+	targHost := strings.ToLower(target.Hostname())
+	if candHost == "" || candHost != targHost {
+		return false
+	}
+	if crawler.EffectivePort(candidate) != crawler.EffectivePort(target) {
+		return false
+	}
+	if candidate.Scheme != "" && target.Scheme != "" && !strings.EqualFold(candidate.Scheme, target.Scheme) {
+		return false
+	}
+	return true
 }
 
 // IsAllowed returns true if a URL is within the approved scope AND not excluded.
@@ -158,17 +219,12 @@ func (v *ScopeValidator) IsAllowed(rawURL string) bool {
 		return true
 	}
 
-	switch v.ScopeMode {
-	case "same-origin":
-		// Must match at least one approved target host exactly, plus port and scheme
+	switch strings.ToLower(strings.TrimSpace(v.ScopeMode)) {
+	case "", "same-origin", "exact_origin", "explicit_allowlist_with_exclusions":
+		// Must match at least one approved target host, port, and scheme
 		for _, t := range v.Targets {
-			if targetParsed, err := url.Parse(t); err == nil {
-				targetHost := strings.ToLower(targetParsed.Hostname())
-				if assetHost == targetHost && crawler.EffectivePort(parsed) == crawler.EffectivePort(targetParsed) {
-					if parsed.Scheme == "" || targetParsed.Scheme == "" || strings.EqualFold(parsed.Scheme, targetParsed.Scheme) {
-						return true
-					}
-				}
+			if targetParsed, err := url.Parse(t); err == nil && sameTargetOrigin(parsed, targetParsed) {
+				return true
 			}
 		}
 		return false
@@ -185,16 +241,25 @@ func (v *ScopeValidator) IsAllowed(rawURL string) bool {
 		return false
 
 	case "explicit":
-		_, ok := v.allowedHosts[assetHost]
-		return ok
-
-	default:
-		// Default to strict same-origin
 		for _, t := range v.Targets {
-			if targetParsed, err := url.Parse(t); err == nil {
-				if assetHost == strings.ToLower(targetParsed.Hostname()) {
+			if targetParsed, err := url.Parse(t); err == nil && sameTargetOrigin(parsed, targetParsed) {
+				return true
+			}
+		}
+		if _, ok := v.allowedHosts[assetHost]; ok {
+			for _, r := range v.ScopeRules {
+				if (r.RuleType == "HOSTNAME" || r.RuleType == "EXACT_ORIGIN") && strings.EqualFold(r.Pattern, assetHost) {
 					return true
 				}
+			}
+		}
+		return false
+
+	default:
+		// Fail closed to strict same-origin matching host, port, and scheme
+		for _, t := range v.Targets {
+			if targetParsed, err := url.Parse(t); err == nil && sameTargetOrigin(parsed, targetParsed) {
+				return true
 			}
 		}
 		return false

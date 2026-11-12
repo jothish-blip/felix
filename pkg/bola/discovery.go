@@ -95,7 +95,7 @@ var privateDataKeys = []string{
 }
 
 var ownerFieldKeys = []string{
-	"owner", "owner_id", "ownerid", "user_id", "userid", "tenant_id", "tenantid", "author", "username", "created_by", "email",
+	"owner", "owner_id", "ownerid", "user_id", "userid", "user", "user_name", "tenant_id", "tenantid", "author", "author_id", "username", "created_by", "createdby", "email",
 }
 
 var destructiveURLKeywords = []string{
@@ -329,14 +329,28 @@ func buildIdentityAnchors(identities []TestIdentity, obs []DiscoveryObservation)
 		if json.Unmarshal(ob.Body, &parsed) != nil {
 			continue
 		}
-		for _, k := range []string{"id", "user_id", "userId", "username", "email", "owner", "owner_id", "ownerId", "tenant_id", "tenantId"} {
-			if val, ok := parsed[k]; ok && val != nil {
-				s := strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", val)))
-				if s != "" && s != "null" && s != "<nil>" && len(s) >= 2 {
-					a.markers[s] = true
+		var inspectObj func(m map[string]any, depth int)
+		inspectObj = func(m map[string]any, depth int) {
+			if m == nil || depth > 2 {
+				return
+			}
+			for _, k := range []string{"id", "user_id", "userId", "username", "email", "owner", "owner_id", "ownerId", "tenant_id", "tenantId"} {
+				if val, ok := lookupCaseInsensitive(m, k); ok && val != nil {
+					s := strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", val)))
+					if s != "" && s != "null" && s != "<nil>" && len(s) >= 2 {
+						a.markers[s] = true
+					}
+				}
+			}
+			for _, wrapKey := range []string{"data", "user", "account", "profile", "result", "me"} {
+				if sub, ok := lookupCaseInsensitive(m, wrapKey); ok {
+					if subMap, ok := sub.(map[string]any); ok {
+						inspectObj(subMap, depth+1)
+					}
 				}
 			}
 		}
+		inspectObj(parsed, 0)
 	}
 	return anchors
 }
@@ -627,8 +641,20 @@ func extractObjectsFromJSONPayload(
 			}
 		}
 	case map[string]any:
-		for _, listKey := range []string{"items", "data", "documents", "users", "records", "results", "objects"} {
+		for _, listKey := range []string{"items", "data", "documents", "users", "books", "orders", "vehicles", "records", "results", "objects"} {
 			if sub, ok := lookupCaseInsensitive(v, listKey); ok {
+				if arr, ok := sub.([]any); ok {
+					for _, el := range arr {
+						if m, ok := el.(map[string]any); ok {
+							items = append(items, m)
+						}
+					}
+				}
+			}
+		}
+		// Fallback: inspect any top-level slice of JSON objects (e.g., {"Accounts": [...]})
+		if len(items) == 0 {
+			for _, sub := range v {
 				if arr, ok := sub.([]any); ok {
 					for _, el := range arr {
 						if m, ok := el.(map[string]any); ok {
@@ -644,14 +670,69 @@ func extractObjectsFromJSONPayload(
 	if basePath == "" || len(items) == 0 {
 		return
 	}
+
+	// Prefer existing parameterized child templates (e.g., from OpenAPI /users/v1/{username}).
+	// If basePath is a view/debug sub-endpoint like /users/v1/_debug without a child template, check its parent collection /users/v1/{...}.
+	findChildTemplate := func(collectionPath string) *EndpointTemplate {
+		pfx := collectionPath + "/{"
+		var matches []EndpointTemplate
+		for _, tpl := range templates {
+			if strings.EqualFold(tpl.Method, "GET") && strings.HasPrefix(tpl.PathPattern, pfx) {
+				suffix := tpl.PathPattern[len(collectionPath)+1:]
+				if !strings.Contains(suffix, "/") && strings.HasPrefix(suffix, "{") && strings.HasSuffix(suffix, "}") {
+					matches = append(matches, tpl)
+				}
+			}
+		}
+		if len(matches) == 0 {
+			return nil
+		}
+		sort.Slice(matches, func(i, j int) bool {
+			return matches[i].PathPattern < matches[j].PathPattern
+		})
+		cp := matches[0]
+		return &cp
+	}
+
+	lastSegLow := strings.ToLower(lastSegment(basePath))
+	isCollectionViewSuffix := lastSegLow == "_debug" || lastSegLow == "debug" || lastSegLow == "all" ||
+		lastSegLow == "list" || lastSegLow == "summary" || lastSegLow == "export" || lastSegLow == "search"
+
+	matchedChildTemplate := findChildTemplate(basePath)
+	if matchedChildTemplate == nil && isCollectionViewSuffix {
+		if idx := strings.LastIndex(basePath, "/"); idx > 0 {
+			matchedChildTemplate = findChildTemplate(basePath[:idx])
+		}
+	}
+	// Do not synthesize a nonexistent synthetic child URL on debug/search/all view routes when no real template exists.
+	if matchedChildTemplate == nil && isCollectionViewSuffix {
+		return
+	}
+
 	for _, item := range items {
 		idVal := ""
-		for _, idKey := range []string{"id", "doc_id", "docId", "document_id", "user_id", "userId", "order_id", "uuid"} {
-			if raw, ok := lookupCaseInsensitive(item, idKey); ok && raw != nil {
+		paramName := ""
+		if matchedChildTemplate != nil && len(matchedChildTemplate.Params) > 0 {
+			tpName := matchedChildTemplate.Params[0]
+			if raw, ok := lookupCaseInsensitive(item, tpName); ok && raw != nil {
 				s := strings.TrimSpace(fmt.Sprintf("%v", raw))
 				if s != "" && s != "null" && s != "<nil>" {
 					idVal = s
-					break
+					paramName = tpName
+				}
+			}
+		}
+		if idVal == "" {
+			for _, idKey := range []string{"id", "doc_id", "docId", "document_id", "user_id", "userId", "username", "book_title", "vehicle_id", "vehicleId", "order_id", "orderId", "report_id", "uuid"} {
+				if raw, ok := lookupCaseInsensitive(item, idKey); ok && raw != nil {
+					s := strings.TrimSpace(fmt.Sprintf("%v", raw))
+					if s != "" && s != "null" && s != "<nil>" {
+						idVal = s
+						if paramName == "" {
+							paramName = idKey
+						}
+						break
+					}
 				}
 			}
 		}
@@ -659,8 +740,25 @@ func extractObjectsFromJSONPayload(
 			continue
 		}
 
-		paramName := singularParamName(lastSegment(basePath))
-		tplPath := basePath + "/{" + paramName + "}"
+		tplPath := ""
+		if matchedChildTemplate != nil {
+			tplPath = matchedChildTemplate.PathPattern
+			if len(matchedChildTemplate.Params) > 0 {
+				paramName = matchedChildTemplate.Params[0]
+			}
+		} else {
+			if paramName == "" || paramName == "id" {
+				segForNoun := lastSegment(basePath)
+				if rxVersionSeg.MatchString(strings.ToLower(segForNoun)) {
+					trimmedSegs := strings.Split(strings.Trim(basePath, "/"), "/")
+					if len(trimmedSegs) >= 2 {
+						segForNoun = trimmedSegs[len(trimmedSegs)-2]
+					}
+				}
+				paramName = singularParamName(segForNoun)
+			}
+			tplPath = basePath + "/{" + paramName + "}"
+		}
 		tplKey := "GET " + tplPath
 		if _, exists := templates[tplKey]; !exists {
 			templates[tplKey] = EndpointTemplate{

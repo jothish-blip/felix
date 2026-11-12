@@ -1,0 +1,12 @@
+[
+  {
+    "finding_id": "<finding_id from assessment_report.json for fixed control>",
+    "ground_truth_id": "GT-001",
+    "expected_action": "FIXED"
+  },
+  {
+    "finding_id": "<finding_id from assessment_report.json for unpatched control>",
+    "ground_truth_id": "GT-003",
+    "expected_action": "STILL_PRESENT"
+  }
+]

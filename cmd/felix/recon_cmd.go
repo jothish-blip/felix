@@ -20,15 +20,17 @@ import (
 // runRecon executes the "felix recon" subcommand.
 func runRecon(args []string) int {
 	var (
-		targetURL     string
-		timeoutSec    int = 15
-		concurrency   int = 5
-		maxAssets     int = 200
-		allowLoopback bool
-		allowPrivate  bool
-		jsonOutput    bool
-		outputPath    string
-		verbose       bool
+		targetURL          string
+		timeoutSec         int = 15
+		concurrency        int = 5
+		maxAssets          int = 200
+		allowLoopback      bool
+		allowPrivate       bool
+		insecureSkipVerify bool
+		jsonOutput         bool
+		outputPath         string
+		scopeManifestPath  string
+		verbose            bool
 	)
 
 	for i := 0; i < len(args); i++ {
@@ -62,11 +64,20 @@ func runRecon(args []string) int {
 			allowLoopback = true
 		case arg == "--allow-private":
 			allowPrivate = true
+		case arg == "--insecure":
+			insecureSkipVerify = true
 		case arg == "--output" || arg == "-o":
 			if i+1 < len(args) {
 				outputPath = args[i+1]
 				i++
 			}
+		case arg == "--scope-manifest":
+			if i+1 < len(args) {
+				scopeManifestPath = args[i+1]
+				i++
+			}
+		case strings.HasPrefix(arg, "--scope-manifest="):
+			scopeManifestPath = strings.TrimPrefix(arg, "--scope-manifest=")
 		case arg == "--json":
 			jsonOutput = true
 		case arg == "--verbose" || arg == "-v":
@@ -102,6 +113,22 @@ func runRecon(args []string) int {
 		return 2
 	}
 
+	var (
+		manifestAllowed  func(string) bool
+		manifestExcluded func(string) bool
+		windowEnd        time.Time
+	)
+	if strings.TrimSpace(scopeManifestPath) != "" {
+		var scopeErr error
+		manifestAllowed, manifestExcluded, windowEnd, scopeErr = buildAssessScopePolicy(&AssessOptions{
+			ScopeManifest: scopeManifestPath,
+		}, targetURL, time.Now().UTC())
+		if scopeErr != nil {
+			fmt.Fprintf(os.Stderr, "[-] Authorization gate failed: %v\n", scopeErr)
+			return 2
+		}
+	}
+
 	host := parsed.Hostname()
 	ips, _ := net.LookupIP(host)
 	if len(ips) > 0 {
@@ -113,18 +140,28 @@ func runRecon(args []string) int {
 		}
 	}
 
+	allowLoop := allowLoopback || os.Getenv("FELIX_ALLOW_LOOPBACK") == "true"
+	allowPriv := allowPrivate || os.Getenv("FELIX_ALLOW_PRIVATE") == "true"
+
 	// Fetch initial target page
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	var baseTransport http.RoundTripper = &http.Transport{
+		TLSClientConfig: &tls.Config{
+			MinVersion:         tls.VersionTLS12,
+			InsecureSkipVerify: insecureSkipVerify,
+		},
 		DialContext: crawler.NewSafeDialContext(crawler.SafeDialerOptions{
 			Timeout:         time.Duration(timeoutSec) * time.Second,
-			AllowLoopback:   allowLoopback || os.Getenv("FELIX_ALLOW_LOOPBACK") == "true",
-			AllowPrivateIPs: allowPrivate || os.Getenv("FELIX_ALLOW_PRIVATE") == "true",
+			AllowLoopback:   allowLoop,
+			AllowPrivateIPs: allowPriv,
 		}),
 	}
+	if !windowEnd.IsZero() {
+		baseTransport = wrapWindowGuard(baseTransport, context.Background(), windowEnd)
+	}
 	client := &http.Client{
-		Transport: tr,
-		Timeout:   time.Duration(timeoutSec) * time.Second,
+		Transport:     baseTransport,
+		Timeout:       time.Duration(timeoutSec) * time.Second,
+		CheckRedirect: buildSafeRedirectPolicy(targetURL, manifestAllowed, manifestExcluded, allowLoop, allowPriv),
 	}
 
 	req, err := http.NewRequestWithContext(context.Background(), "GET", targetURL, nil)
@@ -157,6 +194,12 @@ func runRecon(args []string) int {
 	engine := discovery.NewEngine(engineCfg)
 
 	scopeAllowed := func(u string) bool {
+		if manifestExcluded != nil && manifestExcluded(u) {
+			return false
+		}
+		if manifestAllowed != nil && !manifestAllowed(u) {
+			return false
+		}
 		p, err := url.Parse(u)
 		if err != nil {
 			return false
@@ -231,7 +274,7 @@ func runRecon(args []string) int {
 			"summary":   summary,
 		}, "", "  ")
 		if err == nil {
-			_ = os.WriteFile(outputPath, data, 0644)
+			_ = writePrivateFile(outputPath, data)
 			fmt.Printf("\n[+] Reconnaissance inventory exported to: %s\n", outputPath)
 		}
 	}
@@ -251,6 +294,7 @@ func printReconHelp() {
 	fmt.Println("  --json                   Output complete inventory structure as JSON")
 	fmt.Println("  --allow-loopback         Allow testing against loopback/localhost (testing only)")
 	fmt.Println("  --allow-private          Allow testing against RFC 1918 private IPs")
+	fmt.Println("  --insecure               Allow insecure/self-signed TLS certificates (not recommended)")
 	fmt.Println("  --verbose, -v            Show full list of discovered routes and forms")
 	fmt.Println("  --help, -h               Show this help message")
 }

@@ -19,24 +19,24 @@
       "subsecond_matching": true,
       "zero_false_correlations": true
     },
-    "benchmark_duration_ms": 1936.6594,
+    "benchmark_duration_ms": 465.7928,
     "benchmark_iterations": 2000,
-    "benchmark_throughput_ops_sec": 1032.7061123912652,
+    "benchmark_throughput_ops_sec": 4293.754647989406,
     "concurrency_goroutines": 50,
     "concurrency_race_free": true,
     "correctly_correlated_count": 2000,
     "correlation_processing_latency": {
       "count": 2000,
-      "max_us": 1388.8,
-      "min_us": 1.7,
-      "p50_ns": 7000,
-      "p50_us": 7,
-      "p90_ns": 14500,
-      "p90_us": 14.5,
-      "p95_ns": 21000,
-      "p95_us": 21,
-      "p99_ns": 48400,
-      "p99_us": 48.4
+      "max_us": 165.5,
+      "min_us": 0.6,
+      "p50_ns": 2400,
+      "p50_us": 2.4,
+      "p90_ns": 4800,
+      "p90_us": 4.8,
+      "p95_ns": 6100,
+      "p95_us": 6.1,
+      "p99_ns": 17000,
+      "p99_us": 17
     },
     "dns_callbacks_received": 1000,
     "duplicate_replayed_count": 0,
@@ -52,15 +52,15 @@
     "measurement_breakdown": {
       "description": "Explicit mathematical separation of end-to-end socket round-trip, network transport overhead, and core correlation matching latency",
       "end_to_end_latency_us": {
-        "avg": 968.3297,
-        "max": 21146.7,
+        "avg": 232.8964,
+        "max": 10269.9,
         "min": 0,
-        "p50": 576.8,
-        "p90": 2018.5,
-        "p95": 2637.7,
-        "p99": 6699.6
+        "p50": 0,
+        "p90": 542.7,
+        "p95": 1010.5,
+        "p99": 5187.5
       },
-      "network_transport_overhead_avg_us": 961.3297
+      "network_transport_overhead_avg_us": 230.4964
     },
     "probes_generated": 2000,
     "storage_capacity": 10000,
@@ -69,10 +69,10 @@
   },
   "phase_id": "phase4",
   "receipt_version": "3.0.0",
-  "sha256_hash": "7d3c46fceea652a030e1c2c2b86fe3ce1fda1b8380dc546987083cd646010d16",
+  "sha256_hash": "916bab7ecd6997e0ec17ed1ec2b720cea9a160a8d35523ab954105c0136d41cd",
   "subphase_id": "4.4",
   "target_repo": "Out-of-Band (OAST) DNS/HTTP Callback Listener (pkg/oast/listener.go)",
   "test_command": "go test -v -count=1 ./pkg/oast -run TestLive_Phase44_OASTCorrelationBenchmarkAndReceipt",
-  "timestamp": "2026-11-07T16:31:48Z",
+  "timestamp": "2026-11-12T13:56:05Z",
   "title": "Out-of-Band (OAST) DNS/HTTP Callback Correlation Proof"
 }

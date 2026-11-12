@@ -4,12 +4,14 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"felix/pkg/clierror"
+	"felix/pkg/crawler"
 	"felix/pkg/cve"
 )
 
@@ -625,6 +627,7 @@ func runCVETemplateRun(args []string) int {
 	dirPath := fs.String("dir", "", "Directory of templates to run")
 	cveFilter := fs.String("cve", "", "Filter templates by CVE ID")
 	timeoutSec := fs.Int("timeout", 10, "Execution timeout in seconds")
+	scopeManifest := fs.String("scope-manifest", "", "Phase 8/10 signed authorization & scope manifest JSON")
 	allowLoopback := fs.Bool("allow-loopback", false, "Permit execution against loopback addresses (127.0.0.1, localhost)")
 	allowPrivate := fs.Bool("allow-private", false, "Permit execution against private RFC 1918 addresses")
 
@@ -635,6 +638,22 @@ func runCVETemplateRun(args []string) int {
 	if *targetURL == "" {
 		fmt.Fprintln(os.Stderr, "[-] Target URL is required (--target <url>)")
 		return clierror.ExitOperational
+	}
+
+	var (
+		scopeAllowed  func(string) bool
+		scopeExcluded func(string) bool
+		windowEnd     time.Time
+	)
+	if strings.TrimSpace(*scopeManifest) != "" {
+		var scopeErr error
+		scopeAllowed, scopeExcluded, windowEnd, scopeErr = buildAssessScopePolicy(&AssessOptions{
+			ScopeManifest: *scopeManifest,
+		}, *targetURL, time.Now().UTC())
+		if scopeErr != nil {
+			fmt.Fprintf(os.Stderr, "[-] Authorization gate failed: %v\n", scopeErr)
+			return clierror.ExitOperational
+		}
 	}
 
 	reg := cve.NewTemplateRegistry()
@@ -693,10 +712,33 @@ func runCVETemplateRun(args []string) int {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*timeoutSec)*time.Second)
 	defer cancel()
+	if !windowEnd.IsZero() {
+		var cancelWin context.CancelFunc
+		ctx, cancelWin = context.WithDeadline(ctx, windowEnd)
+		defer cancelWin()
+	}
+
+	allowLoop := *allowLoopback || os.Getenv("FELIX_ALLOW_LOOPBACK") == "true" || os.Getenv("FELIX_ALLOW_LOOPBACK") == "1"
+	allowPriv := *allowPrivate || os.Getenv("FELIX_ALLOW_PRIVATE") == "true" || os.Getenv("FELIX_ALLOW_PRIVATE") == "1"
+
+	var tr http.RoundTripper = crawler.NewSafeTransport(crawler.SafeTransportOptions{
+		AllowLoopback:   allowLoop,
+		AllowPrivateIPs: allowPriv,
+		Timeout:         time.Duration(*timeoutSec) * time.Second,
+	})
+	if !windowEnd.IsZero() {
+		tr = wrapWindowGuard(tr, ctx, windowEnd)
+	}
+	cveClient := &http.Client{
+		Transport:     tr,
+		Timeout:       time.Duration(*timeoutSec) * time.Second,
+		CheckRedirect: buildSafeRedirectPolicy(*targetURL, scopeAllowed, scopeExcluded, allowLoop, allowPriv),
+	}
 
 	execOpts := cve.ExecutionOptions{
-		AllowLoopback:   *allowLoopback || os.Getenv("FELIX_ALLOW_LOOPBACK") == "true" || os.Getenv("FELIX_ALLOW_LOOPBACK") == "1",
-		AllowPrivateIPs: *allowPrivate || os.Getenv("FELIX_ALLOW_PRIVATE") == "true" || os.Getenv("FELIX_ALLOW_PRIVATE") == "1",
+		Client:          cveClient,
+		AllowLoopback:   allowLoop,
+		AllowPrivateIPs: allowPriv,
 	}
 
 	matchedCount := 0

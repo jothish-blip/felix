@@ -733,7 +733,7 @@ func Save(cfg Config) error {
 	}
 
 	dir := filepath.Dir(p)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
 
@@ -742,7 +742,7 @@ func Save(cfg Config) error {
 		return err
 	}
 
-	return os.WriteFile(p, data, 0644)
+	return os.WriteFile(p, data, 0600)
 }
 
 // Reset restores default configuration and removes the config file if present.

@@ -1,0 +1,21 @@
+﻿{
+    "phase":  "Phase 10A",
+    "verified_at_utc":  "2026-11-12T13:59:45Z",
+    "external_requests_sent":  0,
+    "template_hash_gt_output":  "sha256:6ee7cc535dd6a87355d3952643f3472269f012dd7644f657b5d7304a6e2297b0",
+    "validation_package_exit_code":  0,
+    "validation_tests_output":  [
+                                    "=== RUN   TestPhase8_AuthorizationGate_WindowAndExclusions",
+                                    "--- PASS: TestPhase8_AuthorizationGate_WindowAndExclusions (0.00s)",
+                                    "=== RUN   TestPhase8_EvaluateAccuracy_StrictNineStates_And_NoInconclusiveAsTN",
+                                    "--- PASS: TestPhase8_EvaluateAccuracy_StrictNineStates_And_NoInconclusiveAsTN (0.00s)",
+                                    "=== RUN   TestPhase8_DenominatorZero_TamperedGT_And_SecretLeakDetection",
+                                    "--- PASS: TestPhase8_DenominatorZero_TamperedGT_And_SecretLeakDetection (0.00s)",
+                                    "=== RUN   TestPhase9_Evaluator_ValidationGuards_And_NoUnverifiedCorroboration",
+                                    "--- PASS: TestPhase9_Evaluator_ValidationGuards_And_NoUnverifiedCorroboration (0.00s)",
+                                    "=== RUN   TestPhase10A_PilotReadiness_StatesAndPlaceholders",
+                                    "--- PASS: TestPhase10A_PilotReadiness_StatesAndPlaceholders (0.03s)",
+                                    "PASS",
+                                    "ok  \tfelix/pkg/validation\t1.799s"
+                                ]
+}

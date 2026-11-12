@@ -204,16 +204,16 @@ func NormalizeSource(src string) string {
 // NormalizeVerificationStatus canonicalizes verification status to one of the canonical states.
 func NormalizeVerificationStatus(v VerificationStatus) VerificationStatus {
 	s := strings.ToUpper(strings.TrimSpace(string(v)))
-	switch VerificationStatus(s) {
-	case VerificationVerified:
+	switch s {
+	case string(VerificationVerified), "CONFIRMED", "HIGH CONFIDENCE", "HIGH_CONFIDENCE":
 		return VerificationVerified
-	case VerificationDetected:
+	case string(VerificationDetected), "POTENTIAL", "CANDIDATE":
 		return VerificationDetected
-	case VerificationObserved:
+	case string(VerificationObserved):
 		return VerificationObserved
-	case VerificationNotVerified:
+	case string(VerificationNotVerified), "NOT VALIDATED", "NOT_VALIDATED", "NOT TESTED", "NOT_TESTED", "INCONCLUSIVE":
 		return VerificationNotVerified
-	case VerificationNotExposed:
+	case string(VerificationNotExposed), "NOT EXPOSED", "NOT VULNERABLE", "NOT_VULNERABLE", "REMEDIATED", "FIX DETECTED", "PASSED":
 		return VerificationNotExposed
 	default:
 		return VerificationObserved

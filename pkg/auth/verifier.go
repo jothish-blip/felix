@@ -1876,10 +1876,12 @@ func buildRouteInconsistencyFinding(endpoint, protectedSibling string) report.Fi
 
 func buildMissingAuthFinding(endpoint string, statusCode int, confirmed bool) report.Finding {
 	status := report.FindingStatusSuspected
+	outcome := report.OutcomeSuspected
 	severity := report.SeverityHigh
 	confidence := report.ConfidenceMedium
 	if confirmed {
 		status = report.FindingStatusConfirmed
+		outcome = report.OutcomeConfirmed
 		confidence = report.ConfidenceHigh
 	}
 
@@ -1892,7 +1894,7 @@ func buildMissingAuthFinding(endpoint string, statusCode int, confirmed bool) re
 		ID:                    fID,
 		RuleID:                "AUTH-ENFORCE-MISSING",
 		Status:                status,
-		ClassificationOutcome: report.OutcomeConfirmed,
+		ClassificationOutcome: outcome,
 		AnalysisMethod:        report.AnalysisMethodActive,
 		Category:              "Authentication / Enforcement",
 		Title:                 "Protected Endpoint Accessible Without Authentication",

@@ -174,8 +174,9 @@ func (s *LiveAssessmentSession) EnrichReport(rep *report.Report) {
 	for _, inf := range s.InvestigatedFindings {
 		f := inf.Finding
 
-		// Synchronize verification state
+		// Synchronize verification state (keep ValidationStatus verbatim; report normalization maps to canonical statuses)
 		f.Verification.Status = report.VerificationStatus(inf.ValidationStatus)
+		f.Status = report.FindingStatusFromVerification(f.Verification.Status)
 		f.Verification.Result = fmt.Sprintf("Validation outcome: %s", inf.ValidationStatus)
 		if inf.EvidenceBundle != nil {
 			f.Verification.Rationale = secrets.RedactText(inf.EvidenceBundle.ProofSummary)
@@ -281,4 +282,5 @@ func (s *LiveAssessmentSession) EnrichReport(rep *report.Report) {
 
 	rep.Findings = enrichedFindings
 	rep.AttackPaths = attackSummaries
+	report.RecalculateReportRisk(rep)
 }

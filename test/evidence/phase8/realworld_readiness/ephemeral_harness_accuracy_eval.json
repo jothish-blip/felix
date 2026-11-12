@@ -1,0 +1,357 @@
+{
+  "schema_version": "phase8-accuracy-v1",
+  "target_name": "Phase8EphemeralCLIApp",
+  "registry_id": "gt-phase8-cli-ephemeral-v1",
+  "campaign_id": "p8-cli-ephemeral-campaign-01",
+  "evaluated_at": "2026-11-12T11:19:25.5090805Z",
+  "ground_truth_sha256": "sha256:a70329e9bfebbcf4942c5a191fecc178db7b3daedf78c293c2fd9cb0e07201a8",
+  "manifest_integrity_ok": true,
+  "blind_execution_verified": true,
+  "evaluated_population": 3,
+  "executable_positive_population": 2,
+  "evaluated_negative_population": 1,
+  "counts": {
+    "tp": 2,
+    "fp": 0,
+    "fn": 0,
+    "tn": 1,
+    "inconclusive": 0,
+    "not_tested": 0,
+    "not_configured": 0,
+    "safety_excluded": 0,
+    "out_of_scope": 1,
+    "candidate_only_matches": 0,
+    "candidate_fps": 0,
+    "verified_fps": 0,
+    "discovery_observations_ignored": 1
+  },
+  "precision": {
+    "value": 1,
+    "numerator": 2,
+    "denominator": 2,
+    "valid": true,
+    "ci_95": {
+      "valid": true,
+      "lower_95": 0.3424,
+      "upper_95": 1
+    }
+  },
+  "recall": {
+    "value": 1,
+    "numerator": 2,
+    "denominator": 2,
+    "valid": true,
+    "ci_95": {
+      "valid": true,
+      "lower_95": 0.3424,
+      "upper_95": 1
+    }
+  },
+  "specificity": {
+    "value": 1,
+    "numerator": 1,
+    "denominator": 1,
+    "valid": true,
+    "ci_95": {
+      "valid": true,
+      "lower_95": 0.2065,
+      "upper_95": 1
+    }
+  },
+  "f1_score": {
+    "value": 1,
+    "numerator": 4,
+    "denominator": 4,
+    "valid": true,
+    "ci_95": {
+      "valid": false,
+      "lower_95": 0,
+      "upper_95": 0
+    }
+  },
+  "execution_coverage": {
+    "value": 1,
+    "numerator": 3,
+    "denominator": 3,
+    "valid": true,
+    "ci_95": {
+      "valid": true,
+      "lower_95": 0.4385,
+      "upper_95": 1
+    }
+  },
+  "class_breakdown": {
+    "BFLA": {
+      "vuln_class": "BFLA",
+      "evaluated_population": 0,
+      "counts": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "tn": 0,
+        "inconclusive": 0,
+        "not_tested": 0,
+        "not_configured": 0,
+        "safety_excluded": 0,
+        "out_of_scope": 1,
+        "candidate_only_matches": 0,
+        "candidate_fps": 0,
+        "verified_fps": 0,
+        "discovery_observations_ignored": 0
+      },
+      "precision": {
+        "value": 0,
+        "numerator": 0,
+        "denominator": 0,
+        "valid": false,
+        "invalid_reason": "TP+FP == 0",
+        "ci_95": {
+          "valid": false,
+          "lower_95": 0,
+          "upper_95": 0
+        }
+      },
+      "recall": {
+        "value": 0,
+        "numerator": 0,
+        "denominator": 0,
+        "valid": false,
+        "invalid_reason": "TP+FN == 0",
+        "ci_95": {
+          "valid": false,
+          "lower_95": 0,
+          "upper_95": 0
+        }
+      },
+      "specificity": {
+        "value": 0,
+        "numerator": 0,
+        "denominator": 0,
+        "valid": false,
+        "invalid_reason": "TN+FP == 0",
+        "ci_95": {
+          "valid": false,
+          "lower_95": 0,
+          "upper_95": 0
+        }
+      },
+      "execution_coverage": {
+        "value": 0,
+        "numerator": 0,
+        "denominator": 0,
+        "valid": false,
+        "invalid_reason": "no executable in-scope cases",
+        "ci_95": {
+          "valid": false,
+          "lower_95": 0,
+          "upper_95": 0
+        }
+      }
+    },
+    "BOLA": {
+      "vuln_class": "BOLA",
+      "evaluated_population": 1,
+      "counts": {
+        "tp": 1,
+        "fp": 0,
+        "fn": 0,
+        "tn": 0,
+        "inconclusive": 0,
+        "not_tested": 0,
+        "not_configured": 0,
+        "safety_excluded": 0,
+        "out_of_scope": 0,
+        "candidate_only_matches": 0,
+        "candidate_fps": 0,
+        "verified_fps": 0,
+        "discovery_observations_ignored": 0
+      },
+      "precision": {
+        "value": 1,
+        "numerator": 1,
+        "denominator": 1,
+        "valid": true,
+        "ci_95": {
+          "valid": true,
+          "lower_95": 0.2065,
+          "upper_95": 1
+        }
+      },
+      "recall": {
+        "value": 1,
+        "numerator": 1,
+        "denominator": 1,
+        "valid": true,
+        "ci_95": {
+          "valid": true,
+          "lower_95": 0.2065,
+          "upper_95": 1
+        }
+      },
+      "specificity": {
+        "value": 0,
+        "numerator": 0,
+        "denominator": 0,
+        "valid": false,
+        "invalid_reason": "TN+FP == 0",
+        "ci_95": {
+          "valid": false,
+          "lower_95": 0,
+          "upper_95": 0
+        }
+      },
+      "execution_coverage": {
+        "value": 1,
+        "numerator": 1,
+        "denominator": 1,
+        "valid": true,
+        "ci_95": {
+          "valid": true,
+          "lower_95": 0.2065,
+          "upper_95": 1
+        }
+      }
+    },
+    "SECURITY_HEADERS": {
+      "vuln_class": "SECURITY_HEADERS",
+      "evaluated_population": 2,
+      "counts": {
+        "tp": 1,
+        "fp": 0,
+        "fn": 0,
+        "tn": 1,
+        "inconclusive": 0,
+        "not_tested": 0,
+        "not_configured": 0,
+        "safety_excluded": 0,
+        "out_of_scope": 0,
+        "candidate_only_matches": 0,
+        "candidate_fps": 0,
+        "verified_fps": 0,
+        "discovery_observations_ignored": 0
+      },
+      "precision": {
+        "value": 1,
+        "numerator": 1,
+        "denominator": 1,
+        "valid": true,
+        "ci_95": {
+          "valid": true,
+          "lower_95": 0.2065,
+          "upper_95": 1
+        }
+      },
+      "recall": {
+        "value": 1,
+        "numerator": 1,
+        "denominator": 1,
+        "valid": true,
+        "ci_95": {
+          "valid": true,
+          "lower_95": 0.2065,
+          "upper_95": 1
+        }
+      },
+      "specificity": {
+        "value": 1,
+        "numerator": 1,
+        "denominator": 1,
+        "valid": true,
+        "ci_95": {
+          "valid": true,
+          "lower_95": 0.2065,
+          "upper_95": 1
+        }
+      },
+      "execution_coverage": {
+        "value": 1,
+        "numerator": 2,
+        "denominator": 2,
+        "valid": true,
+        "ci_95": {
+          "valid": true,
+          "lower_95": 0.3424,
+          "upper_95": 1
+        }
+      }
+    }
+  },
+  "evidence_comparison": [
+    {
+      "ground_truth_id": "GT-BOLA-ITEMS",
+      "finding_id": "661407f1-a0e6-462a-a210-a0f05e634b53",
+      "finding_title": "[BOLA-USER-READ] Unauthorized Cross-User Object Read on item-alice-1",
+      "endpoint": "/api/items/%7Bitem_id%7D",
+      "vuln_class": "BOLA",
+      "outcome": "TP",
+      "verification_tier": "VERIFIED",
+      "evidence_present": true,
+      "rationale": "verified finding matches executable in-scope positive ground-truth entry"
+    },
+    {
+      "ground_truth_id": "GT-HDR-CSP",
+      "finding_id": "HDR-CSP-2b592793",
+      "finding_title": "Missing Content-Security-Policy (CSP)",
+      "vuln_class": "SECURITY_HEADERS",
+      "outcome": "TP",
+      "verification_tier": "VERIFIED",
+      "evidence_present": true,
+      "rationale": "verified finding matches executable in-scope positive ground-truth entry"
+    },
+    {
+      "ground_truth_id": "GT-HDR-NOSNIFF-NC",
+      "endpoint": "/",
+      "vuln_class": "SECURITY_HEADERS",
+      "outcome": "TN",
+      "evidence_present": false,
+      "rationale": "target root headers inspected without triggering finding on present control header"
+    },
+    {
+      "ground_truth_id": "GT-EXCL-RESET",
+      "endpoint": "/admin/reset",
+      "vuln_class": "BFLA",
+      "outcome": "OUT_OF_SCOPE",
+      "evidence_present": false,
+      "rationale": "marked excluded or out of scope in independent ground truth"
+    },
+    {
+      "ground_truth_id": "GT-BOLA-ITEMS",
+      "finding_id": "7d274d82-652e-40a9-b6b3-778bb74be5c1",
+      "finding_title": "[BOLA-USER-READ] Unauthorized Cross-User Object Read on item-bob-1",
+      "endpoint": "/api/items/%7Bitem_id%7D",
+      "vuln_class": "BOLA",
+      "outcome": "TP",
+      "verification_tier": "VERIFIED",
+      "evidence_present": true,
+      "rationale": "additional verified/corroborating finding for already-satisfied ground-truth entry"
+    }
+  ],
+  "retest_accuracy": {
+    "expected_total": 3,
+    "correct_fixed": 2,
+    "correct_still_present": 1,
+    "incorrect_verdict": 0,
+    "inconclusive_count": 0,
+    "missing_verdict": 0,
+    "retest_accuracy": {
+      "value": 1,
+      "numerator": 3,
+      "denominator": 3,
+      "valid": true,
+      "ci_95": {
+        "valid": true,
+        "lower_95": 0.4385,
+        "upper_95": 1
+      }
+    }
+  },
+  "redaction_audit": {
+    "clean": true,
+    "finding_count": 4
+  },
+  "report_summary_consistent": true,
+  "findings_count_reported": 4,
+  "summary_total_reported": 4,
+  "universal_accuracy_claimed": false,
+  "disclaimer": "Metrics measure empirical performance strictly on the registered target, scope, and evaluated population. Zero universal accuracy claim is made."
+}

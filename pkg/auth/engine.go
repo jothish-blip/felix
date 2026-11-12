@@ -75,8 +75,8 @@ func (e *Engine) AnalyzeAuthentication(
 
 				ruleID := "AUTH-COOKIE-DEFECT"
 				fStatus := report.FindingStatusSuspected
-				if verificationStatus == report.VerificationObserved || verificationStatus == report.VerificationVerified {
-					fStatus = report.FindingStatusConfirmed
+				if verificationStatus != report.VerificationObserved {
+					fStatus = report.FindingStatusFromVerification(verificationStatus)
 				}
 				fp := fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%s:cookie:%s:%s", targetURL, c.Name, defect))))
 				fID := report.ComputeStableFindingID(targetURL, ruleID, "Authentication / Session Security", c.Path, "GET", fp)

@@ -1,0 +1,68 @@
+{
+  "registry_id": "gt-pilot-template-v1",
+  "application": "<REQUIRED: Target Application Name>",
+  "version": "<REQUIRED: Deployed Version / Git SHA>",
+  "target_origin": "https://staging.example-authorized-app.internal",
+  "established_at": "2026-11-14T18:00:00Z",
+  "established_by": "<REQUIRED: Independent AppSec Reviewer (Non-FELIX)>",
+  "provenance_note": "Derived independently from application source code, OpenAPI spec, authorization middleware, and manual verification BEFORE any FELIX scan executes.",
+  "derived_from_scanner": false,
+  "entries": [
+    {
+      "id": "GT-001",
+      "endpoint_pattern": "/api/v1/orders/{order_id}",
+      "method": "GET",
+      "vuln_class": "BOLA",
+      "expected_status": "VULNERABLE",
+      "required_identities": ["user_a", "user_b"],
+      "in_scope": true,
+      "requires_config": "MULTI_ROLE",
+      "matcher": {
+        "vuln_classes": ["BOLA"],
+        "path_contains": ["/api/v1/orders"],
+        "methods": ["GET"]
+      },
+      "source_reference": "controllers/orders.go#GetOrder (missing owner check)",
+      "description": "Cross-tenant object read when user_b requests user_a order_id"
+    },
+    {
+      "id": "GT-002",
+      "endpoint_pattern": "/api/v1/profile/{user_id}",
+      "method": "GET",
+      "vuln_class": "BOLA",
+      "expected_status": "SECURE_NEGATIVE_CONTROL",
+      "required_identities": ["user_a", "user_b"],
+      "in_scope": true,
+      "requires_config": "MULTI_ROLE",
+      "matcher": {
+        "vuln_classes": ["BOLA"],
+        "path_contains": ["/api/v1/profile"],
+        "methods": ["GET"]
+      },
+      "source_reference": "middleware/authz.go#RequireSelfOrAdmin",
+      "description": "Negative control: returns HTTP 403 for cross-user access"
+    },
+    {
+      "id": "GT-003",
+      "endpoint_pattern": "/",
+      "method": "GET",
+      "vuln_class": "SECURITY_HEADERS",
+      "expected_status": "VULNERABLE",
+      "in_scope": true,
+      "matcher": {
+        "title_contains": ["Content-Security-Policy"]
+      },
+      "description": "Root response omits Content-Security-Policy header"
+    },
+    {
+      "id": "GT-004",
+      "endpoint_pattern": "/admin/reset",
+      "method": "POST",
+      "vuln_class": "BFLA",
+      "expected_status": "EXCLUDED_SCOPE",
+      "in_scope": false,
+      "safety_excluded": true,
+      "description": "Destructive reset endpoint excluded in authorization contract"
+    }
+  ]
+}

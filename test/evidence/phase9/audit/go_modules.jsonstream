@@ -1,0 +1,411 @@
+﻿{
+	"Path": "felix",
+	"Main": true,
+	"Dir": "C:\\Jothish\\felix",
+	"GoMod": "C:\\Jothish\\felix\\go.mod",
+	"GoVersion": "1.27.0"
+}
+{
+	"Path": "github.com/Masterminds/semver/v3",
+	"Version": "v3.5.0",
+	"Time": "2026-04-30T15:39:17Z",
+	"Indirect": true,
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\github.com\\!masterminds\\semver\\v3@v3.5.0",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\github.com\\!masterminds\\semver\\v3\\@v\\v3.5.0.mod",
+	"GoVersion": "1.21",
+	"Sum": "h1:kQceYJfbupGfZOKZQg0kou0DgAKhzDg2NZPAwZ/2OOE=",
+	"GoModSum": "h1:4V+yj/TJE1HU9XfppCwVMZq3I84lprf4nC11bSS5beM="
+}
+{
+	"Path": "github.com/ProtonMail/go-crypto",
+	"Version": "v1.5.2",
+	"Time": "2026-09-25T16:16:17Z",
+	"Indirect": true,
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\github.com\\!proton!mail\\go-crypto@v1.5.2",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\github.com\\!proton!mail\\go-crypto\\@v\\v1.5.2.mod",
+	"GoVersion": "1.23.0",
+	"Sum": "h1:cucYnvqcY7UOXVD//mSyjeaPY0SSN3v5cDkYPxumINk=",
+	"GoModSum": "h1:/RaSu30DaKO4RY+XdV/ACcCcZkGr7AhUIduq5sjzzCo="
+}
+{
+	"Path": "github.com/bwesterb/go-ristretto",
+	"Version": "v1.2.3",
+	"Time": "2023-03-16T16:56:11Z",
+	"Indirect": true
+}
+{
+	"Path": "github.com/chromedp/cdproto",
+	"Version": "v0.157.8",
+	"Time": "2026-10-05T21:40:28Z",
+	"Indirect": true,
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\github.com\\chromedp\\cdproto@v0.157.8",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\github.com\\chromedp\\cdproto\\@v\\v0.157.8.mod",
+	"GoVersion": "1.25",
+	"Sum": "h1:Tkq0AjsUlC3Z4sJfHBzV/uAAxnTF/AZyuSTjfV/1gvk=",
+	"GoModSum": "h1:h68JaIuFr9o3yiayxEYhBdvaxgYO3shDrPSYhNlyfu0="
+}
+{
+	"Path": "github.com/chromedp/chromedp",
+	"Version": "v0.21.0",
+	"Time": "2026-10-11T04:21:32Z",
+	"Indirect": true,
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\github.com\\chromedp\\chromedp@v0.21.0",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\github.com\\chromedp\\chromedp\\@v\\v0.21.0.mod",
+	"GoVersion": "1.25",
+	"Sum": "h1:nVHgS2LHyhZJ1l3BWRbG2eFIFYiJMnvkJbELbd8WBoQ=",
+	"GoModSum": "h1:6z1Y5FdKUxRzxx2qcC5h1xjaBJrSWrZp1mjgITfNZig="
+}
+{
+	"Path": "github.com/cloudflare/circl",
+	"Version": "v1.6.3",
+	"Time": "2026-01-22T20:12:37Z",
+	"Indirect": true,
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\github.com\\cloudflare\\circl@v1.6.3",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\github.com\\cloudflare\\circl\\@v\\v1.6.3.mod",
+	"GoVersion": "1.22.0",
+	"Sum": "h1:9GPOhQGF9MCYUeXyMYlqTR6a5gTrgR/fBLXvUgtVcg8=",
+	"GoModSum": "h1:2eXP6Qfat4O/Yhh8BznvKnJ+uzEoTQ6jVKJRn81BiS4="
+}
+{
+	"Path": "github.com/dustin/go-humanize",
+	"Version": "v1.0.1",
+	"Time": "2023-01-10T06:44:38Z",
+	"Indirect": true,
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\github.com\\dustin\\go-humanize@v1.0.1",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\github.com\\dustin\\go-humanize\\@v\\v1.0.1.mod",
+	"GoVersion": "1.16",
+	"Sum": "h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=",
+	"GoModSum": "h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto="
+}
+{
+	"Path": "github.com/go-json-experiment/json",
+	"Version": "v0.0.0-20260213210345-44df1a37e875",
+	"Time": "2026-02-13T21:03:45Z",
+	"Indirect": true,
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\github.com\\go-json-experiment\\json@v0.0.0-20260213210345-44df1a37e875",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\github.com\\go-json-experiment\\json\\@v\\v0.0.0-20260213210345-44df1a37e875.mod",
+	"GoVersion": "1.25",
+	"Sum": "h1:XGPtjxqp0FS8jj1Z7QGcSOSgyq1fUPjNyJXvi3KfI4A=",
+	"GoModSum": "h1:uNVvRXArCGbZ508SxYYTC5v1JWoz2voff5pm25jU1Ok="
+}
+{
+	"Path": "github.com/google/pprof",
+	"Version": "v0.0.0-20260802141513-ef3492d7dac3",
+	"Time": "2026-08-02T14:15:13Z",
+	"Indirect": true,
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\github.com\\google\\pprof@v0.0.0-20260802141513-ef3492d7dac3",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\github.com\\google\\pprof\\@v\\v0.0.0-20260802141513-ef3492d7dac3.mod",
+	"GoVersion": "1.25.0",
+	"Sum": "h1:LMLX+LgTNWpfvCBdFebv6EsYotImrt/Ppc5cXIriCSo=",
+	"GoModSum": "h1:jl5iWTm0/hd5PjEYEOuwAJ57L/CibdZfrqZ5XA5GrCk="
+}
+{
+	"Path": "github.com/google/uuid",
+	"Version": "v1.6.0",
+	"Time": "2024-01-23T18:54:04Z",
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\github.com\\google\\uuid@v1.6.0",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\github.com\\google\\uuid\\@v\\v1.6.0.mod",
+	"Sum": "h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=",
+	"GoModSum": "h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo="
+}
+{
+	"Path": "github.com/hashicorp/golang-lru/v2",
+	"Version": "v2.0.7",
+	"Time": "2023-09-21T18:26:40Z",
+	"Indirect": true,
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\github.com\\hashicorp\\golang-lru\\v2@v2.0.7",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\github.com\\hashicorp\\golang-lru\\v2\\@v\\v2.0.7.mod",
+	"GoVersion": "1.18",
+	"Sum": "h1:a+bsQ5rvGLjzHuww6tVxozPZFVghXaHOwFs4luLUK2k=",
+	"GoModSum": "h1:QeFd9opnmA6QUJc5vARoKUSoFhyfM2/ZepoAG6RGpeM="
+}
+{
+	"Path": "github.com/mattn/go-isatty",
+	"Version": "v0.0.24",
+	"Time": "2026-07-23T16:45:22Z",
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\github.com\\mattn\\go-isatty@v0.0.24",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\github.com\\mattn\\go-isatty\\@v\\v0.0.24.mod",
+	"GoVersion": "1.20",
+	"Sum": "h1:tGZZoVgT/KiqK1c8ocVLeDS8BSWMRd47J3Lbz7vsReI=",
+	"GoModSum": "h1:nMCL3Zebbrt45jsMDgnfIwz6ydEQApk5oEI3HqDio6A="
+}
+{
+	"Path": "github.com/ncruces/go-strftime",
+	"Version": "v1.0.0",
+	"Time": "2025-10-08T11:45:18Z",
+	"Indirect": true,
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\github.com\\ncruces\\go-strftime@v1.0.0",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\github.com\\ncruces\\go-strftime\\@v\\v1.0.0.mod",
+	"GoVersion": "1.17",
+	"Sum": "h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOFAw7w=",
+	"GoModSum": "h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls="
+}
+{
+	"Path": "github.com/remyoudompheng/bigfft",
+	"Version": "v0.0.0-20230129092748-24d4a6f8daec",
+	"Time": "2023-01-29T09:27:48Z",
+	"Indirect": true,
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\github.com\\remyoudompheng\\bigfft@v0.0.0-20230129092748-24d4a6f8daec",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\github.com\\remyoudompheng\\bigfft\\@v\\v0.0.0-20230129092748-24d4a6f8daec.mod",
+	"GoVersion": "1.12",
+	"Sum": "h1:W09IVJc94icq4NjY3clb7Lk8O1qJ8BdBEF8z0ibU0rE=",
+	"GoModSum": "h1:qqbHyh8v60DhA7CoWK5oRCqLrMHRGoxYCSS9EjAz6Eo="
+}
+{
+	"Path": "github.com/santhosh-tekuri/jsonschema/v5",
+	"Version": "v5.3.1",
+	"Time": "2023-07-22T18:48:50Z",
+	"Indirect": true,
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\github.com\\santhosh-tekuri\\jsonschema\\v5@v5.3.1",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\github.com\\santhosh-tekuri\\jsonschema\\v5\\@v\\v5.3.1.mod",
+	"GoVersion": "1.19",
+	"Sum": "h1:lZUw3E0/J3roVtGQ+SCrUrg3ON6NgVqpn3+iol9aGu4=",
+	"GoModSum": "h1:uToXkOrWAZ6/Oc07xWQrPOhJotwFIyu2bBVN41fcDUY="
+}
+{
+	"Path": "golang.org/x/crypto",
+	"Version": "v0.58.0",
+	"Time": "2026-10-09T16:24:17Z",
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\golang.org\\x\\crypto@v0.58.0",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\golang.org\\x\\crypto\\@v\\v0.58.0.mod",
+	"GoVersion": "1.26.0",
+	"Sum": "h1:COkYLr4k7nDI4r6QtMML2AfzeIswWHAJthLS6K/M/54=",
+	"GoModSum": "h1:Xh+kl5A+M0gMiWDytH2Hhr5Z7WbNCpv/eB/EFgfSk+w="
+}
+{
+	"Path": "golang.org/x/mod",
+	"Version": "v0.41.0",
+	"Time": "2026-08-24T20:56:42Z",
+	"Indirect": true,
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\golang.org\\x\\mod@v0.41.0",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\golang.org\\x\\mod\\@v\\v0.41.0.mod",
+	"GoVersion": "1.26.0",
+	"Sum": "h1:qJmnOUb4YB+FsEuM3HcWucdZASCPGhsX6uljO6pog0c=",
+	"GoModSum": "h1:Ek9pY8RKWXwsWvd3rQiHYtMqkjSUV+s1Rj7j4H5Ur6o="
+}
+{
+	"Path": "golang.org/x/net",
+	"Version": "v0.60.0",
+	"Time": "2026-10-08T17:22:58Z",
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\golang.org\\x\\net@v0.60.0",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\golang.org\\x\\net\\@v\\v0.60.0.mod",
+	"GoVersion": "1.26.0",
+	"Sum": "h1:79p50tfZlm0J9YfoDsSi639qSXNGVwEzOPLCxM2FsYU=",
+	"GoModSum": "h1:2DA/G1UfVbCpQPeWTmMPGY7Cs2PkBkwu743bVX5PIVg="
+}
+{
+	"Path": "golang.org/x/sync",
+	"Version": "v0.23.0",
+	"Time": "2026-08-31T03:04:41Z",
+	"Indirect": true,
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\golang.org\\x\\sync@v0.23.0",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\golang.org\\x\\sync\\@v\\v0.23.0.mod",
+	"GoVersion": "1.26.0",
+	"Sum": "h1:KameEIfc1IkluZyXWLn39Wd4tURc6GbCiISGiZm2bQk=",
+	"GoModSum": "h1:sUUOizhqBxiL6pEWpqNLUiaJn1ShEbZ6BBqskPbjZm0="
+}
+{
+	"Path": "golang.org/x/sys",
+	"Version": "v0.49.0",
+	"Time": "2026-10-06T18:35:47Z",
+	"Indirect": true,
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\golang.org\\x\\sys@v0.49.0",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\golang.org\\x\\sys\\@v\\v0.49.0.mod",
+	"GoVersion": "1.26.0",
+	"Sum": "h1:XbzkgYJHdqh/8m2Uu0W/dQv8nktxx4BFHp1M0gROTXA=",
+	"GoModSum": "h1:hNLxWAXmnKAxqDtdwIYC4bM9oQPEecfsnNMuSxOs3og="
+}
+{
+	"Path": "golang.org/x/term",
+	"Version": "v0.47.0",
+	"Time": "2026-10-09T15:22:17Z",
+	"Indirect": true
+}
+{
+	"Path": "golang.org/x/text",
+	"Version": "v0.43.0",
+	"Time": "2026-10-09T15:18:32Z",
+	"Indirect": true
+}
+{
+	"Path": "golang.org/x/tools",
+	"Version": "v0.50.0",
+	"Time": "2026-09-08T19:59:56Z",
+	"Indirect": true,
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\golang.org\\x\\tools@v0.50.0",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\golang.org\\x\\tools\\@v\\v0.50.0.mod",
+	"GoVersion": "1.26.0",
+	"Sum": "h1:c2ifzfcuY7L90lZ2aKd8S4K2NpASF08SZx9ZuJkHmSU=",
+	"GoModSum": "h1:7ulVMw3831Mwi5EZD6RomGyffr4VFjuNYXf2BbCEAV0="
+}
+{
+	"Path": "gopkg.in/check.v1",
+	"Version": "v0.0.0-20161208181325-20d25e280405",
+	"Time": "2016-12-08T18:13:25Z",
+	"Indirect": true,
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\gopkg.in\\check.v1\\@v\\v0.0.0-20161208181325-20d25e280405.mod",
+	"GoModSum": "h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0="
+}
+{
+	"Path": "gopkg.in/yaml.v3",
+	"Version": "v3.0.1",
+	"Time": "2022-05-27T08:35:30Z",
+	"Indirect": true,
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\gopkg.in\\yaml.v3@v3.0.1",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\gopkg.in\\yaml.v3\\@v\\v3.0.1.mod",
+	"Sum": "h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=",
+	"GoModSum": "h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM="
+}
+{
+	"Path": "modernc.org/cc/v4",
+	"Version": "v4.29.7",
+	"Time": "2026-09-12T09:50:28Z",
+	"Indirect": true,
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\modernc.org\\cc\\v4@v4.29.7",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\modernc.org\\cc\\v4\\@v\\v4.29.7.mod",
+	"GoVersion": "1.25",
+	"Sum": "h1:q+NXGJ0bK3b4TXFYQQVr9pYETGnmwFWkrUzJnMya/Tg=",
+	"GoModSum": "h1:OnovgIhbbMXMu1aISnJ0wvVD1KnW+cAUJkIrAWh+kVI="
+}
+{
+	"Path": "modernc.org/ccgo/v4",
+	"Version": "v4.36.1",
+	"Time": "2026-09-21T14:40:51Z",
+	"Indirect": true,
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\modernc.org\\ccgo\\v4@v4.36.1",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\modernc.org\\ccgo\\v4\\@v\\v4.36.1.mod",
+	"GoVersion": "1.26.0",
+	"Sum": "h1:ZNIUZAryN0UgnJwtyxrdEzcFc3yD4Cu4AzjfPXsLsIE=",
+	"GoModSum": "h1:rrtGc2QkS239nYb/mQNuBMyjq3/y3ZXWbBjPoV3wqzA="
+}
+{
+	"Path": "modernc.org/fileutil",
+	"Version": "v1.4.0",
+	"Time": "2026-02-18T10:24:55Z",
+	"Indirect": true,
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\modernc.org\\fileutil@v1.4.0",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\modernc.org\\fileutil\\@v\\v1.4.0.mod",
+	"GoVersion": "1.24",
+	"Sum": "h1:j6ZzNTftVS054gi281TyLjHPp6CPHr2KCxEXjEbD6SM=",
+	"GoModSum": "h1:EqdKFDxiByqxLk8ozOxObDSfcVOv/54xDs/DUHdvCUU="
+}
+{
+	"Path": "modernc.org/gc/v2",
+	"Version": "v2.6.5",
+	"Time": "2025-03-12T16:49:23Z",
+	"Indirect": true,
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\modernc.org\\gc\\v2@v2.6.5",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\modernc.org\\gc\\v2\\@v\\v2.6.5.mod",
+	"GoVersion": "1.21",
+	"Sum": "h1:nyqdV8q46KvTpZlsw66kWqwXRHdjIlJOhG6kxiV/9xI=",
+	"GoModSum": "h1:YgIahr1ypgfe7chRuJi2gD7DBQiKSLMPgBQe9oIiito="
+}
+{
+	"Path": "modernc.org/gc/v3",
+	"Version": "v3.1.5",
+	"Time": "2026-06-24T18:04:59Z",
+	"Indirect": true,
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\modernc.org\\gc\\v3@v3.1.5",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\modernc.org\\gc\\v3\\@v\\v3.1.5.mod",
+	"GoVersion": "1.23.0",
+	"Sum": "h1:21ldfPfRYE31Tb7B3mwAK8gy1AxP4+dKjrOQPfqakoc=",
+	"GoModSum": "h1:HFK/6AGESC7Ex+EZJhJ2Gni6cTaYpSMmU/cT9RmlfYY="
+}
+{
+	"Path": "modernc.org/goabi0",
+	"Version": "v0.2.0",
+	"Time": "2025-07-02T15:46:44Z",
+	"Indirect": true,
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\modernc.org\\goabi0@v0.2.0",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\modernc.org\\goabi0\\@v\\v0.2.0.mod",
+	"GoVersion": "1.23.0",
+	"Sum": "h1:HvEowk7LxcPd0eq6mVOAEMai46V+i7Jrj13t4AzuNks=",
+	"GoModSum": "h1:CEFRnnJhKvWT1c1JTI3Avm+tgOWbkOu5oPA8eH8LnMI="
+}
+{
+	"Path": "modernc.org/libc",
+	"Version": "v1.77.1",
+	"Time": "2026-09-21T23:07:06Z",
+	"Indirect": true,
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\modernc.org\\libc@v1.77.1",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\modernc.org\\libc\\@v\\v1.77.1.mod",
+	"GoVersion": "1.26.0",
+	"Sum": "h1:Ct8j47QtiZ1Enj2DtFXQtUqrPCAjdCmPjtCuvrYQ0Hs=",
+	"GoModSum": "h1:87/pZ4L6nD1zqW4nItuS12YO7hN1igAah34xjnQo/W0="
+}
+{
+	"Path": "modernc.org/mathutil",
+	"Version": "v1.7.1",
+	"Time": "2024-12-26T12:13:25Z",
+	"Indirect": true,
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\modernc.org\\mathutil@v1.7.1",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\modernc.org\\mathutil\\@v\\v1.7.1.mod",
+	"GoVersion": "1.21",
+	"Sum": "h1:GCZVGXdaN8gTqB1Mf/usp1Y/hSqgI2vAGGP4jZMCxOU=",
+	"GoModSum": "h1:4p5IwJITfppl0G4sUEDtCr4DthTaT47/N3aT6MhfgJg="
+}
+{
+	"Path": "modernc.org/memory",
+	"Version": "v1.12.1",
+	"Time": "2026-08-19T16:36:49Z",
+	"Indirect": true,
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\modernc.org\\memory@v1.12.1",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\modernc.org\\memory\\@v\\v1.12.1.mod",
+	"GoVersion": "1.23.0",
+	"Sum": "h1:nFMiWrpStgZczNl6XI9GnIk/rWhYIyHGUaR04pGbp9g=",
+	"GoModSum": "h1:/JP4VbVC+K5sU2wZi9bHoq2MAkCnrt2r98UGeSK7Mjw="
+}
+{
+	"Path": "modernc.org/opt",
+	"Version": "v0.2.0",
+	"Time": "2026-03-24T16:14:02Z",
+	"Indirect": true,
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\modernc.org\\opt@v0.2.0",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\modernc.org\\opt\\@v\\v0.2.0.mod",
+	"GoVersion": "1.21",
+	"Sum": "h1:tGyef5ApycA7FSEOMraay9SaTk5zmbx7Tu+cJs4QKZg=",
+	"GoModSum": "h1:03fq9lsNfvkYSfxrfUhZCWPk1lm4cq4N+Bh//bEtgns="
+}
+{
+	"Path": "modernc.org/sortutil",
+	"Version": "v1.2.1",
+	"Time": "2024-12-28T00:09:37Z",
+	"Indirect": true,
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\modernc.org\\sortutil@v1.2.1",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\modernc.org\\sortutil\\@v\\v1.2.1.mod",
+	"GoVersion": "1.21",
+	"Sum": "h1:+xyoGf15mM3NMlPDnFqrteY07klSFxLElE2PVuWIJ7w=",
+	"GoModSum": "h1:7ZI3a3REbai7gzCLcotuw9AC4VZVpYMjDzETGsSMqJE="
+}
+{
+	"Path": "modernc.org/sqlite",
+	"Version": "v1.60.1",
+	"Time": "2026-09-29T08:41:38Z",
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\modernc.org\\sqlite@v1.60.1",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\modernc.org\\sqlite\\@v\\v1.60.1.mod",
+	"GoVersion": "1.26.0",
+	"Sum": "h1:/blz53O951KWFOso4QQvEs/Fq6cDBKLtMVrYNSeJVKw=",
+	"GoModSum": "h1:1dIoEagfDE72QytD5scH1lxARtaUgKgHC/NuApA27r0="
+}
+{
+	"Path": "modernc.org/strutil",
+	"Version": "v1.2.1",
+	"Time": "2024-12-27T20:23:31Z",
+	"Indirect": true,
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\modernc.org\\strutil@v1.2.1",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\modernc.org\\strutil\\@v\\v1.2.1.mod",
+	"GoVersion": "1.21",
+	"Sum": "h1:UneZBkQA+DX2Rp35KcM69cSsNES9ly8mQWD71HKlOA0=",
+	"GoModSum": "h1:EHkiggD70koQxjVdSBM3JKM7k6L0FbGE5eymy9i3B9A="
+}
+{
+	"Path": "modernc.org/token",
+	"Version": "v1.1.0",
+	"Time": "2022-11-13T14:28:03Z",
+	"Indirect": true,
+	"Dir": "C:\\Users\\LENOVO\\go\\pkg\\mod\\modernc.org\\token@v1.1.0",
+	"GoMod": "C:\\Users\\LENOVO\\go\\pkg\\mod\\cache\\download\\modernc.org\\token\\@v\\v1.1.0.mod",
+	"Sum": "h1:Xl7Ap9dKaEs5kLoOQeQmPWevfnk/DM5qcLcYlA8ys6Y=",
+	"GoModSum": "h1:UGzOrNV1mAFSEB63lOFHIpNRUVMvYTc6yu1SMY/XTDM="
+}
+
